@@ -1,14 +1,8 @@
-# XXXX
+# pubmedqa environment
 
 ### Overview
-- **Environment ID**: `xxxxx`
-- **Short description**: xxxxxx dataset from Stanford (Wu et al. 2025)
-- **Tags**: 
-
-### Datasets
-- **Primary dataset(s)**: <name(s) and brief description>
-- **Source links**: 
-- **Split sizes**: 13.1k (train) / 500 (val) / 897 (test)
+- **Environment ID**: `pubmedqa`
+- **Short description**: pubmedqa test set from Jin et al. 2019
 
 ### Dataset
 
