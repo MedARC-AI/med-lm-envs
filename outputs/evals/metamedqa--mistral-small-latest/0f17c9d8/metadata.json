@@ -1,0 +1,1 @@
+{"env": "metamedqa", "model": "mistral-small-latest", "num_examples": 200, "rollouts_per_example": 1, "sampling_args": {"temperature": 0, "max_tokens": null}, "date": "2025-09-15", "time": "16:18:39", "avg_reward": 0.7, "avg_accuracy_reward": 0.7}
