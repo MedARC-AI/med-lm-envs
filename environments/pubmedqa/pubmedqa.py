@@ -42,11 +42,12 @@ def map_row_to_mcq_prompt(row):
     #     'reasoning_required_pred': ['y', 'e', 's'], 
     #     'reasoning_free_pred': ['n', 'o']
     # }
-    contexts = row.get('contexts') 
-    labels = row.get('contexts_labels') 
-    #labels = context_dict.get('labels') # list of the abstract subsection titles
-    #contexts = context_dict.get('contexts') # a list of the subsections contents
-
+    
+    #contexts = row.get('contexts') 
+    #labels = row.get('contexts_labels')
+    context_dict = row.get('context')
+    labels = context_dict.get('labels') # list of the abstract subsection titles
+    contexts = context_dict.get('contexts') # a list of the subsections contents
     
     # a string which is either "yes", "no" or "maybe"
     final_decision = row.get('final_decision', '').lower() 
@@ -153,11 +154,10 @@ def load_environment() -> vf.Environment:
     for yes/no/maybe classification tasks.
     """
  
-    # pqa_labeled is the subset they use for benchmarking. This subset only have one split 'train'
-    
-    '''
+    # Both subsets only have a 'train' split
     DATASET_PATH = "qiaojin/PubMedQA"
-    dataset = load_dataset(DATASET_PATH, name="pqa_labeled", split="train")
+    dataset_train = load_dataset(DATASET_PATH, name="pqa_artificial", split="train")
+    dataset_test = load_dataset(DATASET_PATH, name="pqa_labeled", split="train")
 
     # Read in the predefined IDs in the test split taken from https://github.com/pubmedqa/pubmedqa/blob/master/data/test_ground_truth.json
     file_path = os.path.join("data", "test_ground_truth.json")
@@ -165,19 +165,9 @@ def load_environment() -> vf.Environment:
         test_ids = json.load(f)
 
     # reducing the 1000k annotated to the 500 human annotated
-    test_dataset = dataset.filter(
+    dataset_test = dataset_test.filter(
         lambda sample: str(sample["pubid"]) in test_ids
     )
-
-    # use hf_hub_download to only download the test set, as asking for a split results in full ds download
-    from huggingface_hub import hf_hub_download
-    file_path = hf_hub_download(repo_id="rschf/pubmedqa", filename="data/test-00000-of-00001.parquet", repo_type="dataset")
-    test_ds = load_dataset("parquet", data_files=file_path)
-    '''
-
-    DATASET_PATH = "rschf/pubmedqa"
-    dataset_train = load_dataset(DATASET_PATH, split="pqaa")
-    dataset_test = load_dataset(DATASET_PATH, split="test")
     
     mapped_dataset_train = dataset_train.map(map_row_to_mcq_prompt, load_from_cache_file=False)
     mapped_dataset_test = dataset_test.map(map_row_to_mcq_prompt, load_from_cache_file=False)
