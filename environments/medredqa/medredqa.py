@@ -115,7 +115,7 @@ Provide a score indicating if predicted opinion and recommendations cover the gr
             pass
         return 0.0, False
 
-    async def medical_diagnosis_reward_func(
+    async def medical_recommendations_reward_func(
         judge, prompt, completion, answer, state, info=None, **kwargs
     ) -> float:
         """
@@ -141,7 +141,7 @@ Provide a score indicating if predicted opinion and recommendations cover the gr
         return score
 
     # Add the reward function to the rubric
-    rubric.add_reward_func(medical_diagnosis_reward_func, weight=1.0)
+    rubric.add_reward_func(medical_recommendations_reward_func, weight=1.0)
 
     # Create the environment
     vf_env = vf.SingleTurnEnv(
