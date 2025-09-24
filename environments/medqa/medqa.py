@@ -2,23 +2,12 @@ from __future__ import annotations
 from typing import Dict, Optional, Any
 from datasets import load_dataset
 import verifiers as vf
+from verifiers.utils.data_utils import (
+    extract_boxed_answer,
+    BOXED_SYSTEM_PROMPT,
+    THINK_BOXED_SYSTEM_PROMPT,
+)
 
-def _get_text_from_completion(completion: Any) -> str:
-    if isinstance(completion, str):
-        return completion
-    if isinstance(completion, list) and completion:
-        last = completion[-1]
-        if isinstance(last, dict):
-            return str(last.get("content", ""))
-        return str(last)
-    return str(completion)
-
-def _first_letter(text: str) -> Optional[str]:
-    t = (text or "").upper()
-    for ch in t:
-        if "A" <= ch <= "Z":
-            return ch
-    return None
 
 def _build_prompt(question: str, options: Dict[str, str]) -> str:
     opts = "\n".join(f"{k}. {v}" for k, v in options.items())
@@ -30,13 +19,18 @@ def _build_prompt(question: str, options: Dict[str, str]) -> str:
         f"Answer with ONLY the letter ({letters})."
     )
 
-def load_environment() -> vf.Environment:
+
+def load_environment(
+    use_think: bool = False,
+    system_prompt: Optional[str] = None,
+) -> vf.Environment:
     """
     MedQA-USMLE-4-options multiple-choice evaluation
     - Train split = dataset
     - Test split = eval_dataset
-    - Scoring: accuracy (predicted letter == gold letter)
+    - Supports reasoning (use_think=True) or non-reasoning models
     """
+
     ds = load_dataset("GBaker/MedQA-USMLE-4-options")
 
     def _map(ex):
@@ -52,16 +46,16 @@ def load_environment() -> vf.Environment:
     train_mapped = ds["train"].map(_map, remove_columns=ds["train"].column_names)
     test_mapped = ds["test"].map(_map, remove_columns=ds["test"].column_names)
 
-    def accuracy_reward(completion, answer):
-        pred = _first_letter(_get_text_from_completion(completion))
-        gold = str(answer).strip().upper()
-        return 1.0 if (pred is not None and pred == gold) else 0.0
+    # Use boxed parser; ThinkParser if use_think is True
+    parser = vf.ThinkParser(extract_boxed_answer) if use_think else vf.Parser(extract_boxed_answer)
+    system_prompt = system_prompt or (THINK_BOXED_SYSTEM_PROMPT if use_think else BOXED_SYSTEM_PROMPT)
 
-    rubric = vf.Rubric(funcs=[accuracy_reward], weights=[1.0])
+    rubric = vf.Rubric(parser=parser)
 
     return vf.SingleTurnEnv(
         dataset=train_mapped,
         eval_dataset=test_mapped,
-        system_prompt=None,
+        system_prompt=system_prompt,
+        parser=parser,
         rubric=rubric,
     )
