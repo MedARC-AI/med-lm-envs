@@ -82,3 +82,18 @@ Use vf-eval -h for the full set of options (rollouts per example, max concurrenc
 During development you can iterate quickly by tweaking prompts, parser logic, or reward functions, reinstalling with `vf-install` if dependencies change, and rerunning `vf-eval` to view the results.
 
 After running with `-s`, inspect saved runs with `vf-tui`, which provides a terminal UI for browsing prompts, completions, and rewards under the generated `outputs/evals` folders.
+
+## Using an Existing MedARC Environment
+
+Once your tooling is set up you can install MedARC-maintained environments directly from the Prime Environments Hub (for example [`medarc/medcasereasoning`](https://app.primeintellect.ai/dashboard/environments/medarc/medcasereasoning) or [`medarc/metamedqa`](https://app.primeintellect.ai/dashboard/environments/medarc/metamedqa)).
+
+- **Install from the Hub.** Run `prime env install medarc/medcasereasoning` to pull the latest published version (add `@version` to pin a release).
+- **Run an evaluation.** Execute `vf-eval medcasereasoning -m gpt-4.1-mini -n 10 -s` to generate a small batch of rollouts.
+- **Load programmatically.** Environments installed via the Hub are importable like any other Verifiers module:
+
+  ```python
+  import verifiers as vf
+
+  env = vf.load_environment("medcasereasoning", split="validation")
+  results = env.evaluate(model_client, "gpt-4.1-mini", num_examples=5)
+  ```
