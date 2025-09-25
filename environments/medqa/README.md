@@ -6,20 +6,14 @@ This repository provides an evaluation environment for the [MedQA](https://huggi
 
 ## Usage
 
-To run an evaluation using [vf-eval](https://github.com/PrimeIntellect-ai/verifiers) with the Mistral API, use:
+To run an evaluation using [vf-eval](https://github.com/PrimeIntellect-ai/verifiers) with the OpenAI API, use:
 
 ```sh
-uv run vf-eval \
-	-m mistral-small-latest \
-	-b https://api.mistral.ai/v1 \
-	-k MISTRAL_API_KEY \
-	--env-args '{"split":"test"}' \
-	--num-examples 200 \
-	-s \
-	metamedqa
+export OPENAI_API_KEY=sk-...
+vf-eval medqa -m gpt-4.1-mini -n 5 -s
 ```
 
-Replace `MISTRAL_API_KEY` with your actual API key.
+Replace `OPENAI_API_KEY` with your actual API key.
 
 ## Environment
 
