@@ -8,7 +8,7 @@ import json
 
 # "Think step-by-step inside <think>...</think> tags. Then, give your final answer inside \\boxed{}."
 SYSTEM_PROMPT_THINK=vf.utils.data_utils.THINK_BOXED_SYSTEM_PROMPT
-SYSTEM_PROMPT_NOTHINK = "" # empty
+SYSTEM_PROMPT_NOTHINK = vf.utils.data_utils.BOXED_SYSTEM_PROMPT#"" # empty
 
 # Each question prompt matching Inspect Evals TEMPLATE format
 # SINGLE_PROMPT_TEMPLATE = r"""
@@ -166,6 +166,7 @@ def load_environment(use_think: bool = False) -> vf.Environment:
     
     # load_from_cache_file=False, keep_in_memory=True need to be specified, as otherwise datasets will default to using the cache
     # but we want to be sure that the loaded dataset reflects the most recent updates to map_row_to_mcq_prompt
+    # mapped_dataset_train = dataset_train
     mapped_dataset_train = dataset_train.map(map_row_to_mcq_prompt, load_from_cache_file=False, keep_in_memory=True)
     mapped_dataset_test = dataset_test.map(map_row_to_mcq_prompt, load_from_cache_file=False, keep_in_memory=True)
 
