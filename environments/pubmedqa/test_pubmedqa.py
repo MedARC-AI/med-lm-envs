@@ -4,6 +4,7 @@ import json
 from pubmedqa import load_environment
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
+import random
 
 class MockClient:
     def __init__(self):
@@ -13,12 +14,28 @@ class MockChat:
     def __init__(self):
         self.completions = MockCompletions()
 
+
 class MockCompletions:
+    def __init__(self):
+        self.contents = [
+            'ANSWER: A (using {model})',
+            'ANSWER: AF',
+            'ANSWER: yes',
+            r'<think> dadada </think> my answer is \boxed{A}',
+            r'<think> dadada </think> my answer is \boxed{yes}'
+        ]
+        self.index = 0;
+
+
     async def create(self, **kwargs):
         model = kwargs.get('model', 'unknown')
+
+        content = self.contents[self.index % len(self.contents)]
+        self.index += 1
+
         message = ChatCompletionMessage(
             role='assistant',
-            content=f'ANSWER: A (using {model})'
+            content=content
         )
         choice = Choice(
             index=0,
@@ -60,8 +77,9 @@ def submit_results(env_name, model_name, results):
 def main():
     parser = argparse.ArgumentParser(description='Run PubMedQA evaluation')
     parser.add_argument('--no-mock', action='store_true', help='Use real Mistral API instead of mock client')
+    parser.add_argument('--think', action='store_true', help='Use thinking')
     parser.add_argument('--model', default='mistral-medium', help='Model name to use')
-    parser.add_argument('--num_examples', type=int, default=4, help='Number of examples to evaluate (-1 for full benchmark)')
+    parser.add_argument('--num_examples', type=int, default=5, help='Number of examples to evaluate (-1 for full benchmark)')
     
     args, _ = parser.parse_known_args()
 
@@ -85,7 +103,7 @@ def main():
         print(f"Using mock client with model: {args.model}")
     
     # conduct evaluation
-    env = load_environment()
+    env = load_environment(use_think=args.think)
     #print(len(env.eval_dataset), env.eval_dataset[0])
     
     # Handle full benchmark case

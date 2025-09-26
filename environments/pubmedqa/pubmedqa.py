@@ -6,13 +6,28 @@ from datasets import load_dataset
 import verifiers as vf
 import json
 
-SYSTEM_PROMPT="" # no system prompt given. 
+# "Think step-by-step inside <think>...</think> tags. Then, give your final answer inside \\boxed{}."
+SYSTEM_PROMPT_THINK=vf.utils.data_utils.THINK_BOXED_SYSTEM_PROMPT
+SYSTEM_PROMPT_NOTHINK = "" # empty
 
 # Each question prompt matching Inspect Evals TEMPLATE format
+# SINGLE_PROMPT_TEMPLATE = r"""
+# Answer the following multiple choice question about medical knowledge given the context.
+# The entire content of your response should be of the following format: 'ANSWER: $LETTER'
+# (without quotes) where LETTER is one of {letters}.
+#
+# {abstract_as_context_and_question}
+#
+# {choices}
+# """.strip()
+
+ANSWER_FORMAT = r"\\boxed{ANSWER: $LETTER}"
 SINGLE_PROMPT_TEMPLATE = r"""
 Answer the following multiple choice question about medical knowledge given the context.
-The entire content of your response should be of the following format: 'ANSWER: $LETTER'
-(without quotes) where LETTER is one of {letters}.
+Your final answer should be should be of the following format: '{answer_format}'
+(without quotes) where LETTER is one of {letters}. 
+Only provide the answer in the format specified. 
+Do not provide any further content after the final answer.
 
 {abstract_as_context_and_question}
 
@@ -43,8 +58,6 @@ def map_row_to_mcq_prompt(row):
     #     'reasoning_free_pred': ['n', 'o']
     # }
     
-    #contexts = row.get('contexts') 
-    #labels = row.get('contexts_labels')
     context_dict = row.get('context')
     labels = context_dict.get('labels') # list of the abstract subsection titles
     contexts = context_dict.get('contexts') # a list of the subsections contents
@@ -66,8 +79,8 @@ def map_row_to_mcq_prompt(row):
     # see EXAMPLE_COMPLETE_PROMPT
     complete_prompt = SINGLE_PROMPT_TEMPLATE.format(letters="A, B, C",
             abstract_as_context_and_question=context_and_question,
-            choices="A) yes\nB) no\nC) maybe")
-    
+            choices="A) yes\nB) no\nC) maybe", answer_format=ANSWER_FORMAT)
+        
     # required fields for each dataset row:
     #  question: transformed into the user-chat message forming part of the prompt
     #  answer: given to the reward scoring fucntion / rubic
@@ -86,38 +99,24 @@ def map_row_to_mcq_prompt(row):
 
 def extract_choice(response: str) -> str:
     """Extract choice from model response using Inspect Evals parse_answers logic"""
-    # Based on inspect_ai.solver._multiple_choice.parse_answers
-    
-    # First check whether the string strictly ends with the expected answer
+
+    # matched and stripped response need to correspond to any of the three allowed options 
+    allowed_options = {"A", "B", "C"}
+
+    # matches "ANSWER: [spaces][mulitple a-zA-Z, digits, spaces][end of line or period]"
+    # returns the [mulitple a-zA-Z, digits, spaces] group
     match = re.search(
-        r"(?i)^ANSWER\s*:\s*([A-Za-z\d ,]+)\s*(?:$|\n|\.)",
-        response,
-        flags=re.MULTILINE,
-    )
-
-    # If we couldn't match the strict version, try the less strict version
-    if match is None:
-        match = re.search(
-            r"(?i)ANSWER\s*:\s*([A-Za-z\d ,]+)(?:[^\w]|\n|$|\.)",
+            r"(?i)ANSWER\s*:\s*([A-Za-z\d\s]+)(?:[^\w]|\n|$|\.)",
             response,
-        )
-
-    if match is None:
-        return None  # No valid answer found - matches Inspect Evals
-
-    matched = match.group(1)
-
+    )
+    # if no match, return the entire response
+    matched = response if match is None else match.group(1)
     # Strip trailing period / full stop
     matched = matched.strip()
     matched = matched.rstrip(".")
-
-    # For single choice (PubMedQA), match must contain a single letter in allowed choices
-    allowed_options = {"A", "B", "C"}
-    if matched in allowed_options:
-        letter_to_choice = {"A": "yes", "B": "no", "C": "maybe"}
-        return letter_to_choice.get(matched, None)
-
-    return None  # No valid answer found - matches Inspect Evals
+    
+    # return only reponses that are part of the allowed options
+    return matched if matched in allowed_options else None
 
 
 def classification_reward_func(prompt, completion, answer, state, **kwargs) -> float:
@@ -125,28 +124,26 @@ def classification_reward_func(prompt, completion, answer, state, **kwargs) -> f
     Classification-based reward function for PubMedQA.
     Returns 1.0 for correct classification, 0.0 otherwise.
     """
+
     # completition is a chat response, like:
     # {'role': 'assistant', 'content': 'ANSWER: A'}]
     # so we get the first item
     completion=completion[0]["content"]
-    predicted_choice = extract_choice(completion)
+    #print("Prompt:", prompt)
+    
+    parsed_completion = kwargs["parser"].parse(completion);
+    predicted_letter = extract_choice(parsed_completion)
+    #print(f"Completion: \033[34m{completion}\033[0m -> \033[1m{predicted_letter}\033[0m")
     
     # Handle case where no valid answer was extracted
-    if predicted_choice is None:
-        return 0.0  # Incorrect if no valid answer found
-    
-    # Map back to A/B/C format for comparison
-    choice_to_letter = {"yes": "A", "no": "B", "maybe": "C"}
-    predicted_letter = choice_to_letter.get(predicted_choice, None)
-    
     if predicted_letter is None:
-        return 0.0  # Incorrect if mapping failed
+        return 0.0  # Incorrect if no valid answer found
     
     # Compare with ground truth
     return 1.0 if predicted_letter == answer else 0.0
 
 
-def load_environment() -> vf.Environment:
+def load_environment(use_think: bool = False) -> vf.Environment:
     """
     PubMedQA environment using classification-based evaluation.
     
@@ -169,19 +166,34 @@ def load_environment() -> vf.Environment:
         lambda sample: str(sample["pubid"]) in test_ids
     )
     
-    mapped_dataset_train = dataset_train.map(map_row_to_mcq_prompt, load_from_cache_file=False)
-    mapped_dataset_test = dataset_test.map(map_row_to_mcq_prompt, load_from_cache_file=False)
+    # load_from_cache_file=False, keep_in_memory=True need to be specified, as otherwise datasets will default to using the cache
+    # but we want to be sure that the loaded dataset reflects the most recent updates to map_row_to_mcq_prompt
+    mapped_dataset_train = dataset_train.map(map_row_to_mcq_prompt, load_from_cache_file=False, keep_in_memory=True)
+    mapped_dataset_test = dataset_test.map(map_row_to_mcq_prompt, load_from_cache_file=False, keep_in_memory=True)
 
+    sys_prompt=SYSTEM_PROMPT_NOTHINK
+    # if \\boxed{<answer>} is present, extract answer from it, otherwise return the text
+    parser = vf.parsers.parser.Parser(extract_fn = vf.extract_boxed_answer) 
+
+    if use_think:
+        sys_prompt=SYSTEM_PROMPT_THINK
+        # ThinkParser requires <think>...</think> tags to be present and strips everything up to </think>
+        # from the remaining part it then extracts the answer using the extract_fn
+        parser = vf.parsers.think_parser.ThinkParser(extract_fn = vf.extract_boxed_answer)
+
+    # parses the reponse using parser and calculates the rewards based on the extrancted answers
     rubric = vf.Rubric(
-        funcs=[classification_reward_func], weights=[1.0]
+        funcs=[classification_reward_func], weights=[1.0], parser= parser
     )
-    
+
     # Create the environment
     vf_env = vf.SingleTurnEnv(
+        #dataset=mapped_dataset_train,
         dataset=mapped_dataset_train,
         eval_dataset=mapped_dataset_test,
-        system_prompt="", # by default no-system prompt given
-        rubric=rubric,
+        system_prompt=sys_prompt,
+        rubric=rubric, # if a rubric is given, it needs to manually call the parser
+        parser=parser, # needs to be same parser as given to rubric, otherwise raises a warning
     )
 
     return vf_env
