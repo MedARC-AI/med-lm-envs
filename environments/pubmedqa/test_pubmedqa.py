@@ -18,11 +18,12 @@ class MockChat:
 class MockCompletions:
     def __init__(self):
         self.contents = [
-            'ANSWER: A (using {model})',
-            'ANSWER: AF',
-            'ANSWER: yes',
-            r'<think> dadada </think> my answer is \boxed{A}',
-            r'<think> dadada </think> my answer is \boxed{yes}'
+            r'A',
+            r'\\boxed{A }',
+            r'\\boxed{AF}',
+            r'\\boxed{yes}',
+            r'<think> dadada </think> my answer is \\boxed{A}',
+            r'<think> dadada </think> my answer is \\boxed{yes}'
         ]
         self.index = 0;
 

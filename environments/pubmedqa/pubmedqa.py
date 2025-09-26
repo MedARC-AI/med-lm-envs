@@ -21,7 +21,7 @@ SYSTEM_PROMPT_NOTHINK = "" # empty
 # {choices}
 # """.strip()
 
-ANSWER_FORMAT = r"\\boxed{ANSWER: $LETTER}"
+ANSWER_FORMAT = r"\\boxed{LETTER}"
 SINGLE_PROMPT_TEMPLATE = r"""
 Answer the following multiple choice question about medical knowledge given the context.
 Your final answer should be should be of the following format: '{answer_format}'
@@ -96,7 +96,7 @@ def map_row_to_mcq_prompt(row):
         "task": "pubmedqa",
     }
 
-
+'''
 def extract_choice(response: str) -> str:
     """Extract choice from model response using Inspect Evals parse_answers logic"""
 
@@ -105,10 +105,7 @@ def extract_choice(response: str) -> str:
 
     # matches "ANSWER: [spaces][mulitple a-zA-Z, digits, spaces][end of line or period]"
     # returns the [mulitple a-zA-Z, digits, spaces] group
-    match = re.search(
-            r"(?i)ANSWER\s*:\s*([A-Za-z\d\s]+)(?:[^\w]|\n|$|\.)",
-            response,
-    )
+    match = re.search(r"(?i)ANSWER\s*:\s*([A-Za-z\d\s]+)(?:[^\w]|\n|$|\.)", response)
     # if no match, return the entire response
     matched = response if match is None else match.group(1)
     # Strip trailing period / full stop
@@ -117,7 +114,7 @@ def extract_choice(response: str) -> str:
     
     # return only reponses that are part of the allowed options
     return matched if matched in allowed_options else None
-
+''';
 
 def classification_reward_func(prompt, completion, answer, state, **kwargs) -> float:
     """
@@ -132,7 +129,8 @@ def classification_reward_func(prompt, completion, answer, state, **kwargs) -> f
     #print("Prompt:", prompt)
     
     parsed_completion = kwargs["parser"].parse(completion);
-    predicted_letter = extract_choice(parsed_completion)
+    #predicted_letter = extract_choice(parsed_completion)
+    predicted_letter = parsed_completion.strip().rstrip(".")
     #print(f"Completion: \033[34m{completion}\033[0m -> \033[1m{predicted_letter}\033[0m")
     
     # Handle case where no valid answer was extracted
@@ -188,7 +186,6 @@ def load_environment(use_think: bool = False) -> vf.Environment:
 
     # Create the environment
     vf_env = vf.SingleTurnEnv(
-        #dataset=mapped_dataset_train,
         dataset=mapped_dataset_train,
         eval_dataset=mapped_dataset_test,
         system_prompt=sys_prompt,
