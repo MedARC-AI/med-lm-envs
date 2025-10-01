@@ -14,6 +14,7 @@ SINGLE_PROMPT_TEMPLATE = r"""
 Answer the following multiple choice question about medical knowledge given the context.
 Your final answer should be should be of the following format: '{answer_format}'
 (without quotes) where LETTER is one of {letters}. 
+
 {abstract_as_context_and_question}
 
 {choices}
