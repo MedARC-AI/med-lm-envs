@@ -9,11 +9,9 @@ import json
 SYSTEM_PROMPT_THINK=vf.utils.data_utils.THINK_BOXED_SYSTEM_PROMPT
 SYSTEM_PROMPT_NOTHINK = vf.utils.data_utils.BOXED_SYSTEM_PROMPT
 
-ANSWER_FORMAT = r"\\boxed{LETTER}"
 SINGLE_PROMPT_TEMPLATE = r"""
 Answer the following multiple choice question about medical knowledge given the context.
-Your final answer should be should be of the following format: '{answer_format}'
-(without quotes) where LETTER is one of {letters}. 
+Your final answer should be only one of the following letters: {letters}. 
 
 {abstract_as_context_and_question}
 
