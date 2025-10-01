@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Dict, Optional, Any
+from typing import Dict, Optional
 from datasets import load_dataset
 import verifiers as vf
 from verifiers.utils.data_utils import (
@@ -11,13 +11,13 @@ from verifiers.utils.data_utils import (
 
 def _build_prompt(question: str, options: Dict[str, str]) -> str:
     opts = "\n".join(f"{k}. {v}" for k, v in options.items())
-    letters = ", ".join(sorted(options.keys()))
-    return (
-        "You are a clinician. Choose exactly ONE option letter.\n\n"
-        f"Question:\n{question}\n\n"
-        f"Options:\n{opts}\n\n"
-        f"Answer with ONLY the letter ({letters})."
-    )
+    return f"Question:{question}\n{opts}\nAnswer:"
+
+
+def exact_match(parser: vf.Parser, completion: str, answer: str, **kwargs) -> float:
+    """Reward exact matches."""
+    response = parser.parse_answer(completion).lower().strip()
+    return 1.0 if response == answer.lower().strip() else 0.0
 
 
 def load_environment(
@@ -50,7 +50,7 @@ def load_environment(
     parser = vf.ThinkParser(extract_boxed_answer) if use_think else vf.Parser(extract_boxed_answer)
     system_prompt = system_prompt or (THINK_BOXED_SYSTEM_PROMPT if use_think else BOXED_SYSTEM_PROMPT)
 
-    rubric = vf.Rubric(parser=parser)
+    rubric = vf.Rubric(funcs=[exact_match], weights=[1.0], parser=parser)
 
     return vf.SingleTurnEnv(
         dataset=train_mapped,
