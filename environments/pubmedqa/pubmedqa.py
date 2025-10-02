@@ -9,15 +9,7 @@ import json
 SYSTEM_PROMPT_THINK=vf.utils.data_utils.THINK_BOXED_SYSTEM_PROMPT
 SYSTEM_PROMPT_NOTHINK = vf.utils.data_utils.BOXED_SYSTEM_PROMPT
 
-SINGLE_PROMPT_TEMPLATE = r"""
-Answer the following multiple choice question about medical knowledge given the context.
-Your final answer should be only one of the following letters: {letters}. 
-
-{abstract_as_context_and_question}
-
-{choices}
-""".strip()
-
+SINGLE_PROMPT_TEMPLATE = r"""Answer A for yes, B for no or C for maybe.\n\nContext: {abstract_as_context}\n\nQuestion: {question}\nAnswer: """
 
 def map_row_to_mcq_prompt(row):
     """Map dataset format for PubMedQA samples"""
@@ -38,16 +30,12 @@ def map_row_to_mcq_prompt(row):
     # Zip them together and format as label[0]: contexts[0]
     formatted_contexts = []
     for label, context in zip(labels, contexts):
-        formatted_contexts.append(f"({label}) {context}")
+        formatted_contexts.append(f"{label}. {context}")
     context_text = '\n'.join(formatted_contexts)
-    
-    # Format as multiple choice question
-    context_and_question = f"Context:\n{context_text}\n\nQuestion: {question_text}"
 
     # see EXAMPLE_COMPLETE_PROMPT
-    complete_prompt = SINGLE_PROMPT_TEMPLATE.format(letters="A, B, C",
-            abstract_as_context_and_question=context_and_question,
-            choices="A) yes\nB) no\nC) maybe", answer_format=ANSWER_FORMAT)
+    complete_prompt = SINGLE_PROMPT_TEMPLATE.format(abstract_as_context=context_text,
+            question=question_text)
         
     # required fields: question (for the prompt), and answer (for the scoring)
     return {

@@ -18,10 +18,10 @@ class MockChat:
 class MockCompletions:
     def __init__(self):
         self.contents = [
-            r'A',
+            r'C',
             r'\\boxed{A }',
-            r'\\boxed{AF}',
-            r'\\boxed{yes}',
+            r'\\boxed{BF}',
+            r'\\boxed{no}',
             r'<think> dadada </think> my answer is \\boxed{A}',
             r'<think> dadada </think> my answer is \\boxed{yes}'
         ]
@@ -79,7 +79,7 @@ def main():
     parser = argparse.ArgumentParser(description='Run PubMedQA evaluation')
     parser.add_argument('--no-mock', action='store_true', help='Use real Mistral API instead of mock client')
     parser.add_argument('--think', action='store_true', help='Use thinking')
-    parser.add_argument('--model', default='mistral-medium', help='Model name to use')
+    parser.add_argument('--model', default='mock-model', help='Model name to use')
     parser.add_argument('--num_examples', type=int, default=5, help='Number of examples to evaluate (-1 for full benchmark)')
     
     args, _ = parser.parse_known_args()
