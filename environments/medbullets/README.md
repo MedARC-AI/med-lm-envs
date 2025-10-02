@@ -8,16 +8,15 @@
 ### Datasets
 - **Primary dataset(s)**: `Medbullets-4` and `Medbullets-5`
 - **Source links**: [Paper](https://arxiv.org/pdf/2402.18060), [Github](https://github.com/HanjieChen/ChallengeClinicalQA), [HF Dataset](https://huggingface.co/datasets/mkieffer/Medbullets)
-- **Split sizes**: 80/20 train/eval splits 
+- **Split sizes**:
 
     | Split       | Choices         | Count   |
     | ----------- | --------------- | ------- |
-    | `op4_train` | {A, B, C, D}    | **246** |
-    | `op4_eval`  | {A, B, C, D}    | **62**  |
-    | `op5_train` | {A, B, C, D, E} | **246** |
-    | `op5_eval`  | {A, B, C, D, E} | **62**  |
+    | `op4_test` | {A, B, C, D}    | **308** |
+    | `op5_test` | {A, B, C, D, E} | **308** |
 
-    `op5` splits contain the same questions as `op4` splits, but with one additional answer choice to increase difficulty. Note that while the content and answer texts are identical, the correct answer letter may differ between `op4` and `op5`.
+    `op5_test` contains the same content as `op4_test`, but with one additional answer choice to increase difficulty. Note that while the content is the same, the letter choice corresponding to the correct answer is sometimes different between these splits.
+
 
 ### Task
 - **Type**: single-turn
@@ -37,7 +36,7 @@ Configure model and sampling:
 uv run vf-eval medbullets \
     -m gpt-4.1-mini   \
     -n -1 -r 3 -t 1024 -T 0.7  \
-    -a '{"use_think": false, "num_options": 4, "num_train_examples": -1, "num_eval_examples": -1, "shuffle": true}'
+    -a '{"use_think": false, "num_options": 4, "num_test_examples": -1, "shuffle": true}'
 ```
 
 Notes:
@@ -48,8 +47,7 @@ Document any supported environment arguments and their meaning. Example:
 
 | Arg                  | Type | Default | Description                                                                                                                                                                          |
 | -------------------- | ---- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `num_train_examples` | int  | `-1`    | Limit the number of training examples (`-1` for all)                                                                                                                            |
-| `num_eval_examples`  | int  | `-1`    | Limit the number of eval examples (`-1` for all)                                                                                                                                |
+| `num_test_examples` | int  | `-1`    | Limit the number of test examples (`-1` for all)                                                                                                                            |
 | `num_options`        | int  | `4`     | Number of options: `4` → {A, B, C, D}; `5` → {A, B, C, D, E}                                                |
 | `use_think`          | bool | `False` | Whether to check for `<think>...</think>` formatting with `ThinkParser`|
 | `shuffle`            | bool | `False` | Whether to shuffle answer choices |
@@ -62,5 +60,3 @@ Summarize key metrics your rubric emits and how they’re interpreted.
 | ------ | ------- |
 | `correct_answer_reward_func` | (weight 1.0): 1.0 if parsed letter is correct, else 0.0|
 | `parser.get_format_reward_func()` | (weight 0.0): optional format adherence (not counted) |
-
-

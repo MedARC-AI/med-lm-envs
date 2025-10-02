@@ -2,20 +2,16 @@ import verifiers as vf
 from verifiers.utils.data_utils import extract_boxed_answer, THINK_BOXED_SYSTEM_PROMPT, BOXED_SYSTEM_PROMPT
 from datasets import load_dataset, Dataset
 from datasets.utils.logging import disable_progress_bar
+from typing import Dict
 import random
 disable_progress_bar() # suppress datasets mapping progress bar
 
 
-def _build_question_str(question: str, options: dict) -> str:
-    s = f"Question: {question}\n"
-    for k, v in options.items():
-        # skip null values of v (for the combined dataset where E opt for 4op is null)
-        if v is not None and v != "":
-            s += f"\n{k}: {v}"
-    return s
+def _build_question_str(question: str, options: Dict[str, str]) -> str:
+    opts = "\n".join(f"{k}. {v}" for k, v in options.items())
+    return f"Question: {question}\n\n{opts}"
 
-
-def _to_vf_format(ds: Dataset, split: str, num_options: int, shuffle: bool) -> Dataset:
+def _to_vf_format(ds: Dataset, num_options: int, shuffle: bool) -> Dataset:
     """
     Shape each row for SingleTurnEnv's defaults:
       - 'question': string the env will turn into chat messages
@@ -26,7 +22,7 @@ def _to_vf_format(ds: Dataset, split: str, num_options: int, shuffle: bool) -> D
       - num_options: 4 or 5; if 4, strips out option "E"
       - shuffle: whether to shuffle the answer choices
     """
-    VALID = {"A","B","C","D","E"}
+    VALID = ("A","B","C","D","E")
 
     def _format_row(row: dict) -> dict:
         question = row.get("question", "") or "" # question string
@@ -54,7 +50,7 @@ def _to_vf_format(ds: Dataset, split: str, num_options: int, shuffle: bool) -> D
             rng.shuffle(option_pairs)
             
             # rebuild options dict with new letter assignments
-            letters = ["A", "B", "C", "D", "E"][:len(option_pairs)]
+            letters = VALID[:len(option_pairs)]
             opts = {letters[i]: text for i, (_, text) in enumerate(option_pairs)}
             
             # find the new letter for the correct answer
@@ -83,8 +79,7 @@ def _to_vf_format(ds: Dataset, split: str, num_options: int, shuffle: bool) -> D
 
 
 def load_environment(
-        num_train_examples: int = -1, 
-        num_eval_examples: int = -1,
+        num_test_examples: int = -1, 
         num_options: int = 4,
         use_think: bool = False,
         shuffle: bool = False,
@@ -100,8 +95,8 @@ def load_environment(
             "info":     { ...original example fields... }  # full source row for debugging
         }
 
-    - num_options=4 : loads splits `op4_train` / `op4_eval` and drops option "E"
-    - num_options=5 : loads splits `op5_train` / `op5_eval`
+    - num_options=4 : loads split `op4_test
+    - num_options=5 : loads split `op5_test`
 
     - Parser extracts \\boxed{A|B|C|D|E} from completions
 
@@ -111,32 +106,25 @@ def load_environment(
     # -------- load dataset --------
     if num_options == 4:
         # 4 options: {"A", "B", "C", "D"}
-        train_raw, eval_raw = load_dataset("mkieffer/Medbullets", split=["op4_train", "op4_eval"])
+        test_raw = load_dataset("mkieffer/Medbullets", split="op4_test")
     elif num_options == 5:
         # 5 options: {"A", "B", "C", "D", "E"}
-        train_raw, eval_raw = load_dataset("mkieffer/Medbullets", split=["op5_train", "op5_eval"])
+        test_raw= load_dataset("mkieffer/Medbullets", split="op5_test")
     else: 
         raise ValueError("'num_options' must be 4 or 5")
 
     # -------- limit number of examples if specified --------
-    if num_train_examples != -1:
-        train_raw = train_raw.select(range(min(num_train_examples, len(train_raw))))
-    if num_eval_examples != -1:
-        eval_raw = eval_raw.select(range(min(num_eval_examples, len(eval_raw))))
+    if num_test_examples != -1:
+        test_raw = test_raw.select(range(min(num_test_examples, len(test_raw))))
 
     # -------- convert rows to vf format and shuffle row order --------
     rng_seed = 12345
-    train_ds = _to_vf_format(train_raw, split="train", num_options=num_options, shuffle=shuffle).shuffle(seed=rng_seed)
-    eval_ds  = _to_vf_format(eval_raw, split="eval", num_options=num_options, shuffle=shuffle).shuffle(seed=rng_seed)
-    del train_raw, eval_raw  # free memory
+    test_ds = _to_vf_format(test_raw, num_options=num_options, shuffle=shuffle).shuffle(seed=rng_seed)
+    del test_raw  # free memory
 
     # -------- construct prompts and questions --------
-    if use_think:
-        system_prompt = THINK_BOXED_SYSTEM_PROMPT
-        parser = vf.ThinkParser(extract_fn=extract_boxed_answer)
-    else:
-        system_prompt = BOXED_SYSTEM_PROMPT
-        parser = vf.Parser(extract_fn=extract_boxed_answer)
+    parser = vf.ThinkParser(extract_fn=extract_boxed_answer) if use_think else vf.Parser(extract_fn=extract_boxed_answer)
+    system_prompt = THINK_BOXED_SYSTEM_PROMPT if use_think else BOXED_SYSTEM_PROMPT
 
     # -------- rubric --------
     def correct_answer_reward_func(parser, completion, answer, **kwargs) -> float:
@@ -153,8 +141,7 @@ def load_environment(
     )
 
     return vf.SingleTurnEnv(
-        dataset=train_ds,
-        eval_dataset=eval_ds,
+        eval_dataset=test_ds,
         system_prompt=system_prompt,
         parser=parser,
         rubric=rubric,
