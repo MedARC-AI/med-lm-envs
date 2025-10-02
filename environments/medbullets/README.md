@@ -37,8 +37,7 @@ Configure model and sampling:
 uv run vf-eval medbullets \
     -m gpt-4.1-mini   \
     -n -1 -r 3 -t 1024 -T 0.7  \
-    -a '{"num_train_examples": -1, "num_eval_examples": -1, "num_options": 4, "use_think": true}'
-
+    -a '{"use_think": false, "num_options": 4, "num_train_examples": -1, "num_eval_examples": -1, "shuffle": true}'
 ```
 
 Notes:
@@ -53,6 +52,8 @@ Document any supported environment arguments and their meaning. Example:
 | `num_eval_examples`  | int  | `-1`    | Limit the number of eval examples (`-1` for all)                                                                                                                                |
 | `num_options`        | int  | `4`     | Number of options: `4` → {A, B, C, D}; `5` → {A, B, C, D, E}                                                |
 | `use_think`          | bool | `False` | Whether to check for `<think>...</think>` formatting with `ThinkParser`|
+| `shuffle`            | bool | `False` | Whether to shuffle answer choices |
+
 
 ### Metrics
 Summarize key metrics your rubric emits and how they’re interpreted.

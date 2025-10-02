@@ -1,14 +1,10 @@
 import verifiers as vf
-from verifiers.utils.data_utils import extract_boxed_answer
-from datasets import load_dataset, Dataset, concatenate_datasets
+from verifiers.utils.data_utils import extract_boxed_answer, THINK_BOXED_SYSTEM_PROMPT, BOXED_SYSTEM_PROMPT
+from datasets import load_dataset, Dataset
 from datasets.utils.logging import disable_progress_bar
-disable_progress_bar() # suppress 'Generating...' messages from Dataset.from_generator
+import random
+disable_progress_bar() # suppress datasets mapping progress bar
 
-def _strip_E(split):
-    for ex in split:
-        ex = dict(ex)
-        ex["options"] = {k: v for k, v in ex["options"].items() if k != "E"}
-        yield ex
 
 def _build_question_str(question: str, options: dict) -> str:
     s = f"Question: {question}\n"
@@ -18,49 +14,80 @@ def _build_question_str(question: str, options: dict) -> str:
             s += f"\n{k}: {v}"
     return s
 
-def _to_vf_format(ds: Dataset, split: str) -> Dataset:
+
+def _to_vf_format(ds: Dataset, split: str, num_options: int, shuffle: bool) -> Dataset:
     """
     Shape each row for SingleTurnEnv's defaults:
       - 'question': string the env will turn into chat messages
       - 'answer':   top-level gold letter (A/B/C/D[/E])
       - 'info':     keep all original fields for bookkeeping
+    
+    Args:
+      - num_options: 4 or 5; if 4, strips out option "E"
+      - shuffle: whether to shuffle the answer choices
     """
     VALID = {"A","B","C","D","E"}
 
-    def gen():
-        for row in ds:
-            row = dict(row)
-            # build the user-visible question string (stem + options)
-            q = row.get("question", "") or ""
-            opts = row.get("options", {}) or {}
-            question_str = _build_question_str(q, opts)
+    def _format_row(row: dict) -> dict:
+        question = row.get("question", "") or "" # question string
+        opts = row.get("options", {}) or {} # answer choices, map of letter to answer text
+        
+        # strip option E if num_options == 4
+        if num_options == 4:
+            opts = {k: v for k, v in opts.items() if k != "E"}
+        
+        # lift the answer to top-level, normalize to a single letter
+        answer_letter = (row.get("answer") or "").strip().upper()
+        if answer_letter not in VALID:
+            return None
+        
+        # shuffle answer choices if requested
+        if shuffle and answer_letter and answer_letter in opts:
+            # get the correct answer text before shuffling
+            correct_answer_text = opts[answer_letter]
 
-            # lift the answer to top-level, normalize to a single letter
-            ans = (row.get("answer") or "").strip().upper()
-            if ans not in VALID:
-                # if op4 split sometimes stores 'E' or empty, coerce safely
-                if ans == "" and "answer_letter" in row:
-                    ans = str(row["answer_letter"]).strip().upper()
-                if ans not in VALID:
-                    # final guard: drop anything unexpected
-                    ans = ""
+            # create list of (letter, text) pairs and shuffle them
+            option_pairs = list(opts.items())
 
-            # keep full original example under 'info'
-            info = dict(row)
+            # use a deterministic seed based on the question for consistency
+            rng = random.Random(hash(question) % (2**32))
+            rng.shuffle(option_pairs)
+            
+            # rebuild options dict with new letter assignments
+            letters = ["A", "B", "C", "D", "E"][:len(option_pairs)]
+            opts = {letters[i]: text for i, (_, text) in enumerate(option_pairs)}
+            
+            # find the new letter for the correct answer
+            for letter, text in opts.items():
+                if text == correct_answer_text:
+                    answer_letter = letter
+                    break
+        
+        question_str = _build_question_str(question, opts)
 
-            yield {
-                "question": question_str,
-                "answer": ans,
-                "info": info,
-            }
+        # question and answer have been moved to top-level, so remove them here
+        info = dict(row)
 
-    return Dataset.from_generator(gen, split=split)
+        # update shuffled answer choices in the info dict
+        if shuffle:
+            info["answer"] = answer_letter
+            info["options"] = opts
+
+        return {
+            "question": question_str,
+            "answer": answer_letter,
+            "info": info,
+        }
+
+    return ds.map(_format_row, remove_columns=ds.column_names).filter(lambda row: row is not None)
+
 
 def load_environment(
         num_train_examples: int = -1, 
         num_eval_examples: int = -1,
         num_options: int = 4,
         use_think: bool = False,
+        shuffle: bool = False,
         **kwargs
     ) -> vf.Environment:
     """
@@ -85,9 +112,6 @@ def load_environment(
     if num_options == 4:
         # 4 options: {"A", "B", "C", "D"}
         train_raw, eval_raw = load_dataset("mkieffer/Medbullets", split=["op4_train", "op4_eval"])
-        # remove the "E" option from op4 splits
-        train_raw = Dataset.from_generator(lambda: _strip_E(train_raw), split="op4_train")
-        eval_raw  = Dataset.from_generator(lambda: _strip_E(eval_raw), split="op4_eval")
     elif num_options == 5:
         # 5 options: {"A", "B", "C", "D", "E"}
         train_raw, eval_raw = load_dataset("mkieffer/Medbullets", split=["op5_train", "op5_eval"])
@@ -100,19 +124,23 @@ def load_environment(
     if num_eval_examples != -1:
         eval_raw = eval_raw.select(range(min(num_eval_examples, len(eval_raw))))
 
-    # -------- reshape to {'prompt', 'info'} --------
+    # -------- convert rows to vf format and shuffle row order --------
     rng_seed = 12345
-    train_ds = _to_vf_format(train_raw, split="train").shuffle(seed=rng_seed)
-    eval_ds  = _to_vf_format(eval_raw, split="eval").shuffle(seed=rng_seed)
+    train_ds = _to_vf_format(train_raw, split="train", num_options=num_options, shuffle=shuffle).shuffle(seed=rng_seed)
+    eval_ds  = _to_vf_format(eval_raw, split="eval", num_options=num_options, shuffle=shuffle).shuffle(seed=rng_seed)
+    del train_raw, eval_raw  # free memory
+    
+    import json
+    print(json.dumps(train_ds[0], indent=4))
+    print(json.dumps(eval_ds[0], indent=4))
+    exit(0)
 
     # -------- construct prompts and questions --------
-    options = "(A, B, C, or D)" if num_options == 4 else "(A, B, C, D, or E)"
-
     if use_think:
-        system_prompt = f"""Think step-by-step inside <think>...</think> tags, then give only the letter of the correct answer inside \\boxed{{...}} {options}. Do not include option text in the box; only the letter."""
+        system_prompt = THINK_BOXED_SYSTEM_PROMPT
         parser = vf.ThinkParser(extract_fn=extract_boxed_answer)
     else:
-        system_prompt = f"""Give only the letter of the correct answer inside \\boxed{{...}} {options}. Do not include option text in the box; only the letter. /no_think"""
+        system_prompt = BOXED_SYSTEM_PROMPT
         parser = vf.Parser(extract_fn=extract_boxed_answer)
 
     # -------- rubric --------
