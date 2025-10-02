@@ -129,11 +129,6 @@ def load_environment(
     train_ds = _to_vf_format(train_raw, split="train", num_options=num_options, shuffle=shuffle).shuffle(seed=rng_seed)
     eval_ds  = _to_vf_format(eval_raw, split="eval", num_options=num_options, shuffle=shuffle).shuffle(seed=rng_seed)
     del train_raw, eval_raw  # free memory
-    
-    import json
-    print(json.dumps(train_ds[0], indent=4))
-    print(json.dumps(eval_ds[0], indent=4))
-    exit(0)
 
     # -------- construct prompts and questions --------
     if use_think:
