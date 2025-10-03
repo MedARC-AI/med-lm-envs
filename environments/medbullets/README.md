@@ -36,7 +36,7 @@ Configure model and sampling:
 uv run vf-eval medbullets \
     -m gpt-4.1-mini   \
     -n -1 -r 3 -t 1024 -T 0.7  \
-    -a '{"use_think": false, "num_options": 4, "num_test_examples": -1, "shuffle": true}'
+    -a '{"use_think": false, "num_options": 4, "shuffle": true}'
 ```
 
 Notes:
@@ -46,7 +46,6 @@ Notes:
 
 | Arg                  | Type | Default | Description                                                                                                                                                                          |
 | -------------------- | ---- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `num_test_examples` | int  | `-1`    | Limit the number of test examples (`-1` for all)                                                                                                                            |
 | `num_options`        | int  | `4`     | Number of options: `4` → {A, B, C, D}; `5` → {A, B, C, D, E}                                                |
 | `use_think`          | bool | `False` | Whether to check for `<think>...</think>` formatting with `ThinkParser`|
 | `shuffle`            | bool | `False` | Whether to shuffle answer choices |
@@ -57,4 +56,3 @@ Notes:
 | Metric | Meaning |
 | ------ | ------- |
 | `correct_answer_reward_func` | (weight 1.0): 1.0 if parsed letter is correct, else 0.0|
-| `parser.get_format_reward_func()` | (weight 0.0): optional format adherence (not counted) |
