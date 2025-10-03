@@ -1,14 +1,13 @@
 import random
-
+import re
 import verifiers as vf
 from datasets import Dataset, load_dataset
 from datasets.utils.logging import disable_progress_bar
 from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
-
 disable_progress_bar()  # suppress datasets mapping progress bar
 
 
-def _build_question_str(question: str, options: dict[str, str]) -> str:
+def _build_question(question: str, options: dict[str, str]) -> str:
     opts = "\n".join(f"{k}. {v}" for k, v in options.items())
     return f"Question: {question}\n\n{opts}"
 
@@ -61,7 +60,11 @@ def _to_vf_format(ds: Dataset, num_options: int, shuffle: bool) -> Dataset:
                     answer_letter = letter
                     break
 
-        question_str = _build_question_str(question, opts)
+
+
+        instruction = "The following are multiple choice questions (with answers) about health. Think step by step and then output the single letter answer at the end like \\boxed{A}.\n\n"
+        question = _build_question(question, opts)
+        prompt = instruction + question
 
         # question and answer have been moved to top-level, so remove them here
         info = dict(row)
@@ -72,7 +75,7 @@ def _to_vf_format(ds: Dataset, num_options: int, shuffle: bool) -> Dataset:
             info["options"] = opts
 
         return {
-            "question": question_str,
+            "question": prompt,
             "answer": answer_letter,
             "info": info,
         }
@@ -80,7 +83,13 @@ def _to_vf_format(ds: Dataset, num_options: int, shuffle: bool) -> Dataset:
     return ds.map(_format_row, remove_columns=ds.column_names).filter(lambda row: row is not None)
 
 
-def load_environment(num_options: int = 4, use_think: bool = False, shuffle: bool = False, **kwargs) -> vf.Environment:
+def load_environment(
+        num_test_examples: int = -1, 
+        num_options: int = 4, 
+        use_think: bool = False, 
+        shuffle: bool = False,  
+        **kwargs
+    ) -> vf.Environment:
     """
     Single-turn Medbullets environment using HuggingFace `mkieffer/Medbullets` dataset
 
@@ -109,17 +118,35 @@ def load_environment(num_options: int = 4, use_think: bool = False, shuffle: boo
     else:
         raise ValueError("'num_options' must be 4 or 5")
 
+    # -------- limit number of examples if specified --------
+    if num_test_examples != -1:
+        test_raw = test_raw.select(range(min(num_test_examples, len(test_raw))))
+
+    # -------- convert rows to vf format and shuffle row order --------
     test_ds = _to_vf_format(test_raw, num_options=num_options, shuffle=shuffle)
     del test_raw  # free memory
 
-    parser = (
-        vf.ThinkParser(extract_fn=extract_boxed_answer) if use_think else vf.Parser(extract_fn=extract_boxed_answer)
-    )
+    # -------- construct prompts and questions --------
+    parser = vf.ThinkParser(extract_fn=extract_boxed_answer) if use_think else vf.Parser(extract_fn=extract_boxed_answer)
     system_prompt = THINK_BOXED_SYSTEM_PROMPT if use_think else BOXED_SYSTEM_PROMPT
 
+    # -------- rubric --------
     def correct_answer_reward_func(parser, completion, answer, **kwargs) -> float:
         response = parser.parse_answer(completion) or ""
-        return 1.0 if response == answer else 0.0
+        response = response.strip()
+
+        # remove \text{...} wrapper if present
+        text_match = re.match(r'\\text\{(.+)\}', response)
+        if text_match:
+            response = text_match.group(1).strip()
+
+        # try to extract a letter at the beginning
+        # matches: "H", "H.", "H:", "(H)", "(H).", "H. Some text", "(A) Some text", etc.
+        letter_match = re.match(r'^\(?([A-J])\)?(?:[.:\s]|$)', response)
+        if letter_match:
+            extracted_letter = letter_match.group(1)
+            return 1.0 if extracted_letter.upper() == answer.upper() else 0.0
+        return 0.0
 
     rubric = vf.Rubric(
         funcs=[correct_answer_reward_func],

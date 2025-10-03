@@ -43,7 +43,6 @@ Notes:
 - Use `-a` / `--env-args` to pass environment-specific configuration as a JSON object.
 
 ### Environment Arguments
-Document any supported environment arguments and their meaning. Example:
 
 | Arg                  | Type | Default | Description                                                                                                                                                                          |
 | -------------------- | ---- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -54,7 +53,6 @@ Document any supported environment arguments and their meaning. Example:
 
 
 ### Metrics
-Summarize key metrics your rubric emits and how they’re interpreted.
 
 | Metric | Meaning |
 | ------ | ------- |
