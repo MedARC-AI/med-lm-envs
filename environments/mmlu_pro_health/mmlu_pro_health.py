@@ -112,7 +112,6 @@ def _to_vf_format(
 
 
 def load_environment(
-    num_test_examples: int = -1,
     num_few_shot: int = 1,
     use_think: bool = False,
     shuffle: bool = False,
@@ -140,8 +139,6 @@ def load_environment(
     )
 
     # -------- limit number of examples if specified --------
-    if num_test_examples != -1:
-        test_raw = test_raw.select(range(min(num_test_examples, len(test_raw))))
     if num_few_shot != -1:
         if num_few_shot > few_shot_examples.num_rows:
             print(
@@ -182,14 +179,12 @@ def load_environment(
         letter_match = re.match(r"^\(?([A-J])\)?(?:[.:\s]|$)", response)
         if letter_match:
             extracted_letter = letter_match.group(1)
-            return 1.0 if extracted_letter == answer else 0.0
-
-        # fallback to exact match
-        return 1.0 if response == answer else 0.0
+            return 1.0 if extracted_letter.upper() == answer.upper() else 0.0
+        return 0.0
 
     rubric = vf.Rubric(
-        funcs=[correct_answer_reward_func, parser.get_format_reward_func()],
-        weights=[1.0, 0.0],
+        funcs=[correct_answer_reward_func],
+        weights=[1.0],
         parser=parser,
     )
 
