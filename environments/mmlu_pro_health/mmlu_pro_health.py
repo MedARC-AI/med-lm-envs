@@ -78,7 +78,7 @@ def _to_vf_format(ds: Dataset, few_shot_examples: Dataset, shuffle: bool, use_th
                     break
         
         # https://github.com/TIGER-AI-Lab/MMLU-Pro/blob/main/evaluate_from_api.py#L228
-        instruction = "The following are multiple choice questions (with answers) about health. Think step by step and then output the single letter answer at the end like \\boxed{A}.\n\n" if use_think else ""
+        instruction = "The following are multiple choice questions (with answers) about health. Think step by step and then output the single letter answer at the end like \\boxed{A}.\n\n"
         few_shot_prompt = _build_few_shot(few_shot_examples, use_think)
         question_prompt = _build_question(question, opts)
         prompt = instruction + few_shot_prompt + question_prompt + "\nAnswer:"
