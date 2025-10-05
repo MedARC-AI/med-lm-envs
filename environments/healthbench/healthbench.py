@@ -281,7 +281,6 @@ def load_environment(
     except KeyError:
         raise ValueError(f"Invalid difficulty: {difficulty}")
 
-    print(dataset)
     api_key = judge_api_key if judge_api_key else os.getenv("JUDGE_API_KEY")
     judge_client = AsyncOpenAI(
         base_url=judge_base_url, api_key=api_key
@@ -302,7 +301,6 @@ def load_environment(
         **kwargs,
     ) -> float:
         # Extract the last message content as the completion text
-        print(f"MAKE DATASET: {make_dataset}")
         if isinstance(completion, list) and completion:
             raw_completion = completion[-1].get("content", "")
         else:
@@ -310,7 +308,6 @@ def load_environment(
 
         # Build conversation string
         conversation = _format_prompt_to_judge(prompt, raw_completion)
-        print(info)
         points_list = info.get("points_list", [])
         if not points_list:
             return 0.0
@@ -336,20 +333,16 @@ def load_environment(
             )
             state["judge_response"] = None  # prevent caching
 
-            print("=" * 50)
             dict_resp = _parse_json(str(raw_resp))
-            print(f"DICT RESPONSE: {dict_resp}")
             criteria_met = (
                 bool(dict_resp.get("criteria_met", False))
                 if isinstance(dict_resp, dict)
                 else False
             )
-            print(f"CRITERIA MET: {criteria_met}")
             current_reward += points_possible
 
             ## Update state to record performance by rubric
             if make_dataset:
-                print("it was true!")
                 if state.get("performance_by_rubric", None) is None:
                     state["performance_by_rubric"] = []
 
@@ -359,8 +352,6 @@ def load_environment(
                         "judge_explanation": dict_resp.get("explanation", None),
                     }
                 )
-            print(f"CURRENT REWARD: {current_reward}/{points_possible}")
-            print("=" * 50)
 
         return float(max(0.0, min(1.0, current_reward / total_reward)))
 
@@ -448,7 +439,6 @@ def _process_healthbench_dataset(example: dict) -> dict:
             try:
                 consensus_criterion = HEALTHBENCH_CONSENSUS_CRITERIA_LOOKUP[cluster_tag]
             except KeyError:
-                print(f"Invalid cluster tag: {cluster_tag}")
         else:
             consensus_criterion = None
 
@@ -491,33 +481,3 @@ def _parse_json(text: str) -> dict:
             except json.JSONDecodeError:
                 continue
         return {}
-
-
-if __name__ == "__main__":
-    env = load_environment(
-        judge_model="gemini-2.5-flash",
-        judge_base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        judge_api_key=os.getenv("OPENAI_API_KEY"),
-        difficulty="all",
-        make_dataset=True,
-    )
-
-    client = AsyncOpenAI(
-        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        api_key=os.getenv("OPENAI_API_KEY"),
-    )
-
-    results = env.evaluate(
-        client=client,
-        model="gemini-2.5-flash",
-        num_examples=1,  # Just one example
-        rollouts_per_example=1,  # Just one rollout
-        max_concurrent=1,  # No parallelization
-    )
-
-    dataset = env.make_dataset(
-        results=results,
-        state_columns=["performance_by_rubric"],
-    )
-
-    dataset.save_to_disk("sample_results")
