@@ -1,10 +1,7 @@
 import os
-import re
 import json
-import urllib.request
 from datasets import load_dataset
 import verifiers as vf
-import json
 
 SYSTEM_PROMPT_THINK=vf.utils.data_utils.THINK_BOXED_SYSTEM_PROMPT
 SYSTEM_PROMPT_NOTHINK = vf.utils.data_utils.BOXED_SYSTEM_PROMPT
@@ -70,7 +67,7 @@ def load_environment(use_think: bool = False) -> vf.Environment:
     This environment loads the PubMedQA dataset and uses exact match scoring
     for yes/no/maybe classification tasks.
     """
- 
+    
     # Both subsets only have a 'train' split
     DATASET_PATH = "qiaojin/PubMedQA"
     dataset_train = load_dataset(DATASET_PATH, name="pqa_artificial", split="train")
@@ -78,10 +75,11 @@ def load_environment(use_think: bool = False) -> vf.Environment:
 
     # Read in the predefined IDs in the test split taken from 
     # https://github.com/pubmedqa/pubmedqa/blob/master/data/test_ground_truth.json
-    file_path = os.path.join("data", "test_ground_truth.json")
+    here = os.path.dirname(__file__)
+    file_path = os.path.join(here, "data", "test_ground_truth.json")
     with open(file_path) as f:
         test_ids = json.load(f)
-
+    
     # reducing the 1000k annotated to the 500 human annotated
     dataset_test = dataset_test.filter(
         lambda sample: str(sample["pubid"]) in test_ids
