@@ -3,7 +3,7 @@ import re
 import json
 import hashlib
 from collections import defaultdict
-from openai import OpenAI, AsyncOpenAI
+from openai import AsyncOpenAI
 from verifiers.envs.singleturn_env import SingleTurnEnv
 from verifiers.types import Messages, Info, State
 from verifiers import JudgeRubric
@@ -324,7 +324,6 @@ def load_environment(
                 "<<rubric_item>>",
                 rubric_text,
             )
-            # Call judge with the full prompt as a message
             raw_resp = await jr.judge(
                 [{"role": "user", "content": full_prompt}],
                 "",  # completion
@@ -436,9 +435,7 @@ def _process_healthbench_dataset(example: dict) -> dict:
 
         cluster_tag = tags.get("cluster")
         if cluster_tag:
-            try:
-                consensus_criterion = HEALTHBENCH_CONSENSUS_CRITERIA_LOOKUP[cluster_tag]
-            except KeyError:
+            consensus_criterion = HEALTHBENCH_CONSENSUS_CRITERIA_LOOKUP[cluster_tag]
         else:
             consensus_criterion = None
 
@@ -450,6 +447,8 @@ def _process_healthbench_dataset(example: dict) -> dict:
     return final_info
 
 
+# Function code directly copied from openai/simple-evals/healthbench_eval.py
+# Credit to Rahul Arora; MIT licensed
 def _format_prompt_to_judge(prompt: Messages, completion: str) -> str:
     """Format conversation for judge."""
     lines = []
@@ -464,6 +463,8 @@ def _format_prompt_to_judge(prompt: Messages, completion: str) -> str:
     return "\n\n".join(lines)
 
 
+# Function code directly copied from groq/openbench/utils/text.py:parse_json_from_response
+# Credit to Aarush Sah; MIT licensed
 def _parse_json(text: str) -> dict:
     """Extract and parse JSON from judge model response."""
     json_match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
