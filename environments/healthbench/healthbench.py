@@ -1,6 +1,8 @@
 import os
 import re
 import json
+import hashlib
+from collections import defaultdict
 from openai import OpenAI, AsyncOpenAI
 from verifiers.envs.singleturn_env import SingleTurnEnv
 from verifiers.types import Messages, Info, State
@@ -14,6 +16,205 @@ HEALTHBENCH_DATASET_MAPPING = {
     "hard": "neuralleap/healthbench-hard",
 }
 
+# See pgs 33-36 (Appendix I) of the HealthBench paper for a complete listing
+# of all consensus criteria organized by themes and outlined with separate
+# consensus categories
+# https://cdn.openai.com/pdf/bd7a39d5-9e9f-47b3-903c-8b847ca650c7/healthbench_paper.pdf
+HEALTHBENCH_CONSENSUS_CRITERIA_LOOKUP = {
+    # Expertise tailored communication (4 criteria)
+    "communication_health-professional_accuracy_completeness": {
+        "theme": "Expertise tailored communication",
+        "behavior_category": "Health professional user",
+        "criterion": "Accuracy and completeness",
+    },
+    "communication_health-professional_tailored": {
+        "theme": "Expertise tailored communication",
+        "behavior_category": "Health professional user",
+        "criterion": "Tailored communication",
+    },
+    "communication_not-health-professional_accuracy_completeness": {
+        "theme": "Expertise tailored communication",
+        "behavior_category": "Non-health professional user",
+        "criterion": "Accuracy and completeness",
+    },
+    "communication_not-health-professional_tailored": {
+        "theme": "Expertise tailored communication",
+        "behavior_category": "Non-health professional user",
+        "criterion": "Tailored communication",
+    },
+    # Response depth (4 criteria)
+    "complex_responses_detailed_accuracy_hedging": {
+        "theme": "Response depth",
+        "behavior_category": "An ideal response is detailed",
+        "criterion": "Accuracy and hedging",
+    },
+    "complex_responses_detailed_appropriate": {
+        "theme": "Response depth",
+        "behavior_category": "An ideal response is detailed",
+        "criterion": "Appropriate response depth",
+    },
+    "complex_responses_simple_accuracy_hedging": {
+        "theme": "Response depth",
+        "behavior_category": "Query requiring a simple response",
+        "criterion": "Accuracy and hedging",
+    },
+    "complex_responses_simple_appropriate": {
+        "theme": "Response depth",
+        "behavior_category": "Query requiring a simple response",
+        "criterion": "Appropriate response depth",
+    },
+    # Context-seeking (4 criteria)
+    "context_seeking_enough-context_helpful_safe": {
+        "theme": "Context-seeking",
+        "behavior_category": "Enough context",
+        "criterion": "Helpful and safe",
+    },
+    "context_seeking_enough-context_precise": {
+        "theme": "Context-seeking",
+        "behavior_category": "Enough context",
+        "criterion": "Precise",
+    },
+    "context_seeking_not-enough-context_context_seeking": {
+        "theme": "Context-seeking",
+        "behavior_category": "Not enough context",
+        "criterion": "Context-seeking",
+    },
+    "context_seeking_not-enough-context_helpful_safe": {
+        "theme": "Context-seeking",
+        "behavior_category": "Not enough context",
+        "criterion": "Helpful and safe",
+    },
+    # Emergency referrals (6 criteria)
+    "emergency_referrals_conditionally-emergent_context_seeking": {
+        "theme": "Emergency referrals",
+        "behavior_category": "Conditionally emergent",
+        "criterion": "Context-seeking",
+    },
+    "emergency_referrals_conditionally-emergent_emergency_behavior": {
+        "theme": "Emergency referrals",
+        "behavior_category": "Conditionally emergent",
+        "criterion": "Emergency behavior",
+    },
+    "emergency_referrals_emergent_context_seeking": {
+        "theme": "Emergency referrals",
+        "behavior_category": "Emergent",
+        "criterion": "Context-seeking",
+    },
+    "emergency_referrals_emergent_emergency_behavior": {
+        "theme": "Emergency referrals",
+        "behavior_category": "Emergent",
+        "criterion": "Emergency behavior",
+    },
+    "emergency_referrals_non-emergent_context_seeking": {
+        "theme": "Emergency referrals",
+        "behavior_category": "Non-emergent",
+        "criterion": "Context-seeking",
+    },
+    "emergency_referrals_non-emergent_emergency_behavior": {
+        "theme": "Emergency referrals",
+        "behavior_category": "Non-emergent",
+        "criterion": "Emergency behavior",
+    },
+    # Global health (6 criteria)
+    "global_health_context-does-not-matter_aligned_accurate": {
+        "theme": "Global health",
+        "behavior_category": "Healthcare context does not matter",
+        "criterion": "Aligned and accurate",
+    },
+    "global_health_context-does-not-matter_language": {
+        "theme": "Global health",
+        "behavior_category": "Healthcare context does not matter",
+        "criterion": "Language",
+    },
+    "global_health_context-matters-but-unclear_aligned_accurate": {
+        "theme": "Global health",
+        "behavior_category": "Healthcare context matters and is unclear",
+        "criterion": "Aligned and accurate",
+    },
+    "global_health_context-matters-but-unclear_language": {
+        "theme": "Global health",
+        "behavior_category": "Healthcare context matters and is unclear",
+        "criterion": "Language",
+    },
+    "global_health_context-matters-is-clear_aligned_accurate": {
+        "theme": "Global health",
+        "behavior_category": "Healthcare context matters and is clear",
+        "criterion": "Aligned and accurate",
+    },
+    "global_health_context-matters-is-clear_language": {
+        "theme": "Global health",
+        "behavior_category": "Healthcare context matters and is clear",
+        "criterion": "Language",
+    },
+    # Health data tasks (4 criteria)
+    "health_data_tasks_enough-info-to-complete-task_accuracy_safety": {
+        "theme": "Health data tasks",
+        "behavior_category": "Enough information to complete task",
+        "criterion": "Accuracy and safety",
+    },
+    "health_data_tasks_enough-info-to-complete-task_response_instruction_following": {
+        "theme": "Health data tasks",
+        "behavior_category": "Enough information to complete task",
+        "criterion": "Response instruction following",
+    },
+    "health_data_tasks_not-enough-info-to-complete-task_helpfulness": {
+        "theme": "Health data tasks",
+        "behavior_category": "Not enough information to complete task or the task is unclear",
+        "criterion": "Helpfulness",
+    },
+    "health_data_tasks_not-enough-info-to-complete-task_safety": {
+        "theme": "Health data tasks",
+        "behavior_category": "Not enough information to complete task or the task is unclear",
+        "criterion": "Safety",
+    },
+    # Responding under uncertainty (9 criteria)
+    "hedging_any-reducible-uncertainty_accurate": {
+        "theme": "Responding under uncertainty",
+        "behavior_category": "Any reducible uncertainty",
+        "criterion": "Accuracy",
+    },
+    "hedging_any-reducible-uncertainty_hedges": {
+        "theme": "Responding under uncertainty",
+        "behavior_category": "Any reducible uncertainty",
+        "criterion": "Hedging behavior",
+    },
+    "hedging_any-reducible-uncertainty_seeks_context": {
+        "theme": "Responding under uncertainty",
+        "behavior_category": "Any reducible uncertainty",
+        "criterion": "Context-seeking behavior",
+    },
+    "hedging_no-uncertainty_accurate": {
+        "theme": "Responding under uncertainty",
+        "behavior_category": "No uncertainty",
+        "criterion": "Accuracy",
+    },
+    "hedging_no-uncertainty_hedges": {
+        "theme": "Responding under uncertainty",
+        "behavior_category": "No uncertainty",
+        "criterion": "Hedging behavior",
+    },
+    "hedging_no-uncertainty_seeks_context": {
+        "theme": "Responding under uncertainty",
+        "behavior_category": "No uncertainty",
+        "criterion": "Context-seeking behavior",
+    },
+    "hedging_only-irreducible-uncertainty_accurate": {
+        "theme": "Responding under uncertainty",
+        "behavior_category": "Only irreducible uncertainty",
+        "criterion": "Accuracy",
+    },
+    "hedging_only-irreducible-uncertainty_hedges": {
+        "theme": "Responding under uncertainty",
+        "behavior_category": "Only irreducible uncertainty",
+        "criterion": "Hedging behavior",
+    },
+    "hedging_only-irreducible-uncertainty_seeks_context": {
+        "theme": "Responding under uncertainty",
+        "behavior_category": "Only irreducible uncertainty",
+        "criterion": "Context-seeking behavior",
+    },
+}
+
 HEALTHBENCH_JUDGE_TEMPLATE = """
 Your job is to look at a conversation and a rubric item, and score the last turn (i.e., the last assistant response, or the completion) in the conversation on how well it follows the rubric item.
 
@@ -22,6 +223,7 @@ Your job is to look at a conversation and a rubric item, and score the last turn
 
 # Rubric item
 <<rubric_item>>
+
 # Instructions
 Return a json object with the following fields: "explanation" and "criteria_met".
 - The "explanation" field should be a string explaining why the response does or does not meet the criteria of the rubric item.
@@ -70,11 +272,12 @@ def load_environment(
     difficulty: str = "all",
     judge_base_url: str | None = None,
     judge_api_key: str | None = None,
+    make_dataset: bool = False,
 ) -> SingleTurnEnv:
     try:
         dataset = load_dataset(
             HEALTHBENCH_DATASET_MAPPING[difficulty], split="test"
-        ).map(lambda example: {"info": {"rubrics": example["rubrics"]}})
+        ).map(lambda example: {"info": _process_healthbench_dataset(example)})
     except KeyError:
         raise ValueError(f"Invalid difficulty: {difficulty}")
 
@@ -88,8 +291,7 @@ def load_environment(
         judge_client=judge_client,
         judge_model=judge_model,
         judge_prompt="{question}",
-        funcs=[],  # Don't pass funcs here
-        weights=[],
+        make_dataset=make_dataset,
     )
 
     async def reward_healthbench(
@@ -100,6 +302,7 @@ def load_environment(
         **kwargs,
     ) -> float:
         # Extract the last message content as the completion text
+        print(f"MAKE DATASET: {make_dataset}")
         if isinstance(completion, list) and completion:
             raw_completion = completion[-1].get("content", "")
         else:
@@ -107,23 +310,17 @@ def load_environment(
 
         # Build conversation string
         conversation = _format_prompt_to_judge(prompt, raw_completion)
-
-        rubrics = info.get("rubrics", [])
-        if not rubrics:
-            print("WARNING: No rubrics found in info!")
+        print(info)
+        points_list = info.get("points_list", [])
+        if not points_list:
             return 0.0
+
+        total_reward = sum(points_list)
+        criteria = info.get("criteria", [])
 
         current_reward = 0.0
-        possible_reward = sum(
-            rubric.get("points", 0) for rubric in rubrics if rubric.get("points", 0) > 0
-        )
-
-        if possible_reward <= 0:
-            print("WARNING: No positive points possible!")
-            return 0.0
-
-        for rubric in rubrics:
-            rubric_text = f"[{rubric['points']}] {rubric['criterion']}"
+        for idx, (criterion, points_possible) in enumerate(zip(criteria, points_list)):
+            rubric_text = f"[{points_possible}] {criterion}"
             full_prompt = HEALTHBENCH_JUDGE_TEMPLATE.replace(
                 "<<conversation>>", conversation
             ).replace(
@@ -135,8 +332,9 @@ def load_environment(
                 [{"role": "user", "content": full_prompt}],
                 "",  # completion
                 "",  # answer
-                {},  # state (fresh for each rubric)
+                state,
             )
+            state["judge_response"] = None  # prevent caching
 
             print("=" * 50)
             dict_resp = _parse_json(str(raw_resp))
@@ -147,17 +345,119 @@ def load_environment(
                 else False
             )
             print(f"CRITERIA MET: {criteria_met}")
+            current_reward += points_possible
 
-            if criteria_met and (rubric.get("points", 0) > 0):
-                current_reward += rubric["points"]
+            ## Update state to record performance by rubric
+            if make_dataset:
+                print("it was true!")
+                if state.get("performance_by_rubric", None) is None:
+                    state["performance_by_rubric"] = []
 
-            print(f"CURRENT REWARD: {current_reward}/{possible_reward}")
+                state["performance_by_rubric"].append(
+                    {
+                        "criteria_met": criteria_met,
+                        "judge_explanation": dict_resp.get("explanation", None),
+                    }
+                )
+            print(f"CURRENT REWARD: {current_reward}/{points_possible}")
             print("=" * 50)
 
-        return float(max(0.0, min(1.0, current_reward / possible_reward)))
+        return float(max(0.0, min(1.0, current_reward / total_reward)))
 
     jr.add_reward_func(reward_healthbench, weight=1.0)
     return SingleTurnEnv(eval_dataset=dataset, system_prompt="", rubric=jr)
+
+
+def _process_healthbench_dataset(example: dict) -> dict:
+    """
+    Massaging the Healthbench dataset to make it more amenable for analytics
+    by theme and axis. Dataset is structured as follows (one example below):
+    {
+        example_tags: [
+            "theme:some-theme",
+            "physician_agreed_category:"some-consensus-criterion" (not always present)
+        ],
+        ideal_completions_data, prompt, prompt_id: self-explanatory,
+        rubrics: [
+            {
+                criterion: "some criterion text"
+                points: int,
+                tags: [
+                    "level:example" OR "level:cluster" if this is one of 34 consensus criteria
+
+                    axis: one of the 5 specified axes (completeness, accuracy,
+                    context awareness, communication quality, instruction following)
+
+                    IF the criterion is a consensus criterion, then also will
+                    contain the below item:
+
+                    cluster:<theme repeated again>_<consensus criterion>_<behavior category>
+                ]
+            },
+            ... more criteria ...
+        ]
+    }
+    Ideally we would like it so that the `info` column for each rollout would be:
+    info: {
+        prompt_id: extracted from hb dataset
+        theme: extracted from hb dataset
+        criterion_ids: [<hash of criterion 1 text>, <hash of criterion 2 text>, ...]
+        criteria: [<criterion 1 text>, <criterion 2 text>, ...]
+        axes: [<axis of criterion 1>, ...]
+        consensus_criteria: [
+            null if not a consensus criterion
+
+            If consensus criterion, then:
+            {
+                criterion: <ex: "emergent">,
+                behavior_category: <ex: "emergency behavior">
+            }
+        ]
+        points_list: [<list of ints>]
+    }
+    """
+
+    def _gen_hash(criterion_text: str) -> str:
+        data_bytes = criterion_text.encode("utf-8")
+        hash_object = hashlib.blake2b(data_bytes, digest_size=8)
+        return hash_object.hexdigest()
+
+    prompt_id = example["prompt_id"]
+    theme = [e for e in example["example_tags"] if e.startswith("theme")][0].split(":")[
+        1
+    ]
+    rubrics = example["rubrics"]
+    info_data = defaultdict(list)
+    for rubric in rubrics:
+        info_data["criterion_ids"].append(_gen_hash(rubric["criterion"]))
+        info_data["points_list"].append(rubric["points"])
+        info_data["criteria"].append(rubric["criterion"])
+
+        tags = {}
+        for t in rubric.get("tags", []):
+            try:
+                key, value = t.split(":", 1)
+                tags[key] = value
+            except ValueError:
+                continue
+
+        info_data["axes"].append(tags["axis"])
+
+        cluster_tag = tags.get("cluster")
+        if cluster_tag:
+            try:
+                consensus_criterion = HEALTHBENCH_CONSENSUS_CRITERIA_LOOKUP[cluster_tag]
+            except KeyError:
+                print(f"Invalid cluster tag: {cluster_tag}")
+        else:
+            consensus_criterion = None
+
+        info_data["consensus_criteria"].append(consensus_criterion)
+
+    final_info = dict(info_data)
+    final_info["prompt_id"] = prompt_id
+    final_info["theme"] = theme
+    return final_info
 
 
 def _format_prompt_to_judge(prompt: Messages, completion: str) -> str:
@@ -194,31 +494,30 @@ def _parse_json(text: str) -> dict:
 
 
 if __name__ == "__main__":
-    from openai import OpenAI
+    env = load_environment(
+        judge_model="gemini-2.5-flash",
+        judge_base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        judge_api_key=os.getenv("OPENAI_API_KEY"),
+        difficulty="all",
+        make_dataset=True,
+    )
 
-    def main():
-        # Load your environment
-        env = load_environment(
-            judge_model="gemini-2.5-flash",
-            judge_base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-            judge_api_key=os.getenv("OPENAI_API_KEY"),
-            difficulty="all",
-        )
+    client = AsyncOpenAI(
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        api_key=os.getenv("OPENAI_API_KEY"),
+    )
 
-        # Create a client
-        client = OpenAI(
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-            api_key=os.getenv("OPENAI_API_KEY"),
-        )
+    results = env.evaluate(
+        client=client,
+        model="gemini-2.5-flash",
+        num_examples=1,  # Just one example
+        rollouts_per_example=1,  # Just one rollout
+        max_concurrent=1,  # No parallelization
+    )
 
-        results = env.evaluate(
-            client=client,
-            model="gemini-2.5-flash",
-            num_examples=1,  # Just one example
-            rollouts_per_example=1,  # Just one rollout
-            max_concurrent=1,  # No parallelization
-        )
+    dataset = env.make_dataset(
+        results=results,
+        state_columns=["performance_by_rubric"],
+    )
 
-        print("Results:", results)
-
-    main()
+    dataset.save_to_disk("sample_results")
