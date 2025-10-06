@@ -1,0 +1,187 @@
+{
+  "communication_health-professional_accuracy_completeness": {
+    "theme": "Expertise tailored communication",
+    "behavior_category": "Health professional user",
+    "criterion": "Accuracy and completeness"
+  },
+  "communication_health-professional_tailored": {
+    "theme": "Expertise tailored communication",
+    "behavior_category": "Health professional user",
+    "criterion": "Tailored communication"
+  },
+  "communication_not-health-professional_accuracy_completeness": {
+    "theme": "Expertise tailored communication",
+    "behavior_category": "Non-health professional user",
+    "criterion": "Accuracy and completeness"
+  },
+  "communication_not-health-professional_tailored": {
+    "theme": "Expertise tailored communication",
+    "behavior_category": "Non-health professional user",
+    "criterion": "Tailored communication"
+  },
+  "complex_responses_detailed_accuracy_hedging": {
+    "theme": "Response depth",
+    "behavior_category": "An ideal response is detailed",
+    "criterion": "Accuracy and hedging"
+  },
+  "complex_responses_detailed_appropriate": {
+    "theme": "Response depth",
+    "behavior_category": "An ideal response is detailed",
+    "criterion": "Appropriate response depth"
+  },
+  "complex_responses_simple_accuracy_hedging": {
+    "theme": "Response depth",
+    "behavior_category": "Query requiring a simple response",
+    "criterion": "Accuracy and hedging"
+  },
+  "complex_responses_simple_appropriate": {
+    "theme": "Response depth",
+    "behavior_category": "Query requiring a simple response",
+    "criterion": "Appropriate response depth"
+  },
+  "context_seeking_enough-context_helpful_safe": {
+    "theme": "Context-seeking",
+    "behavior_category": "Enough context",
+    "criterion": "Helpful and safe"
+  },
+  "context_seeking_enough-context_precise": {
+    "theme": "Context-seeking",
+    "behavior_category": "Enough context",
+    "criterion": "Precise"
+  },
+  "context_seeking_not-enough-context_context_seeking": {
+    "theme": "Context-seeking",
+    "behavior_category": "Not enough context",
+    "criterion": "Context-seeking"
+  },
+  "context_seeking_not-enough-context_helpful_safe": {
+    "theme": "Context-seeking",
+    "behavior_category": "Not enough context",
+    "criterion": "Helpful and safe"
+  },
+  "emergency_referrals_conditionally-emergent_context_seeking": {
+    "theme": "Emergency referrals",
+    "behavior_category": "Conditionally emergent",
+    "criterion": "Context-seeking"
+  },
+  "emergency_referrals_conditionally-emergent_emergency_behavior": {
+    "theme": "Emergency referrals",
+    "behavior_category": "Conditionally emergent",
+    "criterion": "Emergency behavior"
+  },
+  "emergency_referrals_emergent_context_seeking": {
+    "theme": "Emergency referrals",
+    "behavior_category": "Emergent",
+    "criterion": "Context-seeking"
+  },
+  "emergency_referrals_emergent_emergency_behavior": {
+    "theme": "Emergency referrals",
+    "behavior_category": "Emergent",
+    "criterion": "Emergency behavior"
+  },
+  "emergency_referrals_non-emergent_context_seeking": {
+    "theme": "Emergency referrals",
+    "behavior_category": "Non-emergent",
+    "criterion": "Context-seeking"
+  },
+  "emergency_referrals_non-emergent_emergency_behavior": {
+    "theme": "Emergency referrals",
+    "behavior_category": "Non-emergent",
+    "criterion": "Emergency behavior"
+  },
+  "global_health_context-does-not-matter_aligned_accurate": {
+    "theme": "Global health",
+    "behavior_category": "Healthcare context does not matter",
+    "criterion": "Aligned and accurate"
+  },
+  "global_health_context-does-not-matter_language": {
+    "theme": "Global health",
+    "behavior_category": "Healthcare context does not matter",
+    "criterion": "Language"
+  },
+  "global_health_context-matters-but-unclear_aligned_accurate": {
+    "theme": "Global health",
+    "behavior_category": "Healthcare context matters and is unclear",
+    "criterion": "Aligned and accurate"
+  },
+  "global_health_context-matters-but-unclear_language": {
+    "theme": "Global health",
+    "behavior_category": "Healthcare context matters and is unclear",
+    "criterion": "Language"
+  },
+  "global_health_context-matters-is-clear_aligned_accurate": {
+    "theme": "Global health",
+    "behavior_category": "Healthcare context matters and is clear",
+    "criterion": "Aligned and accurate"
+  },
+  "global_health_context-matters-is-clear_language": {
+    "theme": "Global health",
+    "behavior_category": "Healthcare context matters and is clear",
+    "criterion": "Language"
+  },
+  "health_data_tasks_enough-info-to-complete-task_accuracy_safety": {
+    "theme": "Health data tasks",
+    "behavior_category": "Enough information to complete task",
+    "criterion": "Accuracy and safety"
+  },
+  "health_data_tasks_enough-info-to-complete-task_response_instruction_following": {
+    "theme": "Health data tasks",
+    "behavior_category": "Enough information to complete task",
+    "criterion": "Response instruction following"
+  },
+  "health_data_tasks_not-enough-info-to-complete-task_helpfulness": {
+    "theme": "Health data tasks",
+    "behavior_category": "Not enough information to complete task or the task is unclear",
+    "criterion": "Helpfulness"
+  },
+  "health_data_tasks_not-enough-info-to-complete-task_safety": {
+    "theme": "Health data tasks",
+    "behavior_category": "Not enough information to complete task or the task is unclear",
+    "criterion": "Safety"
+  },
+  "hedging_any-reducible-uncertainty_accurate": {
+    "theme": "Responding under uncertainty",
+    "behavior_category": "Any reducible uncertainty",
+    "criterion": "Accuracy"
+  },
+  "hedging_any-reducible-uncertainty_hedges": {
+    "theme": "Responding under uncertainty",
+    "behavior_category": "Any reducible uncertainty",
+    "criterion": "Hedging behavior"
+  },
+  "hedging_any-reducible-uncertainty_seeks_context": {
+    "theme": "Responding under uncertainty",
+    "behavior_category": "Any reducible uncertainty",
+    "criterion": "Context-seeking behavior"
+  },
+  "hedging_no-uncertainty_accurate": {
+    "theme": "Responding under uncertainty",
+    "behavior_category": "No uncertainty",
+    "criterion": "Accuracy"
+  },
+  "hedging_no-uncertainty_hedges": {
+    "theme": "Responding under uncertainty",
+    "behavior_category": "No uncertainty",
+    "criterion": "Hedging behavior"
+  },
+  "hedging_no-uncertainty_seeks_context": {
+    "theme": "Responding under uncertainty",
+    "behavior_category": "No uncertainty",
+    "criterion": "Context-seeking behavior"
+  },
+  "hedging_only-irreducible-uncertainty_accurate": {
+    "theme": "Responding under uncertainty",
+    "behavior_category": "Only irreducible uncertainty",
+    "criterion": "Accuracy"
+  },
+  "hedging_only-irreducible-uncertainty_hedges": {
+    "theme": "Responding under uncertainty",
+    "behavior_category": "Only irreducible uncertainty",
+    "criterion": "Hedging behavior"
+  },
+  "hedging_only-irreducible-uncertainty_seeks_context": {
+    "theme": "Responding under uncertainty",
+    "behavior_category": "Only irreducible uncertainty",
+    "criterion": "Context-seeking behavior"
+  }
+}
