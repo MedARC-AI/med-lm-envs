@@ -1,14 +1,15 @@
+import hashlib
+import json
 import os
 import re
-import json
-import hashlib
 from collections import defaultdict
-from openai import AsyncOpenAI
-from verifiers.envs.singleturn_env import SingleTurnEnv
-from verifiers.types import Messages, Info, State
-from verifiers import JudgeRubric
+from pathlib import Path
 
 from datasets import load_dataset
+from openai import AsyncOpenAI
+from verifiers import JudgeRubric
+from verifiers.envs.singleturn_env import SingleTurnEnv
+from verifiers.types import Info, Messages, State
 
 HEALTHBENCH_DATASET_MAPPING = {
     "all": "neuralleap/healthbench-regular",
@@ -21,7 +22,7 @@ HEALTHBENCH_DATASET_MAPPING = {
 # consensus categories
 # https://cdn.openai.com/pdf/bd7a39d5-9e9f-47b3-903c-8b847ca650c7/healthbench_paper.pdf
 
-with open("hb_consensus_criteria.json", "r") as fp:
+with open(Path(__file__).resolve().parent / "hb_consensus_criteria.json", "r") as fp:
     HEALTHBENCH_CONSENSUS_CRITERIA_LOOKUP = json.load(fp)
 
 
@@ -85,16 +86,14 @@ def load_environment(
     make_dataset: bool = False,
 ) -> SingleTurnEnv:
     try:
-        dataset = load_dataset(
-            HEALTHBENCH_DATASET_MAPPING[difficulty], split="test"
-        ).map(lambda example: {"info": _process_healthbench_dataset(example)})
+        dataset = load_dataset(HEALTHBENCH_DATASET_MAPPING[difficulty], split="test").map(
+            lambda example: {"info": _process_healthbench_dataset(example)}
+        )
     except KeyError:
         raise ValueError(f"Invalid difficulty: {difficulty}")
 
     api_key = judge_api_key if judge_api_key else os.getenv("JUDGE_API_KEY")
-    judge_client = AsyncOpenAI(
-        base_url=judge_base_url, api_key=api_key
-    )  # Use AsyncOpenAI
+    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key)  # Use AsyncOpenAI
 
     jr = JudgeRubric(
         judge_client=judge_client,
@@ -128,12 +127,7 @@ def load_environment(
         current_reward = 0.0
         for idx, (criterion, points_possible) in enumerate(zip(criteria, points_list)):
             rubric_text = f"[{points_possible}] {criterion}"
-            full_prompt = HEALTHBENCH_JUDGE_TEMPLATE.replace(
-                "<<conversation>>", conversation
-            ).replace(
-                "<<rubric_item>>",
-                rubric_text,
-            )
+            full_prompt = HEALTHBENCH_JUDGE_TEMPLATE.replace("<<conversation>>", conversation).replace("<<rubric_item>>", rubric_text)  # fmt: skip
             raw_resp = await jr.judge(
                 [{"role": "user", "content": full_prompt}],
                 "",  # completion
@@ -143,11 +137,7 @@ def load_environment(
             state["judge_response"] = None  # prevent caching
 
             dict_resp = _parse_json(str(raw_resp))
-            criteria_met = (
-                bool(dict_resp.get("criteria_met", False))
-                if isinstance(dict_resp, dict)
-                else False
-            )
+            criteria_met = bool(dict_resp.get("criteria_met", False)) if isinstance(dict_resp, dict) else False
 
             if criteria_met:
                 current_reward += points_possible
@@ -225,9 +215,7 @@ def _process_healthbench_dataset(example: dict) -> dict:
         return hash_object.hexdigest()
 
     prompt_id = example["prompt_id"]
-    theme = [e for e in example["example_tags"] if e.startswith("theme")][0].split(":")[
-        1
-    ]
+    theme = [e for e in example["example_tags"] if e.startswith("theme")][0].split(":")[1]
     rubrics = example["rubrics"]
     info_data = defaultdict(list)
     for rubric in rubrics:
