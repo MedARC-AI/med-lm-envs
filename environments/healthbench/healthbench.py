@@ -148,7 +148,9 @@ def load_environment(
                 if isinstance(dict_resp, dict)
                 else False
             )
-            current_reward += points_possible
+
+            if criteria_met:
+                current_reward += points_possible
 
             ## Update state to record performance by rubric
             if make_dataset:
