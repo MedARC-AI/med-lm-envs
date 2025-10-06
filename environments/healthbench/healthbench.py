@@ -21,7 +21,7 @@ HEALTHBENCH_DATASET_MAPPING = {
 # consensus categories
 # https://cdn.openai.com/pdf/bd7a39d5-9e9f-47b3-903c-8b847ca650c7/healthbench_paper.pdf
 
-with open("hb_consensus_critera.json", "r") as fp:
+with open("hb_consensus_criteria.json", "r") as fp:
     HEALTHBENCH_CONSENSUS_CRITERIA_LOOKUP = json.load(fp)
 
 
