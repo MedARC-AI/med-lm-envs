@@ -1,7 +1,7 @@
 [project]
 name = "healthbench"
-description = "Your environment description here"
-tags = ["placeholder-tag", "train", "eval"]
+description = "OpenAI HealthBench evaluation by RK Arora et al., 2025"
+tags = ["medical", "communication", "single-turn", "llm-judge"]
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
