@@ -149,11 +149,10 @@ def load_environment(
         )
 
     # -------- convert rows to vf format and shuffle row order --------
-    rng_seed = 12345
-    few_shot_examples = few_shot_examples.shuffle(seed=rng_seed)
+    few_shot_examples = few_shot_examples
     test_ds = _to_vf_format(
         test_raw, few_shot_examples, shuffle=shuffle, use_think=use_think
-    ).shuffle(seed=rng_seed)
+    )
     del test_raw, few_shot_examples  # free memory
 
     # -------- construct prompts and questions --------
