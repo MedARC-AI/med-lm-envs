@@ -42,6 +42,11 @@ Document any supported environment arguments and their meaning. Example:
 | --- | ---- | ------- | ----------- |
 | `difficulty` | str | `"all"` | One of 'all', 'hard', or 'consensus'; corresponds to healthbench dataset variant|
 | `make_dataset` | bool | `False` | Add rubric-specific model performance metric to results |
+| `max_parallel_judges` | int | `5` | Number of concurrent judge requests *per rollout* |
+
+> [!NOTE]
+> When setting `max_parallel_judges` your total number of concurrent requests
+> will be `max_concurrent` * `max_parallel_judges`!
 
 ### Results Dataset
 The results dataset can report model performance by theme, axis and consensus
@@ -57,6 +62,7 @@ env = load_environment(
     judge_api_key=os.getenv("OPENAI_API_KEY"),
     difficulty="all",
     make_dataset=True,
+    max_parallel_judges=10
 )
 
 client = AsyncOpenAI(

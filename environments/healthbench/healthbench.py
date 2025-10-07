@@ -4,6 +4,7 @@ import os
 import re
 from collections import defaultdict
 from pathlib import Path
+import asyncio
 
 from datasets import load_dataset
 from openai import AsyncOpenAI
@@ -84,31 +85,36 @@ def load_environment(
     judge_base_url: str | None = None,
     judge_api_key: str | None = None,
     make_dataset: bool = False,
+    max_parallel_judges: int = 5,
+    **kwargs,
 ) -> SingleTurnEnv:
     try:
-        dataset = load_dataset(HEALTHBENCH_DATASET_MAPPING[difficulty], split="test").map(
-            lambda example: {"info": _process_healthbench_dataset(example)}
-        )
+        dataset = load_dataset(
+            HEALTHBENCH_DATASET_MAPPING[difficulty], split="test"
+        ).map(lambda example: {"info": _process_healthbench_dataset(example)})
     except KeyError:
         raise ValueError(f"Invalid difficulty: {difficulty}")
 
     api_key = judge_api_key if judge_api_key else os.getenv("JUDGE_API_KEY")
-    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key)  # Use AsyncOpenAI
+    judge_client = AsyncOpenAI(
+        base_url=judge_base_url, api_key=api_key
+    )  # Use AsyncOpenAI
 
     jr = JudgeRubric(
         judge_client=judge_client,
         judge_model=judge_model,
         judge_prompt="{question}",
-        make_dataset=make_dataset,
     )
 
     async def reward_healthbench(
-        prompt: Messages,
-        completion: Messages,
-        info: Info = {},
-        state: State = {},
-        **kwargs,
+        prompt: Messages, completion: Messages, info: Info, state: State
     ) -> float:
+        """
+        Embedded reward function that asynchronously calls `judge` for every
+        criterion for this rollout.
+        NB: `make_dataset` and `max_parallel_judges` taken from outer scope
+        `load_environment` function.
+        """
         # Extract the last message content as the completion text
         if isinstance(completion, list) and completion:
             raw_completion = completion[-1].get("content", "")
@@ -117,47 +123,79 @@ def load_environment(
 
         # Build conversation string
         conversation = _format_prompt_to_judge(prompt, raw_completion)
+
+        criteria = info.get("criteria", [])
         points_list = info.get("points_list", [])
         if not points_list:
             return 0.0
 
-        total_reward = sum(points_list)
-        criteria = info.get("criteria", [])
-
+        total_reward = sum([pt for pt in points_list if pt > 0])
         current_reward = 0.0
-        for idx, (criterion, points_possible) in enumerate(zip(criteria, points_list)):
-            rubric_text = f"[{points_possible}] {criterion}"
-            full_prompt = HEALTHBENCH_JUDGE_TEMPLATE.replace("<<conversation>>", conversation).replace("<<rubric_item>>", rubric_text)  # fmt: skip
-            raw_resp = await jr.judge(
-                [{"role": "user", "content": full_prompt}],
-                "",  # completion
-                "",  # answer
-                state,
+
+        tasks = [
+            _judge_single_criterion(
+                idx, criterion, points_possible, conversation, jr, max_parallel_judges
             )
-            state["judge_response"] = None  # prevent caching
+            for idx, (criterion, points_possible) in enumerate(
+                zip(criteria, points_list)
+            )
+        ]
 
-            dict_resp = _parse_json(str(raw_resp))
-            criteria_met = bool(dict_resp.get("criteria_met", False)) if isinstance(dict_resp, dict) else False
+        judgments = await asyncio.gather(*tasks)
+        current_reward += sum(
+            judgment["points_possible"] if judgment["criteria_met"] else 0
+            for judgment in judgments
+        )
 
-            if criteria_met:
-                current_reward += points_possible
+        ## Update state to record performance by rubric
+        if make_dataset:
+            judgments_sorted = sorted(judgments, key=lambda x: x["idx"])
+            for judg in judgments_sorted:
+                judg.pop("idx", None)  # metadata do not report
+                judg.pop("points_possible", None)  # already contained in `info`
 
-            ## Update state to record performance by rubric
-            if make_dataset:
-                if state.get("performance_by_rubric", None) is None:
-                    state["performance_by_rubric"] = []
+            if state.get("performance_by_rubric", None) is None:
+                state["performance_by_rubric"] = []
 
-                state["performance_by_rubric"].append(
-                    {
-                        "criteria_met": criteria_met,
-                        "judge_explanation": dict_resp.get("explanation", None),
-                    }
-                )
+            state["performance_by_rubric"].append(judgments_sorted)
 
         return float(max(0.0, min(1.0, current_reward / total_reward)))
 
     jr.add_reward_func(reward_healthbench, weight=1.0)
     return SingleTurnEnv(eval_dataset=dataset, system_prompt="", rubric=jr)
+
+
+async def _judge_single_criterion(
+    idx: int,
+    criterion: str,
+    points_possible: int,
+    conversation: str,
+    judge_rubric: JudgeRubric,
+    max_parallel_judges: int,
+) -> dict[str, str | int | bool]:
+    async with asyncio.Semaphore(max_parallel_judges):
+        rubric_text = f"[{points_possible}] {criterion}"
+        full_prompt = HEALTHBENCH_JUDGE_TEMPLATE.replace("<<conversation>>", conversation).replace("<<rubric_item>>", rubric_text)  # fmt: skip
+        raw_resp = await judge_rubric.judge(
+            [{"role": "user", "content": full_prompt}],
+            "",  # completion
+            "",  # answer
+            {},  # state
+        )
+
+        dict_resp = _parse_json(str(raw_resp))
+        criteria_met = (
+            bool(dict_resp.get("criteria_met", False))
+            if isinstance(dict_resp, dict)
+            else False
+        )
+
+        return {
+            "idx": idx,
+            "points_possible": points_possible,
+            "criteria_met": criteria_met,
+            "judge_explanation": dict_resp.get("explanation", None),
+        }
 
 
 def _process_healthbench_dataset(example: dict) -> dict:
@@ -215,7 +253,9 @@ def _process_healthbench_dataset(example: dict) -> dict:
         return hash_object.hexdigest()
 
     prompt_id = example["prompt_id"]
-    theme = [e for e in example["example_tags"] if e.startswith("theme")][0].split(":")[1]
+    theme = [e for e in example["example_tags"] if e.startswith("theme")][0].split(":")[
+        1
+    ]
     rubrics = example["rubrics"]
     info_data = defaultdict(list)
     for rubric in rubrics:
