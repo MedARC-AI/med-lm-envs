@@ -1,14 +1,15 @@
-import verifiers as vf
-from typing import Dict
-from verifiers.utils.data_utils import (
-    extract_boxed_answer,
-    THINK_BOXED_SYSTEM_PROMPT,
-    BOXED_SYSTEM_PROMPT,
-)
-from datasets import load_dataset, Dataset
-from datasets.utils.logging import disable_progress_bar
 import random
 import re
+from typing import Dict
+
+import verifiers as vf
+from datasets import Dataset, load_dataset
+from datasets.utils.logging import disable_progress_bar
+from verifiers.utils.data_utils import (
+    BOXED_SYSTEM_PROMPT,
+    THINK_BOXED_SYSTEM_PROMPT,
+    extract_boxed_answer,
+)
 
 disable_progress_bar()  # suppress datasets mapping progress bar
 
@@ -36,9 +37,7 @@ def _build_few_shot(few_shot_examples: Dataset, use_think: bool) -> str:
     return few_shot_prompt
 
 
-def _to_vf_format(
-    ds: Dataset, few_shot_examples: Dataset, shuffle: bool, use_think: bool
-) -> Dataset:
+def _to_vf_format(ds: Dataset, few_shot_examples: Dataset, shuffle: bool, use_think: bool) -> Dataset:
     """
     Shape each row for SingleTurnEnv's defaults:
       - 'question': string the env will turn into chat messages
@@ -55,9 +54,7 @@ def _to_vf_format(
 
     def _format_row(row: dict) -> dict:
         question = row.get("question", "") or ""  # question string
-        opts = (
-            row.get("options", {}) or {}
-        )  # answer choices, map of letter to answer text
+        opts = row.get("options", {}) or {}  # answer choices, map of letter to answer text
 
         # lift the answer to top-level, normalize to a single letter
         answer_letter = (row.get("answer") or "").strip().upper()
@@ -87,7 +84,7 @@ def _to_vf_format(
                     break
 
         # https://github.com/dbernardo05/medARC-QA/blob/main/evaluate_from_api.py#L339
-        instruction = "The following are multiple choice questions (with answers) about health. Think step by step and then output the single letter answer in the format of \\boxed{A} at the end.\n\n"
+        instruction = 'The following are multiple choice questions (with answers) about health. Think step by step and then finish your answer with "\\boxed{X}" where X is the correct letter choice.\n'
         few_shot_prompt = _build_few_shot(few_shot_examples, use_think)
         question_prompt = _build_question(question, opts)
         prompt = instruction + few_shot_prompt + question_prompt + "\nAnswer:"
@@ -106,17 +103,10 @@ def _to_vf_format(
             "info": info,
         }
 
-    return ds.map(_format_row, remove_columns=ds.column_names).filter(
-        lambda row: row is not None
-    )
+    return ds.map(_format_row, remove_columns=ds.column_names).filter(lambda row: row is not None)
 
 
-def load_environment(
-    num_few_shot: int = 1,
-    use_think: bool = False,
-    shuffle: bool = False,
-    **kwargs,
-) -> vf.Environment:
+def load_environment(num_few_shot: int = 5, use_think: bool = False, shuffle: bool = False, **kwargs) -> vf.Environment:
     """
     Single-turn M-ARC environment using HuggingFace `mkieffer/M-ARC` dataset
 
@@ -144,22 +134,16 @@ def load_environment(
             print(
                 f"WARNING: num_few_shot={num_few_shot} is greater than the number of few-shot examples ({few_shot_examples.num_rows}). Using all examples."
             )
-        few_shot_examples = few_shot_examples.select(
-            range(min(num_few_shot, len(few_shot_examples)))
-        )
+        few_shot_examples = few_shot_examples.select(range(min(num_few_shot, len(few_shot_examples))))
 
     # -------- convert rows to vf format and shuffle row order --------
     few_shot_examples = few_shot_examples
-    test_ds = _to_vf_format(
-        test_raw, few_shot_examples, shuffle=shuffle, use_think=use_think
-    )
+    test_ds = _to_vf_format(test_raw, few_shot_examples, shuffle=shuffle, use_think=use_think)
     del test_raw, few_shot_examples  # free memory
 
     # -------- construct prompts and questions --------
     parser = (
-        vf.ThinkParser(extract_fn=extract_boxed_answer)
-        if use_think
-        else vf.Parser(extract_fn=extract_boxed_answer)
+        vf.ThinkParser(extract_fn=extract_boxed_answer) if use_think else vf.Parser(extract_fn=extract_boxed_answer)
     )
     system_prompt = THINK_BOXED_SYSTEM_PROMPT if use_think else BOXED_SYSTEM_PROMPT
 
@@ -181,16 +165,6 @@ def load_environment(
             return 1.0 if extracted_letter.upper() == answer.upper() else 0.0
         return 0.0
 
-    rubric = vf.Rubric(
-        funcs=[correct_answer_reward_func],
-        weights=[1.0],
-        parser=parser,
-    )
+    rubric = vf.Rubric(funcs=[correct_answer_reward_func], weights=[1.0], parser=parser)
 
-    return vf.SingleTurnEnv(
-        eval_dataset=test_ds,
-        system_prompt=system_prompt,
-        parser=parser,
-        rubric=rubric,
-        **kwargs,
-    )
+    return vf.SingleTurnEnv(eval_dataset=test_ds, system_prompt=system_prompt, parser=parser, rubric=rubric, **kwargs)
