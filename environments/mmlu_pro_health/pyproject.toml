@@ -1,0 +1,21 @@
+[project]
+name = "mmlu-pro-health"
+description = "Single-turn medical MCQ"
+tags = ["medical", "clinical", "single-turn", "multiple-choice", "mmlu", "evaluation", "test"]
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "verifiers>=0.1.3.post0",
+]
+
+[tool.prime.environment]
+loader = "mmlu_pro_health:load_environment"
+display_name = "MMLU-Pro-Health"
+visibility = "PUBLIC"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["mmlu_pro_health.py"]
