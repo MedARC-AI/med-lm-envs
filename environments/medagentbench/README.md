@@ -1,7 +1,7 @@
 # MedAgentBench
 
 ### Overview
-- **Environment ID**: `med-agent-bench`
+- **Environment ID**: `medagentbench`
 - **Short description**: A realistic virtual EHR environment to benchmark medical LLM agents on clinical tasks.
 - **Tags**: medical, ehr, multi-turn, clinical, evaluation
 
@@ -30,14 +30,14 @@ docker run -p 8080:8080 medagentbench
 Run an evaluation with default settings (requires FHIR server):
 
 ```bash
-uv run vf-eval med-agent-bench \
+uv run vf-eval medagentbench \
   -a '{"fhir_api_base": "http://localhost:8080/fhir/"}'
 ```
 
 Configure model and sampling:
 
 ```bash
-uv run vf-eval med-agent-bench \
+uv run vf-eval medagentbench \
   -m gpt-4.1-mini \
   -n 20 -r 1 -t 2048 -T 0 \
   -a '{"fhir_api_base": "http://localhost:8080/fhir/"}'
@@ -64,3 +64,9 @@ Notes:
 | Metric | Meaning |
 | ------ | ------- |
 | `reward` | 1 if clinical task correctly solved, else 0 |
+| `medagent_bench_reward` | Same as the above reward |
+| `query_success_rate` | Proportion of successful FHIR queries (weight 0) |
+| `action_success_rate` | Proportion of successful actions (weight 0) |
+
+### Note
+This environment is adapted from the original Prime Intellect [MedAgentBench implementation](https://app.primeintellect.ai/dashboard/environments/primeintellect/med-agent-bench). It has been modified to report the query success rate and action success rate as unweighted rewards to match the paper.

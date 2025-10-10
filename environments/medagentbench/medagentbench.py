@@ -1,3 +1,6 @@
+# modified from the Prime Intellect implementation
+# https://app.primeintellect.ai/dashboard/environments/primeintellect/med-agent-bench
+
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
