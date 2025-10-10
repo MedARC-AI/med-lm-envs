@@ -29,16 +29,10 @@ Run an evaluation with default settings:
 uv run vf-eval med_dialog
 ```
 
-Configure model and sampling:
-
-```bash
-uv run vf-eval med_dialog -m gpt-4.1-mini -n 20 -r 3 -t 1024 -T 0.7
-```
-
 Use a custom judge model:
 
 ```bash
-uv run vf-eval med_dialog -m gpt-4.1-mini --env-args '{"judge_model": "gpt-4o", "cache_dir": "./data/meddialog"}'
+uv run vf-eval med_dialog -m gpt-4.1-mini --env-args '{"judge_model": "gpt-5-mini"}'
 ```
 
 Notes:

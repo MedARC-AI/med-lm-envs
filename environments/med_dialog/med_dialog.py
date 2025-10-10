@@ -1,6 +1,3 @@
-from __future__ import annotations
-
-import json
 import os
 from pathlib import Path
 from typing import Any, Sequence
@@ -8,7 +5,6 @@ from typing import Any, Sequence
 import verifiers as vf
 from datasets import Dataset, concatenate_datasets, load_dataset
 from medarc_verifiers.parsers import JSONParser
-from pydantic import BaseModel
 from medarc_verifiers.utils import download_file
 from openai import AsyncOpenAI
 from verifiers.types import Info, Messages, State
@@ -20,6 +16,7 @@ SPLITS: Sequence[str] = ("train", "test")
 SUBSETS: Sequence[str] = ("healthcaremagic", "icliniq")
 
 PROMPT = "Generate a one sentence summary of this patient-doctor conversation."
+PROMPT_THINK = "Think step-by-step inside <think>...</think> tags then generate a one sentence summary of this patient-doctor conversation."
 
 JUDGE_RESPONSE_PARSER = JSONParser(fields=["accuracy", "completeness", "clarity"])
 JUDGE_DIMENSIONS = ("accuracy", "completeness", "clarity")
@@ -78,6 +75,7 @@ def _load_split_dataset(subsets: Sequence[str], split: str, cache_path: Path) ->
 
 
 def load_environment(
+    use_think: bool = False,
     cache_dir: Path | str | None = None,
     judge_model: str = "gpt-4o-mini",
     judge_base_url: str | None = None,
@@ -94,10 +92,11 @@ def load_environment(
     eval_dataset = _load_split_dataset(subsets=SUBSETS, split="test", cache_path=cache_path)
 
     api_key = judge_api_key if judge_api_key is not None else os.getenv("JUDGE_API_KEY")
-    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key)
     judge_parser = JSONParser(fields=["accuracy", "completeness", "clarity"])
     judge_rubric = vf.JudgeRubric(
-        judge_client=judge_client,
+        parser=vf.ThinkParser(extract_fn=lambda x: x) if use_think else None,
+        parallelize_scoring=True,
+        judge_client=AsyncOpenAI(base_url=judge_base_url, api_key=api_key),
         judge_model=judge_model,
         judge_prompt="{question}",
     )
@@ -123,7 +122,7 @@ def load_environment(
             [{"role": "user", "content": judge_prompt}], completion_text, gold_response, state
         )
 
-        parsed = judge_parser.parse(str(judge_raw), strip=True, last=True)
+        parsed = judge_parser.parse(str(judge_raw), strip=True)
         if parsed is None:
             parsed = {dimension: {"score": None, "explanation": None, "raw": None} for dimension in JUDGE_DIMENSIONS}
 
@@ -143,7 +142,7 @@ def load_environment(
     return vf.SingleTurnEnv(
         dataset=train_dataset,
         eval_dataset=eval_dataset,
-        system_prompt=PROMPT,
+        system_prompt=PROMPT_THINK if use_think else PROMPT,
         rubric=judge_rubric,
         **kwargs,
     )
