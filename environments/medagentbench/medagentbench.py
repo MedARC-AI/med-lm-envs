@@ -1,4 +1,6 @@
 import json
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 import requests
@@ -56,7 +58,7 @@ def extract_posts(results):
                     url = r.split("\n")[0][4:].strip()
                     payload = json.loads("\n".join(r.split("\n")[1:]))
                     posts.append((url, payload))
-                except:
+                except Exception:
                     pass
     return posts
 
@@ -76,11 +78,8 @@ def task1(case_data, results, fhir_api_base):
         if ref_sol == json.loads(results.result):
             return True
         return False
-    except:
+    except Exception:
         return False
-
-
-from datetime import datetime, timedelta
 
 
 def calculate_age(dob):
@@ -106,7 +105,7 @@ def task2(case_data, results, fhir_api_base):
         if ref_sol == json.loads(results.result):
             return True
         return False
-    except:
+    except Exception:
         return False
 
 
@@ -160,7 +159,7 @@ def task4(case_data, results, fhir_api_base):
         if ref_sol == json.loads(results.result):
             return True
         return False
-    except:
+    except Exception:
         return False
 
 
@@ -221,7 +220,7 @@ def task5(case_data, results, fhir_api_base):
         ):  # We only ask the model to check, so it's fine if model returns []
             return True
         return False
-    except:
+    except Exception:
         return False
 
 
@@ -243,11 +242,11 @@ def task6(case_data, results, fhir_api_base):
 
     print(case_data["id"], ref_sol, results.result, flush=True)
     try:
-        l = json.loads(results.result)
-        if (len(l) == 1) and abs(l[0] - ref_sol[0]) < 0.1:
+        json_results = json.loads(results.result)
+        if (len(json_results) == 1) and abs(json_results[0] - ref_sol[0]) < 0.1:
             return True
         return False
-    except:
+    except Exception:
         return False
 
 
@@ -270,7 +269,7 @@ def task7(case_data, results, fhir_api_base):
         if ref_sol == json.loads(results.result):
             return True
         return False
-    except:
+    except Exception:
         return False
 
 
@@ -362,7 +361,7 @@ def task9(case_data, results, fhir_api_base):
         ):  # We only ask the model to check, so it's fine if model returns []
             return True
         return False
-    except:
+    except Exception:
         return False
 
 
@@ -416,7 +415,7 @@ def task10(case_data, results, fhir_api_base):
         ):  # We only ask the model to check, so it's fine if model returns []
             return True
         return False
-    except:
+    except Exception:
         return False
 
 
@@ -866,6 +865,13 @@ def load_environment(
     Returns:
         A configured MedAgentBenchEnv instance
     """
+
+    def _resolve_local_path(path_str: str) -> Path:
+        path_obj = Path(path_str)
+        if not path_obj.is_absolute() and path_obj.parent == Path("."):
+            return Path(__file__).resolve().parent / path_obj
+        return path_obj
+
     # Verify FHIR server is reachable before loading environment
     if not verify_fhir_server(fhir_api_base):
         raise Exception(
@@ -873,14 +879,15 @@ def load_environment(
         )
 
     # Load functions
-    with open(funcs_path, "r") as f:
+    with open(_resolve_local_path(funcs_path), "r") as f:
         funcs = json.load(f)
 
     # Load and prepare eval dataset only
     eval_dataset = None
     if test_data_path:
         try:
-            eval_dataset = Dataset.from_json(test_data_path)
+            test_data_path = _resolve_local_path(test_data_path)
+            eval_dataset = Dataset.from_json(str(test_data_path))
 
             # Filter tasks if specified
             if tasks:
@@ -927,9 +934,7 @@ def load_environment(
 
     # Rubric combines all functions - main reward (weight 1.0) + metrics (weight 0.0)
     rubric = vf.Rubric(
-        parser=parser,
-        funcs=[reward_func, query_success_func, action_success_func],
-        weights=[1.0, 0.0, 0.0]
+        parser=parser, funcs=[reward_func, query_success_func, action_success_func], weights=[1.0, 0.0, 0.0]
     )
 
     # Create and return the environment
