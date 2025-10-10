@@ -1,0 +1,33 @@
+[project]
+name = "medarc-verifiers"
+version = "0.1.0"
+description = "A collection of MedARC utilites for the verifiers package"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+dependencies = [
+    "prime>=0.3.35",
+    "verifiers>=0.1.4",
+    "pyyaml>=6.0.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ["docs"]
+src = ["medarc_verifiers"]
+
+[build-system]
+requires = ["uv_build>=0.9.0,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "medarc_verifiers"
+module-root = ""
