@@ -1,6 +1,8 @@
-# MedARC Medical Language Model Evaluations
+# MedARC Medical Language Model Environments
 
-This repository is used to build evaluations for the MedARC medical language model project.
+This repository is used to build verifiers environments and tools for the MedARC medical language model project.
+
+It also contains the medarc-verifiers package, which provides additional tools for creating verifiers environments.
 
 ## Getting Started with Verifiers Environments
 
