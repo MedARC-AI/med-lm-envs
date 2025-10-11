@@ -1,5 +1,4 @@
 from __future__ import annotations
-from typing import Any, Optional
 from datasets import load_dataset
 import verifiers as vf
     
