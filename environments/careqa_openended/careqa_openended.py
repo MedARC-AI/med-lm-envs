@@ -2,17 +2,6 @@ from __future__ import annotations
 from typing import Any, Optional
 from datasets import load_dataset
 import verifiers as vf
-
-# Prompt Construction
-
-def _build_open_prompt(question: str) -> str:
-    """Create an open-ended clinical QA prompt."""
-    return (
-        "You are an expert clinician answering medical questions.\n"
-        "Read the following question carefully and provide a detailed, concise answer.\n\n"
-        f"Question:\n{question.strip()}\n\n"
-        "Answer:"
-    )
     
 # Load Open-Ended Environment
 
