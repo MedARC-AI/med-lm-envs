@@ -1,51 +1,42 @@
-# careqa-openended
+# careqa_openended
 
-> Replace the placeholders below, then remove this callout.
+Evaluation environment for the [HPAI-BSC/CareQA](https://huggingface.co/datasets/HPAI-BSC/CareQA) openended dataset.
 
 ### Overview
-- **Environment ID**: `careqa-openended`
-- **Short description**: <one-sentence description>
-- **Tags**: <comma-separated tags>
+- **Environment ID**: `careqa_openended`  
+- **Short description**: CareQA is a healthcare QA dataset with **multiple-choice** and **open-ended clinical reasoning questions**. This environment is for the open-ended questions only.  
+- **Tags**: healthcare, medical QA, clinical reasoning, single-turn
 
 ### Datasets
-- **Primary dataset(s)**: <name(s) and brief description>
-- **Source links**: <links>
-- **Split sizes**: <train/eval counts>
+- **Primary dataset(s)**:  
+  - `CareQA_en_open` â€“ open-ended clinical questions with reference answers.
+- **Source links**:  
+  - [Hugging Face CareQA dataset](https://huggingface.co/datasets/HPAI-BSC/CareQA)
 
 ### Task
-- **Type**: <single-turn | multi-turn | tool use>
-- **Parser**: <e.g., ThinkParser, XMLParser, custom>
-- **Rubric overview**: <briefly list reward functions and key metrics>
+- **Type**: single-turn  
+- **Parser**: custom prompt mapping (no structured markup)  
+- **Rubric overview**:  
+**Open-ended (`open_clinical`)**: `vf.JudgeRubric()` using an LLM-as-judge to score free-text answers for correctness and clinical reasoning. 
 
 ### Quickstart
 Run an evaluation with default settings:
 
 ```bash
-uv run vf-eval careqa-openended
+uv run vf-eval careqa
 ```
 
 Configure model and sampling:
 
 ```bash
-uv run vf-eval careqa-openended   -m gpt-4.1-mini   -n 20 -r 3 -t 1024 -T 0.7   -a '{"key": "value"}'  # env-specific args as JSON
-```
-
-Notes:
-- Use `-a` / `--env-args` to pass environment-specific configuration as a JSON object.
-
-### Environment Arguments
-Document any supported environment arguments and their meaning. Example:
-
-| Arg | Type | Default | Description |
-| --- | ---- | ------- | ----------- |
-| `foo` | str | `"bar"` | What this controls |
-| `max_examples` | int | `-1` | Limit on dataset size (use -1 for all) |
+uv run vf-eval careqa_openended --model gpt-4.1-mini --num-examples 3 -s
+``` 
 
 ### Metrics
-Summarize key metrics your rubric emits and how they’re interpreted.
 
-| Metric | Meaning |
-| ------ | ------- |
-| `reward` | Main scalar reward (weighted sum of criteria) |
-| `accuracy` | Exact match on target answer |
+| Metric        | Meaning |
+|---------------|---------|
+| `reward`      | Main scalar reward (weighted sum of rubric criteria) |
+|  `judge_score` | For open-ended questions, LLM-assigned score evaluating answer quality, correctness, and clinical reasoning |
+
 

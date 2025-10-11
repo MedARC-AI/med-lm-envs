@@ -32,17 +32,6 @@ Configure model and sampling:
 uv run vf-eval careqa_mcq --model gpt-4.1-mini --num-examples 3 -s
 ``` 
 
-
-### Environment Arguments
-
-| Arg            | Type | Default | Description |
-|----------------|------|---------|-------------|
-| `max_examples` | int  | `-1`    | Maximum number of examples to evaluate; use `-1` for full dataset |
-| `split`        | str  | `"test"` | Dataset split to use: `train`, `validation`, or `test` |
-| `verbose`      | bool | `False` | Print prompt/answer samples during evaluation |
-
----
-
 ### Metrics
 
 | Metric        | Meaning |
