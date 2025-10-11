@@ -28,7 +28,7 @@ def _first_letter(text: str) -> Optional[str]:
 # Prompt Construction
 
 def _build_prompt(question: str, options: dict[str, str]) -> str:
-    """Create a polished clinical MCQ prompt."""
+    """Create an MCQ prompt."""
     formatted_opts = "\n".join(f"{k}. {v}" for k, v in options.items())
     letters = ", ".join(options.keys())
     return (

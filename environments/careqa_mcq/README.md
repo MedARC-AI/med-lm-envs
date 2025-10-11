@@ -2,12 +2,10 @@
 
 Evaluation environment for the [HPAI-BSC/CareQA](https://huggingface.co/datasets/HPAI-BSC/CareQA) multiple-choice dataset.
 
----
-
 ### Overview
-- **Environment ID**: `careqa`  
+- **Environment ID**: `careqa_mcq`  
 - **Short description**: CareQA is a healthcare QA dataset with **multiple-choice** and **open-ended clinical reasoning questions**. This environment is for the MCQs only.  
-- **Tags**: healthcare, medical QA, clinical reasoning, MCQ, open-ended, single-turn
+- **Tags**: healthcare, medical QA, clinical reasoning, MCQ, single-turn
 
 ### Datasets
 - **Primary dataset(s)**:  
@@ -21,8 +19,6 @@ Evaluation environment for the [HPAI-BSC/CareQA](https://huggingface.co/datasets
 - **Rubric overview**:  
 **MCQ (`closed_mcq`)**: `vf.Rubric()` measuring **accuracy** (letter match).  
 
----
-
 ### Quickstart
 Run an evaluation with default settings:
 
@@ -33,11 +29,8 @@ uv run vf-eval careqa
 Configure model and sampling:
 
 ```bash
-uv run vf-eval careqa     -m gpt-4.1-mini     -n 20 -r 3 -t 1024 -T 0.7     -a '{"max_examples": 50}'
-```
-
-Notes:  
-- Use `-a` / `--env-args` to pass environment-specific configuration as a JSON object.  
+uv run vf-eval careqa_mcq --model gpt-4.1-mini --num-examples 3 -s
+``` 
 
 
 ### Environment Arguments
