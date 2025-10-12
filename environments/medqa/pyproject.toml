@@ -1,0 +1,23 @@
+[project]
+name = "medqa"
+version = "0.1.0"
+description = "MedQA Evaluation"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "datasets>=4.0.0",
+    "verifiers>=0.1.2.post0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["medqa.py"]
+
+[tool.prime.environment]
+# lets Prime/vf-eval know where the loader lives in a flat repo
+loader = "medqa:load_environment"
+display_name = "MedQA"
+visibility = "PUBLIC"
