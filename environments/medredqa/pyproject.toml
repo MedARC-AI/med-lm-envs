@@ -21,3 +21,8 @@ allow-direct-references = true
 include = ["medredqa.py",
            "factscore_judge/**",
 ]
+
+[tool.prime.environment]
+loader = "medredqa:load_environment"
+display_name = "MedRedQA"
+visibility = "PUBLIC"
