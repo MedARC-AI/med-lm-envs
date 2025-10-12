@@ -1,6 +1,6 @@
 [project]
 name = "medredqa"
-version = "0.1.0"
+version = "0.2.7"
 description = "MedRedQA medical question answer evaluation"
 tags = ["medical", "reasoning", "single-turn", "llm-judge", "question answering"]
 requires-python = ">=3.11,<3.13"
@@ -18,4 +18,6 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build]
-include = ["medredqa.py"]
+include = ["medredqa.py",
+           "factscore_judge/**",
+]
