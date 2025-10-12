@@ -3,7 +3,7 @@ import sys
 from datasets import load_dataset
 from openai import AsyncOpenAI
 import verifiers as vf
-from factscore_judge.atomic_facts_judge import create_judge_rubric
+from factscore_judge.atomic_facts_judge import create_atomic_facts_judge_rubric
 
 
 def load_environment(
@@ -67,7 +67,7 @@ def load_environment(
     judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key) if api_key else None
 
     # Create JudgeRubric using the helper function from judge.py
-    rubric = create_judge_rubric(
+    rubric = create_atomic_facts_judge_rubric(
         judge_client=judge_client,
         judge_model=judge_model,
     )
