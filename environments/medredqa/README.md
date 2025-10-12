@@ -33,59 +33,65 @@ Here is a picture for reference:
 The small spots may be Fordyce spots but the  lump in the circle is not. If it is firm and non compressible then it is probably an epidermoid cyst. If it can be squashed flat it may be a blood vessel. It doesn’t look worrying and if it has not changed then there is a low likelihood of being serious.
 
 ##### Model Opinion and Recommendation:
-Thank you for sharing detailed information about your symptom. Based on your description of a small, painless, stable-sized lump the size of a grain of rice under the skin on the shaft of your penis near the dorsal vein, here are some possible considerations:
+Based on the information you provided, the small, painless, stable lump under the skin of your penile shaft is most likely a benign lesion such as an epidermoid cyst or a normal vein irregularity. Since it has been present for several months without change or symptoms, this is reassuring. 
 
-1. **Pearly Penile Papules (PPP)**
-These are small, dome-shaped or filiform papules that typically appear around the corona (the rim of the glans) but can sometimes be near the shaft. They are benign, normal anatomical variants and are usually asymptomatic. However, they tend to be multiple rather than a single lump.
+Your plan to see your primary care provider is appropriate. In the meantime, avoid manipulating or irritating the area, monitor for any changes (growth, pain, ulceration, discharge), and seek urgent care if these occur.
 
-2. **Epidermoid cyst (sebaceous cyst)**
-A small, benign cyst that can arise under the skin. Usually painless and slow-growing. They feel like a small, firm lump under the skin. Sometimes they can have a central punctum.
+At your appointment, your provider can examine the lump and, if needed, refer you to a urologist or dermatologist for further evaluation or possible removal.
 
-3. **Peyronie's disease nodule**
-This is a fibrous plaque or nodule under the skin of the penile shaft. Usually associated with penile curvature or pain during erection, but early plaques can be painless and stable. Usually feels firm.
+If you develop new symptoms such as pain, rapid growth, redness, or ulceration before your appointment, seek medical evaluation sooner.
 
-4. **Lymphocele or enlarged lymph node**
-Less likely on the shaft itself; usually lymph nodes are in the groin area.
-
-5. **Other benign lesions**
-Such as angiomas, fibromas, or lipomas (fatty lumps).
-
-6. **Infectious causes**
-Small bumps from infections (warts, molluscum contagiosum) usually have a characteristic appearance and often more than one lesion.
-
-7. **Malignant lesions**
-Very rare in this context, especially if stable, painless, and small, but any new persistent growth should be evaluated.
-Given that your lump is stable in size, painless, and you have no other symptoms such as redness, discharge, pain, or rapid growth, it is likely benign.
-
-**Recommendations:**
-Since you already have an appointment with your PCP, it is appropriate to wait for a professional evaluation.
-Monitor for any changes in size, color, pain, or new symptoms like discharge. If such changes occur, seek medical attention sooner.
-Avoid manipulating or squeezing the lump as it may cause irritation or infection.
-Your PCP may examine the lesion, and if necessary, order an ultrasound or refer you to a dermatologist or urologist for further evaluation.
-If the lump is bothersome or cosmetically concerning, options such as excision or biopsy can be discussed with your doctor.
-If you develop any urgent symptoms such as rapid enlargement, severe pain, ulceration, bleeding, or signs of infection (redness, warmth, fever), you should seek medical care promptly.
-In summary, the lump you describe sounds like it could be a benign cyst or other harmless lesion, but confirmation by your PCP is important. Your planned appointment is a good step, and you should keep an eye on any changes in the lesion until then.
+Overall, keep track of any changes and follow up as scheduled.
 
 ##### Judge reasoning and Score:
 Atomic Facts and matching 
-Fact: Small spots may be Fordyce spots., Match: False
-Fact: The circled lump is unlikely to be a Fordyce spot., Match: True
+Fact: The small spots may be Fordyce spots., Score: False
+Fact: A firm and non-compressible lump is probably an epidermoid cyst., Score: True
 Fact: A firm, noncompressible lump is likely an epidermoid cyst., Match: True
-Fact: A lump that can be flattened may be a blood vessel., Match: False
-Fact: The lesion’s appearance is not concerning., Match: True
-Fact: If the lesion has not changed over time, it is less likely to be serious., Match: True
-Total Matches: 4, Total Facts: 6, Score: **0.66**
+Fact: If the lump doesn’t look worrying and has not changed, there is a low likelihood of it being serious., Score: True
+Total Matches: 2, Total Facts: 4, Score: **0.5**
 
 
-### Using
-Run evaluation with configured model and sampling:
+### Environment Arguments
+Use `-a` / `--env-args` to pass environment-specific configuration as a JSON object.
+
+| Arg | Type | Default | Description |
+| --- | ---- | ------- | ----------- |
+| `judge_model` | str | `"gpt-4o-mini"` | Model to use for LLM-as-a-Judge evaluation |
+| `judge_base_url` | str | `None` | Optional base URL for judge model API |
+| `judge_api_key` | str | `None` | Optional API key for judge model (defaults to OPENAI_API_KEY env var) |
+| `use_think` | bool | `False` | Whether to use ThinkParser with `<think>...</think>` tags and `\boxed{}` format for reasoning models |
+
+### Usage Examples
+
+Standard evaluation (free-form responses):
 
 ```bash
-uv run vf-eval medredqa  -m gpt-4.1-mini -n 20 -r 3 -t 1024 -T 0.7
+uv run vf-eval medredqa -m gpt-4.1-mini -n 20 -r 3 -t 1024 -T 0.7
 ```
 
-Verbose with saved output
+Verbose with saved output:
 
 ```bash
-uv run vf-eval medredqa  -m gpt-4.1-mini -n 20 -r 3 -t 1024 -T 0.7 -s -v
+uv run vf-eval medredqa -m gpt-4.1-mini -n 20 -r 3 -t 1024 -T 0.7 -s -v
+```
+
+Evaluation with reasoning model (with think tags and boxed answers):
+
+```bash
+uv run vf-eval medredqa \
+  -m gpt-4.1-mini \
+  -n 20 -r 3 -t 1024 -T 0.7 \
+  -a '{"use_think": true}' \
+  -s
+```
+
+Custom judge model:
+
+```bash
+uv run vf-eval medredqa \
+  -m gpt-4.1-mini \
+  -n 20 -r 3 -t 1024 -T 0.7 \
+  -a '{"judge_model": "gpt-4o", "use_think": true}' \
+  -s
 ```

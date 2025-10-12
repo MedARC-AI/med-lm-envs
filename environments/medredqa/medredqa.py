@@ -3,13 +3,31 @@ import sys
 from datasets import load_dataset
 from openai import AsyncOpenAI
 import verifiers as vf
+from verifiers.utils.data_utils import (
+    extract_boxed_answer,
+)
+from datasets.utils.logging import disable_progress_bar
 from factscore_judge.atomic_facts_judge import create_atomic_facts_judge_rubric
+
+disable_progress_bar()  # suppress datasets mapping progress bar
+
+THINK_BOXED_SYSTEM_PROMPT = ("You are a biomedical reasoning model. You must think step-by-step and reason carefully about "
+        "the following medical question and then provide your opinion and recommendations. "
+        "Think step-by-step inside <think>...</think> tags. "
+        "Then, give your opinion and recommendations inside\\boxed{}.")
+
+BOXED_SYSTEM_PROMPT = (
+    "You are a biomedical reasoning model. You must think step-by-step and reason carefully about "
+        "the following medical question and then provide your opinion and recommendations. "
+        "Then, give your opinion and recommendations inside\\boxed{}."
+)
 
 
 def load_environment(
     judge_model: str = "gpt-4o-mini",
     judge_base_url: str | None = None,
     judge_api_key: str | None = None,
+    use_think: bool = False,
 ) -> vf.Environment:
     """
     MedRedQA environment using LLM-as-a-Judge evaluation.
@@ -57,19 +75,27 @@ def load_environment(
     
 
     # System prompt for the task
-    system_prompt = (
+    system_prompt_msg = (
         "You are a biomedical reasoning model. You must think step-by-step and reason carefully about "
         "the following medical question and then provide your opinion and recommendations."
     )
+    if use_think:
+        system_prompt = THINK_BOXED_SYSTEM_PROMPT 
+    else:
+        system_prompt = BOXED_SYSTEM_PROMPT + "\n" + system_prompt_msg
 
     # Initialize OpenAI client for judge
     api_key = judge_api_key if judge_api_key else os.getenv("OPENAI_API_KEY")
     judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key) if api_key else None
 
+    # Create parser - ThinkParser for reasoning models, None for free-form evaluation
+    parser = vf.ThinkParser(extract_boxed_answer) if use_think else vf.Parser(extract_boxed_answer)
+
     # Create JudgeRubric using the helper function from judge.py
     rubric = create_atomic_facts_judge_rubric(
+        parser=parser,
         judge_client=judge_client,
-        judge_model=judge_model,
+        judge_model=judge_model
     )
 
     # Create the environment
@@ -77,6 +103,7 @@ def load_environment(
         dataset=train_dataset,
         eval_dataset=eval_dataset,
         system_prompt=system_prompt,
+        parser=parser,
         rubric=rubric
     )
     

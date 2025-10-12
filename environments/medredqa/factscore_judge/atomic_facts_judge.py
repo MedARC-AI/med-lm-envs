@@ -98,10 +98,15 @@ async def medical_recommendations_atomic_facts_reward_func(
 
     # Ensure completion is a string for processing
     completion_text = completion if isinstance(completion, str) else str(completion)
+    parser = kwargs.get('parser')
+    if parser:
+        parsed_completion_text = parser.parse_answer(completion) or ""
+    else:
+        parsed_completion_text = completion if isinstance(completion, str) else str(completion)
     
     # Print debug information if verbose mode is enabled
     if verbose:
-        print(f"completion_text: {completion_text}")
+        print(f"completion_text: {parsed_completion_text}")
         print(f"answer: {answer}")
         print(f"prompt: {prompt}")
         print(f"atomic_facts: {atomic_facts}")
@@ -134,6 +139,7 @@ async def medical_recommendations_atomic_facts_reward_func(
 
 
 def create_atomic_facts_judge_rubric(
+    parser: vf.Parser,
     judge_client: AsyncOpenAI | None,
     judge_model: str = "gpt-4o-mini",
 ) -> vf.JudgeRubric:
@@ -156,6 +162,7 @@ def create_atomic_facts_judge_rubric(
         judge_client=judge_client,
         judge_model=judge_model,
         judge_prompt=JUDGE_TEMPLATE,
+        parser=parser
     )
     
     # Register the atomic facts reward function with full weight
