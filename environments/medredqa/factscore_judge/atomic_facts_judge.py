@@ -153,7 +153,7 @@ async def medical_recommendations_atommic_reward_func(
     judge_api_key = kwargs.get('judge_api_key')
     api_key = judge_api_key if judge_api_key else os.getenv("OPENAI_API_KEY")
     judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key) if api_key else None
-    generator = AtomicFactGenerator(judge_client)
+    generator = AtomicFactGenerator(judge_client, model_name=judge_model)
     atomic_facts, para_breaks = await generator.run(answer)
 
     # Extract the answer section (handling think tags)

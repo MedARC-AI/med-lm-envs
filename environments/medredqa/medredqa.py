@@ -1,9 +1,9 @@
 import os
 import sys
-import re
 from datasets import load_dataset
 from openai import AsyncOpenAI
 import verifiers as vf
+from factscore_judge.atomic_facts_judge import create_judge_rubric
 
 
 def load_environment(
@@ -62,86 +62,15 @@ def load_environment(
         "the following medical question and then provide your opinion and recommendations."
     )
 
-    # Judge prompt template for medical diagnosis evaluation
-    JUDGE_TEMPLATE = """\
-Your job is to evaluate whether the provided opinions and recommendations match the opinions and recommendations of a certified medical professional.
-
-You will be given:
-1. A medical question (question)
-2. The ground truth opinion and recommendations from a certified medical professional (answer)  
-3. Predicted opinion and recommendations (response)
-
-Your task is to determine how similar the predicted opinion and recommendations are to those of a certified medical professional, even if worded differently and provide a similarity score between 0 and 1.
-
-Consider these guidelines:
-- Medical terms that refer to the same condition should be considered equivalent
-- Different levels of specificity may be acceptable (e.g., "pneumonia" vs "bacterial pneumonia")
-- Spelling variations of medical terms should be considered equivalent
-- The core medical meaning should match, even if additional details vary
-- Consider if predicted opinion and recommendations are similar in implications to ground truth opinion and recommendations
-
-Question: {question}
-
-Certified medical professional's opinion and recommendations: {answer}
-
-Predicted opinion and recommendations: {response}
-
-Provide a score indicating if predicted opinion and recommendations cover the ground truth opinion and recommendations based on following:
-- Consider number of unique points that are made in ground truth opinion and recommendations. For each unique point, consider if the predicted opinion and recommendations make a similar point. Use this to compute percentage of points that are made in the ground truth opinion and recommendations that are also made in the predicted opinion and recommendations.
-- Respond with number between 0 and 1 based on this percentage, where 1 is the most similar and 0 is the least similar. 
-- Give final score in the format **SCORE:actual_score**. For example **SCORE:0.5** or **SCORE:1.0**
-""".strip()
-
     # Initialize OpenAI client for judge
     api_key = judge_api_key if judge_api_key else os.getenv("OPENAI_API_KEY")
     judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key) if api_key else None
 
-    # Create JudgeRubric with custom prompt
-    rubric = vf.JudgeRubric(
+    # Create JudgeRubric using the helper function from judge.py
+    rubric = create_judge_rubric(
         judge_client=judge_client,
         judge_model=judge_model,
-        judge_prompt=JUDGE_TEMPLATE,
     )
-
-    def extract_score(text: str) -> tuple[float, bool]:
-        """
-        Extracts the numeric value following 'SCORE:' in the given text. Also indicates if score was found
-        """
-        try:
-            match = re.search(r"SCORE:([0-9]*\.?[0-9]+)", text)
-            if match:
-                return float(match.group(1)), True
-        except Exception:
-            pass
-        return 0.0, False
-
-    async def medical_recommendations_reward_func(
-        judge, prompt, completion, answer, state, info=None, **kwargs
-    ) -> float:
-        """
-        Reward function that uses LLM judge to evaluate medical diagnosis equivalence.
-        Expects judge response to be a float between 0 and 1. Returns 0 for invalid numbers.
-        """
-        # Extract the answer section (handling think tags)
-        completion_text = completion if isinstance(completion, str) else str(completion)
-        
-        # Get judge response using the extracted answer
-        judge_response = await judge(prompt, completion_text, answer, state, **kwargs)
-
-        #add judge response to info to be saved
-        info["judge_response"] = judge_response
-
-        #parse score and save parsing status
-        score, passed_parse = extract_score(judge_response)
-
-        #log to info if unable to parse
-        if not passed_parse:
-            info["failure_reason"] = "Unable to parse score from judge response"
-        
-        return score
-
-    # Add the reward function to the rubric
-    rubric.add_reward_func(medical_recommendations_reward_func, weight=1.0)
 
     # Create the environment
     vf_env = vf.SingleTurnEnv(
