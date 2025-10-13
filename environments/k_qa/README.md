@@ -1,7 +1,5 @@
 # k_qa
 
-> Replace the placeholders below, then remove this callout.
-
 ### Overview
 - **Environment ID**: `k_qa`
 - **Short description**: An Evaluation for free form answers using concepts from FActScore ( break in to atomic statements) and calculating metrics for any LLM using comprehensiveness and hallucination.
