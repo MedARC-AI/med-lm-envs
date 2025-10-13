@@ -1,3 +1,11 @@
+
+##################
+
+# ALL PROMPTS ARE FROM THE PAPER (Source: https://arxiv.org/abs/2401.14493)
+
+##################
+
+
 def _prompt_for_has_contradiction(question: str, llm_answer: str, answer: str) -> str:
     return f"""
 # OVERALL INSTRUCTIONS
@@ -203,7 +211,7 @@ Claims:
 
 
 
-
+# CURRENTLY NOT USED (Source: https://arxiv.org/abs/2401.14493)
 def _build_eval_prompt(question: str, llm_answer: str, physician_answer: str) -> str:
     return f"""
 
