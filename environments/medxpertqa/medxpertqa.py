@@ -1,4 +1,5 @@
 import verifiers as vf
+from verifiers.utils.data_utils import extract_boxed_answer
 from datasets import load_dataset
 
 import os
@@ -6,11 +7,13 @@ import re
 
 def _get_system_prompt() -> str:
     system_prompt = (
-        "You are a medical question-answering model. You must think step-by-step and reason carefully about "
-        "the following medical question before providing your answer. You should enclose your thoughts "
-        "and reasoning inside <think> </think> tags, and then provide your final option letter enclosed inside <answer> </answer> tags. Choose exactly ONE option letter."
-    )
+        "You are a helpful medical assistant. Think step-by-step inside <think>...</think> tags."
+        "Put your final answer within \boxed{{}}.\nQ:"
+        )
     return system_prompt
+
+def _build_prompt(question: str) -> str:
+    return _get_system_prompt() + " " + question
 
 def load_environment() -> vf.Environment:
     """
@@ -26,6 +29,18 @@ def load_environment() -> vf.Environment:
         }
     )
 
+    def _map(ex):
+        q: str = ex["question"]
+        a: str = ex["label"]
+
+        return {
+            "question": _build_prompt(q),
+            "answer": a,
+        }
+
+
+    mapped = test_dataset.map(_map).filter(lambda r: r is not None)
+
     async def medxpertqa_reward_func(
         completion: str,
         answer: str,
@@ -35,12 +50,7 @@ def load_environment() -> vf.Environment:
         Compares the model response with the ground truth answer.
         Returns 1.0 if they match (case-insensitive), else 0.0.
         """
-
-        match = re.search(r"<answer>(.*?)</answer>", completion, re.DOTALL | re.IGNORECASE)
-        if match:
-            final_answer = match.group(1).strip()
-        else:
-            final_answer = completion.strip()
+        final_answer = extract_boxed_answer(completion)
 
         if final_answer.lower() == answer.lower():
             return 1.0
@@ -53,9 +63,8 @@ def load_environment() -> vf.Environment:
     )
 
     vf_env = vf.SingleTurnEnv(
-        dataset=test_dataset,
-        eval_dataset=test_dataset,
-        system_prompt=_get_system_prompt(),
+        eval_dataset=mapped,
+        system_prompt=None,
         rubric=rubric
     )
 

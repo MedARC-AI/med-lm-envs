@@ -9,7 +9,7 @@
 ### Datasets
 - **Primary dataset(s)**: TsinghuaC3I/MedXpertQA
 - **Source links**: [HuggingFace](https://huggingface.co/datasets/TsinghuaC3I/MedXpertQA)
-- **Split sizes**: using the test subset with 2.45k rows as both train and test 
+- **Split sizes**: test subset - 2.45k rows
 
 ### Task
 - **Type**: single-turn
