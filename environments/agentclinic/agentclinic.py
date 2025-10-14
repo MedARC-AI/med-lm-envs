@@ -1,20 +1,17 @@
 """
 AgentClinic Environment for Prime Intellect Verifiers
 Reimplemented to match the original paper exactly.
-Supports multiple LLM backends: OpenAI, Anthropic, Gemini, Mistral, vLLM
+Supports multiple LLM backends via OpenAI-compatible APIs
 """
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
 import json
 import os
-import urllib.request
-import urllib.error
 
 import verifiers as vf
 from datasets import Dataset
 from verifiers.utils.data_utils import THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
-
-from llm_client import LLMClient
+from openai import AsyncOpenAI
 
 
 # ============================================================
@@ -40,8 +37,11 @@ class PatientAgent:
     Simulates patient responses using configured LLM backend.
     """
 
-    def __init__(self, llm_client: LLMClient):
-        self.llm_client = llm_client
+    def __init__(self, client: AsyncOpenAI, model: str, temperature: float = 0.05, max_tokens: int = 200):
+        self.client = client
+        self.model = model
+        self.temperature = temperature
+        self.max_tokens = max_tokens
         self.agent_hist = ""
         self.symptoms = {}
 
@@ -64,7 +64,7 @@ class PatientAgent:
         )
         return base + symptoms
 
-    def inference_patient(self, question: str) -> str:
+    async def inference_patient(self, question: str) -> str:
         prompt = (
             f"\nHere is a history of your dialogue: {self.agent_hist}\n"
             f"Here was the doctor response: {question}\n"
@@ -76,7 +76,18 @@ class PatientAgent:
             {"role": "user", "content": prompt}
         ]
 
-        answer = self.llm_client.generate(messages)
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens
+            )
+            answer = response.choices[0].message.content or ""
+        except Exception as e:
+            print(f"[PatientAgent] Error: {e}")
+            answer = ""
+
         if not answer:
             answer = "I'm not sure about that."
 
@@ -90,17 +101,20 @@ class MeasurementAgent:
     Returns test results from the scenario data using configured LLM backend
     """
 
-    def __init__(self, scenario_data: Dict[str, Any], llm_client: LLMClient):
+    def __init__(self, scenario_data: Dict[str, Any], client: AsyncOpenAI, model: str, temperature: float = 0.05, max_tokens: int = 200):
         self.agent_hist = ""
         self.information = scenario_data
-        self.llm_client = llm_client
+        self.client = client
+        self.model = model
+        self.temperature = temperature
+        self.max_tokens = max_tokens
 
     def system_prompt(self) -> str:
         base = "You are a measurement reader who responds with medical test results. Please respond in the format \"RESULTS: [results here]\""
         presentation = f"\n\nBelow is all of the information you have. {json.dumps(self.information, ensure_ascii=False)}. \n\nIf the requested results are not in your data then you can respond with NORMAL READINGS."
         return base + presentation
 
-    def inference_measurement(self, question: str) -> str:
+    async def inference_measurement(self, question: str) -> str:
         prompt = (
             f"\nHere is a history of the dialogue: {self.agent_hist}\n"
             f"Here was the doctor measurement request: {question}"
@@ -111,11 +125,22 @@ class MeasurementAgent:
             {"role": "user", "content": prompt}
         ]
 
-        answer = self.llm_client.generate(messages)
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens
+            )
+            answer = response.choices[0].message.content or ""
+        except Exception as e:
+            print(f"[MeasurementAgent] Error: {e}")
+            answer = ""
+
         if not answer:
             answer = "RESULTS: NORMAL READINGS"
 
-        # Update history 
+        # Update history
         self.agent_hist += question + "\n\n" + answer + "\n\n"
         return answer
 
@@ -224,19 +249,16 @@ class AgentClinicEnv(vf.MultiTurnEnv):
         name: str = "AgentClinic",
         # Patient agent config
         patient_model: str = "gpt-4o-mini",
-        patient_api_base: Optional[str] = None,
+        patient_base_url: Optional[str] = None,
         patient_api_key: Optional[str] = None,
-        patient_backend: str = "auto",
         # Measurement agent config
         measurement_model: str = "gpt-4o-mini",
-        measurement_api_base: Optional[str] = None,
+        measurement_base_url: Optional[str] = None,
         measurement_api_key: Optional[str] = None,
-        measurement_backend: str = "auto",
         # Moderator/judge config
         moderator_model: str = "gpt-4o-mini",
-        moderator_api_base: Optional[str] = None,
+        moderator_base_url: Optional[str] = None,
         moderator_api_key: Optional[str] = None,
-        moderator_backend: str = "auto",
     ):
         """
         Initialize AgentClinic environment.
@@ -247,17 +269,14 @@ class AgentClinicEnv(vf.MultiTurnEnv):
             use_think: Whether to use chain-of-thought prompting
             name: Environment name
             patient_model: Model name for Patient agent
-            patient_api_base: API base URL for patient agent
+            patient_base_url: API base URL for patient agent (supports OpenAI, vLLM, etc.)
             patient_api_key: API key for patient agent
-            patient_backend: Backend type for patient agent
             measurement_model: Model name for Measurement agent
-            measurement_api_base: API base URL for measurement agent
+            measurement_base_url: API base URL for measurement agent
             measurement_api_key: API key for measurement agent
-            measurement_backend: Backend type for measurement agent
             moderator_model: Model name for Moderator/Judge
-            moderator_api_base: API base URL for moderator
+            moderator_base_url: API base URL for moderator
             moderator_api_key: API key for moderator
-            moderator_backend: Backend type for moderator
         """
         self._raw_cases = cases
         self._scenarios = [Scenario(c) for c in cases]
@@ -266,30 +285,23 @@ class AgentClinicEnv(vf.MultiTurnEnv):
 
         # Store patient agent LLM configuration
         self._patient_model = patient_model
-        self._patient_api_base = patient_api_base
-        self._patient_api_key = patient_api_key
-        self._patient_backend = patient_backend
+        self._patient_base_url = patient_base_url
+        self._patient_api_key = patient_api_key or os.environ.get("OPENAI_API_KEY")
 
         # Store measurement agent LLM configuration
         self._measurement_model = measurement_model
-        self._measurement_api_base = measurement_api_base
-        self._measurement_api_key = measurement_api_key
-        self._measurement_backend = measurement_backend
+        self._measurement_base_url = measurement_base_url
+        self._measurement_api_key = measurement_api_key or os.environ.get("OPENAI_API_KEY")
 
         # Store moderator LLM configuration
         self._moderator_model = moderator_model
-        self._moderator_api_base = moderator_api_base
-        self._moderator_api_key = moderator_api_key
-        self._moderator_backend = moderator_backend
+        self._moderator_base_url = moderator_base_url
+        self._moderator_api_key = moderator_api_key or os.environ.get("OPENAI_API_KEY")
 
         # Create moderator client for scoring
-        self._moderator_client = LLMClient(
-            model=moderator_model,
-            api_base=moderator_api_base,
-            api_key=moderator_api_key,
-            backend=moderator_backend,
-            temperature=0.0,
-            max_tokens=10,
+        self._moderator_client = AsyncOpenAI(
+            base_url=moderator_base_url,
+            api_key=self._moderator_api_key
         )
 
         # Build dataset for verifiers
@@ -328,31 +340,34 @@ class AgentClinicEnv(vf.MultiTurnEnv):
 
         scenario = self._scenarios[case_index]
 
-        # Create separate LLM clients for each agent
-        patient_client = LLMClient(
-            model=self._patient_model,
-            api_base=self._patient_api_base,
-            api_key=self._patient_api_key,
-            backend=self._patient_backend,
-            temperature=0.05,
-            max_tokens=200,
+        # Create separate AsyncOpenAI clients for each agent
+        patient_client = AsyncOpenAI(
+            base_url=self._patient_base_url,
+            api_key=self._patient_api_key
         )
 
-        measurement_client = LLMClient(
-            model=self._measurement_model,
-            api_base=self._measurement_api_base,
-            api_key=self._measurement_api_key,
-            backend=self._measurement_backend,
-            temperature=0.05,
-            max_tokens=200,
+        measurement_client = AsyncOpenAI(
+            base_url=self._measurement_base_url,
+            api_key=self._measurement_api_key
         )
 
         # Create fresh agents for this case (like paper's initialization)
-        patient_agent = PatientAgent(patient_client)
+        patient_agent = PatientAgent(
+            client=patient_client,
+            model=self._patient_model,
+            temperature=0.05,
+            max_tokens=200
+        )
         patient_info = scenario.patient_information()
         patient_agent.reset(patient_info)
 
-        measurement_agent = MeasurementAgent(scenario.exam_information(), measurement_client)
+        measurement_agent = MeasurementAgent(
+            scenario_data=scenario.exam_information(),
+            client=measurement_client,
+            model=self._measurement_model,
+            temperature=0.05,
+            max_tokens=200
+        )
 
         # Add our agents to the state
         state["case_index"] = case_index
@@ -411,12 +426,12 @@ class AgentClinicEnv(vf.MultiTurnEnv):
         # Check if doctor requested test (like paper's main loop)
         if "REQUEST TEST" in doctor_dialogue:
             # Measurement agent responds
-            result = measurement_agent.inference_measurement(doctor_dialogue)
+            result = await measurement_agent.inference_measurement(doctor_dialogue)
             patient_agent.agent_hist += result + "\n\n"  # Add to patient history too
             return ([{"role": "user", "content": result}], new_state)
 
         # Otherwise, patient responds
-        pi_dialogue = patient_agent.inference_patient(doctor_dialogue)
+        pi_dialogue = await patient_agent.inference_patient(doctor_dialogue)
         measurement_agent.agent_hist += pi_dialogue + "\n\n"  # Add to measurement history too
 
         return ([{"role": "user", "content": pi_dialogue}], new_state)
@@ -426,10 +441,11 @@ class AgentClinicEnv(vf.MultiTurnEnv):
 #                    Scoring (LLM Judge)
 # ============================================================
 
-def compare_results_llm(
+async def compare_results_llm(
     prediction: str,
     gold: str,
-    moderator_client: Optional[LLMClient] = None
+    moderator_client: Optional[AsyncOpenAI] = None,
+    moderator_model: str = "gpt-4o-mini"
 ) -> float:
     """
     LLM judge matching paper's compare_results().
@@ -440,13 +456,7 @@ def compare_results_llm(
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             return 0.0
-        moderator_client = LLMClient(
-            model="gpt-4o-mini",
-            backend="openai",
-            api_key=api_key,
-            temperature=0.0,
-            max_tokens=10
-        )
+        moderator_client = AsyncOpenAI(api_key=api_key)
 
     # Extract diagnosis from "DIAGNOSIS READY: [diagnosis]" format
     if "DIAGNOSIS READY:" in prediction:
@@ -469,9 +479,16 @@ def compare_results_llm(
     ]
 
     try:
-        answer = moderator_client.generate(messages).lower()
+        response = await moderator_client.chat.completions.create(
+            model=moderator_model,
+            messages=messages,
+            temperature=0.0,
+            max_tokens=10
+        )
+        answer = (response.choices[0].message.content or "").lower()
         return 1.0 if "yes" in answer else 0.0
-    except:
+    except Exception as e:
+        print(f"[compare_results_llm] Error: {e}")
         return 0.0
 
 
@@ -481,10 +498,11 @@ class AccuracyReward:
     # Add __name__ for verifiers framework compatibility
     __name__ = "accuracy_reward"
 
-    def __init__(self, moderator_client: LLMClient):
+    def __init__(self, moderator_client: AsyncOpenAI, moderator_model: str):
         self.moderator_client = moderator_client
+        self.moderator_model = moderator_model
 
-    def __call__(self, prompt: str, completion: str, answer: str, state: Dict[str, Any]) -> float:
+    async def __call__(self, prompt: str, completion: str, answer: str, state: Dict[str, Any]) -> float:
         """Reward function for verifiers."""
         gold = (state.get("info") or {}).get("gold", "") or answer
 
@@ -498,7 +516,7 @@ class AccuracyReward:
         else:
             completion_text = str(completion)
 
-        return compare_results_llm(completion_text, gold, self.moderator_client)
+        return await compare_results_llm(completion_text, gold, self.moderator_client, self.moderator_model)
 
 
 # ============================================================
@@ -526,19 +544,16 @@ def load_environment(
     max_turns: int = 20,
     # Patient agent config
     patient_model: str = "gpt-4o-mini",
-    patient_api_base: Optional[str] = None,
+    patient_base_url: Optional[str] = None,
     patient_api_key: Optional[str] = None,
-    patient_backend: str = "auto",
     # Measurement agent config
     measurement_model: str = "gpt-4o-mini",
-    measurement_api_base: Optional[str] = None,
+    measurement_base_url: Optional[str] = None,
     measurement_api_key: Optional[str] = None,
-    measurement_backend: str = "auto",
     # Moderator config
     moderator_model: str = "gpt-4o-mini",
-    moderator_api_base: Optional[str] = None,
+    moderator_base_url: Optional[str] = None,
     moderator_api_key: Optional[str] = None,
-    moderator_backend: str = "auto",
     **kwargs,
 ) -> vf.Environment:
     """
@@ -550,17 +565,14 @@ def load_environment(
         use_think: Whether to use chain-of-thought prompting
         max_turns: Maximum conversation turns
         patient_model: Model name for Patient agent
-        patient_api_base: API base URL for patient agent
+        patient_base_url: API base URL for patient agent (supports OpenAI, vLLM, etc.)
         patient_api_key: API key for patient agent
-        patient_backend: Backend type for patient agent
         measurement_model: Model name for Measurement agent
-        measurement_api_base: API base URL for measurement agent
+        measurement_base_url: API base URL for measurement agent
         measurement_api_key: API key for measurement agent
-        measurement_backend: Backend type for measurement agent
         moderator_model: Model name for Moderator/Judge
-        moderator_api_base: API base URL for moderator
+        moderator_base_url: API base URL for moderator
         moderator_api_key: API key for moderator
-        moderator_backend: Backend type for moderator
         **kwargs: Additional arguments passed to AgentClinicEnv
 
     Returns:
@@ -625,17 +637,14 @@ def load_environment(
         use_think=use_think,
         name=f"AgentClinic-{dataset_type.upper()}",
         patient_model=patient_model,
-        patient_api_base=patient_api_base,
+        patient_base_url=patient_base_url,
         patient_api_key=patient_api_key,
-        patient_backend=patient_backend,
         measurement_model=measurement_model,
-        measurement_api_base=measurement_api_base,
+        measurement_base_url=measurement_base_url,
         measurement_api_key=measurement_api_key,
-        measurement_backend=measurement_backend,
         moderator_model=moderator_model,
-        moderator_api_base=moderator_api_base,
+        moderator_base_url=moderator_base_url,
         moderator_api_key=moderator_api_key,
-        moderator_backend=moderator_backend,
         **kwargs,
     )
 
@@ -643,7 +652,7 @@ def load_environment(
     env._scenarios = scenarios
 
     # Set rubric with moderator client from environment
-    accuracy_reward_func = AccuracyReward(env._moderator_client)
+    accuracy_reward_func = AccuracyReward(env._moderator_client, env._moderator_model)
     env.rubric = vf.Rubric(
         funcs=[accuracy_reward_func],
         names=["accuracy_reward"]

@@ -4,54 +4,42 @@ Multi-agent medical diagnosis environment for evaluating LLMs on clinical diagno
 
 ## Quick Start
 
-### 1. Install
-
 ```bash
+# Install
 uv pip install -e .
-```
 
-### 2. Set API Keys
-
-```bash
-# Required for helper agents (patient, measurement, moderator)
+# Set API key
 export OPENAI_API_KEY="your-key"
-
-# Optional: For using other models
-export ANTHROPIC_API_KEY="your-key"
-export MISTRAL_API_KEY="your-key"
-
 ```
 
----
+## Usage
 
-## Running Evaluations
-
-### Basic Command Structure
+### Basic Command
 
 ```bash
 uv run --active -m verifiers.scripts.eval \
-  -m MODEL_NAME \                    # Doctor model (evaluated)
-  -b API_BASE_URL \                  # Doctor API endpoint
-  -k API_KEY_VAR \                   # Doctor API key variable name
+  -m MODEL_NAME \
+  -b API_BASE_URL \
+  -k API_KEY_VAR \
   agentclinic \
-  -n NUM_CASES \                     # Number of cases to evaluate
-  --rollouts-per-example 3 \         # Rollouts 
-  --max-concurrent 2 \               # Parallel requests
-  -T 0.0 \                          # Temperature
-  -s \                              # Save results
+  -n NUM_CASES \
+  --rollouts-per-example 3 \
+  --max-concurrent 2 \
+  -T 0.0 \
+  -s \
   --env-args '{
     "dataset_path": "DATASET.jsonl",
     "patient_model": "MODEL",
+    "patient_base_url": "URL",
+    "patient_api_key": "KEY",
     "measurement_model": "MODEL",
-    "moderator_model": "MODEL"
+    "measurement_base_url": "URL",
+    "moderator_model": "MODEL",
+    "moderator_base_url": "URL"
   }'
 ```
 
----
-
-## Examples
-
-### MedQA with GPT-4o-mini (all agents)
+### OpenAI Example (MedQA)
 
 ```bash
 export OPENAI_API_KEY="your-key"
@@ -61,15 +49,15 @@ uv run --active -m verifiers.scripts.eval \
   -b https://api.openai.com/v1 \
   -k OPENAI_API_KEY \
   agentclinic \
-  -n 50 \
-  --rollouts-per-example 3 \
+  -n 10 \
+  --rollouts-per-example 2 \
   --max-concurrent 2 \
   -T 0.0 \
   -s \
   --env-args '{"dataset_path": "agentclinic_medqa_extended.jsonl"}'
 ```
 
-### NEJM with GPT-4o-mini (all agents)
+### OpenAI Example (NEJM)
 
 ```bash
 export OPENAI_API_KEY="your-key"
@@ -79,117 +67,64 @@ uv run --active -m verifiers.scripts.eval \
   -b https://api.openai.com/v1 \
   -k OPENAI_API_KEY \
   agentclinic \
-  -n 50 \
-  --rollouts-per-example 3 \
+  -n 10 \
+  --rollouts-per-example 2 \
   --max-concurrent 2 \
   -T 0.0 \
   -s \
   --env-args '{"dataset_path": "agentclinic_nejm_extended.jsonl"}'
 ```
 
-### Mistral Large (all agents)
+### Mixed Providers (Mistral Doctor + OpenAI Helpers)
 
 ```bash
 export MISTRAL_API_KEY="your-key"
+export OPENAI_API_KEY="your-key"
 
 uv run --active -m verifiers.scripts.eval \
   -m mistral-large-latest \
   -b https://api.mistral.ai/v1 \
   -k MISTRAL_API_KEY \
   agentclinic \
-  -n 50 \
-  --rollouts-per-example 3 \
+  -n 10 \
+  --rollouts-per-example 2 \
   --max-concurrent 2 \
   -T 0.0 \
   -s \
   --env-args '{
-    "dataset_path": "agentclinic_nejm_extended.jsonl",
-    "patient_model": "mistral-large-latest",
-    "patient_backend": "mistral",
-    "measurement_model": "mistral-large-latest",
-    "measurement_backend": "mistral",
-    "moderator_model": "mistral-large-latest",
-    "moderator_backend": "mistral"
+    "dataset_path": "agentclinic_medqa_extended.jsonl",
+    "patient_model": "gpt-4o-mini",
+    "patient_base_url": "https://api.openai.com/v1",
+    "patient_api_key": "'$OPENAI_API_KEY'",
+    "measurement_model": "gpt-4o-mini",
+    "measurement_base_url": "https://api.openai.com/v1",
+    "measurement_api_key": "'$OPENAI_API_KEY'",
+    "moderator_model": "gpt-4o-mini",
+    "moderator_base_url": "https://api.openai.com/v1",
+    "moderator_api_key": "'$OPENAI_API_KEY'"
   }'
 ```
 
-### Claude 3.5 Sonnet (doctor) + GPT-4o-mini (helpers)
+## Configuration
 
-```bash
-export ANTHROPIC_API_KEY="your-key"
-export OPENAI_API_KEY="your-key"
+### Agent Parameters
 
-uv run --active -m verifiers.scripts.eval \
-  -m claude-3-5-sonnet-20241022 \
-  -b https://api.anthropic.com/v1 \
-  -k ANTHROPIC_API_KEY \
-  agentclinic \
-  -n 50 \
-  --rollouts-per-example 3 \
-  --max-concurrent 2 \
-  -T 0.0 \
-  -s \
-  --env-args '{"dataset_path": "agentclinic_medqa_extended.jsonl"}'
-```
-
-
-
----
-
-## Configuration Options
-
-### Agent Configuration
-
-Configure each agent separately via `--env-args`:
-
-```json
-{
-  "dataset_path": "agentclinic_medqa_extended.jsonl",
-
-  // Patient Agent
-  "patient_model": "gpt-4o-mini",
-  "patient_backend": "auto",
-  "patient_api_key": null,
-  "patient_api_base": null,
-
-  // Measurement Agent
-  "measurement_model": "gpt-4o-mini",
-  "measurement_backend": "auto",
-  "measurement_api_key": null,
-  "measurement_api_base": null,
-
-  // Moderator/Judge Agent
-  "moderator_model": "gpt-4o-mini",
-  "moderator_backend": "auto",
-  "moderator_api_key": null,
-  "moderator_api_base": null,
-
-  // Other options
-  "max_turns": 20,
-  "use_think": false
-}
-```
-
-### Supported Backends
-
-- `openai` - OpenAI models (gpt-4, gpt-4o-mini, etc.)
-- `anthropic` - Anthropic models (claude-3-5-sonnet, etc.)
-- `mistral` - Mistral models (mistral-large-latest, etc.)
-- `gemini` - Google Gemini models
-- `vllm` - Local vLLM server
-- `auto` - Auto-detect from model name (default)
+Each agent (patient, measurement, moderator) can be configured via `--env-args`:
 
 ### Datasets
 
 - **MedQA Extended** (214 cases): `agentclinic_medqa_extended.jsonl`
 - **NEJM Extended** (120 cases): `agentclinic_nejm_extended.jsonl`
 
----
+### Other Options
+
+- `max_turns`: Maximum conversation turns (default: 20)
+- `use_think`: Enable chain-of-thought prompting (default: false)
 
 ## Agent Roles
 
-- **Doctor** (evaluated model): Asks questions, orders tests, makes diagnosis
-- **Patient** (helper): Simulates patient responses based on case data
-- **Measurement** (helper): Returns test results from case data
-- **Moderator** (helper): Judges if diagnosis matches ground truth
+- **Doctor** (evaluated): Asks questions, orders tests, makes diagnosis
+- **Patient** (helper): Simulates patient responses
+- **Measurement** (helper): Returns test results
+- **Moderator** (helper): Judges diagnosis accuracy
 
