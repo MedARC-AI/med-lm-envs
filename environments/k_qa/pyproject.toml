@@ -23,4 +23,4 @@ display_name = "K-QA"
 visibility = "PUBLIC"
 
 [tool.uv.sources]
-medarc-verifiers = { path = "../../" }
+medarc-verifiers = {git = "https://github.com/MedARC-AI/med-lm-envs"}
