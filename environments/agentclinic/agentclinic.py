@@ -1,7 +1,6 @@
 """
 AgentClinic Environment for Prime Intellect Verifiers
 Reimplemented to match the original paper exactly.
-Supports multiple LLM backends via OpenAI-compatible APIs
 """
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
@@ -91,7 +90,6 @@ class PatientAgent:
         if not answer:
             answer = "I'm not sure about that."
 
-        # Update history like the paper
         self.agent_hist += question + "\n\n" + answer + "\n\n"
         return answer
 
@@ -140,7 +138,6 @@ class MeasurementAgent:
         if not answer:
             answer = "RESULTS: NORMAL READINGS"
 
-        # Update history
         self.agent_hist += question + "\n\n" + answer + "\n\n"
         return answer
 
@@ -183,7 +180,6 @@ class NEJMScenario:
         self.question = scenario_dict.get("question", "")
         self.image_url = scenario_dict.get("image_url", "")
 
-        # Extract correct answer from answers array
         answers = scenario_dict.get("answers", [])
         self.diagnosis = next((a["text"] for a in answers if a.get("correct")), "")
 
@@ -237,7 +233,7 @@ def _compose_doctor_system(use_think: bool, max_infs: int, current_infs: int) ->
 
 class AgentClinicEnv(vf.MultiTurnEnv):
     """
-    AgentClinic environment matching the paper's main() loop.
+    AgentClinic environment
     Doctor is the evaluated model, Patient and Measurement are helper agents.
     """
 
@@ -247,15 +243,12 @@ class AgentClinicEnv(vf.MultiTurnEnv):
         max_turns: int = 20,
         use_think: bool = False,
         name: str = "AgentClinic",
-        # Patient agent config
         patient_model: str = "gpt-4o-mini",
         patient_base_url: Optional[str] = None,
         patient_api_key: Optional[str] = None,
-        # Measurement agent config
         measurement_model: str = "gpt-4o-mini",
         measurement_base_url: Optional[str] = None,
         measurement_api_key: Optional[str] = None,
-        # Moderator/judge config
         moderator_model: str = "gpt-4o-mini",
         moderator_base_url: Optional[str] = None,
         moderator_api_key: Optional[str] = None,
@@ -283,22 +276,18 @@ class AgentClinicEnv(vf.MultiTurnEnv):
         self._max_turns = max_turns
         self._use_think = use_think
 
-        # Store patient agent LLM configuration
         self._patient_model = patient_model
         self._patient_base_url = patient_base_url
         self._patient_api_key = patient_api_key or os.environ.get("OPENAI_API_KEY")
 
-        # Store measurement agent LLM configuration
         self._measurement_model = measurement_model
         self._measurement_base_url = measurement_base_url
         self._measurement_api_key = measurement_api_key or os.environ.get("OPENAI_API_KEY")
 
-        # Store moderator LLM configuration
         self._moderator_model = moderator_model
         self._moderator_base_url = moderator_base_url
         self._moderator_api_key = moderator_api_key or os.environ.get("OPENAI_API_KEY")
 
-        # Create moderator client for scoring
         self._moderator_client = AsyncOpenAI(
             base_url=moderator_base_url,
             api_key=self._moderator_api_key
@@ -334,13 +323,11 @@ class AgentClinicEnv(vf.MultiTurnEnv):
         Override MultiTurnEnv.setup_state to initialize agents for each case.
         This is called by the rollout() method with the initial state.
         """
-        # Get the case index from info (passed through from dataset)
         info = state.get("info", {})
         case_index = info.get("case_id", 0)
 
         scenario = self._scenarios[case_index]
 
-        # Create separate AsyncOpenAI clients for each agent
         patient_client = AsyncOpenAI(
             base_url=self._patient_base_url,
             api_key=self._patient_api_key
@@ -351,7 +338,7 @@ class AgentClinicEnv(vf.MultiTurnEnv):
             api_key=self._measurement_api_key
         )
 
-        # Create fresh agents for this case (like paper's initialization)
+        # Create new agents for each case (like paper's initialization)
         patient_agent = PatientAgent(
             client=patient_client,
             model=self._patient_model,
@@ -381,7 +368,6 @@ class AgentClinicEnv(vf.MultiTurnEnv):
         """Check if conversation is complete."""
         turns = state.get("turn", 0)
 
-        # Check last assistant message for DIAGNOSIS READY (like paper)
         last_assistant = None
         for m in reversed(messages):
             if isinstance(m, dict) and m.get("role") == "assistant":
@@ -405,32 +391,26 @@ class AgentClinicEnv(vf.MultiTurnEnv):
         new_state = dict(state)
         new_state["turn"] = state.get("turn", 0) + 1
 
-        # Get agents from state
         patient_agent = new_state["_patient_agent"]
         measurement_agent = new_state["_measurement_agent"]
 
-        # Get last doctor message
         doctor_dialogue = ""
         for m in reversed(messages):
             if isinstance(m, dict) and m.get("role") == "assistant":
                 doctor_dialogue = m.get("content", "")
                 break
 
-        # Final turn nudge
         if new_state["turn"] >= self._max_turns:
             return (
                 [{"role": "user", "content": "This is the final question. Please provide a diagnosis.\nDIAGNOSIS READY: "}],
                 new_state
             )
 
-        # Check if doctor requested test (like paper's main loop)
         if "REQUEST TEST" in doctor_dialogue:
-            # Measurement agent responds
             result = await measurement_agent.inference_measurement(doctor_dialogue)
             patient_agent.agent_hist += result + "\n\n"  # Add to patient history too
             return ([{"role": "user", "content": result}], new_state)
 
-        # Otherwise, patient responds
         pi_dialogue = await patient_agent.inference_patient(doctor_dialogue)
         measurement_agent.agent_hist += pi_dialogue + "\n\n"  # Add to measurement history too
 
@@ -448,7 +428,7 @@ async def compare_results_llm(
     moderator_model: str = "gpt-4o-mini"
 ) -> float:
     """
-    LLM judge matching paper's compare_results().
+    LLM judge
     Uses configurable moderator LLM.
     """
     # Fallback to default OpenAI if no client provided
@@ -458,11 +438,9 @@ async def compare_results_llm(
             return 0.0
         moderator_client = AsyncOpenAI(api_key=api_key)
 
-    # Extract diagnosis from "DIAGNOSIS READY: [diagnosis]" format
     if "DIAGNOSIS READY:" in prediction:
         prediction = prediction.split("DIAGNOSIS READY:")[-1].strip()
 
-    # Also handle \boxed{} format for verifiers compatibility
     try:
         boxed = extract_boxed_answer(prediction)
         if boxed:
@@ -495,7 +473,6 @@ async def compare_results_llm(
 class AccuracyReward:
     """Reward function class that holds reference to moderator client."""
 
-    # Add __name__ for verifiers framework compatibility
     __name__ = "accuracy_reward"
 
     def __init__(self, moderator_client: AsyncOpenAI, moderator_model: str):
@@ -506,7 +483,6 @@ class AccuracyReward:
         """Reward function for verifiers."""
         gold = (state.get("info") or {}).get("gold", "") or answer
 
-        # Extract final diagnosis from completion
         if isinstance(completion, list):
             completion_text = ""
             for msg in reversed(completion):
@@ -542,15 +518,12 @@ def load_environment(
     dataset_type: Optional[str] = None,
     use_think: bool = False,
     max_turns: int = 20,
-    # Patient agent config
     patient_model: str = "gpt-4o-mini",
     patient_base_url: Optional[str] = None,
     patient_api_key: Optional[str] = None,
-    # Measurement agent config
     measurement_model: str = "gpt-4o-mini",
     measurement_base_url: Optional[str] = None,
     measurement_api_key: Optional[str] = None,
-    # Moderator config
     moderator_model: str = "gpt-4o-mini",
     moderator_base_url: Optional[str] = None,
     moderator_api_key: Optional[str] = None,
@@ -578,7 +551,6 @@ def load_environment(
     Returns:
         AgentClinic environment instance
     """
-    # Find dataset file
     if dataset_path:
         # User specified a path via --env-args
         # Check if it's an absolute path
@@ -615,7 +587,6 @@ def load_environment(
     if not cases:
         raise ValueError(f"No cases loaded from: {found}")
 
-    # Auto-detect dataset type if not specified
     if dataset_type is None:
         dataset_type = _detect_dataset_type(cases)
 
@@ -630,7 +601,6 @@ def load_environment(
     else:
         raise ValueError(f"Unknown dataset type: {dataset_type}. Use 'medqa' or 'nejm'")
 
-    # Create environment
     env = AgentClinicEnv(
         cases=cases,
         max_turns=max_turns,
@@ -648,10 +618,8 @@ def load_environment(
         **kwargs,
     )
 
-    # Override scenarios with typed versions
     env._scenarios = scenarios
 
-    # Set rubric with moderator client from environment
     accuracy_reward_func = AccuracyReward(env._moderator_client, env._moderator_model)
     env.rubric = vf.Rubric(
         funcs=[accuracy_reward_func],
