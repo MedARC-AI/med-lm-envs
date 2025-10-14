@@ -2,148 +2,168 @@ import verifiers as vf
 import pandas as pd
 from pathlib import Path
 from typing import Any, Dict, List
-from prompts import _build_eval_prompt, _llm_generation_prompt, _decompose_free_form_answer, _prompt_for_has_contradiction, _prompt_for_is_entails
-from openai import OpenAI
+
+from prompts import (
+    _llm_generation_prompt,
+    _decompose_free_form_answer,
+    _prompt_for_has_contradiction,
+    _prompt_for_is_entails,
+)
 from datasets import Dataset
-from medarc_verifiers.parsers import JSONParser 
+from medarc_verifiers.parsers import JSONParser
 
 
-def _call_llm(model: str, prompt: str) -> str:
-    """for making an OpenAI API call."""
-    client = OpenAI()
-    response = client.chat.completions.create(
-        model=model, messages=[{"role": "user", "content": prompt}], temperature=0
+def _get_raw_completion(completion) -> str:
+    if isinstance(completion, list) and completion:
+        return completion[-1].get("content", "") or ""
+    return str(completion or "")
+
+
+async def _extract_and_store_claims(
+    extractor: vf.JudgeRubric, prompt, completion, info, state
+) -> float:
+    # Build extraction prompt and judge via the rubric
+    question: str = (info or {}).get("Question", "")
+    llm_answer: str = _get_raw_completion(completion)
+    extraction_prompt = _decompose_free_form_answer(question, llm_answer)
+
+    raw = await extractor.judge(
+        [{"role": "user", "content": extraction_prompt}],
+        completion="", 
+        answer="",      
+        state=state,
     )
-    return (response.choices[0].message.content or "").strip()
+
+    # Parse {"claims": [...]} like format
+    json_parser = JSONParser(fields=["claims"])
+    parsed = json_parser.parse(str(raw)) or {}
+    claims = [str(c).strip() for c in (parsed.get("claims") or []) if str(c).strip()]
+
+    #  shared state
+    state.setdefault("kqa", {})
+    state["kqa"]["claims"] = claims
+    state["kqa"]["raw_completion"] = llm_answer
+
+    #  no contribution to reward
+    return 0.0
 
 
-
-def _nli_judge( # evaluate the entailment or contradiction between the premise and hypothesis
-    question: str, premise: str, hypothesis: str, task: str, judge_model: str
-) -> bool:
-    """
-    Judges whether the premise entails or contradicts the hypothesis.
-
-    Args:
-        task: Either "entails" or "contradicts".
-    """
-    if task == "entails":
-        prompt = _prompt_for_is_entails(question, premise, hypothesis)
-    elif task == "contradicts":
-        prompt = _prompt_for_has_contradiction(question, premise, hypothesis)
-    else:
-        raise ValueError(f"Unknown NLI task: {task}")
-
-    response_text = _call_llm(judge_model, prompt).lower()
-    return "true" in response_text[-20:]
-
-
-
-class ClaimExtractorParser(vf.Parser):
-    """A parser that extracts atomic claims from a model's completion."""
-
-    def __init__(self, extractor_model: str):
-        super().__init__(extract_fn=lambda x: x)  # Use raw text
-        self.extractor_model = extractor_model
-        self.json_parser = JSONParser(fields=["claims"])
-
-    def parse(self, text: str, **kwargs: Any) -> Dict[str, Any]:
-        info: Dict[str, Any] = kwargs.get("info", {}) or {}
-        question = info.get("Question", "")
-        if not question:
-            return {"raw_completion": text, "claims": []}
-        prompt = _decompose_free_form_answer(question, text)
-        extracted_text = _call_llm(self.extractor_model, prompt)
-        parsed_obj = self.json_parser.parse(extracted_text)
-        claims = []
-        if isinstance(parsed_obj, dict):
-            raw_claims = parsed_obj.get("claims") or []
-            claims = [str(c).strip() for c in raw_claims if str(c).strip()]
-        return {"raw_completion": text, "claims": claims}
-
-
-
-# from the paper K-QA 
-def comprehensiveness_reward(completion, info, parser, judge_model: str, **_) -> float:
-    # get final assistant text
-    msgs = parser.get_assistant_messages(completion) if isinstance(completion, list) else []
-    text = msgs[-1]["content"] if msgs else (completion if isinstance(completion, str) else "")
-    # parse claims using the parser instance , passing info
-    parsed = parser.parse(text, info=info) if hasattr(parser, "parse") else {}
-    predicted_claims = (parsed or {}).get("claims", []) if isinstance(parsed, dict) else []
-
-    question: str = (info or {}).get("Question", "")
-    must_have_claims = (info or {}).get("Must_have", []) or []
-    if not must_have_claims:
-        return 1.0
-
-    covered = 0
-    for must_claim in must_have_claims: #must have claims that the model should have covered
-        if any(_nli_judge(question, pred, must_claim, "entails", judge_model) for pred in predicted_claims):
-            covered += 1
-    return covered / len(must_have_claims)
-
-
-# from the paper K-QA 
-# claims that the model hallucinated
-def hallucination_rate_reward(completion, info, parser, judge_model: str, **_) -> float:
-    msgs = parser.get_assistant_messages(completion) if isinstance(completion, list) else []
-    text = msgs[-1]["content"] if msgs else (completion if isinstance(completion, str) else "")
-    parsed = parser.parse(text, info=info) if hasattr(parser, "parse") else {}
-    predicted_claims = (parsed or {}).get("claims", []) if isinstance(parsed, dict) else []
-    if not predicted_claims:
-        return 0.0
-
-    question: str = (info or {}).get("Question", "")
-    gold_claims = ((info or {}).get("Must_have", []) or []) + ((info or {}).get("Nice_to_have", []) or [])
-
-    contradictions = 0
-    for pred in predicted_claims: # A claim that the model hallucinated and contradicts the gold claims
-        if any(_nli_judge(question, gold, pred, "contradicts", judge_model) for gold in gold_claims):
-            contradictions += 1
-    return contradictions / len(predicted_claims)
-
+async def _judge_boolean(scorer: vf.JudgeRubric, prompt_str: str, state: Dict) -> bool:
+    raw = await scorer.judge(
+        [{"role": "user", "content": prompt_str}],
+        completion="",
+        answer="",
+        state=state,
+    )
+    text = str(raw).strip().lower()
+    return "true" in text[-20:]
 
 
 def load_environment(
-    extractor_model: str = "gpt-4-mini", judge_model: str = "gpt-4-mini", **kwargs
+    extractor_model: str = "gpt-4-mini",
+    judge_model: str = "gpt-4-mini",
+    **kwargs,
 ) -> vf.Environment:
     """
-    K-QA Environment using a FACTSCORE-style evaluation.
-    - `extractor_model`: LLM to use for breaking answers into atomic claims.
-    - `judge_model`: LLM to use for NLI-based scoring.
+    K-QA Environment using a FACTSCORE-style evaluation with two-phase Judge via RubricGroup:
+      1) Extraction: decompose free-form answer into claims, store in state.
+      2) Scoring: compute comprehensiveness and hallucination_rate using NLI judge.
     """
     data_fp = Path(__file__).resolve().parent / "questions_w_answers.jsonl"
     df = pd.read_json(data_fp, orient="records", lines=True)
 
-    # map to vf format
+    # Map to vf format
     def _map_to_vf_format(row: pd.Series) -> Dict[str, Any]:
         q = row.get("Question", "")
         return {
             "question": _llm_generation_prompt(q),
-            "answer": "",  
+            "answer": "",
             "info": {
                 "Question": q,
-                "Must_have": list(row.get("Must_have", []) or []), # from the dataset we have both must have and nice to have claims
+                # gold claims
+                "Must_have": list(row.get("Must_have", []) or []),
                 "Nice_to_have": list(row.get("Nice_to_have", []) or []),
             },
         }
 
     dataset = Dataset.from_list(df.apply(_map_to_vf_format, axis=1).tolist())
-    parser = ClaimExtractorParser(extractor_model=extractor_model) # parser to extract claims from the model's completion
 
-    rubric = vf.Rubric(
-        funcs=[
-            lambda **kw: comprehensiveness_reward(judge_model=judge_model, **kw),
-            lambda **kw: hallucination_rate_reward(judge_model=judge_model, **kw),
-        ],
-        names=["comprehensiveness", "hallucination_rate"],
-        parser=parser,
+    #  Extractor rubric (stores claims in shared `state["kqa"]["claims"]`)
+    extractor = vf.JudgeRubric(
+        judge_model=extractor_model,
+        judge_prompt="{prompt}",  # prompt provided dynamically in reward
     )
+    extractor.add_reward_func(
+        lambda prompt, completion, info, state, **_: vf.utils.ensure_async(
+            _extract_and_store_claims
+        )(extractor, prompt, completion, info, state),
+        weight=0.0,
+    )
+
+    #  Scoring rubric using NLI prompts; reads claims from state
+    scorer = vf.JudgeRubric(
+        judge_model=judge_model,
+        judge_prompt="{prompt}",
+    )
+
+    async def comprehensiveness_reward(prompt, completion, info, state, **_) -> float:
+        question: str = (info or {}).get("Question", "")
+        must_have: List[str] = (info or {}).get("Must_have", []) or []
+        claims: List[str] = ((state.get("kqa", {}) or {}).get("claims", []) or [])
+        if not must_have:
+            return 1.0
+        if not claims:
+            return 0.0
+
+        covered = 0
+        for must_claim in must_have:
+            # True if ANY predicted claim entails the must-have claim
+            entailed = False
+            for pred in claims:
+                prompt_str = _prompt_for_is_entails(question, pred, must_claim)
+                if await _judge_boolean(scorer, prompt_str, state):
+                    entailed = True
+                    break
+            if entailed:
+                covered += 1
+        return covered / len(must_have)
+
+    async def hallucination_rate_reward(prompt, completion, info, state, **_) -> float:
+        question: str = (info or {}).get("Question", "")
+        claims: List[str] = ((state.get("kqa", {}) or {}).get("claims", []) or [])
+        gold_claims: List[str] = (
+            (info or {}).get("Must_have", []) or []
+        ) + ((info or {}).get("Nice_to_have", []) or [])
+
+        if not claims:
+            return 0.0
+        if not gold_claims:
+            return 0.0
+
+        contradictions = 0
+        for pred in claims:
+            # Count if it contradicts ANY gold claim
+            contradicts = False
+            for gold in gold_claims:
+                prompt_str = _prompt_for_has_contradiction(question, gold, pred)
+                if await _judge_boolean(scorer, prompt_str, state):
+                    contradicts = True
+                    break
+            if contradicts:
+                contradictions += 1
+        return contradictions / len(claims)
+
+    scorer.add_reward_func(comprehensiveness_reward, weight=1.0)
+    scorer.add_reward_func(hallucination_rate_reward, weight=0.0)
+
+    # extractor runs first, then scoring; state is shared
+    rubric_group = vf.RubricGroup([extractor, scorer])
+
+    # Simple pass-through parser; reward funcs operate directly on messages/state
+    parser = vf.Parser(extract_fn=lambda x: x)
 
     return vf.SingleTurnEnv(
         eval_dataset=dataset,
         parser=parser,
-        rubric=rubric,
+        rubric=rubric_group,
     )
-

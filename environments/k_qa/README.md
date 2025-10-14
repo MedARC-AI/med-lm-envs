@@ -15,12 +15,15 @@
 
 ### Task
 - **Type**: single-turn
-- **Parser**: `ClaimExtractorParser`.Uses `medarc_verifiers.JSONParser` to parse a `{"claims": [...]}` JSON from the extractor LLM output.
+- **Parser**: Uses `medarc_verifiers.JSONParser` to parse a `{"claims": [...]}` JSON from the extractor LLM output.
 
 - **Rubric overview**:
-  - `comprehensiveness`: fraction of must-have claims entailed by the model’s predicted claims.
-  - `hallucination_rate`: fraction of predicted claims that contradict any gold claim (must-have or nice-to-have).
-  - Both metrics rely on an NLI-style judge LLM.
+  - A `RubricGroup` with two phases that share state:
+    1.  **Extraction**: A `JudgeRubric` extracts claims from the model's free-form answer and stores them in `state`.
+    2.  **Scoring**: A second `JudgeRubric` reads the claims from `state` and computes:
+        - `comprehensiveness`: fraction of must-have claims entailed by the model’s predicted claims.
+        - `hallucination_rate`: fraction of predicted claims that contradict any gold claim (must-have or nice-to-have).
+  - Both phases rely on an NLI-style judge LLM.
 
 ### Quickstart
 
@@ -51,12 +54,12 @@ Notes:
 - Use `-a` / `--env-args` to pass environment-specific configuration as a JSON object.
 
 ### How it works 
-1. The llm model produces an answer to each `Question`.
-2. Convert answers by the LLM into atomic statements 
-3. `ClaimExtractorParser` prompts the `extractor_model` to extract atomic `claims` from the answer.
-4. The `judge_model` evaluates entailment/contradiction between predicted claims and gold claims to compute:
-   - must-have claims  by (`comprehensiveness`).
-   - Contradictions against gold claims by (`hallucination_rate`).
+1. The LLM agent produces a free-form answer to a `Question`.
+2. An `extractor` rubric prompts the `extractor_model` to decompose the answer into atomic `claims`. These are stored internally.
+3. A `scorer` rubric then uses the `judge_model` to evaluate entailment and contradiction between the model's claims and the gold claims to compute metrics.
+   - `comprehensiveness` is calculated based on how many "must have" gold claims are entailed by the model's claims.
+   - `hallucination_rate` is calculated based on how many of the model's claims contradict any of the gold claims.
+
 
 
 ### Environment Arguments
@@ -64,14 +67,15 @@ Document any supported environment arguments and their meaning. Example:
 
 | Arg | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
-| `foo` | str | `"bar"` | What this controls |
-| `max_examples` | int | `-1` | Limit on dataset size (use -1 for all) |
+| `extractor_model` | str | `"gpt-4-mini"` | The model used to extract claims from the free form answer. |
+| `judge_model` | int | `gpt-4-mini` | The model used for NLI-style scoring (entailment and contradiction) |
 
 ### Metrics
 Summarize key metrics your rubric emits and how they’re interpreted.
 
 | Metric | Meaning |
 | ------ | ------- |
-| `reward` | Main scalar reward (weighted sum of criteria) |
-| `accuracy` | Exact match on target answer |
+| `reward` | The primary reward signal, which is equivalent to comprehensiveness |
+| `comprehensiveness` | The fraction of "must-have" gold claims that are entailed by the claims made in the generated answer. A value of 1.0 means all essential information was covered |
+| `hallucination_rate` | The fraction of claims in the generated answer that contradict any of the gold standard claims ("must-have" or "nice-to-have"). A lower value is better. Note: this metric has a weight of 0 in the final reward.|
 
