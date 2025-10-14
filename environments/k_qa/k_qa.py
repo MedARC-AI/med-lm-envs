@@ -1,3 +1,6 @@
+# ALL PROMPTS ARE FROM THE PAPER (Source: https://arxiv.org/abs/2401.14493)
+# see pgs 16-18 for the prompts from the paper and github: https://github.com/Itaymanes/K-QA/tree/main/evaluation/prompts
+
 import verifiers as vf
 import pandas as pd
 from pathlib import Path
@@ -107,6 +110,7 @@ def load_environment(
     )
 
     async def comprehensiveness_reward(prompt, completion, info, state, **_) -> float:
+        # Adapted the code from the original code: https://github.com/Itaymanes/K-QA/blob/main/evaluation/metrics.py to compute comprehensiveness
         question: str = (info or {}).get("Question", "")
         must_have: List[str] = (info or {}).get("Must_have", []) or []
         claims: List[str] = ((state.get("kqa", {}) or {}).get("claims", []) or [])
@@ -129,6 +133,7 @@ def load_environment(
         return covered / len(must_have)
 
     async def hallucination_rate_reward(prompt, completion, info, state, **_) -> float:
+        # Adapted the code from the original code: https://github.com/Itaymanes/K-QA/blob/main/evaluation/metrics.py to compute hallucination rate
         question: str = (info or {}).get("Question", "")
         claims: List[str] = ((state.get("kqa", {}) or {}).get("claims", []) or [])
         gold_claims: List[str] = (
