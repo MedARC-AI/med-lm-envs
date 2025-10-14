@@ -77,5 +77,5 @@ Summarize key metrics your rubric emits and how they’re interpreted.
 | ------ | ------- |
 | `reward` | The primary reward signal, which is equivalent to comprehensiveness |
 | `comprehensiveness` | The fraction of "must-have" gold claims that are entailed by the claims made in the generated answer. A value of 1.0 means all essential information was covered |
-| `hallucination_rate` | The fraction of claims in the generated answer that contradict any of the gold standard claims ("must-have" or "nice-to-have"). A lower value is better. Note: this metric has a weight of 0 in the final reward.|
+| `hallucination_rate` | The count of claims in the generated answer that contradict any of the gold standard claims ("must-have" or "nice-to-have"). A lower value is better|
 
