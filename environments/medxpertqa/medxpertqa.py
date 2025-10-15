@@ -5,17 +5,24 @@ from datasets import load_dataset
 import os
 import re
 
-def _get_system_prompt() -> str:
-    system_prompt = (
+def _get_system_prompt(use_think: bool) -> str:
+    think_system_prompt = (
         "You are a helpful medical assistant. Think step-by-step inside <think>...</think> tags."
         "Put your final answer within \boxed{{}}.\nQ:"
         )
+    no_think_system_prompt = (
+        "You are a helpful medical assistant."
+        "Put your final answer within \boxed{{}}.\nQ:"
+        )
+    system_prompt = think_system_prompt if use_think else no_think_system_prompt
     return system_prompt
 
-def _build_prompt(question: str) -> str:
-    return _get_system_prompt() + " " + question
+def _build_prompt(question: str, use_think: bool) -> str:
+    return _get_system_prompt(use_think) + " " + question
 
-def load_environment() -> vf.Environment:
+def load_environment(
+    use_think: bool = False,
+) -> vf.Environment:
     """
     MedXpertQA environment using equality with the "label" column as the eval criterion.
     This environment loads the MedXpertQA dataset and compares model responses (diagnosis) with the ground truth in "label" column.
@@ -34,7 +41,7 @@ def load_environment() -> vf.Environment:
         a: str = ex["label"]
 
         return {
-            "question": _build_prompt(q),
+            "question": _build_prompt(q, use_think),
             "answer": a,
         }
 
@@ -50,8 +57,8 @@ def load_environment() -> vf.Environment:
         Compares the model response with the ground truth answer.
         Returns 1.0 if they match (case-insensitive), else 0.0.
         """
-        final_answer = extract_boxed_answer(completion)
-
+        parser = vf.ThinkParser(extract_boxed_answer) if use_think else vf.Parser(extract_boxed_answer)
+        final_answer = parser.parse(completion).strip()
         if final_answer.lower() == answer.lower():
             return 1.0
         else:
