@@ -1,3 +1,15 @@
+""" LongHealth Environment
+
+Lifted from https://github.com/kbressem/LongHealth/tree/main
+Originally licensed Apache-2.0 license
+
+@article{adams2024longhealth,
+  title={LongHealth: A Question Answering Benchmark with Long Clinical Documents},
+  author={Adams, Lisa and Busch, Felix and Han, Tianyu and Excoffier, Jean-Baptiste and Ortala, Matthieu and L{\"o}ser, Alexander and Aerts, Hugo JWL and Kather, Jakob Nikolas and Truhn, Daniel and Bressem, Keno},
+  journal={arXiv preprint arXiv:2401.14490},
+  year={2024}
+}
+"""
 from __future__ import annotations
 import json
 import os
