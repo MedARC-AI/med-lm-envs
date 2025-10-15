@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -67,3 +68,12 @@ def download_file(
         if tmp_path is not None:
             tmp_path.unlink(missing_ok=True)
         raise
+
+
+def medarc_cache_dir(cache_dir: Path | str | None) -> Path:
+    if cache_dir is None:
+        env_override = os.getenv("MEDARC_CACHE_DIR")
+        if env_override:
+            return Path(env_override)
+        return Path.home() / ".cache" / "medarc"
+    return Path(cache_dir)
