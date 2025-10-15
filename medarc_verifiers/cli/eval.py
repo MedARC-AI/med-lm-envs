@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import argparse
 import json
 import logging
@@ -57,7 +55,7 @@ def build_base_parser(require_env: bool, add_help: bool) -> argparse.ArgumentPar
         "-a",
         type=json.loads,
         default=None,
-        help="Environment arguments as JSON object (e.g., '{\"key\": \"value\", \"num\": 42}').",
+        help='Environment arguments as JSON object (e.g., \'{"key": "value", "num": 42}\').',
     )
     parser.add_argument(
         "--env-dir-path",

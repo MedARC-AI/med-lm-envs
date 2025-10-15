@@ -1,5 +1,3 @@
-from __future__ import annotations
+from .download import download_file, medarc_cache_dir
 
-from .download import download_file
-
-__all__ = ["download_file"]
+__all__ = ["download_file", "medarc_cache_dir"]
