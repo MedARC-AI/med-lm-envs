@@ -1,6 +1,5 @@
 import os
 import zipfile
-from pathlib import Path
 
 import bert_score
 import bleurt.score
@@ -25,13 +24,13 @@ def extract_xml_from_string(text: str) -> str:
 
 def load_environment(
     repo_id: str = "sauravlmx/MEDEC-MS",
-    split: str = "test_ms",
-    judge_model: str = "deepseek-chat",
-    judge_base_url: str = "https://api.deepseek.com/v1",
+    test_split: str = "test_ms",
+    judge_model: str = "gpt-4o-mini",
+    judge_base_url: str | None = None,
     judge_api_key: str | None = None,
     num_few_shot: int = 0,
     use_think: bool = False,
-    eval_method: str = "judge",  # "judge" (default) or "metrics"
+    eval_method: str = "judge",  # "judge" (default), "metrics, or "judge-only"
     device: str | None = None,
 ) -> vf.Environment:
     """
@@ -44,17 +43,19 @@ def load_environment(
       main reward score but are available for analysis.
     - 'metrics': The primary score is determined by the paper's original metrics,
       allowing for direct replication of the paper's results.
+    - 'judge-only': The primary score is determined solely by the LLM-as-a-Judge rubric,
+      without calculating the original metrics.
     """
     if device and "cuda" in device:
         gpu_id = device.split(":")[-1]
         os.environ["CUDA_VISIBLE_DEVICES"] = gpu_id
 
     try:
-        print(f"Loading dataset from Hub repo: {repo_id}, split: {split}")
-        dataset = load_dataset(repo_id, split=split)
-        train_dataset = load_dataset(repo_id, split="train_ms") if num_few_shot > 0 else None
+        print(f"Loading dataset from Hub repo: {repo_id}, split: {test_split}")
+        dataset = load_dataset(repo_id, split=test_split)
+        train_dataset = load_dataset(repo_id, split="train_ms")
     except Exception as e:
-        raise ValueError(f"Could not load split '{split}' from repo '{repo_id}'. Error: {e}")
+        raise ValueError(f"Could not load split '{test_split}' from repo '{repo_id}'. Error: {e}")
 
     zero_shot_prompt = """The following is a medical narrative about a patient. You are a skilled medical doctor reviewing the clinical text. The text is either correct or contains one error. The text has one sentence per line. Each line starts with the sentence ID, followed by a pipe character then the sentence to check. Check every sentence of the text. If the text is correct return the following output: <error_flag>0</error_flag>. If the text has a medical error related to treatment, management, cause, or diagnosis, return the sentence id of the sentence containing the error, followed by a space, and then a corrected version of the sentence in the following XML format:
 <error_flag>1</error_flag>
@@ -309,6 +310,7 @@ Respond with either "EQUIVALENT" or "NOT_EQUIVALENT".
     processed_dataset = dataset.map(preprocess_example, remove_columns=dataset.column_names)
 
     return vf.SingleTurnEnv(
+        dataset=train_dataset,
         eval_dataset=processed_dataset,
         system_prompt=system_prompt,
         few_shot=few_shot_examples,
