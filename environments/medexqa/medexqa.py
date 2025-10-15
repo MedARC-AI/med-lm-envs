@@ -19,27 +19,29 @@ SPECIALTIES = [
     "speech_pathologist",
 ]
 
-
-
-AUTHOR_SYSTEM_PROMPT = (
-    "The following is a multiple-choice question. Please choose the most suitable one "
-    "among A, B, C and D as the answer to this question. "
-    "Your answer should be paired with an explanation why you chose that answer."
-)
-
-
+# author prompt directly taken from https://github.com/knowlab/MedExQA/blob/9a5b34af103b0c8ba0c00906e278f6572249fafa/evaluate_pipe_MedExQA.py#L32
 def _build_question_str(question: str, options: dict[str, str]) -> str:
-    """Format question with answer choices only; instruction is provided via system prompt."""
+    """Build user prompt with authors' instruction embedded (as in their script).
+
+    The instruction lives in the user message; the system prompt remains empty in
+    normal mode, and only adds THINK_BOXED in think-mode.
+    """
+    instruction = (
+        "The following is a multiple-choice question. Please choose the most suitable one "
+        "among A, B, C and D as the answer to this question. Your answer should be paired "
+        "with an explanation why you chose that answer.\n\n"
+    )
     opts = "\n".join(f"{k}. {v}" for k, v in options.items())
-    return f"{question}\n{opts}\nAnswer:"
+    return f"{instruction}{question}\n{opts}\nAnswer:"
 
 
 def _to_vf_format(ds: Dataset) -> Dataset:
-    """
-    Shape each row for SingleTurnEnv's defaults:
-      - 'question': formatted question string with options
-      - 'answer': gold letter (A/B/C/D)
-      - 'info': keep all original fields including explanations
+    """Normalize raw rows into the fields expected by SingleTurnEnv.
+
+    Produces rows of the form:
+      - question: string containing authors' instruction, question, and options
+      - answer: gold letter (A/B/C/D)
+      - info: original fields including exp0/exp1 and specialty
     """
     def _format_row(row: dict) -> dict:
         question = row.get("question", "") or ""
@@ -73,13 +75,11 @@ def _to_vf_format(ds: Dataset) -> Dataset:
 
 def load_environment(
     use_think: bool = False,
-    use_explanations: bool = False,
+    use_explanations: bool = True,
     mcq_weight: float = 0.5,
     explanation_weight: float = 0.5,
-    specialty: str = "all",
-    explanation_metrics: list[str] | None = None,
-    metrics_aggregation: str = "average",
-    macroaverage: bool = False,
+    specialty: list[str] | str | None = None,  # list of short codes or full names; None/"ALL" => all
+    explanation_metrics: list[str] | str | None = None,  # None/"all" => average of all four
     # Optional judge settings
     use_judge: bool = False,
     judge_model: str = "gpt-4o-mini",
@@ -90,60 +90,75 @@ def load_environment(
     """
     Single-turn MedExQA environment using HuggingFace `bluesky333/MedExQA` dataset
 
-    Each example is normalized to the fields expected by `vf.SingleTurnEnv`:
-        {
-            "question": "<question + formatted options>",  # string used as the user prompt
-            "answer": "<A|B|C|D>",                         # top-level gold letter
-            "info": { ...original example fields... }      # full source row including exp0, exp1
-        }
-
-    - Loads all 5 medical specialties (biomedical engineering, clinical lab science,
-      clinical psychology, occupational therapy, speech language pathology)
-    - No training split (dataset does not provide one)
-    - Test split used as evaluation data (940 total examples)
-
-    - Parser extracts \\boxed{A|B|C|D} from completions
-
-    - Reward looks for exact match between parsed letter and answer letter
-    - Optional: Explanation quality evaluation using LLM-as-judge
+    Key behaviors:
+      - User prompt embeds the authors' instruction and the options (authors' format).
+      - System prompt: empty (normal) or THINK_BOXED (think mode).
+      - Specialty selection: accepts list or string; loads requested specialties (None/ALL => all).
+      - MCQ accuracy: authors' regex+fuzzy extraction; returns 0 or 100.
+      - Explanation score: lexical metrics (ROUGE-L, BLEU, METEOR, BERTScore) averaged 0–100; 0 if answer wrong.
+      - Optional judge mode: explanation scored by JudgeRubric (0–100).
     """
 
-    # Load all specialties and concatenate
+    # Load specialties (one or more)
     # Note: MedExQA only has dev and test splits, no train split
     # Load TSV files directly since HF dataset has column name issues
+
+    # Resolve allowed specialties up-front and only load those files
+    code_map = {
+        "BE": "biomedical_engineer",
+        "CLS": "clinical_laboratory_scientist",
+        "CP": "clinical_psychologist",
+        "OT": "occupational_therapist",
+        "SLP": "speech_pathologist",
+        "ALL": "all",
+    }
+    allowed_names: set[str]
+    if specialty is None or (isinstance(specialty, str) and (specialty.upper() in ("ALL", ""))):
+        allowed_names = set(SPECIALTIES)
+    elif isinstance(specialty, str):
+        allowed_names = {code_map.get(specialty.upper(), specialty)}
+    else:
+        tmp = set()
+        for s in specialty:
+            name = code_map.get((s or "").upper(), s)
+            if name and name != "all":
+                tmp.add(name)
+        allowed_names = tmp if tmp else set(SPECIALTIES)
+    macro_active = len(allowed_names) > 1
+
+    # Load all requested specialties
     test_datasets = []
-
-    for specialty in SPECIALTIES:
+    for sp_name in SPECIALTIES:
+        if sp_name not in allowed_names:
+            continue
         try:
-            # Download and load TSV file directly
-            url = f"https://huggingface.co/datasets/bluesky333/MedExQA/resolve/main/test/{specialty}_test.tsv"
-
-            # Load TSV with pandas (no headers in file)
+            url = f"https://huggingface.co/datasets/bluesky333/MedExQA/resolve/main/test/{sp_name}_test.tsv"
             df = pd.read_csv(
                 url,
                 sep='\t',
                 header=None,
                 names=["question", "A", "B", "C", "D", "exp0", "exp1", "answer"]
             )
-
-            # Add specialty column
-            df['specialty'] = specialty
-
-            # Convert to HF dataset
-            test_ds = Dataset.from_pandas(df, preserve_index=False)
-            test_datasets.append(test_ds)
+            df['specialty'] = sp_name
+            ds_part = Dataset.from_pandas(df, preserve_index=False)
+            test_datasets.append(ds_part)
         except Exception as e:
-            print(f"Warning: Could not load {specialty}: {e}")
+            print(f"Warning: Could not load {sp_name}: {e}")
             continue
 
-    # Concatenate all specialties
+    # Concatenate and format for verifiers - no training dataset available
     test_combined = concatenate_datasets(test_datasets) if test_datasets else None
-
-    # Format for verifiers - no training dataset available
     test_ds = _to_vf_format(test_combined) if test_combined else None
 
-    # Setup system prompt - use authors' instruction in system; prepend think prompt if requested
-    system_prompt = f"{THINK_BOXED_SYSTEM_PROMPT}\n{AUTHOR_SYSTEM_PROMPT}" if use_think else AUTHOR_SYSTEM_PROMPT
+    # Shuffle examples if multiple specialties were selected
+    if macro_active and test_ds is not None:
+        try:
+            test_ds = test_ds.shuffle(seed=int(kwargs.get("seed", 0)))
+        except Exception:
+            pass
+
+    # Setup system prompt - empty for normal; use think-boxed for think mode
+    system_prompt = THINK_BOXED_SYSTEM_PROMPT if use_think else ""
 
     # Parser for extracting \\boxed{} answers
     parser = (
@@ -156,20 +171,7 @@ def load_environment(
         response = parser.parse_answer(completion) or ""
         return 1.0 if response == answer else 0.0
 
-    # Optional specialty filter (short codes supported)
-    if specialty and test_ds is not None:
-        code_map = {
-            "BE": "biomedical_engineer",
-            "CLS": "clinical_laboratory_scientist",
-            "CP": "clinical_psychologist",
-            "OT": "occupational_therapist",
-            "SLP": "speech_pathologist",
-            "ALL": "all",
-        }
-        spec_upper = (specialty or "all").upper()
-        resolved = code_map.get(spec_upper, specialty)
-        if resolved != "all":
-            test_ds = test_ds.filter(lambda row: (row.get("info") or {}).get("specialty") == resolved)
+    # (shuffling handled above when multiple specialties)
 
     # Helpers (authors' answer extraction logic)
     def process_before_extraction(gen: str, choice_dict: dict[str, str]) -> str:
@@ -197,7 +199,7 @@ def load_environment(
         pred = extract_choice(gen, [options.get(c, "") for c in ["A", "B", "C", "D"]])
         return (pred or "").upper()
 
-    # Metrics selection; 'all'/'overall' => average of all four
+    # Lexical Metrics selection; pass individually or None/'all'/'overall' => average of all four
     base_metrics = ["rougeL", "bleu", "meteor", "bertscore"]
     if explanation_metrics is None:
         selected_metrics = base_metrics
@@ -250,37 +252,35 @@ def load_environment(
         # always average across selected metrics
         return (sum(metric_vals) / len(metric_vals))
 
-    # Precompute specialty counts for macroaverage weighting (if requested)
-    spec_counts: dict[str, int] = {}
-    total_examples = 0
-    if test_ds is not None:
-        for row in test_ds:
-            info_row = row.get("info") or {}
-            spec = info_row.get("specialty") or "unknown"
-            spec_counts[spec] = spec_counts.get(spec, 0) + 1
-            total_examples += 1
-    num_specs = len(spec_counts) if spec_counts else 1
+    # Note: No per-example macro scaling.
 
-    def _macro_scale(spec: str) -> float:
-        if not macroaverage:
-            return 1.0
-        if spec_counts and total_examples and num_specs:
-            n_k = spec_counts.get(spec, 1)
-            return float(total_examples) / float(num_specs * n_k)
-        return 1.0
+    def _get_completion_text(completion_obj) -> str:
+        if isinstance(completion_obj, list) and completion_obj:
+            return completion_obj[-1].get("content", "") or ""
+        return completion_obj if isinstance(completion_obj, str) else str(completion_obj)
 
     def answer_accuracy_reward(parser, completion, answer, **kwargs) -> float:
-        completion_text = completion if isinstance(completion, str) else str(completion)
+        completion_text = _get_completion_text(completion)
         info = kwargs.get("info", {}) or {}
+        state = kwargs.get("state")
         options = {"A": info.get("A", ""), "B": info.get("B", ""), "C": info.get("C", ""), "D": info.get("D", "")}
         gold = (answer or "").strip().upper()
         pred_letter = extract_answer_letter(completion_text, options)
-        base = 1.0 if pred_letter == gold else 0.0
-        spec = (info.get("specialty") or "unknown")
-        return base * _macro_scale(spec)
+        base = 100.0 if pred_letter == gold else 0.0
+        # Persist per-specialty counters into state so runs saved with -s can be summarized post-hoc
+        if isinstance(state, dict):
+            spec = (info.get("specialty") or "unknown")
+            counters = state.get("specialty_counters") or {}
+            curr = counters.get(spec) or {"correct": 0, "total": 0}
+            curr["total"] = int(curr.get("total", 0)) + 1
+            if pred_letter == gold:
+                curr["correct"] = int(curr.get("correct", 0)) + 1
+            counters[spec] = curr
+            state["specialty_counters"] = counters
+        return base
 
     def explanation_reward(parser, completion, answer, **kwargs) -> float:
-        completion_text = completion if isinstance(completion, str) else str(completion)
+        completion_text = _get_completion_text(completion)
         info = kwargs.get("info", {}) or {}
         options = {"A": info.get("A", ""), "B": info.get("B", ""), "C": info.get("C", ""), "D": info.get("D", "")}
         gold = (answer or "").strip().upper()
@@ -289,8 +289,7 @@ def load_environment(
             base = 0.0
         else:
             base = compute_expl_score(completion_text, info.get("exp0", ""), info.get("exp1", ""))
-        spec = (info.get("specialty") or "unknown")
-        return base * _macro_scale(spec)
+        return base
 
     # Optional: Use LLM-as-judge for explanation instead of lexical metrics
     if use_explanations and use_judge:
@@ -303,7 +302,7 @@ def load_environment(
         )
 
         async def explanation_judge_reward(judge, prompt, completion, answer, state, **kwargs) -> float:
-            completion_text = completion if isinstance(completion, str) else str(completion)
+            completion_text = _get_completion_text(completion)
             info = kwargs.get("info", {}) or {}
             options = {"A": info.get("A", ""), "B": info.get("B", ""), "C": info.get("C", ""), "D": info.get("D", "")}
             gold = (answer or "").strip().upper()
@@ -320,10 +319,22 @@ def load_environment(
                 full_prompt = (
                     "You are evaluating the quality of a medical explanation.\n\n"
                     "**Question:**\n" + formatted_question + "\n\n"
-                    "**Correct Answer:** " + str(gold) + "\n\n"
+                    "**Correct Answer:** " + str(answer) + "\n\n"
                     "**Reference Explanation 1:**\n" + str(exp0) + "\n\n"
                     "**Reference Explanation 2:**\n" + str(exp1) + "\n\n"
                     "**Model's Response:**\n" + completion_text + "\n\n"
+                    "Evaluate whether the model's explanation is medically accurate, relevant, and demonstrates understanding of the medical concepts. The explanation should justify why the answer is correct.\n\n"
+                    "Compare the model's explanation quality to the reference explanations. Consider:\n"
+                    "- Medical accuracy\n"
+                    "- Relevance to the question\n"
+                    "- Clarity and completeness\n"
+                    "- Proper use of medical concepts\n\n"
+                    "Respond with a score from 0.0 to 1.0:\n"
+                    "- 1.0 = Excellent (as good as or better than references)\n"
+                    "- 0.75 = Good (mostly correct with minor issues)\n"
+                    "- 0.5 = Acceptable (partially correct)\n"
+                    "- 0.25 = Poor (significant errors)\n"
+                    "- 0.0 = Wrong or irrelevant\n\n"
                     "Respond with ONLY a number between 0.0 and 1.0."
                 )
                 judge_response = await judge_rubric.judge(
@@ -336,23 +347,22 @@ def load_environment(
                 try:
                     score_str = str(judge_response).strip()
                     import re as _re
-                    m = _re.search(r"(\d+\.?\d*)", score_str)
-                    s = float(m.group(1)) if m else 0.0
+                    number_match = _re.search(r"(\d+\.?\d*)", score_str)
+                    explanation_score = float(number_match.group(1)) if number_match else 0.0
                 except Exception:
-                    s = 0.0
-                base = max(0.0, min(1.0, s)) * 100.0
-            spec = (info.get("specialty") or "unknown")
-            return base * _macro_scale(spec)
+                    explanation_score = 0.0
+                base = max(0.0, min(1.0, explanation_score)) * 100.0
+            return base
 
         # Use JudgeRubric with two metrics: answer accuracy (sync), explanation judge (async)
-        judge_rubric.add_reward_func(answer_accuracy_reward, weight=0.0)
-        judge_rubric.add_reward_func(explanation_judge_reward, weight=0.0)
+        judge_rubric.add_reward_func(answer_accuracy_reward, weight=mcq_weight)
+        judge_rubric.add_reward_func(explanation_judge_reward, weight=explanation_weight)
         rubric = judge_rubric
     else:
-        # Keep metrics separate (no combined reward)
-        rubric = vf.Rubric(funcs=[answer_accuracy_reward, explanation_reward], weights=[0.0, 0.0], parser=parser)
+        # Keep metrics separate (and a combine drewad with tunable weights)
+        rubric = vf.Rubric(funcs=[answer_accuracy_reward, explanation_reward], weights=[mcq_weight, explanation_weight], parser=parser)
 
-    return vf.SingleTurnEnv(
+    env = vf.SingleTurnEnv(
         dataset=None,  # No training split available
         eval_dataset=test_ds,
         system_prompt=system_prompt,
@@ -360,3 +370,5 @@ def load_environment(
         rubric=rubric,
         **kwargs
     )
+
+    return env
