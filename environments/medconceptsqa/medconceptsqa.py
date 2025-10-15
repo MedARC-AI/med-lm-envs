@@ -35,6 +35,7 @@ def _create_few_shot_data(few_shot_set: Dataset, num_few_shot: int) -> dict[tupl
 def load_environment(
         use_think: bool = False,
         num_few_shot: int = 3,
+        subset: str = "all"
     ) -> vf.Environment:
     """MedConceptsQA multiple-choice evaluation
     - Loads HF 'ofir408/MedConceptsQA' (contains only dev and test split)
@@ -45,11 +46,12 @@ def load_environment(
     Args:
         num_few_shot: number of few-shot examples to include in the prompt (default: 3)
         use_think: whether to use a ThinkParser and reasoning system prompt (default: False)
+        subset: subset of dataset to use (eg. all, atc_easy, ..)
     Returns:
         vf.Environment: the single-turn evaluation environment
     """
     # load the entire dataset, should contain dev and test
-    ds = load_dataset("ofir408/MedConceptsQA", 'all')
+    ds = load_dataset("ofir408/MedConceptsQA", subset)
     test = ds['test']
     
     if num_few_shot > 0:
@@ -85,7 +87,7 @@ def load_environment(
     parser = vf.ThinkParser(extract_boxed_answer) if use_think else vf.Parser(extract_boxed_answer)
 
     def accuracy_reward(completion: Any, answer: str) -> float:
-        parsed = parser.parse_answer(completion).strip().upper()
+        parsed = parser.parse_answer(completion).strip().upper()[0]  # first character
         answer = answer.upper()
         return 1.0 if parsed == answer else 0.0
     
