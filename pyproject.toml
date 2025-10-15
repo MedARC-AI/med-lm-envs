@@ -9,7 +9,11 @@ dependencies = [
     "prime>=0.3.35",
     "verifiers>=0.1.4",
     "pyyaml>=6.0.1",
+    "docstring-parser>=0.17.0",
 ]
+
+[project.scripts]
+medarc-eval = "medarc_verifiers.cli.eval:main"
 
 [dependency-groups]
 dev = [
