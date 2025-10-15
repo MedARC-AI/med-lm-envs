@@ -120,7 +120,7 @@ def _simple_truncate_documents(
 
 def _prepare_task1_data(
     benchmark: dict,
-    max_context_tokens: int = 14000,
+    max_context_tokens: int = 16000,
     shuffle_docs: bool = True,
 ) -> list[dict]:
     """
@@ -230,7 +230,7 @@ def _sample_distraction_docs(
 
 def _prepare_task2_data(
     benchmark: dict,
-    max_context_tokens: int = 14000,
+    max_context_tokens: int = 16000,
     shuffle_docs: bool = True,
 ) -> list[dict]:
     """
@@ -417,7 +417,7 @@ def exact_match_reward(parser: vf.Parser, completion: str, answer: str, **kwargs
 
 def load_environment(
     task: Literal["task1", "task2", "all"] = "task1",
-    max_context_tokens: int = 14000,
+    max_context_tokens: int = 16000,
     use_think: bool = False,
     shuffle_docs: bool = True,
     use_custom_system_prompt: bool = True,
@@ -444,7 +444,7 @@ def load_environment(
         >>> env = vf.load_environment("longhealth", task="task1")
         
         >>> # Load Task 2 (negation + identification)
-        >>> env = vf.load_environment("longhealth", task="task2", max_context_tokens=14000)
+        >>> env = vf.load_environment("longhealth", task="task2", max_context_tokens=16000)
         
         >>> # Run evaluation
         >>> vf-eval longhealth -m gpt-4.1-mini -n 10 -a '{"task": "task1"}'
