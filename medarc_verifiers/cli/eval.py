@@ -43,6 +43,10 @@ def build_base_parser(require_env: bool, add_help: bool) -> argparse.ArgumentPar
             "Use `medarc-eval <env> --help` to list both global and environment-specific options."
         ),
     )
+    for group in parser._action_groups:
+        if group.title in {"optional arguments", "options"}:
+            group.title = "medarc-eval options"
+            break
     env_kwargs: Dict[str, Any] = {"metavar": "ENV", "help": "Environment module name"}
     if require_env:
         parser.add_argument("env", **env_kwargs)
@@ -186,8 +190,11 @@ def register_env_options(
     """Register environment-specific arguments and return their bindings."""
     reserved_dests = {action.dest for action in parser._actions}
     group = parser.add_argument_group(f"{env_id} options")
+    # argparse prints groups in insertion order; move env options ahead of globals.
+    parser._action_groups.insert(1, parser._action_groups.pop())
 
     bindings: Dict[str, EnvOptionBinding] = {}
+    env_actions: list[argparse.Action] = []
 
     for param in metadata:
         if not param.supports_cli:
@@ -223,11 +230,23 @@ def register_env_options(
                 kwargs["type"] = param.argparse_type
             kwargs["default"] = param.default
         action = group.add_argument(option, **kwargs)
+        env_actions.append(action)
         bindings[action.dest] = EnvOptionBinding(
             param=param,
             dest=action.dest,
             default=action.default,
         )
+
+    if env_actions:
+        # Reorder usage string so env-specific options precede globals.
+        help_action_index = next(
+            (index for index, action in enumerate(parser._actions) if action.dest == "help"),
+            None,
+        )
+        insert_at = (help_action_index + 1) if help_action_index is not None else 0
+        for action in reversed(env_actions):
+            parser._actions.remove(action)
+            parser._actions.insert(insert_at, action)
 
     return bindings
 
