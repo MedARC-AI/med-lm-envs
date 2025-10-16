@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 
 import verifiers as vf
 from datasets import Dataset, load_dataset
@@ -8,6 +8,8 @@ from verifiers.utils.data_utils import (
     extract_boxed_answer,
 )
 
+_VOCAB_CHOICES = ['atc', 'icd10cm', 'icd10proc', 'icd9cm', 'icd9proc']
+_LEVEL_CHOICES = ['easy', 'hard', 'medium']
 
 def _create_few_shot_data(few_shot_set: Dataset, num_few_shot: int) -> dict[tuple, str]:
     """Create few-shot examples from the dev set, grouped by (vocab, level).
@@ -35,7 +37,8 @@ def _create_few_shot_data(few_shot_set: Dataset, num_few_shot: int) -> dict[tupl
 def load_environment(
         use_think: bool = False,
         num_few_shot: int = 3,
-        subset: str = "all"
+        vocab: Optional[str] = None,
+        level: Optional[str] = None,
     ) -> vf.Environment:
     """MedConceptsQA multiple-choice evaluation
     - Loads HF 'ofir408/MedConceptsQA' (contains only dev and test split)
@@ -46,10 +49,20 @@ def load_environment(
     Args:
         num_few_shot: number of few-shot examples to include in the prompt (default: 3)
         use_think: whether to use a ThinkParser and reasoning system prompt (default: False)
-        subset: subset of dataset to use (eg. all, atc_easy, ..)
+        vocab: vocabulary to subset dataset, if `None` - choses `all` (default: None)
+        level: difficulty level to subset dataset (used in conjunction with vocab).
+            cannot be None if vocab is not None (default: None)
     Returns:
         vf.Environment: the single-turn evaluation environment
     """
+    subset = "all"
+    if vocab is not None:
+        if vocab not in _VOCAB_CHOICES:
+            raise ValueError(f"Invalid vocab choice {vocab}, must be one of {_VOCAB_CHOICES}")
+        if level is None or level not in _LEVEL_CHOICES:
+            raise ValueError(f"Invalid level choice {level}, must be one of {_LEVEL_CHOICES}")
+        subset = f"{vocab}_{level}"
+
     # load the entire dataset, should contain dev and test
     ds = load_dataset("ofir408/MedConceptsQA", subset)
     test = ds['test']
