@@ -262,21 +262,10 @@ def load_environment(
     def answer_accuracy_reward(parser, completion, answer, **kwargs) -> float:
         completion_text = _get_completion_text(completion)
         info = kwargs.get("info", {}) or {}
-        state = kwargs.get("state")
         options = {"A": info.get("A", ""), "B": info.get("B", ""), "C": info.get("C", ""), "D": info.get("D", "")}
         gold = (answer or "").strip().upper()
         pred_letter = extract_answer_letter(completion_text, options)
         base = 100.0 if pred_letter == gold else 0.0
-        # Persist per-specialty counters into state so runs saved with -s can be summarized post-hoc
-        if isinstance(state, dict):
-            spec = (info.get("specialty") or "unknown")
-            counters = state.get("specialty_counters") or {}
-            curr = counters.get(spec) or {"correct": 0, "total": 0}
-            curr["total"] = int(curr.get("total", 0)) + 1
-            if pred_letter == gold:
-                curr["correct"] = int(curr.get("correct", 0)) + 1
-            counters[spec] = curr
-            state["specialty_counters"] = counters
         return base
 
     def explanation_reward(parser, completion, answer, **kwargs) -> float:
