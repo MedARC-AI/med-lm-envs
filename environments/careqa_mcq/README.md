@@ -23,7 +23,7 @@ Evaluation environment for the [HPAI-BSC/CareQA](https://huggingface.co/datasets
 Run an evaluation with default settings:
 
 ```bash
-uv run vf-eval careqa
+uv run vf-eval careqa_mcq
 ```
 
 Configure model and sampling:
