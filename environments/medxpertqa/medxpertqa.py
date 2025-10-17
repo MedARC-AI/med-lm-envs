@@ -1,23 +1,38 @@
 import verifiers as vf
-from verifiers.utils.data_utils import extract_boxed_answer
 from datasets import load_dataset
-
-import os
-import re
+from verifiers.utils.data_utils import extract_boxed_answer
 
 
 def _get_system_prompt(use_think: bool) -> str:
-    think_system_prompt = (
-        "You are a helpful medical assistant. Think step-by-step inside <think>...</think> tags."
-        "Put your final answer within \boxed{{}}.\nQ:"
+    think_system_prompt = "You are a helpful medical assistant. Think step-by-step inside <think>...</think> tags. Put your final answer within \\boxed{}."
+    no_think_system_prompt = (
+        "You are a helpful medical assistant. Think step-by-step and put your final answer within \\boxed{}."
     )
-    no_think_system_prompt = "You are a helpful medical assistant.Put your final answer within \boxed{{}}.\nQ:"
     system_prompt = think_system_prompt if use_think else no_think_system_prompt
     return system_prompt
 
 
-def _build_prompt(question: str, use_think: bool) -> str:
-    return _get_system_prompt(use_think) + " " + question
+def _format_question_with_options(question_with_options: str, options) -> str:
+    """
+    Rebuild the composite question string from the standalone stem and options.
+    This keeps the current formatting while letting us randomize the options later.
+    """
+    if not options:
+        return question_with_options
+
+    if isinstance(options, dict):
+        option_items = list(options.items())
+    elif isinstance(options, list):
+        option_items = [(chr(ord("A") + idx), value) for idx, value in enumerate(options)]
+    else:
+        return question_with_options
+
+    question, sep, _ = question_with_options.partition("Answer Choices:")
+    question = question.strip() if sep else question_with_options.strip()
+    formatted_options = " ".join(f"({key}) {value}" for key, value in option_items)
+    if not formatted_options:
+        return question
+    return f"{question}\nAnswer Choices: {formatted_options}"
 
 
 def load_environment(
@@ -33,16 +48,14 @@ def load_environment(
             "question": x["question"],
             "answer": x["label"],
             "task": "medxpertqa",
+            "options": x.get("options"),
         }
     )
 
     def _map(ex):
-        q: str = ex["question"]
-        a: str = ex["label"]
-
         return {
-            "question": _build_prompt(q, use_think),
-            "answer": a,
+            "question": _format_question_with_options(ex["question"], ex.get("options")),
+            "answer": ex["label"],
         }
 
     mapped = test_dataset.map(_map).filter(lambda r: r is not None)
@@ -63,11 +76,8 @@ def load_environment(
         else:
             return 0.0
 
-    rubric = vf.Rubric(
-        funcs=[medxpertqa_reward_func],
-        weights=[1.0],
-    )
+    rubric = vf.Rubric(funcs=[medxpertqa_reward_func], weights=[1.0])
 
-    vf_env = vf.SingleTurnEnv(eval_dataset=mapped, system_prompt=None, rubric=rubric)
+    vf_env = vf.SingleTurnEnv(eval_dataset=mapped, system_prompt=_get_system_prompt(use_think), rubric=rubric)
 
     return vf_env
