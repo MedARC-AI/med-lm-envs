@@ -37,23 +37,23 @@ async def _extract_and_store_claims(
     question: str = (info or {}).get("Question", "")
     llm_answer: str = _get_raw_completion(completion)
     extraction_prompt = _decompose_free_form_answer(question, llm_answer)
-
+    
     raw = await extractor.judge(
         [{"role": "user", "content": extraction_prompt}],
         completion="", 
         answer="",      
         state=state,
     )
-    
-    print("---------------- raw claim ----------------")
-    print("question: ", question)
-    print(raw)
-    print("---------------- raw claim ----------------")
 
     # Parse {"claims": [...]} like format
     json_parser = JSONParser(fields=["claims"])
     parsed = json_parser.parse(str(raw)) or {}
     claims = [str(c).strip() for c in (parsed.get("claims") or []) if str(c).strip()]
+    
+    print("---------------- raw claim ----------------")
+    print("question: ", question)
+    print(raw)
+    print("---------------- raw claim ----------------")
 
     #  shared state
     state.setdefault("kqa", {})
@@ -64,15 +64,36 @@ async def _extract_and_store_claims(
     return 0.0
 
 
-async def _judge_boolean(scorer: vf.JudgeRubric, prompt_str: str, state: Dict) -> bool:
-    raw = await scorer.judge(
-        [{"role": "user", "content": prompt_str}],
-        completion="",
-        answer="",
-        state=state,
-    )
-    text = str(raw).strip().lower()
-    return "true" in text[-20:]
+async def _batch_eval(scorer: vf.JudgeRubric, question: str, info: Dict, state: Dict) -> None:
+        
+        if "batch_eval_results" in state.get("kqa", {}): 
+            return
+        
+        
+        must_have: List[str] = (info or {}).get("Must_have", []) or []
+        claims: List[str] = ((state.get("kqa", {}) or {}).get("claims", []) or [])
+        gold_claims: List[str] = ((info or {}).get("Must_have", []) or []) + ((info or {}).get("Nice_to_have", []) or [])
+                           
+        if not claims or not gold_claims:
+            state.setdefault("kqa", {})["batch_eval_results"] = {
+            "comprehensiveness": {"entailed_must_have_claims": []},
+            "hallucination": {"contradictory_generated_claims": []},
+        }
+            return 
+    
+        prompt_str = batch_eval_prompt(question, claims, must_have, gold_claims)
+        raw = await scorer.judge(
+            [{"role": "user", "content": prompt_str}],
+            completion="",
+            answer="",
+            state=state,
+        )
+        
+        json_parser = JSONParser(fields=["comprehensiveness", "hallucination"])
+
+        parsed = json_parser.parse(str(raw)) or {}
+        
+        state.setdefault("kqa", {})["batch_eval_results"] = parsed
 
 
 def load_environment(
@@ -92,7 +113,7 @@ def load_environment(
     data_fp = Path(__file__).resolve().parent / "questions_w_answers.jsonl"
     df = pd.read_json(data_fp, orient="records", lines=True)
 
-    # Map to vf format
+    # map to vf format
     def _map_to_vf_format(row: pd.Series) -> Dict[str, Any]:
         q = row.get("Question", "")
         return {
@@ -137,51 +158,39 @@ def load_environment(
 
     async def comprehensiveness_reward(prompt, completion, info, state, **_) -> float:
         # Adapted the code from the original code: https://github.com/Itaymanes/K-QA/blob/main/evaluation/metrics.py to compute comprehensiveness
+        
         question: str = (info or {}).get("Question", "")
+        await _batch_eval(scorer, question, info, state)
+        
         must_have: List[str] = (info or {}).get("Must_have", []) or []
-        claims: List[str] = ((state.get("kqa", {}) or {}).get("claims", []) or [])
         if not must_have:
             return 1.0
-        if not claims:
-            return 0.0
 
-        covered = 0
-        for must_claim in must_have:
-            # True if ANY predicted claim entails the must-have claim
-            entailed = False
-            for pred in claims:
-                prompt_str = _prompt_for_is_entails(question, pred, must_claim)
-                if await _judge_boolean(scorer, prompt_str, state):
-                    entailed = True
-                    break
-            if entailed:
-                covered += 1
-        return covered / len(must_have)
+        eval_results = state.get("kqa", {}).get("batch_eval_results", {})
+        comprehensiveness_results = eval_results.get("comprehensiveness", {})
+        entailed_claims = comprehensiveness_results.get("entailed_must_have_claims", [])
+        
+        entailed_count = len(entailed_claims)
+        return entailed_count / len(must_have)
+
     
     
 
     async def hallucination_rate_reward(prompt, completion, info, state, **_) -> float:
         question: str = (info or {}).get("Question", "")
-        claims: List[str] = ((state.get("kqa", {}) or {}).get("claims", []) or [])
-        gold_claims: List[str] = (
-            (info or {}).get("Must_have", []) or []
-        ) + ((info or {}).get("Nice_to_have", []) or [])
+        await _batch_eval(scorer, question, info, state)
 
-        if not claims or not gold_claims:
+        claims: List[str] = ((state.get("kqa", {}) or {}).get("claims", []) or [])
+        if not claims:
             return 0.0
 
-        contradicted_gold = 0
-        for gold in gold_claims:
-            contradicted = False
-            for pred in claims:
-                prompt_str = _prompt_for_has_contradiction(question, pred, gold)
-                if await _judge_boolean(scorer, prompt_str, state):
-                    contradicted = True
-                    break
-            if contradicted:
-                contradicted_gold += 1
-        return contradicted_gold
-    
+        eval_results = state.get("kqa", {}).get("batch_eval_results", {})
+        hallucination_results = eval_results.get("hallucination", {})
+        contradictory_claims = hallucination_results.get("contradictory_generated_claims", [])
+        
+        contradictory_count = len(contradictory_claims)
+        return contradictory_count 
+        
 
     scorer.add_reward_func(comprehensiveness_reward, weight=1.0)
     scorer.add_reward_func(hallucination_rate_reward, weight=1.0)
@@ -189,7 +198,7 @@ def load_environment(
     # extractor runs first, then scoring; state is shared
     rubric_group = vf.RubricGroup([extractor, scorer])
 
-    # Simple pass-through parser; reward funcs operate directly on messages/state
+    
     parser = vf.Parser(extract_fn=lambda x: x)
 
     return vf.SingleTurnEnv(
