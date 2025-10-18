@@ -13,7 +13,7 @@ from verifiers.utils.data_utils import (
 def _build_prompt(question: str, options: dict[str, str]) -> str:
     """Create an MCQ prompt."""
     formatted_opts = "\n".join(f"{k}. {v}" for k, v in options.items())
-    return f"Question:{question}\n{formatted_opts}\nAnswer:"
+    return f"Question:{question}\nChoices:{formatted_opts}\nAnswer:"
     
 def exact_match(parser: vf.Parser, completion: str, answer: str, **kwargs) -> float:
     """Reward exact matches."""
