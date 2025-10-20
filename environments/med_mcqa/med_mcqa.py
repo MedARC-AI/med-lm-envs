@@ -41,7 +41,7 @@ def med_mcqa(line: Dict[str, Any]) -> Dict[str, Any]:
     query += "Answer:"
     
     result = {
-        "query": query,
+        "question": query,
         "answer": LETTER_INDICES[line["cop"] - 1],
         "choices": LETTER_INDICES,
         "gold_index": line["cop"] - 1,
@@ -111,9 +111,10 @@ def load_environment(use_think: bool = False, system_prompt: Optional[str] = Non
         mapped = med_mcqa(line)
         return mapped
     
-    train_mapped = train_ds.map(_map_example).filter(lambda x: x is not None)
-    val_mapped = val_ds.map(_map_example).filter(lambda x: x is not None)
-
+    columns_to_remove = ['question', 'opa', 'opb', 'opc', 'opd', 'cop']
+    train_mapped = train_ds.map(_map_example,  remove_columns=columns_to_remove).filter(lambda x: x is not None)
+    val_mapped = val_ds.map(_map_example,  remove_columns=columns_to_remove).filter(lambda x: x is not None)
+    
     system_prompt = system_prompt or (THINK_BOXED_SYSTEM_PROMPT if use_think else BOXED_SYSTEM_PROMPT)
     parser = vf.ThinkParser(extract_boxed_answer) if use_think else vf.Parser(extract_boxed_answer)
 
