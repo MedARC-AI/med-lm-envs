@@ -126,13 +126,12 @@ def extract_answer(response, calid):
 def check_correctness(parser, completion, info, **kwargs):
 
     # Pull required fields from info
-    try:
-        ground_truth = info.get("ground_truth")
-        calc_id = info.get("calc_id")
-        upper_bound = info.get("upper_bound")
-        lower_bound = info.get("lower_bound")
-    except Exception:
-        return 0.0
+
+    ground_truth = info.get("ground_truth")
+    calc_id = info.get("calc_id")
+    upper_bound = info.get("upper_bound")
+    lower_bound = info.get("lower_bound")
+
 
     calid = int(calc_id)
 
