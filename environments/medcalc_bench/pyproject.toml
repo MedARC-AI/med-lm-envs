@@ -1,0 +1,24 @@
+[project]
+name = "medcalc-bench"
+version = "0.1.0"
+description = "MedCalc-Bench clinical calculator evaluation"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "verifiers>=0.1.4",
+    "datasets>=4.0.0",
+    "numpy>=1.26.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["medcalc_bench.py"]
+
+[tool.prime.environment]
+# lets Prime/vf-eval know where the loader lives in a flat repo
+loader = "medcalc_bench:load_environment"
+display_name = "MedCalc-Bench"
+visibility = "PUBLIC"
