@@ -43,33 +43,19 @@ def load_environment(
     )
 
     # Judge Prompt Template
-    JUDGE_TEMPLATE = """\
-You are a clinical reasoning evaluator tasked with determining whether a model's medical answer
-is equivalent in meaning and correctness to the reference (ground truth) answer.
-
-You will be given:
-1. A clinical question.
-2. The ground truth answer.
-3. A model's predicted answer.
-
-Judge whether the predicted answer is *medically equivalent* to the ground truth. 
-Equivalence means that both answers express the same medical reasoning or correct clinical interpretation,
-even if the wording differs.
-
-Guidelines:
-- Equivalent if the same diagnosis, reasoning, or recommendation is conveyed.
-- Accept synonyms (e.g., “heart attack” vs “myocardial infarction”).
-- Ignore trivial stylistic differences or additional context.
-- Not equivalent if the model changes the diagnosis, key mechanism, or recommendation.
-
+    JUDGE_TEMPLATE = """You are a clinical fact verifier.
+Given:
 Question: {question}
+Reference (ground truth) answer: {answer}
+Model’s answer: {response}
 
-Ground Truth Answer: {answer}
+Determine if the model’s answer is medically equivalent to the reference.
+- Consider medical synonyms and abbreviations equivalent.
+- Ignore minor wording differences (e.g., “high blood pressure” ≈ “hypertension”).
+- If the model’s answer is more general or specific but still correct, consider it equivalent.
 
-Predicted Answer: {response}
+Respond with one word only: "EQUIVALENT" or "NOT_EQUIVALENT".
 
-Is the predicted answer medically equivalent to the ground truth?
-Respond strictly with "EQUIVALENT" or "NOT_EQUIVALENT".
 """.strip()
 
     # Judge Client Setup
