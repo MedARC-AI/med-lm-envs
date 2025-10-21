@@ -1,16 +1,14 @@
-from __future__ import annotations
-from typing import Dict, Optional
-from datasets import load_dataset
-import verifiers as vf
+import math
 import re
 from datetime import datetime
-import math
-import numpy as np
+from typing import Optional
 
+import numpy as np
+import verifiers as vf
+from datasets import load_dataset
 
 
 def _build_prompt(patient_note, question) -> str:
- 
     return f"""You are a helpful assistant for calculating a score for a given patient note. 
 Please think step-by-step to solve the question and then generate the required score. 
 \n\nPatient Note: {patient_note}
@@ -26,8 +24,8 @@ Your answer here without any units, just give the number.
 </answer>
 """
 
-def extract_answer(response, calid):
 
+def extract_answer(response, calid):
     calid = int(calid)
 
     extracted_explanation = re.search(r"<think>(.*?)</think>", response, re.DOTALL | re.IGNORECASE)
@@ -35,7 +33,6 @@ def extract_answer(response, calid):
         extracted_explanation = extracted_explanation.group(1).strip()
     else:
         extracted_explanation = "No Explanation"
-
 
     m = re.search(r"<answer>(.*?)</answer>", response, re.DOTALL | re.IGNORECASE)
     if m:
@@ -47,7 +44,7 @@ def extract_answer(response, calid):
         extracted_answer = "Not Found"
     else:
         extracted_answer = answer.strip('"')
-    
+
     if calid in [13, 68]:
         # Output Type: date
         match = re.search(r"^(0?[1-9]|1[0-2])\/(0?[1-9]|[12][0-9]|3[01])\/(\d{4})", extracted_answer)
@@ -61,10 +58,14 @@ def extract_answer(response, calid):
 
     elif calid in [69]:
         # Output Type: integer (A, B)
-        match = re.search(r"\(?[\"\']?(\d+)\s*(weeks?)?[\"\']?,?\s*[\"\']?(\d+)\s*(days?)?[\"\']?\s*\)?", extracted_answer)
+        match = re.search(
+            r"\(?[\"\']?(\d+)\s*(weeks?)?[\"\']?,?\s*[\"\']?(\d+)\s*(days?)?[\"\']?\s*\)?", extracted_answer
+        )
         ground_truth = f"({match.group(1)}, {match.group(3)})"
         extracted_answer = extracted_answer.replace("[", "(").replace("]", ")").replace("'", "").replace('"', "")
-        match = re.search(r"\(?[\"\']?(\d+)\s*(weeks?)?[\"\']?,?\s*[\"\']?(\d+)\s*(days?)?[\"\']?\s*\)?", extracted_answer)
+        match = re.search(
+            r"\(?[\"\']?(\d+)\s*(weeks?)?[\"\']?,?\s*[\"\']?(\d+)\s*(days?)?[\"\']?\s*\)?", extracted_answer
+        )
         if match:
             weeks = match.group(1)
             days = match.group(3)
@@ -74,64 +75,94 @@ def extract_answer(response, calid):
     elif calid in [4, 15, 16, 17, 18, 20, 21, 25, 27, 28, 29, 32, 33, 36, 43, 45, 48, 51, 69]:
         # Output Type: integer A
         match = re.search(r"(\d+) out of", extracted_answer)
-        if match: # cases like "3 out of 5"
+        if match:  # cases like "3 out of 5"
             answer = match.group(1)
         else:
             match = re.search(r"-?\d+(, ?-?\d+)+", extracted_answer)
-            if match: # cases like "3, 4, 5"
+            if match:  # cases like "3, 4, 5"
                 answer = str(len(match.group(0).split(",")))
             else:
                 # match = re.findall(r"(?<!-)\d+", extracted_answer)
                 match = re.findall(r"(-?\d+(\.\d+)?)", extracted_answer)
                 # match = re.findall(r"-?\d+", extracted_answer)
-                if len(match) > 0: # find the last integer
+                if len(match) > 0:  # find the last integer
                     answer = match[-1][0]
                     # answer = match[-1].lstrip("0")
                 else:
                     answer = "N/A"
-    elif calid in [2,  3,  5,  6,  7,  8,  9, 10, 11, 19, 22, 23, 24, 26, 30, 31, 38, 39, 40, 44, 46, 49, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67]:
+    elif calid in [2,  3,  5,  6,  7,  8,  9, 10, 11, 19, 22, 23, 24, 26, 30, 31, 38, 39, 40, 44, 46, 49, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67]:  # fmt: skip
         # Output Type: decimal
         match = re.search(r"str\((.*)\)", extracted_answer)
-        if match: # cases like "str(round((140 * (3.15 - 136) / 1400) * 72.36)"
-            expression = match.group(1).replace("^", "**").replace("is odd", "% 2 == 1").replace("is even", "% 2 == 0").replace("sqrt", "math.sqrt").replace(".math", "").replace("weight", "").replace("height", "").replace("mg/dl", "").replace("g/dl", "").replace("mmol/L", "").replace("kg", "").replace("g", "").replace("mEq/L", "")
-            expression = expression.split('#')[0] # cases like round(45.5 * 166 - 45.3 + 0.4 * (75 - (45.5 * 166 - 45.3))))) # Calculation: ...
-            if expression.count('(') > expression.count(')'): # add missing ')
-                expression += ')' * (expression.count('(') - expression.count(')'))
-            elif expression.count(')') > expression.count('('): # add missing (
-                expression = '(' * (expression.count(')') - expression.count('(')) + expression
+        if match:  # cases like "str(round((140 * (3.15 - 136) / 1400) * 72.36)"
+            expression = (
+                match.group(1)
+                .replace("^", "**")
+                .replace("is odd", "% 2 == 1")
+                .replace("is even", "% 2 == 0")
+                .replace("sqrt", "math.sqrt")
+                .replace(".math", "")
+                .replace("weight", "")
+                .replace("height", "")
+                .replace("mg/dl", "")
+                .replace("g/dl", "")
+                .replace("mmol/L", "")
+                .replace("kg", "")
+                .replace("g", "")
+                .replace("mEq/L", "")
+            )
+            expression = expression.split("#")[
+                0
+            ]  # cases like round(45.5 * 166 - 45.3 + 0.4 * (75 - (45.5 * 166 - 45.3))))) # Calculation: ...
+            if expression.count("(") > expression.count(")"):  # add missing ')
+                expression += ")" * (expression.count("(") - expression.count(")"))
+            elif expression.count(")") > expression.count("("):  # add missing (
+                expression = "(" * (expression.count(")") - expression.count("(")) + expression
             try:
-                answer = eval(expression, {"__builtins__": None}, {"min": min, "pow": pow, "round": round, "abs": abs, "int": int, "float": float, "math": math, "np": np, "numpy": np})
+                answer = eval(
+                    expression,
+                    {"__builtins__": None},
+                    {
+                        "min": min,
+                        "pow": pow,
+                        "round": round,
+                        "abs": abs,
+                        "int": int,
+                        "float": float,
+                        "math": math,
+                        "np": np,
+                        "numpy": np,
+                    },
+                )
             except:
                 print(f"Error in evaluating expression: {expression}")
                 answer = "N/A"
         else:
             match = re.search(r"(-?\d+(\.\d+)?)\s*mL/min/1.73", extracted_answer)
-            if match: # cases like "8.1 mL/min/1.73 m\u00b2"
+            if match:  # cases like "8.1 mL/min/1.73 m\u00b2"
                 answer = eval(match.group(1))
             else:
                 match = re.findall(r"(-?\d+(\.\d+)?)\%", extracted_answer)
-                if len(match) > 0: # cases like "53.1%"
+                if len(match) > 0:  # cases like "53.1%"
                     answer = eval(match[-1][0]) / 100
                 else:
                     match = re.findall(r"(-?\d+(\.\d+)?)", extracted_answer)
-                    if len(match) > 0: # cases like "8.1 mL/min/1.73 m\u00b2" or "11.1"
+                    if len(match) > 0:  # cases like "8.1 mL/min/1.73 m\u00b2" or "11.1"
                         answer = eval(match[-1][0])
                     else:
                         answer = "N/A"
         if answer != "N/A":
-            answer = str(answer)          
- 
-    return answer, extracted_explanation 
+            answer = str(answer)
+
+    return answer, extracted_explanation
+
 
 def check_correctness(parser, completion, info, **kwargs):
-
     # Pull required fields from info
 
     ground_truth = info.get("ground_truth")
     calc_id = info.get("calc_id")
     upper_bound = info.get("upper_bound")
     lower_bound = info.get("lower_bound")
-
 
     calid = int(calc_id)
 
@@ -148,7 +179,9 @@ def check_correctness(parser, completion, info, **kwargs):
         # Output Type: date
 
         try:
-            if datetime.strptime(answer, "%m/%d/%Y").strftime("%-m/%-d/%Y") == datetime.strptime(ground_truth, "%m/%d/%Y").strftime("%-m/%-d/%Y"):
+            if datetime.strptime(answer, "%m/%d/%Y").strftime("%-m/%-d/%Y") == datetime.strptime(
+                ground_truth, "%m/%d/%Y"
+            ).strftime("%-m/%-d/%Y"):
                 correctness = 1
             else:
                 correctness = 0
@@ -156,7 +189,9 @@ def check_correctness(parser, completion, info, **kwargs):
             correctness = 0
     elif calid in [69]:
         # Output Type: integer (A, B)
-        match = re.search(r"\(?[\"\']?(\d+)\s*(weeks?)?[\"\']?,?\s*[\"\']?(\d+)\s*(days?)?[\"\']?\s*\)?", str(ground_truth))
+        match = re.search(
+            r"\(?[\"\']?(\d+)\s*(weeks?)?[\"\']?,?\s*[\"\']?(\d+)\s*(days?)?[\"\']?\s*\)?", str(ground_truth)
+        )
         if match:
             ground_truth = f"({match.group(1)}, {match.group(3)})"
         match = re.search(r"\(?[\"\']?(\d+)\s*(weeks?)?[\"\']?,?\s*[\"\']?(\d+)\s*(days?)?[\"\']?\s*\)?", answer)
@@ -177,7 +212,7 @@ def check_correctness(parser, completion, info, **kwargs):
             correctness = 1 if numeric == eval(str(ground_truth)) else 0
         except Exception:
             correctness = 0
-    elif calid in [2,  3,  5,  6,  7,  8,  9, 10, 11, 19, 22, 23, 24, 26, 30, 31, 38, 39, 40, 44, 46, 49, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67]:
+    elif calid in [2,  3,  5,  6,  7,  8,  9, 10, 11, 19, 22, 23, 24, 26, 30, 31, 38, 39, 40, 44, 46, 49, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67]:  # fmt: skip
         # Output Type: decimal
         try:
             numeric = float(eval(answer))
@@ -191,13 +226,10 @@ def check_correctness(parser, completion, info, **kwargs):
     return float(correctness)
 
 
-
 def load_environment(
     use_think: bool = False,
     system_prompt: Optional[str] = None,
 ) -> vf.Environment:
-
-
     ds = load_dataset("ncbi/MedCalc-Bench-v1.0")
 
     def _map(ex):
@@ -221,12 +253,11 @@ def load_environment(
     train_mapped = ds["train"].map(_map, remove_columns=ds["train"].column_names)
     test_mapped = ds["test"].map(_map, remove_columns=ds["test"].column_names)
 
-  
     # Use ThinkParser to support <think> and <answer> formatting
     parser = vf.ThinkParser()
-    system_prompt = f"""You are a helpful assistant who will assist with calculating a score given a patient note and a question. 
-    Please think step-by-step to solve the question and then generate the required score. 
-    You should use the patient's health status and values in the present at the time of admission prior to treatment."""
+    system_prompt = """You are a helpful assistant who will assist with calculating a score given a patient note and a question. 
+Please think step-by-step to solve the question and then generate the required score. 
+You should use the patient's health status and values in the present at the time of admission prior to treatment."""
 
     rubric = vf.Rubric(funcs=[check_correctness], weights=[1.0], parser=parser)
 
