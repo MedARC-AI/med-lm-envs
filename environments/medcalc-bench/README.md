@@ -58,4 +58,6 @@ Notes:
 | ------ | ------- |
 | `check_correctness` | (weight 1.0): validates numeric/date/tuple answers per calc ID |
 
+### Adjustments 
 
+Adjusted the prompt to output the step-by-step thinking and final answer with the <think> and <answer> tags instead of responding with a JSON. 
