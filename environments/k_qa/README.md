@@ -50,6 +50,11 @@ uv run vf-eval k_qa \
   -a '{"extractor_model":"gpt-4-mini","judge_model":"gpt-4-mini"}'
 ```
 
+To run a batched evaluation(default is set to false):
+```bash
+uv run vf-eval k_qa -a '{"batch": true}'
+```
+
 Notes:
 - Use `-a` / `--env-args` to pass environment-specific configuration as a JSON object.
 
@@ -68,7 +73,8 @@ Document any supported environment arguments and their meaning. Example:
 | Arg | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
 | `extractor_model` | str | `"gpt-4-mini"` | The model used to extract claims from the free form answer. |
-| `judge_model` | int | `gpt-4-mini` | The model used for NLI-style scoring (entailment and contradiction) |
+| `judge_model` | str | `gpt-4-mini` | The model used for NLI-style scoring (entailment and contradiction) |
+| `batch` | bool | `False` | Whether to run evaluation in a single batch call to the judge model. |
 
 ### Metrics
 Summarize key metrics your rubric emits and how they’re interpreted.

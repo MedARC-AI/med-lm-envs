@@ -325,12 +325,13 @@ Answer:
 
 """
 
-def batch_eval_prompt(question,
-    llm_claims,
-    must_have_claims,
-    gold_claims,
+
+def batch_eval_prompt(question: str,
+    llm_claims: list[str],
+    must_have_claims: list[str],
+    gold_claims: list[str],
 ) -> str:
-    return f"""
+    prompt = f"""
 
 # OVERALL INSTRUCTIONS
  - You have a deep understanding of logical relationships, such as entailment and contradiction.
@@ -351,6 +352,20 @@ def batch_eval_prompt(question,
 - Be vigilant in identifying cases where the generated claim doesn't rule out the possibility of an entity (e.g., vaccine, symptom) appearing in the gold claim. In such cases, it is NOT a contradiction.
 - If no generated claims are contradictory, the list should be empty.
 
+
+# FORMAT OF INPUT DATA
+
+ ## Question    
+{"question"}
+
+## Generated Claims
+{"llm_claims_str"}
+
+## Must-Have Claims (for Comprehensiveness)
+{"must_have_claims_str"}
+
+## Ground Truth Gold Claims (for Hallucination)
+{"gold_claims_str"} 
 
 # INPUT DATA
 ## Question
@@ -379,8 +394,11 @@ Respond with a single JSON object with this exact shape:
 
 Rules:
 - Return only valid JSON. No prose, no Markdown/code fences.
+- REMEMBER: For Comprehensiveness, That Must-Have Claims does not need to match WORD FOR WORD, because a generated claim entails a must-have claim if the must-have claim can be reasonably inferred from the generated claim. 
+- REMEMBER: For Hallucination, A contradiction occurs when a generated claim and a gold claim cannot both be true 
 - The lists in the JSON should contain the exact text of the claims.
 - If no claims meet the criteria for a list, return an empty list for it.
 
     """
+    return prompt
     

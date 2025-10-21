@@ -45,11 +45,6 @@ async def _extract_and_store_claims(
         state=state,
     )
     
-    print("---------------- raw claim ----------------")
-    print("question: ", question)
-    print(raw)
-    print("---------------- raw claim ----------------")
-
     # Parse {"claims": [...]} like format
     json_parser = JSONParser(fields=["claims"])
     parsed = json_parser.parse(str(raw)) or {}
@@ -64,6 +59,7 @@ async def _extract_and_store_claims(
     return 0.0
 
 
+ # single judge call for evaluation
 async def _judge_boolean(scorer: vf.JudgeRubric, prompt_str: str, state: Dict) -> bool:
     raw = await scorer.judge(
         [{"role": "user", "content": prompt_str}],
@@ -75,6 +71,48 @@ async def _judge_boolean(scorer: vf.JudgeRubric, prompt_str: str, state: Dict) -
     return "true" in text[-20:]
 
 
+# batch call for evaluation
+async def _batch_eval(scorer: vf.JudgeRubric, question: str, info: Dict, state: Dict) -> None:
+        
+        if "batch_eval_results" in state.get("kqa", {}): 
+            return
+        
+        must_have: List[str] = (info or {}).get("Must_have", []) or []
+        claims: List[str] = ((state.get("kqa", {}) or {}).get("claims", []) or [])
+        gold_claims: List[str] = ((info or {}).get("Must_have", []) or []) + ((info or {}).get("Nice_to_have", []) or [])
+                           
+        if not claims or not gold_claims:
+            state.setdefault("kqa", {})["batch_eval_results"] = {
+            "comprehensiveness": {"entailed_must_have_claims": []},
+            "hallucination": {"contradictory_generated_claims": []},
+        }
+            return 
+    
+        prompt_str = batch_eval_prompt(question, claims, must_have, gold_claims)
+        raw = await scorer.judge(
+            [{"role": "user", "content": prompt_str}],
+            completion="",
+            answer="",
+            state=state,
+        )
+   
+        print("question: ", question,end="\n")
+        print("\n")
+        print("claims: ", claims,end="\n")
+        print("\n")
+        print("must_have: ", must_have,end="\n")
+        print("\n")
+        print("gold_claims: ", gold_claims,end="\n")
+        print("\n")
+        print(raw,end="\n")
+        
+        json_parser = JSONParser(fields=["comprehensiveness", "hallucination"])
+
+        parsed = json_parser.parse(str(raw)) or {}
+        
+        state.setdefault("kqa", {})["batch_eval_results"] = parsed
+
+
 def load_environment(
     extractor_model: str = "gpt-4.1-mini",
     judge_model: str = "gpt-4.1-mini",
@@ -82,6 +120,7 @@ def load_environment(
     extractor_api_key: str | None = None,
     judge_base_url: str | None = None,
     judge_api_key: str | None = None,
+    batch: bool = False,
     **kwargs,
 ) -> vf.Environment:
     """
@@ -139,48 +178,72 @@ def load_environment(
         # Adapted the code from the original code: https://github.com/Itaymanes/K-QA/blob/main/evaluation/metrics.py to compute comprehensiveness
         question: str = (info or {}).get("Question", "")
         must_have: List[str] = (info or {}).get("Must_have", []) or []
-        claims: List[str] = ((state.get("kqa", {}) or {}).get("claims", []) or [])
+        
         if not must_have:
             return 1.0
-        if not claims:
-            return 0.0
-
-        covered = 0
-        for must_claim in must_have:
-            # True if ANY predicted claim entails the must-have claim
-            entailed = False
-            for pred in claims:
-                prompt_str = _prompt_for_is_entails(question, pred, must_claim)
-                if await _judge_boolean(scorer, prompt_str, state):
-                    entailed = True
-                    break
-            if entailed:
-                covered += 1
-        return covered / len(must_have)
+    
+        if batch:
+            await  _batch_eval(scorer, question, info, state)
+            
+            eval_results = state.get("kqa", {}).get("batch_eval_results", {})
+            comprehensiveness_results = eval_results.get("comprehensiveness", {})
+            entailed_claims = comprehensiveness_results.get("entailed_must_have_claims", [])
+            entailed_count = len(entailed_claims)
+            
+            return entailed_count / len(must_have)
+            
+        else:
+            claims: List[str] = ((state.get("kqa", {}) or {}).get("claims", []) or [])
+            if not claims:
+                return 0.0
+            covered = 0
+            for must_claim in must_have:
+                # True if ANY predicted claim entails the must-have claim
+                entailed = False
+                for pred in claims:
+                    prompt_str = _prompt_for_is_entails(question, pred, must_claim)
+                    if await _judge_boolean(scorer, prompt_str, state):
+                        entailed = True
+                        break
+                if entailed:
+                    covered += 1
+            return covered / len(must_have)
     
     
 
     async def hallucination_rate_reward(prompt, completion, info, state, **_) -> float:
         question: str = (info or {}).get("Question", "")
         claims: List[str] = ((state.get("kqa", {}) or {}).get("claims", []) or [])
-        gold_claims: List[str] = (
-            (info or {}).get("Must_have", []) or []
-        ) + ((info or {}).get("Nice_to_have", []) or [])
-
-        if not claims or not gold_claims:
+        
+        if not claims:
             return 0.0
+        
+        if batch:
+            await _batch_eval(scorer, question, info, state)
+            eval_results = state.get("kqa", {}).get("batch_eval_results", {})
+            hallucination_results = eval_results.get("hallucination", {})
+            contradictory_claims = hallucination_results.get("contradictory_generated_claims", [])
+            contradictory_count = len(contradictory_claims)
+            return contradictory_count
+        
+        else:
+            gold_claims: List[str] = (
+                (info or {}).get("Must_have", []) or []
+            ) + ((info or {}).get("Nice_to_have", []) or [])
 
-        contradicted_gold = 0
-        for gold in gold_claims:
-            contradicted = False
-            for pred in claims:
-                prompt_str = _prompt_for_has_contradiction(question, pred, gold)
-                if await _judge_boolean(scorer, prompt_str, state):
-                    contradicted = True
-                    break
-            if contradicted:
-                contradicted_gold += 1
-        return contradicted_gold
+            if not gold_claims:
+                return 0.0
+            contradicted_gold = 0
+            for gold in gold_claims:
+                contradicted = False
+                for pred in claims:
+                    prompt_str = _prompt_for_has_contradiction(question, pred, gold)
+                    if await _judge_boolean(scorer, prompt_str, state):
+                        contradicted = True
+                        break
+                if contradicted:
+                    contradicted_gold += 1
+            return contradicted_gold
     
 
     scorer.add_reward_func(comprehensiveness_reward, weight=1.0)
