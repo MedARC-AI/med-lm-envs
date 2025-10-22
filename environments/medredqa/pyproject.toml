@@ -1,0 +1,28 @@
+[project]
+name = "medredqa"
+version = "0.2.8"
+description = "MedRedQA medical question answer evaluation"
+tags = ["medical", "reasoning", "single-turn", "llm-judge", "question answering"]
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "verifiers>=0.1.2.post0",
+    "datasets",
+    "openai",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build]
+include = ["medredqa.py",
+           "factscore_judge/**",
+]
+
+[tool.prime.environment]
+loader = "medredqa:load_environment"
+display_name = "MedRedQA"
+visibility = "PUBLIC"
