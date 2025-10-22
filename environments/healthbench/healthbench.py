@@ -89,16 +89,14 @@ def load_environment(
     **kwargs,
 ) -> SingleTurnEnv:
     try:
-        dataset = load_dataset(
-            HEALTHBENCH_DATASET_MAPPING[difficulty], split="test"
-        ).map(lambda example: {"info": _process_healthbench_dataset(example)})
+        dataset = load_dataset(HEALTHBENCH_DATASET_MAPPING[difficulty], split="test").map(
+            lambda example: {"info": _process_healthbench_dataset(example)}
+        )
     except KeyError:
         raise ValueError(f"Invalid difficulty: {difficulty}")
 
     api_key = judge_api_key if judge_api_key else os.getenv("JUDGE_API_KEY")
-    judge_client = AsyncOpenAI(
-        base_url=judge_base_url, api_key=api_key
-    )  # Use AsyncOpenAI
+    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key)  # Use AsyncOpenAI
 
     jr = JudgeRubric(
         judge_client=judge_client,
@@ -106,9 +104,7 @@ def load_environment(
         judge_prompt="{question}",
     )
 
-    async def reward_healthbench(
-        prompt: Messages, completion: Messages, info: Info, state: State
-    ) -> float:
+    async def reward_healthbench(prompt: Messages, completion: Messages, info: Info, state: State) -> float:
         """
         Embedded reward function that asynchronously calls `judge` for every
         criterion for this rollout.
@@ -132,20 +128,23 @@ def load_environment(
         total_reward = sum([pt for pt in points_list if pt > 0])
         current_reward = 0.0
 
+        # Limit concurrent judge calls PER rollout using a shared semaphore
+        semaphore = asyncio.Semaphore(max_parallel_judges)
+
         tasks = [
             _judge_single_criterion(
-                idx, criterion, points_possible, conversation, jr, max_parallel_judges
+                idx=idx,
+                criterion=criterion,
+                points_possible=points_possible,
+                conversation=conversation,
+                judge_rubric=jr,
+                semaphore=semaphore,
             )
-            for idx, (criterion, points_possible) in enumerate(
-                zip(criteria, points_list)
-            )
+            for idx, (criterion, points_possible) in enumerate(zip(criteria, points_list))
         ]
 
         judgments = await asyncio.gather(*tasks)
-        current_reward += sum(
-            judgment["points_possible"] if judgment["criteria_met"] else 0
-            for judgment in judgments
-        )
+        current_reward += sum(judgment["points_possible"] if judgment["criteria_met"] else 0 for judgment in judgments)
 
         ## Update state to record performance by rubric
         if make_dataset:
@@ -171,9 +170,10 @@ async def _judge_single_criterion(
     points_possible: int,
     conversation: str,
     judge_rubric: JudgeRubric,
-    max_parallel_judges: int,
+    semaphore: asyncio.Semaphore,
 ) -> dict[str, str | int | bool]:
-    async with asyncio.Semaphore(max_parallel_judges):
+    # Use the shared semaphore to bound concurrency across criteria for this rollout
+    async with semaphore:
         rubric_text = f"[{points_possible}] {criterion}"
         full_prompt = HEALTHBENCH_JUDGE_TEMPLATE.replace("<<conversation>>", conversation).replace("<<rubric_item>>", rubric_text)  # fmt: skip
         raw_resp = await judge_rubric.judge(
@@ -184,11 +184,7 @@ async def _judge_single_criterion(
         )
 
         dict_resp = _parse_json(str(raw_resp))
-        criteria_met = (
-            bool(dict_resp.get("criteria_met", False))
-            if isinstance(dict_resp, dict)
-            else False
-        )
+        criteria_met = bool(dict_resp.get("criteria_met", False)) if isinstance(dict_resp, dict) else False
 
         return {
             "idx": idx,
@@ -253,9 +249,7 @@ def _process_healthbench_dataset(example: dict) -> dict:
         return hash_object.hexdigest()
 
     prompt_id = example["prompt_id"]
-    theme = [e for e in example["example_tags"] if e.startswith("theme")][0].split(":")[
-        1
-    ]
+    theme = [e for e in example["example_tags"] if e.startswith("theme")][0].split(":")[1]
     rubrics = example["rubrics"]
     info_data = defaultdict(list)
     for rubric in rubrics:
