@@ -99,3 +99,43 @@ Once your tooling is set up you can install MedARC-maintained environments direc
   env = vf.load_environment("medcasereasoning", split="validation")
   results = env.evaluate(model_client, "gpt-4.1-mini", num_examples=5)
   ```
+
+## medarc-eval CLI command
+
+`medarc-eval` wraps the upstream `vf-eval` flow and adds environment-specific flags generated from each environment's `load_environment` signature to the CLI instead of requiring a json blob via `--env-args`.
+
+### Quick start
+
+```bash
+uv run medarc-eval medqa -m gpt-4.1-mini -n 5
+```
+
+### Discover environment flags
+
+```bash
+uv run medarc-eval medbullets --help
+```
+
+### Mix explicit flags with JSON
+
+```bash
+uv run medarc-eval medbullets --num-options 4 --env-args '{"shuffle": true}'
+```
+
+Explicit flags always override JSON input. For list parameters, repeat the flag to replace the default entirely:
+
+```bash
+uv run medarc-eval longhealth --section cardio --section neuro
+```
+
+Use `--env-args` for complex structures (dicts, nested generics) that cannot be mapped to simple flags:
+
+```bash
+uv run medarc-eval medagentbench --env-args '{"config": {"mode": "fast"}}'
+```
+
+Print the detected environment schema:
+
+```bash
+uv run medarc-eval mmlu_pro_health --print-env-schema
+```
