@@ -109,7 +109,7 @@ uv run --active -m verifiers.scripts.eval \
 
 ### Agent Parameters
 
-Each agent (patient, measurement, moderator) can be configured via `--env-args`:
+Each agent (patient, measurement) can be configured via `--env-args`:
 
 ### Datasets
 
@@ -121,10 +121,11 @@ Each agent (patient, measurement, moderator) can be configured via `--env-args`:
 - `max_turns`: Maximum conversation turns (default: 20)
 - `use_think`: Enable chain-of-thought prompting (default: false)
 
-## Agent Roles
 
-- **Doctor** (evaluated): Asks questions, orders tests, makes diagnosis
-- **Patient** (helper): Simulates patient responses
-- **Measurement** (helper): Returns test results
-- **Moderator** (helper): Judges diagnosis accuracy
+### Agent Roles
+
+- **Doctor** (evaluated model): Asks questions, requests tests (e.g., "REQUEST TEST: MRI_Brain_Spine"), makes diagnosis
+- **Patient** (auxiliary LLM): Simulates realistic patient responses based on case symptoms
+- **Measurement** (auxiliary LLM): Returns test results from scenario data when requested
+- **Moderator** (auxiliary LLM): Evaluates diagnosis accuracy using JudgeRubric
 

@@ -1,6 +1,5 @@
 """
-AgentClinic Environment for Prime Intellect Verifiers
-Reimplemented to match the original paper exactly.
+AgentClinic Environment
 """
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
@@ -284,15 +283,6 @@ class AgentClinicEnv(vf.MultiTurnEnv):
         self._measurement_base_url = measurement_base_url
         self._measurement_api_key = measurement_api_key or os.environ.get("OPENAI_API_KEY")
 
-        self._moderator_model = moderator_model
-        self._moderator_base_url = moderator_base_url
-        self._moderator_api_key = moderator_api_key or os.environ.get("OPENAI_API_KEY")
-
-        self._moderator_client = AsyncOpenAI(
-            base_url=moderator_base_url,
-            api_key=self._moderator_api_key
-        )
-
         # Build dataset for verifiers
         prompts = []
         infos = []
@@ -338,7 +328,6 @@ class AgentClinicEnv(vf.MultiTurnEnv):
             api_key=self._measurement_api_key
         )
 
-        # Create new agents for each case (like paper's initialization)
         patient_agent = PatientAgent(
             client=patient_client,
             model=self._patient_model,
@@ -377,8 +366,14 @@ class AgentClinicEnv(vf.MultiTurnEnv):
         if last_assistant and "DIAGNOSIS READY" in last_assistant:
             return True
 
-        # Max turns reached
-        if turns >= self._max_turns:
+        # Check if we just sent the final diagnosis prompt
+        # If so allow one more turn for the model to respond
+        if messages and isinstance(messages[-1], dict) and messages[-1].get("role") == "user":
+            last_user_content = messages[-1].get("content", "")
+            if "You have reached the maximum number of questions" in last_user_content:
+                return False  # Give model one more turn to provide diagnosis
+
+        if turns > self._max_turns:
             return True
 
         return False
@@ -400,9 +395,18 @@ class AgentClinicEnv(vf.MultiTurnEnv):
                 doctor_dialogue = m.get("content", "")
                 break
 
+        # Warning when approaching max turns
+        if new_state["turn"] == self._max_turns - 2:
+            warning = "You have 2 questions remaining. Please start formulating your diagnosis."
+            pi_dialogue = await patient_agent.inference_patient(doctor_dialogue)
+            measurement_agent.agent_hist += pi_dialogue + "\n\n"
+            combined_response = f"{pi_dialogue}\n\n[System: {warning}]"
+            return ([{"role": "user", "content": combined_response}], new_state)
+
+        # Final turn force diagnosis
         if new_state["turn"] >= self._max_turns:
             return (
-                [{"role": "user", "content": "This is the final question. Please provide a diagnosis.\nDIAGNOSIS READY: "}],
+                [{"role": "user", "content": "You have reached the maximum number of questions. Based on the information gathered, please provide your diagnosis now using the format: DIAGNOSIS READY: [your diagnosis]"}],
                 new_state
             )
 
@@ -421,78 +425,46 @@ class AgentClinicEnv(vf.MultiTurnEnv):
 #                    Scoring (LLM Judge)
 # ============================================================
 
-async def compare_results_llm(
-    prediction: str,
-    gold: str,
-    moderator_client: Optional[AsyncOpenAI] = None,
-    moderator_model: str = "gpt-4o-mini"
-) -> float:
-    """
-    LLM judge
-    Uses configurable moderator LLM.
-    """
-    # Fallback to default OpenAI if no client provided
-    if moderator_client is None:
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            return 0.0
-        moderator_client = AsyncOpenAI(api_key=api_key)
+# Judge prompt template for medical diagnosis evaluation
+JUDGE_TEMPLATE = """\
+Your job is to evaluate whether a doctor's diagnosis is medically equivalent to the ground truth diagnosis.
 
-    if "DIAGNOSIS READY:" in prediction:
-        prediction = prediction.split("DIAGNOSIS READY:")[-1].strip()
+You will be given:
+1. The ground truth diagnosis (answer)
+2. The doctor's predicted diagnosis (response)
+
+Your task is to determine if the doctor's diagnosis is medically equivalent to the ground truth, even if worded differently.
+
+Consider these guidelines:
+- Medical terms that refer to the same condition should be considered equivalent
+- Different levels of specificity may be acceptable 
+- Spelling variations of medical terms should be considered equivalent
+- The core medical meaning should match, even if additional details vary
+
+Ground truth diagnosis: {answer}
+
+Doctor's diagnosis: {response}
+
+Is the doctor's diagnosis medically equivalent to the ground truth diagnosis?
+Respond with either "CORRECT" or "INCORRECT".
+""".strip()
+
+
+def extract_diagnosis(completion_text: str) -> str:
+    """
+    Extract diagnosis from completion text, handling DIAGNOSIS READY and boxed formats.
+    """
+    if "DIAGNOSIS READY:" in completion_text:
+        completion_text = completion_text.split("DIAGNOSIS READY:")[-1].strip()
 
     try:
-        boxed = extract_boxed_answer(prediction)
+        boxed = extract_boxed_answer(completion_text)
         if boxed:
-            prediction = boxed
+            completion_text = boxed
     except:
         pass
 
-    system = "You are responsible for determining if the correct diagnosis and the doctor diagnosis are the same disease. Please respond only with Yes or No. Nothing else."
-    user = f"\nHere is the correct diagnosis: {gold}\nHere was the doctor dialogue: {prediction}\nAre these the same?"
-
-    messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user}
-    ]
-
-    try:
-        response = await moderator_client.chat.completions.create(
-            model=moderator_model,
-            messages=messages,
-            temperature=0.0,
-            max_tokens=10
-        )
-        answer = (response.choices[0].message.content or "").lower()
-        return 1.0 if "yes" in answer else 0.0
-    except Exception as e:
-        print(f"[compare_results_llm] Error: {e}")
-        return 0.0
-
-
-class AccuracyReward:
-    """Reward function class that holds reference to moderator client."""
-
-    __name__ = "accuracy_reward"
-
-    def __init__(self, moderator_client: AsyncOpenAI, moderator_model: str):
-        self.moderator_client = moderator_client
-        self.moderator_model = moderator_model
-
-    async def __call__(self, prompt: str, completion: str, answer: str, state: Dict[str, Any]) -> float:
-        """Reward function for verifiers."""
-        gold = (state.get("info") or {}).get("gold", "") or answer
-
-        if isinstance(completion, list):
-            completion_text = ""
-            for msg in reversed(completion):
-                if isinstance(msg, dict) and msg.get("role") == "assistant":
-                    completion_text = msg.get("content", "")
-                    break
-        else:
-            completion_text = str(completion)
-
-        return await compare_results_llm(completion_text, gold, self.moderator_client, self.moderator_model)
+    return completion_text.strip()
 
 
 # ============================================================
@@ -546,7 +518,7 @@ def load_environment(
         moderator_model: Model name for Moderator/Judge
         moderator_base_url: API base URL for moderator
         moderator_api_key: API key for moderator
-        **kwargs: Additional arguments passed to AgentClinicEnv
+        **kwargs: Additional arguments
 
     Returns:
         AgentClinic environment instance
@@ -620,11 +592,44 @@ def load_environment(
 
     env._scenarios = scenarios
 
-    accuracy_reward_func = AccuracyReward(env._moderator_client, env._moderator_model)
-    env.rubric = vf.Rubric(
-        funcs=[accuracy_reward_func],
-        names=["accuracy_reward"]
+    moderator_api_key = moderator_api_key or os.environ.get("OPENAI_API_KEY")
+    judge_client = AsyncOpenAI(base_url=moderator_base_url, api_key=moderator_api_key) if moderator_api_key else None
+
+    rubric = vf.JudgeRubric(
+        judge_client=judge_client,
+        judge_model=moderator_model,
+        judge_prompt=JUDGE_TEMPLATE,
     )
+
+    async def diagnosis_reward_func(judge, prompt, completion, answer, state, **kwargs) -> float:
+        """
+        Reward function that uses LLM judge to evaluate diagnosis
+        """
+        if isinstance(completion, list):
+            completion_text = ""
+            for msg in reversed(completion):
+                if isinstance(msg, dict) and msg.get("role") == "assistant":
+                    completion_text = msg.get("content", "")
+                    break
+        else:
+            completion_text = str(completion)
+
+        diagnosis_text = extract_diagnosis(completion_text)
+
+        gold = (state.get("info") or {}).get("gold", "") or answer
+
+        judge_response = await judge(prompt, diagnosis_text, gold, state, **kwargs)
+
+        judge_response_clean = judge_response.strip().upper()
+
+        if "CORRECT" in judge_response_clean and "INCORRECT" not in judge_response_clean:
+            return 1.0
+        else:
+            return 0.0
+
+    rubric.add_reward_func(diagnosis_reward_func, weight=1.0)
+
+    env.rubric = rubric
 
     return env
 
