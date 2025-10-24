@@ -7,6 +7,7 @@ requires-python = ">=3.11"
 dependencies = [
     "verifiers>=0.1.4",
     "datasets>=4.0.0",
+    "medarc_verifiers>=0.1.0",
 ]
 
 [build-system]
@@ -16,8 +17,11 @@ build-backend = "hatchling.build"
 [tool.hatch.build]
 include = ["medxpertqa.py"]
 
+[tool.uv.sources]
+medarc_verifiers = { git = "https://github.com/MedARC-AI/med-lm-envs" }
+
 [tool.prime.environment]
 # lets Prime/vf-eval know where the loader lives in a flat repo
-loader = "c:load_environment"
+loader = "medxpertqa:load_environment"
 display_name = "MedXpertQA"
 visibility = "PUBLIC"
