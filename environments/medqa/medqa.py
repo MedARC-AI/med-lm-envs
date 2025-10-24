@@ -1,11 +1,14 @@
 from __future__ import annotations
+
 from typing import Dict, Optional
-from datasets import load_dataset
+
 import verifiers as vf
+from datasets import load_dataset
+from medarc_verifiers.prompts import THINK_XML_SYSTEM_PROMPT, XML_SYSTEM_PROMPT, AnswerFormat
 from verifiers.utils.data_utils import (
-    extract_boxed_answer,
     BOXED_SYSTEM_PROMPT,
     THINK_BOXED_SYSTEM_PROMPT,
+    extract_boxed_answer,
 )
 
 
@@ -23,6 +26,7 @@ def exact_match(parser: vf.Parser, completion: str, answer: str, **kwargs) -> fl
 def load_environment(
     use_think: bool = False,
     system_prompt: Optional[str] = None,
+    answer_format: AnswerFormat | str = AnswerFormat.XML,
 ) -> vf.Environment:
     """
     MedQA-USMLE-4-options multiple-choice evaluation
@@ -30,7 +34,6 @@ def load_environment(
     - Test split = eval_dataset
     - Supports reasoning (use_think=True) or non-reasoning models
     """
-
     ds = load_dataset("GBaker/MedQA-USMLE-4-options")
 
     def _map(ex):
@@ -46,9 +49,16 @@ def load_environment(
     train_mapped = ds["train"].map(_map, remove_columns=ds["train"].column_names)
     test_mapped = ds["test"].map(_map, remove_columns=ds["test"].column_names)
 
-    # Use boxed parser; ThinkParser if use_think is True
-    parser = vf.ThinkParser(extract_boxed_answer) if use_think else vf.Parser(extract_boxed_answer)
-    system_prompt = system_prompt or (THINK_BOXED_SYSTEM_PROMPT if use_think else BOXED_SYSTEM_PROMPT)
+    answer_format = AnswerFormat(answer_format) if isinstance(answer_format, str) else answer_format
+    if answer_format == AnswerFormat.XML:
+        system_prompt = system_prompt or (THINK_XML_SYSTEM_PROMPT if use_think else XML_SYSTEM_PROMPT)
+        parser_fields = ["think", "answer"] if use_think else ["answer"]
+        parser = vf.XMLParser(fields=parser_fields, answer_field="answer")
+    elif answer_format == AnswerFormat.BOXED:
+        parser = vf.ThinkParser(extract_boxed_answer) if use_think else vf.Parser(extract_boxed_answer)
+        system_prompt = system_prompt or (THINK_BOXED_SYSTEM_PROMPT if use_think else BOXED_SYSTEM_PROMPT)
+    else:
+        raise ValueError(f"Unsupported answer format: {answer_format=}")
 
     rubric = vf.Rubric(funcs=[exact_match], weights=[1.0], parser=parser)
 
