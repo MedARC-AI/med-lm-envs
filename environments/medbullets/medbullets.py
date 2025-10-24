@@ -3,6 +3,7 @@ import random
 import verifiers as vf
 from datasets import Dataset, load_dataset
 from datasets.utils.logging import disable_progress_bar
+from medarc_verifiers.prompts import THINK_XML_SYSTEM_PROMPT, XML_SYSTEM_PROMPT, AnswerFormat
 from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
 disable_progress_bar()  # suppress datasets mapping progress bar
@@ -80,7 +81,13 @@ def _to_vf_format(ds: Dataset, num_options: int, shuffle: bool) -> Dataset:
     return ds.map(_format_row, remove_columns=ds.column_names).filter(lambda row: row is not None)
 
 
-def load_environment(num_options: int = 4, use_think: bool = False, shuffle: bool = False, **kwargs) -> vf.Environment:
+def load_environment(
+    num_options: int = 4,
+    use_think: bool = False,
+    shuffle: bool = False,
+    answer_format: AnswerFormat | str = AnswerFormat.BOXED,
+    **kwargs,
+) -> vf.Environment:
     """
     Single-turn Medbullets environment using HuggingFace `mkieffer/Medbullets` dataset
 
@@ -112,10 +119,20 @@ def load_environment(num_options: int = 4, use_think: bool = False, shuffle: boo
     test_ds = _to_vf_format(test_raw, num_options=num_options, shuffle=shuffle)
     del test_raw  # free memory
 
-    parser = (
-        vf.ThinkParser(extract_fn=extract_boxed_answer) if use_think else vf.Parser(extract_fn=extract_boxed_answer)
-    )
-    system_prompt = THINK_BOXED_SYSTEM_PROMPT if use_think else BOXED_SYSTEM_PROMPT
+    # normalize answer_format
+    answer_format = AnswerFormat(answer_format) if isinstance(answer_format, str) else answer_format
+
+    if answer_format == AnswerFormat.XML:
+        system_prompt = THINK_XML_SYSTEM_PROMPT if use_think else XML_SYSTEM_PROMPT
+        parser_fields = ["think", "answer"] if use_think else ["answer"]
+        parser = vf.XMLParser(fields=parser_fields, answer_field="answer")
+    elif answer_format == AnswerFormat.BOXED:
+        parser = (
+            vf.ThinkParser(extract_fn=extract_boxed_answer) if use_think else vf.Parser(extract_fn=extract_boxed_answer)
+        )
+        system_prompt = THINK_BOXED_SYSTEM_PROMPT if use_think else BOXED_SYSTEM_PROMPT
+    else:
+        raise ValueError(f"Unsupported answer format: {answer_format=}")
 
     def correct_answer_reward_func(parser, completion, answer, **kwargs) -> float:
         response = parser.parse_answer(completion) or ""

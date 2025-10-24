@@ -1,7 +1,8 @@
-from __future__ import annotations
-from typing import Dict, Optional, Any
-from datasets import load_dataset
+from typing import Any, Dict, Optional
+
 import verifiers as vf
+from datasets import load_dataset
+
 
 def _get_text_from_completion(completion: Any) -> str:
     if isinstance(completion, str):
@@ -13,12 +14,14 @@ def _get_text_from_completion(completion: Any) -> str:
         return str(last)
     return str(completion)
 
+
 def _first_letter(text: str) -> Optional[str]:
     t = (text or "").upper()
     for ch in t:
         if "A" <= ch <= "Z":
             return ch
     return None
+
 
 def _build_prompt(question: str, options: Dict[str, str]) -> str:
     opts = "\n".join(f"{k}. {v}" for k, v in options.items())
@@ -30,9 +33,10 @@ def _build_prompt(question: str, options: Dict[str, str]) -> str:
         f"Answer with ONLY the letter ({letters})."
     )
 
+
 def load_environment(split: str = "test") -> vf.Environment:
     """
-    MetaMedQA multiple-choice accuracy eval 
+    MetaMedQA multiple-choice accuracy eval
     - Loads HF 'maximegmd/MetaMedQA'
     - Builds a prompt per item
     - Scores accuracy by comparing the first A–Z from the model to the gold letter
@@ -41,8 +45,8 @@ def load_environment(split: str = "test") -> vf.Environment:
 
     def _map(ex):
         q: str = ex["question"]
-        options: Dict[str, str] = ex["options"]     
-        gold_text: str = ex["answer"]               
+        options: Dict[str, str] = ex["options"]
+        gold_text: str = ex["answer"]
 
         gold_letter = None
         for k, v in options.items():
@@ -50,11 +54,11 @@ def load_environment(split: str = "test") -> vf.Environment:
                 gold_letter = k
                 break
         if gold_letter is None:
-            return None 
+            return None
 
         return {
             "question": _build_prompt(q, options),
-            "answer": gold_letter,   
+            "answer": gold_letter,
         }
 
     mapped = ds.map(_map, remove_columns=ds.column_names).filter(lambda r: r is not None)

@@ -19,11 +19,7 @@ from typing import Literal, Optional
 
 import verifiers as vf
 from datasets import Dataset
-from verifiers.utils.data_utils import (
-    BOXED_SYSTEM_PROMPT,
-    THINK_BOXED_SYSTEM_PROMPT,
-    extract_boxed_answer,
-)
+from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
 # Reuse the system prompt from the original LongHealth implementation
 LONGHEALTH_SYSTEM_PROMPT = """
