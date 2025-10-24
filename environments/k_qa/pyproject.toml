@@ -1,0 +1,26 @@
+[project]
+name = "medarc-k-qa"
+description = "K-QA environment with FACTSCORE-style evaluation"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "verifiers>=0.1.4",
+    "openai>=1.0.0",
+    "pandas>=2.0.0",
+    "medarc-verifiers",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["k_qa.py", "prompts.py"]
+
+[tool.prime.environment]
+loader = "k_qa:load_environment"
+display_name = "K-QA"
+visibility = "PUBLIC"
+
+[tool.uv.sources]
+medarc-verifiers = {git = "https://github.com/MedARC-AI/med-lm-envs"}
