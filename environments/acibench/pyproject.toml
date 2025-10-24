@@ -1,0 +1,20 @@
+[project]
+name = "acibench"
+version = "0.1.0"
+description = "Metric-based evaluation for ACI-Bench clinical summarization."
+dependencies = [
+    "verifiers", "datasets", "openai", "pandas", "numpy", "evaluate",
+    "bert-score", "rouge-score", "nltk", "torch"
+]
+
+[tool.prime.environment]
+loader = "acibench:load_environment"
+display_name = "ACI Bench"
+visibility = "PUBLIC"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["acibench.py"]
