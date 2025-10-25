@@ -1,7 +1,5 @@
 # biohopr
 
-> Replace the placeholders below, then remove this callout.
-
 ### Overview
 - **Environment ID**: `biohopr`
 - **Short description**: BioHopR multiple-hop biomedical question answering evaluation
@@ -35,10 +33,6 @@ Notes:
 
 ### Environment Arguments
 Document any supported environment arguments and their meaning. Example:
-
-    use_think: bool = False,
-    system_prompt: Optional[str] = None,
-    answer_format: AnswerFormat | str = AnswerFormat.XML,
 
 | Arg | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
