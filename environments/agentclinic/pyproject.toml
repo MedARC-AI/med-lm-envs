@@ -1,0 +1,15 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentclinic"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "verifiers",
+    "datasets",
+]
+
+[project.entry-points."verifiers.environments"]
+agentclinic = "agentclinic:load_environment"
