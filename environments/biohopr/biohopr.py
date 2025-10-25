@@ -9,6 +9,7 @@ from verifiers.utils.data_utils import (
     THINK_BOXED_SYSTEM_PROMPT,
     extract_boxed_answer,
 )
+from numpy.linalg import norm
 
 TAU: float = 0.9
 TASKS: List[str] = ['biohopr_hop1','biohopr_hop2','biohopr_hop1_multi','biohopr_hop2_multi']
@@ -22,8 +23,8 @@ def _embedded_precision_f(model: SentenceTransformer):
         completion = completion.lower().strip()
         answer_embeds = model.encode(answers)
         completion_embed = model.encode(completion)
-        similarities = (answer_embeds @ completion_embed) / (
-            (answer_embeds**2).sum(axis=1)**0.5 )
+        similarities = (answer_embeds @ completion_embed) / ( 
+            norm(answer_embeds,axis=1) * norm(completion_embed) )
         return 1.0 if(similarities.max() > TAU) else 0.0
     return embedded_precision
 
