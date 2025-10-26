@@ -23,7 +23,7 @@ class MCQAccuracyResult:
     """Whether the answer was graded as correct."""
 
     method: str
-    """Method used for grading: 'anchored_token', 'last_token', 'answer_text', or 'none'."""
+    """Method used for grading: 'direct_answer', 'anchored_token', 'last_token', 'answer_text', or 'none'."""
 
     matched_answer: Optional[str] = None
     """The extracted answer if found, otherwise None."""
@@ -123,11 +123,12 @@ def multiple_choice_accuracy(
     return_details: bool = False,
 ) -> bool | MCQAccuracyResult:
     """
-    Grade a multiple-choice answer with three fallback strategies:
+    Grade a multiple-choice answer with layered strategies:
 
-    1. Anchored token: Look for patterns like "answer is C"
-    2. Last token: Take the last letter/number found anywhere
-    3. Answer text: Match the full answer text (if long enough)
+    1. Direct answer: Response is just the option letter/number
+    2. Anchored token: Use the last occurrence of a provided prefix, otherwise general anchor phrases
+    3. Last token: Take the last letter/number found anywhere
+    4. Answer text: Match the full answer text (if long enough)
 
     Args:
         llm_answer: The model's response text
@@ -164,10 +165,6 @@ def multiple_choice_accuracy(
         llm_answer = _strip_tex(llm_answer)
         answer_text = _strip_tex(answer_text)
 
-    # Strip optional prefix like "The answer is: ..."
-    if prefix:
-        llm_answer = re.sub(rf"^\s*{re.escape(prefix)}\s*[:\-–—]*\s*", "", llm_answer, flags=re.IGNORECASE)
-
     # Normalize: casefold only (preserve whitespace structure for sentence detection)
     llm_answer = _nfkc_casefold(llm_answer)
 
@@ -180,8 +177,19 @@ def multiple_choice_accuracy(
     if answer_letter == _norm_letter(llm_answer):
         return _result(True, "direct_answer", llm_answer, answer_letter, return_details)
 
-    # Strategy 2: Anchored token (e.g., "final answer: C")
-    anchored_matches = list(ANCHOR_PATTERN.finditer(llm_answer))
+    # Strategy 2: Anchored token (prefix matches first, fallback to generic anchors)
+    prefix_matches = []
+    if prefix:
+        prefix_norm = _nfkc_casefold(prefix).strip()
+        if prefix_norm:
+            flexible_prefix = re.escape(prefix_norm).replace(r"\ ", r"\s+")
+            prefix_pattern = re.compile(
+                rf"{flexible_prefix}\s*[:\-–—]?\s*(?:is\s*)?\(?\s*([A-Za-z]|\d{{1,2}})\s*[\)\.:]?(?!\w)",
+                re.IGNORECASE,
+            )
+            prefix_matches = list(prefix_pattern.finditer(llm_answer))
+
+    anchored_matches = prefix_matches if prefix_matches else list(ANCHOR_PATTERN.finditer(llm_answer))
     if anchored_matches and answer_letter:
         last_match = anchored_matches[-1]
         predicted = _norm_letter(last_match.group(1))
