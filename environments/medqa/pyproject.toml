@@ -16,6 +16,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build]
 include = ["medqa.py"]
 
+[tool.uv.sources]
+medarc_verifiers = { git = "https://github.com/MedARC-AI/med-lm-envs" }
+
 [tool.prime.environment]
 # lets Prime/vf-eval know where the loader lives in a flat repo
 loader = "medqa:load_environment"
