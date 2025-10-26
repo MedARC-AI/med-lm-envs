@@ -35,12 +35,23 @@ def _embedded_precision_f(model: SentenceTransformer):
     return embedded_precision
 
 def question_to_prompt(question: str, task: str) -> str:
-    single = ' Just give me the answer without any explanations.'
-    multi = ' Just give me the answers without any explanations in a bullet-pointed list.'
+    """Wrap question into full prompt for BioHopR based on task.
+    Args:
+      - question: the question string from the dataset
+      - task: which BioHopR task to evaluate against. Valid options are
+        ['biohopr_hop1','biohopr_hop2','biohopr_hop1_multi','biohopr_hop2_multi'].
+    Returns:
+        - full prompt string
+    """
+    # Prompt template matching huggingface.co/datasets/knowlab-research/BioHopR
+    start = "You are an expert biomedical researcher.\n"
+    end = "Answer:\n"
+    single = ' Just give me the answer without any explanations.\n'
+    multi = ' Just give me the answers without any explanations in a bullet-pointed list.\n'
     if('multi' in task):
-        return question + multi
+        return start + question + multi + end
     else:
-        return question + single
+        return start + question + single + end
 
 def load_environment(
     use_think: bool = False,
@@ -48,10 +59,15 @@ def load_environment(
     answer_format: AnswerFormat | str = AnswerFormat.XML,
     task: Optional[str] = None,
 ) -> vf.Environment:
-    '''
+    """
     BioHopR multiple-hop biomedical question answering evaluation
     - Supports reasoning (use_think=True) or non-reasoning models
-    '''
+    - system_prompt: Optional custom system prompt. If None, uses default based on answer_format and use_think.
+    - answer_format: Determines how to parse completion for answer. Also sets system prompt if system
+    - task: which BioHopR task to evaluate against. Valid options are
+      ['biohopr_hop1','biohopr_hop2','biohopr_hop1_multi','biohopr_hop2_multi', 'all'].
+      'all' evaluates on all tasks.
+    """
     if(task is None):
         tasks = ['biohopr_hop2']
     elif(task == 'all'):
