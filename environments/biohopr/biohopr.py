@@ -13,6 +13,12 @@ from numpy.linalg import norm
 
 TAU: float = 0.9
 TASKS: List[str] = ['biohopr_hop1','biohopr_hop2','biohopr_hop1_multi','biohopr_hop2_multi']
+TASK_TO_QUESTION_KEY: Dict[str,str] = {
+    'biohopr_hop1':'hop1_question',
+    'biohopr_hop2':'hop2_question',
+    'biohopr_hop1_multi':'hop1_question_multi',
+    'biohopr_hop2_multi':'hop2_question_multi'
+}
 
 def _embedded_precision_f(model: SentenceTransformer):
     "Returns a function that calculates precision based on embedded cosine similarity."
@@ -28,30 +34,43 @@ def _embedded_precision_f(model: SentenceTransformer):
         return 1.0 if(similarities.max() > TAU) else 0.0
     return embedded_precision
 
+def question_to_prompt(question: str, task: str) -> str:
+    single = ' Just give me the answer without any explanations.'
+    multi = ' Just give me the answers without any explanations in a bullet-pointed list.'
+    if('multi' in task):
+        return question + multi
+    else:
+        return question + single
+
 def load_environment(
     use_think: bool = False,
     system_prompt: Optional[str] = None,
     answer_format: AnswerFormat | str = AnswerFormat.XML,
+    task: Optional[str] = None,
 ) -> vf.Environment:
     '''
     BioHopR multiple-hop biomedical question answering evaluation
     - Supports reasoning (use_think=True) or non-reasoning models
     '''
+    if(task is None):
+        tasks = ['biohopr_hop2']
+    elif(task == 'all'):
+        tasks = TASKS
+    elif(task not in TASKS):
+        raise ValueError(f"Unsupported task: {task=}")
+    else:
+        tasks = [task]
+
     def _map(exs):
         bs = len(exs['answer'])
-        single = ' Just give me the answer without any explanations.'
-        hop1 = [ o+single for o in exs['hop1_question']]
-        hop2 = [ o+single for o in exs['hop2_question']]
-        multi = ' Just give me the answers without any explanations in a bullet-pointed list.'
-        hop1m = [ o+multi for o in exs['hop1_question_multi']]
-        hop2m = [ o+multi for o in exs['hop2_question_multi']]
-        questions = sum([list(tasks) for tasks in zip(hop1,hop2,hop1m,hop2m)],[])
-        tasks = bs*TASKS
+        prompts = [ [question_to_prompt(q,task) for q in exs[TASK_TO_QUESTION_KEY[task]] ]
+                     for task in tasks  ]
+        prompts = [ o2 for o in zip(*prompts) for o2 in o]
         answers = [ {'answer': o} for o in exs['answer']]
-        answers = [ o for o in answers for _ in range(len(TASKS))]
-        return { 'question':questions,
+        answers = [ o for o in answers for _ in range(len(tasks))]
+        return { 'question':prompts,
                 'info': answers,
-                'task': tasks}
+                'task': bs*tasks}
     ds = load_dataset("knowlab-research/BioHopR", split="train")
     ds = ds.map(_map, remove_columns=ds.column_names, batched=True)
     model = SentenceTransformer('FremyCompany/BioLORD-2023')

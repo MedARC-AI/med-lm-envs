@@ -39,6 +39,8 @@ Document any supported environment arguments and their meaning. Example:
 | `use_think` | bool | `False` | Use reasoning when set to true. |
 | `system_prompt` | str | `None` | Optional custom system prompt. |
 | `answer_format` | str | `AnswerFormat.XML` | Determines how to parse completion for answer. Also sets system prompt if `system_prompt` not set. |
+| `task` | str | `biohopr_hop2` | The task to evaluate against. Determines which prompts are used from the BioHopR paper. Valid options are `['biohopr_hop1','biohopr_hop2','biohopr_hop1_multi','biohopr_hop2_multi', 'all']`. `task` also set for verifiers dataset for use with EnvGroup and RubricGroup |
+
 
 ### Metrics
 Summarize key metrics your rubric emits and how they’re interpreted.
