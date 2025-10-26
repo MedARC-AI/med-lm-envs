@@ -139,3 +139,112 @@ Print the detected environment schema:
 ```bash
 uv run medarc-eval mmlu_pro_health --print-env-schema
 ```
+
+## Benchmark CLI
+
+Use the `benchmark` command to run a series of model/environment evaluations sequentially. Invoke it with `--jobs <path>`; the referenced YAML can inline models and environments or they can live alongside the file under `models/` and `envs/`. By default, run artifacts are written to `<jobs_dir>/../runs`. A single-file example looks like this:
+
+```yaml
+name: medarc-baseline
+output_dir: runs
+models:
+  - id: gpt-4.1-mini
+    params:
+      model: gpt-4.1-mini
+      sampling_args:
+        temperature: 0.1
+      env_args:
+        judge_name: gpt-4.1-mini
+envs:
+  - id: medqa
+    module: medqa
+    num_examples: 25
+    rollouts_per_example: 1
+jobs:
+  - model: gpt-4.1-mini
+    env: medqa
+    seed: 123
+```
+
+If `jobs` is omitted the CLI evaluates every model × environment pair defined in the config. Run a dry run to inspect the expanded matrix:
+
+```bash
+uv run benchmark dry-run --jobs configs/jobs.yaml
+```
+
+Execute the plan:
+
+```bash
+uv run benchmark run --jobs configs/jobs.yaml
+```
+
+By default the CLI installs each referenced environment before execution using the same logic as `vf-install`. This respects the resolved `env_dir_path`, ensuring local edits are available to the evaluator. Disable this behavior with `--no-install-envs` if you have already installed the packages or want to manage environments manually.
+
+Each run reuses the `vf-eval` pipeline and writes artifacts into `<output_dir>/<run_id>/<job_id>/`. Job identifiers are deterministic (`<model>-<env>[-<name>]`) so reruns reuse the same directory layout. The CLI persists run metadata in `<output_dir>/<run_id>/run_manifest.json`, allowing interrupted runs to resume without recomputing completed jobs.
+
+Resume an existing run (skipping finished jobs):
+
+```bash
+uv run benchmark run --jobs configs/jobs.yaml --resume medarc-baseline-20240101-120000
+```
+
+Force all jobs to re-run, even when artifacts already exist:
+
+```bash
+uv run benchmark run --jobs configs/jobs.yaml --resume medarc-baseline-20240101-120000 --force
+```
+
+The manifest merges updated configurations on resume, so adding a new model or environment entry will schedule only the new combinations while retaining prior results in `run_summary.json`.
+
+### Split configuration files
+
+For larger suites you can keep per-model, per-environment, and job matrices in separate YAML documents:
+
+```
+configs/
+├── models/
+│   ├── gpt4-mini.yaml
+│   └── medarc-judge.yaml
+├── envs/
+│   ├── medqa.yaml
+│   └── medcasereasoning.yaml
+└── jobs.yaml
+```
+
+`gpt4-mini.yaml`
+```yaml
+id: gpt-4.1-mini
+params:
+  model: gpt-4.1-mini
+```
+
+`medqa.yaml`
+```yaml
+id: medqa
+num_examples: 25
+rollouts_per_example: 1
+```
+
+`jobs.yaml`
+```yaml
+- model: gpt-4.1-mini
+  envs:
+    - medqa
+    - medcasereasoning
+- model: medarc-judge
+  env: medqa
+  seed: 314
+```
+Run everything with:
+
+```bash
+uv run benchmark run --jobs configs/jobs.yaml
+```
+
+The loader expands each referenced file (individual model/env mappings or the shared jobs list) before scheduling the run. Paths are resolved relative to the jobs file.
+
+- When `models` or `envs` point to directories, every `*.yaml` / `*.yml` file inside is loaded in sorted order. Paths are resolved relative to the jobs file first, then relative to the repository root.
+- When a job mapping supplies `envs`, the CLI fans out one evaluation per environment; omit `envs` (and `env`) to target every environment defined in the run.
+- Optional `env_args`, `sampling_args`, and `seed` entries on the job apply to each generated evaluation. If an environment expects a `seed` argument, include it inside `env_args` explicitly.
+- Override defaults with CLI flags such as `--models`, `--envs`, `--env-dir-path`, and `--endpoints-path` when you want to load definitions from a different location.
+- Job folders are named after the job's `name`; when omitted, the CLI generates `<model>-<random>-<env>` automatically.

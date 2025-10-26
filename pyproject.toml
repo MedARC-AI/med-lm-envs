@@ -14,10 +14,12 @@ dependencies = [
 
 [project.scripts]
 medarc-eval = "medarc_verifiers.cli.eval:main"
+medarc-bench = "medarc_verifiers.cli.benchmark:main"
 
 [dependency-groups]
 dev = [
     "pytest>=8.4.2",
+    "ruff>=0.14.2",
 ]
 
 [tool.pytest.ini_options]
