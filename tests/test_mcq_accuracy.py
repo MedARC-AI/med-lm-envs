@@ -80,13 +80,6 @@ def test_answer_text_case_insensitive():
     )
 
 
-def test_answer_text_short_disabled():
-    # "Na" is too short (< min_answer_len=4), should not match
-    assert not multiple_choice_accuracy(
-        "The patient needs Na supplementation", answer_letter="A", answer_text="Na", accept_answer_text=True
-    )
-
-
 def test_answer_text_with_negation_fails():
     assert not multiple_choice_accuracy(
         "This is not hypertension, it's hypotension.", answer_letter="A", answer_text="hypertension"
@@ -138,7 +131,8 @@ def test_return_details_anchored_token():
     assert isinstance(result, MCQAccuracyResult)
     assert result.is_correct is True
     assert result.method == "anchored_token"
-    assert result.predicted_letter == "C"
+    assert result.matched_answer == "C"
+    assert result.correct_answer == "C"
 
 
 def test_return_details_last_token():
@@ -146,7 +140,8 @@ def test_return_details_last_token():
     assert isinstance(result, MCQAccuracyResult)
     assert result.is_correct is True
     assert result.method == "last_token"
-    assert result.predicted_letter == "B"
+    assert result.matched_answer == "B"
+    assert result.correct_answer == "B"
 
 
 def test_return_details_answer_text():
@@ -156,7 +151,8 @@ def test_return_details_answer_text():
     assert isinstance(result, MCQAccuracyResult)
     assert result.is_correct is True
     assert result.method == "answer_text"
-    assert result.predicted_letter is None  # No letter extracted
+    assert result.matched_answer == "the patient has acute appendicitis"
+    assert result.correct_answer == "acute appendicitis"
 
 
 def test_return_details_no_match():
@@ -164,7 +160,7 @@ def test_return_details_no_match():
     assert isinstance(result, MCQAccuracyResult)
     assert result.is_correct is False
     assert result.method == "none"
-    assert result.predicted_letter is None
+    assert result.matched_answer is None
 
 
 def test_return_details_bool_by_default():

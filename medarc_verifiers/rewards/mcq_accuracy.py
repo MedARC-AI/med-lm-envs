@@ -1,11 +1,12 @@
 """
-Simplified multiple-choice question accuracy grader.
+LLM multiple-choice question accuracy reward.
 
 Main use case: Handle models that either return the letter/number (preferred)
 or return the entire answer text verbatim (fallback).
 
 Supports chain-of-thought by prioritizing anchored patterns like "answer is X"
-before falling back to last token or text matching.
+before falling back to last token or text matching. Attempts to recognize
+negations to avoid false positives (e.g., "the answer is not C").
 """
 
 import re
@@ -24,39 +25,42 @@ class MCQAccuracyResult:
     method: str
     """Method used for grading: 'anchored_token', 'last_token', 'answer_text', or 'none'."""
 
-    predicted_letter: Optional[str] = None
-    """The extracted letter/number if found, otherwise None."""
+    matched_answer: Optional[str] = None
+    """The extracted answer if found, otherwise None."""
+
+    correct_answer: Optional[str] = None
+    """The correct answer for reference, if available."""
 
 
-def _nfkc_casefold(s: str) -> str:
+def _nfkc_casefold(text: str) -> str:
     """Unicode normalize + casefold for robust text comparison."""
-    return unicodedata.normalize("NFKC", s or "").casefold()
+    return unicodedata.normalize("NFKC", text or "").casefold()
 
 
-def _normalize_spaces(s: str) -> str:
+def _normalize_spaces(text: str) -> str:
     """Collapse multiple whitespace to single space."""
-    return re.sub(r"\s+", " ", s).strip()
+    return re.sub(r"\s+", " ", text).strip()
 
 
-def _strip_tex(s: str) -> str:
+def _strip_tex(text: str) -> str:
     """Remove LaTeX formatting if pylatexenc is available."""
     try:
         from pylatexenc.latex2text import LatexNodes2Text
 
-        return LatexNodes2Text(math_mode="text").latex_to_text(s)
+        return LatexNodes2Text(math_mode="text").latex_to_text(text)
     except Exception:
-        return s
+        return text
 
 
-def _norm_letter(tok: str) -> Optional[str]:
+def _norm_letter(letter: str) -> Optional[str]:
     """Normalize a token to uppercase letter or digit string."""
-    tok = (tok or "").strip()
-    if not tok:
+    letter = (letter or "").strip()
+    if not letter:
         return None
-    if tok.isdigit():
-        return tok
-    if tok.isalpha() and len(tok) == 1:
-        return tok.upper()
+    if letter.isdigit():
+        return letter
+    if letter.isalpha() and len(letter) == 1:
+        return letter.upper()
     return None
 
 
@@ -116,7 +120,6 @@ def multiple_choice_accuracy(
     prefix: Optional[str] = None,
     accept_answer_text: bool = True,
     strip_tex: bool = True,
-    min_answer_len: int = 4,
     return_details: bool = False,
 ) -> bool | MCQAccuracyResult:
     """
@@ -133,75 +136,74 @@ def multiple_choice_accuracy(
         prefix: Optional prefix to strip (e.g., "The answer is: ")
         accept_answer_text: Whether to fall back to text matching
         strip_tex: Whether to strip LaTeX formatting
-        min_answer_len: Minimum length for answer text matching (avoid false positives)
         return_details: If True, return MCQAccuracyResult dataclass instead of bool
 
     Returns:
         bool (if return_details=False) or MCQAccuracyResult (if return_details=True)
     """
+
+    def _result(
+        is_correct: bool, method: str, predicted: str | None, actual: str | None, return_details: bool
+    ) -> bool | MCQAccuracyResult:
+        """Helper to format return value."""
+        if not return_details:
+            return is_correct
+        return MCQAccuracyResult(
+            is_correct=is_correct,
+            method=method,
+            matched_answer=predicted,
+            correct_answer=actual,
+        )
+
     if not llm_answer:
-        return _result(False, "none", None, return_details)
+        return _result(False, "none", None, None, return_details)
 
     # Normalize the response
-    raw = llm_answer.strip()
+    llm_answer = llm_answer.strip()
     if strip_tex:
-        raw = _strip_tex(raw)
+        llm_answer = _strip_tex(llm_answer)
         answer_text = _strip_tex(answer_text)
 
     # Strip optional prefix like "The answer is: ..."
     if prefix:
-        raw = re.sub(rf"^\s*{re.escape(prefix)}\s*[:\-–—]*\s*", "", raw, flags=re.IGNORECASE)
+        llm_answer = re.sub(rf"^\s*{re.escape(prefix)}\s*[:\-–—]*\s*", "", llm_answer, flags=re.IGNORECASE)
 
     # Normalize: casefold only (preserve whitespace structure for sentence detection)
-    normalized = _nfkc_casefold(raw)
+    llm_answer = _nfkc_casefold(llm_answer)
 
-    answer_letter_norm = _norm_letter(answer_letter)
-    answer_text_norm = _nfkc_casefold(_normalize_spaces(answer_text or ""))
+    answer_letter = _norm_letter(answer_letter)
+    answer_text = _nfkc_casefold(_normalize_spaces(answer_text or ""))
+    if answer_letter is None:
+        raise ValueError(f"Invalid answer_letter '{answer_letter=}'. Must be a single letter or digit string.")
 
-    # Disable text matching for very short answers (too risky)
-    if accept_answer_text and len(answer_text_norm) < min_answer_len:
-        accept_answer_text = False
+    # Strategy 1: Only answer letter anywhere (without anchoring)
+    if answer_letter == _norm_letter(llm_answer):
+        return _result(True, "direct_answer", llm_answer, answer_letter, return_details)
 
-    # Strategy 1: Anchored token (e.g., "final answer: C")
-    anchored_matches = list(ANCHOR_PATTERN.finditer(normalized))
-    if anchored_matches and answer_letter_norm:
+    # Strategy 2: Anchored token (e.g., "final answer: C")
+    anchored_matches = list(ANCHOR_PATTERN.finditer(llm_answer))
+    if anchored_matches and answer_letter:
         last_match = anchored_matches[-1]
         predicted = _norm_letter(last_match.group(1))
-        if predicted == answer_letter_norm and not _negated_near(normalized, last_match):
-            return _result(True, "anchored_token", predicted, return_details)
+        if predicted == answer_letter and not _negated_near(llm_answer, last_match):
+            return _result(True, "anchored_token", predicted, answer_letter, return_details)
 
-    # Strategy 2: Last token anywhere
-    all_tokens = list(TOKEN_PATTERN.finditer(normalized))
-    if all_tokens and answer_letter_norm:
+    # Strategy 3: Last token anywhere
+    all_tokens = list(TOKEN_PATTERN.finditer(llm_answer))
+    if all_tokens and answer_letter:
         last_match = all_tokens[-1]
         predicted = _norm_letter(last_match.group(1))
-        if predicted == answer_letter_norm and not _negated_near(normalized, last_match):
-            return _result(True, "last_token", predicted, return_details)
+        if predicted == answer_letter and not _negated_near(llm_answer, last_match):
+            return _result(True, "last_token", predicted, answer_letter, return_details)
 
-    # Strategy 3: Exact answer text match
-    if accept_answer_text and answer_text_norm:
+    # Strategy 4: Exact answer text match
+    if accept_answer_text and answer_text:
         # Search in normalized text (preserves structure for negation checking)
-        # Make answer_text_norm flexible for whitespace variations
-        flexible_answer = re.escape(answer_text_norm).replace(r"\ ", r"\s+")
+        # Make answer_text flexible for whitespace variations
+        flexible_answer = re.escape(answer_text).replace(r"\ ", r"\s+")
         pattern = re.compile(rf"(?<!\w){flexible_answer}(?!\w)", re.IGNORECASE)
-        match = pattern.search(normalized)
-        if match and not _negated_near(normalized, match):
-            return _result(True, "answer_text", None, return_details)
+        match = pattern.search(llm_answer)
+        if match and not _negated_near(llm_answer, match):
+            return _result(True, "answer_text", llm_answer, answer_text, return_details)
 
-    return _result(False, "none", None, return_details)
-
-
-def _result(
-    is_correct: bool,
-    method: str,
-    predicted_letter: Optional[str],
-    return_details: bool,
-) -> bool | MCQAccuracyResult:
-    """Helper to format return value."""
-    if not return_details:
-        return is_correct
-    return MCQAccuracyResult(
-        is_correct=is_correct,
-        method=method,
-        predicted_letter=predicted_letter,
-    )
+    return _result(False, "none", None, None, return_details)
