@@ -15,10 +15,11 @@ import json
 import os
 import random
 import re
-from typing import Literal, Optional
+from typing import Any, Literal
 
 import verifiers as vf
 from datasets import Dataset
+from medarc_verifiers.rewards.mcq_accuracy import multiple_choice_accuracy
 from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
 # Reuse the system prompt from the original LongHealth implementation
@@ -362,65 +363,18 @@ def _prepare_task2_data(
     return examples
 
 
-def _extract_letter_from_response(response: str) -> Optional[str]:
-    """
-    Extract answer letter from LongHealth-style response.
-
-    Expected format: "The correct answer is C: Acute bronchitis."
-    Also handles boxed format: \\boxed{C}
-
-    Args:
-        response: The model's response text
-
-    Returns:
-        Extracted letter (A-F) or None
-    """
-    if not response:
-        return None
-
-    response_upper = response.upper().strip()
-
-    # Try boxed format first
-    boxed_match = re.search(r"\\boxed\{([A-F])\}", response_upper)
-    if boxed_match:
-        return boxed_match.group(1)
-
-    # Try "The correct answer is X" format
-    answer_match = re.search(r"THE CORRECT ANSWER IS\s*([A-F])", response_upper)
-    if answer_match:
-        return answer_match.group(1)
-
-    # Try to find any single letter A-F
-    letter_match = re.search(r"\b([A-F])\b", response_upper)
-    if letter_match:
-        return letter_match.group(1)
-
-    return None
-
-
-def exact_match_reward(parser: vf.Parser, completion: str, answer: str, **kwargs) -> float:
-    """
-    Reward function for exact match on answer letter.
-
-    Args:
-        parser: The parser (may use boxed answer extraction)
-        completion: Model's completion text
-        answer: Ground truth answer letter
-
-    Returns:
-        1.0 if match, 0.0 otherwise
-    """
-    # Try parser first
-    parsed = parser.parse_answer(completion)
-    if parsed:
-        extracted = _extract_letter_from_response(parsed)
-    else:
-        extracted = _extract_letter_from_response(completion)
-
-    if not extracted:
-        return 0.0
-
-    return 1.0 if extracted.upper() == answer.upper() else 0.0
+def accuracy(completion: Any, answer: str, parser: vf.Parser, info: dict | None = None, **kwargs) -> float:
+    try:
+        parsed = parser.parse_answer(completion) or ""
+        prefix = None
+    except Exception as e:
+        parsed = completion
+        prefix = "The correct answer is"
+    answer_text = info.get("correct_answer_text", None) if info else None
+    is_correct = multiple_choice_accuracy(
+        llm_answer=parsed, answer_letter=answer, answer_text=answer_text, prefix=prefix
+    )
+    return 1.0 if is_correct else 0.0
 
 
 def load_environment(
@@ -499,8 +453,8 @@ def load_environment(
     else:
         system_prompt = THINK_BOXED_SYSTEM_PROMPT if use_think else BOXED_SYSTEM_PROMPT
 
-    # Create rubric with exact match reward
-    rubric = vf.Rubric(funcs=[exact_match_reward], weights=[1.0], parser=parser)
+    # Create rubric with accuracy reward
+    rubric = vf.Rubric(funcs=[accuracy], weights=[1.0], parser=parser)
 
     return vf.SingleTurnEnv(
         eval_dataset=eval_dataset,

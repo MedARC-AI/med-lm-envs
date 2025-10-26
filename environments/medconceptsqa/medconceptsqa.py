@@ -3,6 +3,7 @@ from typing import Any
 import verifiers as vf
 from datasets import Dataset, load_dataset
 from medarc_verifiers.prompts import THINK_XML_SYSTEM_PROMPT, XML_SYSTEM_PROMPT, AnswerFormat
+from medarc_verifiers.rewards.mcq_accuracy import multiple_choice_accuracy
 from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
 _VOCAB_CHOICES = ["atc", "icd10cm", "icd10proc", "icd9cm", "icd9proc"]
@@ -93,7 +94,7 @@ def load_environment(
             + question
             + "\nAnswer:"
         )
-        return {"question": full_question, "answer": answer}
+        return {"question": full_question, "answer": answer, "info": {"answer_text": row["answer"]}}
 
     mapped = test.map(_map, remove_columns=test.column_names)
 
@@ -107,12 +108,13 @@ def load_environment(
     else:
         raise ValueError(f"Unsupported answer format: {answer_format=}")
 
-    def accuracy_reward(completion: Any, answer: str) -> float:
-        parsed = parser.parse_answer(completion).strip().upper()[0]  # first character
-        answer = answer.upper()
-        return 1.0 if parsed == answer else 0.0
+    def accuracy(completion: Any, answer: str, parser: vf.Parser, info: dict | None = None) -> float:
+        parsed = parser.parse_answer(completion) or ""
+        answer_text = info.get("answer_text", None) if info else None
+        is_correct = multiple_choice_accuracy(llm_answer=parsed, answer_letter=answer, answer_text=answer_text)
+        return 1.0 if is_correct else 0.0
 
-    rubric = vf.Rubric(funcs=[accuracy_reward], weights=[1.0])
+    rubric = vf.Rubric(funcs=[accuracy], weights=[1.0], parser=parser)
 
     return vf.SingleTurnEnv(
         eval_dataset=mapped,

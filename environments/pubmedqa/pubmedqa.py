@@ -4,6 +4,7 @@ import os
 import verifiers as vf
 from datasets import load_dataset
 from medarc_verifiers.prompts import THINK_XML_SYSTEM_PROMPT, XML_SYSTEM_PROMPT, AnswerFormat
+from medarc_verifiers.rewards.mcq_accuracy import multiple_choice_accuracy
 from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
 SINGLE_PROMPT_TEMPLATE = r"""Answer A for yes, B for no or C for maybe.\n\nContext: {abstract_as_context}\n\nQuestion: {question}\nAnswer: """
@@ -39,25 +40,19 @@ def map_row_to_mcq_prompt(row):
         "question": complete_prompt,
         "answer": correct_answer_letter,
         "task": "pubmedqa",
+        "info": {"answer_text": final_decision},
     }
 
 
-def classification_reward_func(prompt, completion, answer, state, **kwargs) -> float:
-    """
-    Classification-based reward function for PubMedQA.
-    Returns 1.0 for correct classification, 0.0 otherwise.
-    """
-
-    # completition is a chat response, like: {'role': 'assistant', 'content': 'ANSWER: A'}]
-    completion = completion[0]["content"]
-
-    parsed_completion = kwargs["parser"].parse(completion)
-    predicted_letter = parsed_completion.strip().rstrip(".")
-
-    if predicted_letter is None:
-        return 0.0  # Incorrect if no valid answer found
-
-    return 1.0 if predicted_letter == answer else 0.0
+def accuracy(completion, answer: str, parser: vf.Parser, info: dict | None = None, **kwargs) -> float:
+    parsed = parser.parse_answer(completion) or ""
+    answer_text = info.get("answer_text", None) if info else None
+    is_correct = multiple_choice_accuracy(
+        llm_answer=parsed,
+        answer_letter=answer,
+        answer_text=answer_text,
+    )
+    return 1.0 if is_correct else 0.0
 
 
 def load_environment(use_think: bool = False, answer_format: AnswerFormat | str = AnswerFormat.XML) -> vf.Environment:
@@ -102,7 +97,7 @@ def load_environment(use_think: bool = False, answer_format: AnswerFormat | str 
         raise ValueError(f"Unsupported answer format: {answer_format=}")
 
     # parses the reponse using parser and calculates rewards
-    rubric = vf.Rubric(funcs=[classification_reward_func], weights=[1.0], parser=parser)
+    rubric = vf.Rubric(funcs=[accuracy], weights=[1.0], parser=parser)
 
     # Create the environment
     vf_env = vf.SingleTurnEnv(

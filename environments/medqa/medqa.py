@@ -5,11 +5,8 @@ from typing import Dict, Optional
 import verifiers as vf
 from datasets import load_dataset
 from medarc_verifiers.prompts import THINK_XML_SYSTEM_PROMPT, XML_SYSTEM_PROMPT, AnswerFormat
-from verifiers.utils.data_utils import (
-    BOXED_SYSTEM_PROMPT,
-    THINK_BOXED_SYSTEM_PROMPT,
-    extract_boxed_answer,
-)
+from medarc_verifiers.rewards.mcq_accuracy import multiple_choice_accuracy
+from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
 
 def _build_prompt(question: str, options: Dict[str, str]) -> str:
@@ -17,10 +14,12 @@ def _build_prompt(question: str, options: Dict[str, str]) -> str:
     return f"Question:{question}\n{opts}\nAnswer:"
 
 
-def exact_match(parser: vf.Parser, completion: str, answer: str, **kwargs) -> float:
-    """Reward exact matches."""
-    response = parser.parse_answer(completion).lower().strip()
-    return 1.0 if response == answer.lower().strip() else 0.0
+def accuracy(completion, answer: str, parser: vf.Parser, info: dict | None = None, **kwargs) -> float:
+    """Reward based on shared multiple-choice accuracy grading."""
+    parsed = parser.parse_answer(completion) or ""
+    answer_text = info.get("answer_text", None) if info else None
+    is_correct = multiple_choice_accuracy(llm_answer=parsed, answer_letter=answer, answer_text=answer_text)
+    return 1.0 if is_correct else 0.0
 
 
 def load_environment(
@@ -44,6 +43,7 @@ def load_environment(
         return {
             "question": _build_prompt(q, options),
             "answer": gold_letter,
+            "info": {"answer_text": options.get(gold_letter, "")},
         }
 
     train_mapped = ds["train"].map(_map, remove_columns=ds["train"].column_names)
@@ -60,7 +60,7 @@ def load_environment(
     else:
         raise ValueError(f"Unsupported answer format: {answer_format=}")
 
-    rubric = vf.Rubric(funcs=[exact_match], weights=[1.0], parser=parser)
+    rubric = vf.Rubric(funcs=[accuracy], weights=[1.0], parser=parser)
 
     return vf.SingleTurnEnv(
         dataset=train_mapped,

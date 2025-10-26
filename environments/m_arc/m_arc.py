@@ -5,11 +5,8 @@ from typing import Dict
 import verifiers as vf
 from datasets import Dataset, load_dataset
 from datasets.utils.logging import disable_progress_bar
-from verifiers.utils.data_utils import (
-    BOXED_SYSTEM_PROMPT,
-    THINK_BOXED_SYSTEM_PROMPT,
-    extract_boxed_answer,
-)
+from medarc_verifiers.rewards.mcq_accuracy import multiple_choice_accuracy
+from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
 disable_progress_bar()  # suppress datasets mapping progress bar
 
@@ -97,6 +94,8 @@ def _to_vf_format(ds: Dataset, few_shot_examples: Dataset, shuffle: bool, use_th
             info["answer"] = answer_letter
             info["options"] = opts
 
+        info["answer_text"] = opts.get(answer_letter, None)
+
         return {
             "question": prompt,
             "answer": answer_letter,
@@ -148,23 +147,12 @@ def load_environment(num_few_shot: int = 5, use_think: bool = False, shuffle: bo
     system_prompt = THINK_BOXED_SYSTEM_PROMPT if use_think else BOXED_SYSTEM_PROMPT
 
     # -------- rubric --------
-    def correct_answer_reward_func(parser, completion, answer, **kwargs) -> float:
-        response = parser.parse_answer(completion) or ""
-        response = response.strip()
+    def accuracy(completion, answer: str, parser: vf.Parser, info: dict | None = None, **kwargs) -> float:
+        parsed = parser.parse_answer(completion) or ""
+        answer_text = info.get("answer_text", None) if info else None
+        is_correct = multiple_choice_accuracy(llm_answer=parsed, answer_letter=answer, answer_text=answer_text)
+        return 1.0 if is_correct else 0.0
 
-        # remove \text{...} wrapper if present
-        text_match = re.match(r"\\text\{(.+)\}", response)
-        if text_match:
-            response = text_match.group(1).strip()
-
-        # try to extract a letter at the beginning
-        # matches: "H", "H.", "H:", "(H)", "(H).", "H. Some text", "(A) Some text", etc.
-        letter_match = re.match(r"^\(?([A-J])\)?(?:[.:\s]|$)", response)
-        if letter_match:
-            extracted_letter = letter_match.group(1)
-            return 1.0 if extracted_letter.upper() == answer.upper() else 0.0
-        return 0.0
-
-    rubric = vf.Rubric(funcs=[correct_answer_reward_func], weights=[1.0], parser=parser)
+    rubric = vf.Rubric(funcs=[accuracy], weights=[1.0], parser=parser)
 
     return vf.SingleTurnEnv(eval_dataset=test_ds, system_prompt=system_prompt, parser=parser, rubric=rubric, **kwargs)

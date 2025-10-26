@@ -4,6 +4,7 @@ import verifiers as vf
 from datasets import Dataset, load_dataset
 from datasets.utils.logging import disable_progress_bar
 from medarc_verifiers.prompts import THINK_XML_SYSTEM_PROMPT, XML_SYSTEM_PROMPT, AnswerFormat
+from medarc_verifiers.rewards.mcq_accuracy import multiple_choice_accuracy
 from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
 disable_progress_bar()  # suppress datasets mapping progress bar
@@ -71,10 +72,12 @@ def _to_vf_format(ds: Dataset, num_options: int, shuffle: bool) -> Dataset:
         if shuffle:
             info["answer"] = answer_letter
             info["options"] = opts
+        info["answer_text"] = opts[answer_letter]
 
         return {
             "question": question_str,
             "answer": answer_letter,
+            "answer_text": opts[answer_letter],
             "info": info,
         }
 
@@ -134,14 +137,12 @@ def load_environment(
     else:
         raise ValueError(f"Unsupported answer format: {answer_format=}")
 
-    def correct_answer_reward_func(parser, completion, answer, **kwargs) -> float:
-        response = parser.parse_answer(completion) or ""
-        return 1.0 if response == answer else 0.0
+    def accuracy(completion, answer: str, parser: vf.Parser, info: dict | None = None, **kwargs) -> float:
+        parsed = parser.parse_answer(completion) or ""
+        answer_text = info.get("answer_text", None) if info else None
+        is_correct = multiple_choice_accuracy(llm_answer=parsed, answer_letter=answer, answer_text=answer_text)
+        return 1.0 if is_correct else 0.0
 
-    rubric = vf.Rubric(
-        funcs=[correct_answer_reward_func],
-        weights=[1.0],
-        parser=parser,
-    )
+    rubric = vf.Rubric(funcs=[accuracy], weights=[1.0], parser=parser)
 
     return vf.SingleTurnEnv(eval_dataset=test_ds, system_prompt=system_prompt, parser=parser, rubric=rubric, **kwargs)
