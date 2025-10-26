@@ -6,6 +6,7 @@
 # see pgs 16-18 for the prompts from the paper and github: https://github.com/Itaymanes/K-QA/tree/main/evaluation/prompts
 
 import verifiers as vf
+from verifiers.utils.data_utils import extract_boxed_answer
 import pandas as pd
 from pathlib import Path
 from typing import Any, Dict, List
@@ -67,8 +68,13 @@ async def _judge_boolean(scorer: vf.JudgeRubric, prompt_str: str, state: Dict) -
         answer="",
         state=state,
     )
-    text = str(raw).strip().lower()
-    return "true" in text[-20:]
+    print("the answer box below: ",end="\n")
+
+    answer = extract_boxed_answer(str(raw))
+    print(f"answer: {answer}",end="\n")# from the verifiers library
+    return True if answer.lower() == "true" else False
+   
+    
 
 
 # batch call for evaluation
@@ -214,25 +220,28 @@ def load_environment(
     async def hallucination_rate_reward(prompt, completion, info, state, **_) -> float:
         question: str = (info or {}).get("Question", "")
         claims: List[str] = ((state.get("kqa", {}) or {}).get("claims", []) or [])
-        
+        gold_claims: List[str] = (
+            (info or {}).get("Must_have", []) or []
+        ) + ((info or {}).get("Nice_to_have", []) or [])
+
+        if not gold_claims:
+            return 1.0
+
         if not claims:
-            return 0.0
-        
+            # If no claims are generated, there are no hallucinations.
+            return 1.0
+
         if batch:
             await _batch_eval(scorer, question, info, state)
             eval_results = state.get("kqa", {}).get("batch_eval_results", {})
             hallucination_results = eval_results.get("hallucination", {})
-            contradictory_claims = hallucination_results.get("contradictory_generated_claims", [])
+            contradictory_claims = hallucination_results.get(
+                "contradictory_generated_claims", []
+            )
             contradictory_count = len(contradictory_claims)
-            return contradictory_count
-        
-        else:
-            gold_claims: List[str] = (
-                (info or {}).get("Must_have", []) or []
-            ) + ((info or {}).get("Nice_to_have", []) or [])
+            return 1.0 - (contradictory_count / len(gold_claims))
 
-            if not gold_claims:
-                return 0.0
+        else:
             contradicted_gold = 0
             for gold in gold_claims:
                 contradicted = False
@@ -243,11 +252,11 @@ def load_environment(
                         break
                 if contradicted:
                     contradicted_gold += 1
-            return contradicted_gold
+            return 1.0 - (contradicted_gold / len(gold_claims))
     
 
-    scorer.add_reward_func(comprehensiveness_reward, weight=1.0)
-    scorer.add_reward_func(hallucination_rate_reward, weight=1.0)
+    scorer.add_reward_func(comprehensiveness_reward, weight=0.5)
+    scorer.add_reward_func(hallucination_rate_reward, weight=0.5)
 
     # extractor runs first, then scoring; state is shared
     rubric_group = vf.RubricGroup([extractor, scorer])

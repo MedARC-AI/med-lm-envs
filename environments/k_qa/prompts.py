@@ -16,6 +16,7 @@ Your goal is to determine whether the Premise effectively contradicts the corres
 - If the premise and the hypothesis are unrelated or lack sufficient evidence to ascertain their truthfulness, label your answer as False.
 - be vigilant in identifying cases where the premise doesn't rule out the possibility of an entity (e.g., vaccine, symptom) appearing in the hypothesis. In such cases, classify the answer as False.
 - Approach each question methodically, considering the step-by-step process outlined below.
+- Put your Final Answer in the format: Final Answer: \\boxed{{True}} or Final Answer: \\boxed{{False}}
 
 # INPUT DATA
 Question: What does trich test for? Let's think step by step.
@@ -27,6 +28,7 @@ It's important to note that without additional context, it's difficult to determ
 Hypothesis: Trichamoniasis- a parasitic infection that can cause your symptoms.
 Answer: According to the premise "trich test" refer to two different medical tests. A Trichamoniasis test is one of them, which is used to detect this parasite's presence.
 As stated in the hypothesis, the trich test is used to diagnose parasitic infections. Ths premise entails the hypothesis. The answer is False.
+Final Answer: \\boxed{{False}}
 ###
 Question: Can diabetics eat sweets? Let's think step by step.
 Premise: Individuals with diabetes are recommended to limit their consumption of sweets to one or two times per week.
@@ -34,6 +36,7 @@ It is also suggested being selective with desserts and to focus on foods with a 
 Hypothesis: It is recommended that diabetics avoid sweets.
 Answer: The premise suggests that diabetics can eat sweets but limit their consumption. According to the hypothesis diabetics should avoid sweets.
 Diabetics are allowed to consume sweets according to the premise, but they are prohibited according to the hypothesis. There is a contradiction between the premise and the hypothesis. The answer is True.
+Final Answer: \\boxed{{True}}
 ###
 Question: 25 yo female with right lower abdominal pain, what might be causing it? Let's think step by step.
 Premise: Right lower abdominal pain in a 25-year-old female could be caused by a variety of medical conditions.
@@ -41,6 +44,7 @@ Some potential causes include: Ovarian cyst: a fluid-filled sac on the ovary - E
 Hypothesis: possible cause for right lower abdominal pain in a young female can be Appendicitis.
 Answer: The premise lists several potential causes of right lower abdominal pain in a 25-year-old female, not including appendicitis. The hypothesis states that Appendicitis could be a cause of right lower abdominal pain in a young female.
 There is no direct contradiction between the premise and the hypothesis, as the premise does not exclude the possibility of appendicitis as the cause of the pain. The answer is False.
+Final Answer: \\boxed{{False}}
 ###
 Question: Can a headache last longer than a few days? Let's think step by step.
 Premise: Yes, it is possible. If you are experiencing a headache that lasts longer than a few days, it is important to see a doctor to get the appropriate treatment.
@@ -48,11 +52,13 @@ This will help to relieve the pain and prevent any further complications.
 Hypothesis: It is not a cause for concern if a headache lasts longer than a few days.
 Answer: This premise acknowledges that a headache can last for several days, but emphasizes that seeing a doctor to prevent further complications is important. According to this hypothesis, headaches lasting longer than a few days are not cause of concern.
 There is a contradiction between the premise and hypothesis due to the premise emphasizing the importance of seeking medical consultation, while the hypothesis posits that there is no cause for concern. The answer is True.
+Final Answer: \\boxed{{True}}
 ###
 Question: {question} Let's think step by step.
 Premise: {llm_answer}
 Hypothesis: {answer}
 Answer:
+Final Answer: \\boxed{{True|False}}
 """
 
 
@@ -67,6 +73,8 @@ def _prompt_for_is_entails(question: str, llm_answer: str, answer: str) -> str:
 Your goal is to determine whether the Premise effectively entails the corresponding Hypothesis. Carefully analyze each triplet, focusing on details.
 - If the premise disagrees with, is unrelated to, or does not support the hypothesis, there is not enough evidence to determine whether it is true, and so you answer should be False.
 - Approach each question methodically, considering the step-by-step process outlined below.
+- Put your Final Answer in the format: Final Answer: \\boxed{{True}} or Final Answer: \\boxed{{False}}
+
 
 # INPUT DATA
 Question: What does trich test for? Let's think step by step.
@@ -78,6 +86,7 @@ It's important to note that without additional context, it's difficult to determ
 Hypothesis: Trichamoniasis- a parasitic infection that can cause your symptoms.
 Answer: According to the premise "trich test" refer to two different medical tests. A Trichamoniasis test is one of them, which is used to detect this parasite's presence.
 As the hypothesis suggested, the trich test is used to diagnose parasitic infections. The premise entails the hypothesis. The answer is True.
+Final Answer: \\boxed{{True}}
 ###
 Question: Can diabetics eat sweets? Let's think step by step.
 Premise: Individuals with diabetes are recommended to limit their consumption of sweets to one or two times per week.
@@ -85,6 +94,7 @@ It is also suggested to be selective with desserts and to focus on foods with a 
 Hypothesis: After eating sweets, must monitor blood and sugar level
 Answer: The premise suggests that diabetics can eat sweets but limit their consumption. The hypothesis highlights the necessity of monitor blood and sugar after eating sweets.
 There is no relationship between the premise and hypothesis, therefore they do not entail one another. The answer is False.
+Final Answer: \\boxed{{False}}
 ###
 Question: Can diabetics eat sweets? Let's think step by step.
 Premise: Individuals with diabetes are recommended to limit their consumption of sweets to one or two times per week.
@@ -92,6 +102,7 @@ It is also suggested being selective with desserts and to focus on foods with a 
 Hypothesis: It is recommended that diabetics avoid sweets.
 Answer: The premise suggests that diabetics can eat sweets but limit their consumption. According to the hypothesis diabetics should avoid sweets.
 The premise allows diabetics to consume sweets in moderate consumption, while the hypothesis prohibits them. There premise don't entail the hypothesis. The answer is False.
+Final Answer: \\boxed{{False}}
 ###
 Question: What is the best hypertension treatment for patients who are also have Crohn's disease? Let's think step by step.
 Premise: For patients with Crohn's disease and hypertension, the recommended treatment is a combination of lifestyle changes and medication. The ACC/AHA recommends initiation of antihypertensive drug therapy at a BP \u2265130/80 mm Hg for adults with hypertension.
@@ -99,6 +110,7 @@ It is also important to monitor your blood pressure regularly to make sure that 
 Hypothesis: reducing sodium intake, are the first-line treatment for hypertension in individuals with  Crohn's disease
 Answer: The premise suggests that the recommended treatment for patients with diabetes and hypertension is a combination of lifestyle changes and medication, including antihypertensive drug therapy. The hypothesis focuses on reducing sodium intake as the first-line treatment.
 A reduction in sodium intake could be a part of the lifestyle changes, but since it is not mentioned in the premise, the premise do not entail the hypothesis. The answer is False.
+Final Answer: \\boxed{{False}}
 ###
 Question: 25 yo female with right lower abdominal pain, what might be causing it? Let's think step by step.
 Premise: Right lower abdominal pain in a 25-year-old female could be caused by a variety of medical conditions.
@@ -106,13 +118,13 @@ Some potential causes include: - Appendicitis: inflammation of the appendix - Ap
 Hypothesis: possible cause for right lower abdominal pain in a young female can be Appendicitis.
 Answer: The premise lists several potential causes of right lower abdominal pain in a 25-year-old female, including appendicitis. The hypothesis states that Appendicitis could be a cause of right lower abdominal pain in a 25-year-old female.
 Both the premise and hypothesis mention appendicitis as a possible cause of pain, so the premise entails the hypothesis. The answer is True.
+Final Answer: \\boxed{{True}}
 ###
 Question: {question} Let's think step by step.
 Premise: {llm_answer}
 Hypothesis: {answer}
 Answer:
-
-
+Final Answer: \\boxed{{True|False}}
 """
 
 FORMAT_INSTRUCTIONS = (
@@ -313,7 +325,7 @@ and excludes information about other possible infections caused by yeast.
 
 ###
 Question: the vomiting, tight abdomen pain and burning pain may just be result of pcos?
-Vomiting and tight abdominal pain are not common clinical presentations of PCOS. Vomiting and abdominal pain are nonspecific symptoms
+Answer: Vomiting and tight abdominal pain are not common clinical presentations of PCOS. Vomiting and abdominal pain are nonspecific symptoms
 which could be an indication for a variety of illnesses. In case of this presentation, you should be evaluated by a physician, and
 treated accordingly.
 Rationale: the answer is good, but it does not emphasize enough that the patient’s symptoms are most likely caused by something
