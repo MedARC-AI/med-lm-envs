@@ -4,8 +4,8 @@ from typing import Dict
 import verifiers as vf
 from datasets import Dataset, load_dataset
 from datasets.utils.logging import disable_progress_bar
-from medarc_verifiers.rewards.mcq_accuracy import multiple_choice_accuracy
-from medarc_verifiers.utils.randomize_mcq import randomize_multiple_choice
+from medarc_verifiers.rewards.multiple_choice_accuracy import multiple_choice_accuracy
+from medarc_verifiers.utils.randomize_multiple_choice import randomize_multiple_choice
 from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
 disable_progress_bar()  # suppress datasets mapping progress bar

@@ -3,7 +3,7 @@
 import pytest
 
 from medarc_verifiers.utils import randomize_multiple_choice_hf_map, randomize_multiple_choice_row
-from medarc_verifiers.utils.randomize_mcq import randomize_multiple_choice
+from medarc_verifiers.utils.randomize_multiple_choice import randomize_multiple_choice
 
 
 def test_no_seed_returns_unchanged_list():
@@ -574,7 +574,7 @@ def test_randomize_multiple_choice_row_return_mapping():
 
 def test_traditional_anchor_pattern_detection():
     """ANCHOR regex should detect 'all/none of the above' patterns."""
-    from medarc_verifiers.utils.randomize_mcq import ANCHOR
+    from medarc_verifiers.utils.randomize_multiple_choice import ANCHOR
 
     anchors = [
         "All of the above",
@@ -591,7 +591,7 @@ def test_traditional_anchor_pattern_detection():
 
 def test_label_reference_pattern_detection():
     """LABEL_REF regex should detect options that reference other labels."""
-    from medarc_verifiers.utils.randomize_mcq import LABEL_REF
+    from medarc_verifiers.utils.randomize_multiple_choice import LABEL_REF
 
     label_refs = [
         "A or B",
@@ -613,7 +613,7 @@ def test_label_reference_pattern_detection():
 
 def test_label_reference_pattern_no_false_positives():
     """LABEL_REF regex should not match normal medical text."""
-    from medarc_verifiers.utils.randomize_mcq import LABEL_REF
+    from medarc_verifiers.utils.randomize_multiple_choice import LABEL_REF
 
     non_refs = [
         "Vitamin A deficiency",
