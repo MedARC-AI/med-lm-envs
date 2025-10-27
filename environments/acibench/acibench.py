@@ -32,8 +32,6 @@ import verifiers as vf
 from datasets import load_dataset
 from rouge import Rouge
 
-# --- Utility Functions (adapted from medec.py for self-containment) ---
-
 def medarc_cache_dir() -> Path:
     """Returns the path to the MedARC cache directory."""
     default_cache_path = Path.home() / ".cache" / "medarc"
@@ -86,24 +84,22 @@ def load_environment(
     ROUGE, BERTScore, and BLEURT metrics. A placeholder for MEDCON is included,
     which requires a local QuickUMLS installation to be fully functional.
     """
-    # Set CUDA device if specified
+    
     if device and "cuda" in device:
         gpu_id = device.split(":")[-1]
         os.environ["CUDA_VISIBLE_DEVICES"] = gpu_id
 
-    # Load and split the dataset
+
     try:
-        # CORRECTED LINE: Load the available 'test' split first.
         dataset = load_dataset("harsh-c137/aci-bench-basic", split="test")
         
-        # Now, create a reproducible 80/20 train-validation split from the loaded data.
+        # Create a reproducible 80/20 train-validation split from the loaded data.
         split_datasets = dataset.train_test_split(test_size=0.2, seed=42)
         train_ds = split_datasets["train"]
         val_ds = split_datasets["test"]
     except Exception as e:
         raise ConnectionError(f"Could not load dataset 'harsh-c137/aci-bench-basic' from Hugging Face Hub. Error: {e}")
 
-    # Define the prompt structure based on the paper's experiments
     def _build_prompt(dialogue: str) -> str:
         prompt = (
             "summarize the conversation to generate a clinical note with four sections: "
@@ -167,7 +163,7 @@ def load_environment(
 
     def bleurt_reward(completion: str, answer: str, **kwargs) -> float:
         """Calculates the BLEURT score."""
-        if not completion.strip() or not answer.strip():
+        if not completion.strip() or not answer.strip()
             return 0.0
         scores = bleurt_scorer.score(references=[answer], candidates=[completion])
         return np.mean(scores)
@@ -202,7 +198,6 @@ def load_environment(
         "You are a helpful assistant who generates a clinical note from a doctor-patient conversation."
     )
 
-    # Create and return the environment
     env = vf.SingleTurnEnv(
         dataset=train_mapped,
         eval_dataset=val_mapped,
