@@ -37,7 +37,7 @@ def load_environment(
 
     # System Prompt
     system_prompt = (
-        "Instructions: The following text is a medical question. Answer it in the most factual, concise and informative way possible"
+        "Instructions: The question that will be given to you is a medical question. Answer it in the most factual, concise and informative way possible"
     )
 
     # Judge Prompt Template
