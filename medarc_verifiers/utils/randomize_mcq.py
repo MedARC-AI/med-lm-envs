@@ -2,7 +2,29 @@ import hashlib
 import random
 import re
 
+# Matches phrases like "all/none of the above/following"
 ANCHOR = re.compile(r"\b(?:all|none|some|both|neither)\s+of\s+the\s+(?:above|following)\b", re.IGNORECASE)
+
+# Matches options that reference other option labels (e.g., "A or B", "Both A and C", "A, B, or C")
+# This broader pattern detects label references embedded anywhere in the string, not only when the
+# entire option equals a bare label list. It requires at least two label tokens connected by a
+# conjunction or punctuation (and/or, and, or, nor, ",", "&", "/"). This helps avoid false
+# positives like "Vitamin A deficiency" (no second label token), while catching phrases like
+# "Both A and B are correct", "Choose A and/or B", or "Options A, B, and C".
+_LABEL_TOKEN = r"(?:\((?-i:[A-Z0-9]+)\)|\[(?-i:[A-Z0-9]+)\]|\b(?-i:[A-Z])(?:[)\.:])?|\b\d+(?:[)\.:])?)"
+LABEL_REF = re.compile(
+    r"""
+    (?:\b(?:both|either|neither|only)\b\s+)?   # optional leading qualifier
+    {tok}                              # first label token
+    (?:\s*[,&/]+\s*|\s+(?:and/or|and|or|nor)\s+)   # required separator
+    {tok}                              # second label token
+    (?:                                # optionally, additional tokens
+        (?:\s*[,&/]+\s*|\s+(?:and/or|and|or|nor)\s+)
+        {tok}
+    )*
+    """.format(tok=_LABEL_TOKEN),
+    re.IGNORECASE | re.VERBOSE,
+)
 
 
 def randomize_multiple_choice(
@@ -11,35 +33,47 @@ def randomize_multiple_choice(
     labels: list[str] | None = None,
     seed: int | None = None,
     row_id: str | int | None = None,
-) -> tuple[list[str] | dict[str, str], str, int]:
+    return_mapping: bool = False,
+) -> tuple[list[str] | dict[str, str], str, int] | tuple[list[str] | dict[str, str], str, int, list[int]]:
     """Randomize MCQ options while preserving anchor options in place.
+
+    Anchors remain in their original positions; only non-anchor segments between/around anchors are shuffled.
 
     Anchor options (e.g., "All of the above", "None of the following") stay fixed.
     Only non-anchor options between anchors are shuffled within their blocks.
 
+    Label Reference Detection: If any option references other option labels
+    (e.g., "C) A or B", "D) Both A and B"), shuffling is SKIPPED entirely for that
+    question to avoid breaking the references. This ensures correctness but means
+    no randomization occurs when label references are detected.
+
     Args:
         options: List of option texts OR dict mapping labels to option texts.
         answer_choice: Original answer as 0-based index OR label string like "C", "(B)", "3.", etc.
-        labels: Required when options is a list. Label strings for each option (e.g., ["A", "B", "C"]).
+        labels: Label strings for each option (e.g., ["A", "B", "C"]).
+                For list inputs, labels are required and must match the options length.
         seed: Randomization policy:
             - None: No shuffling, return unchanged
             - -1: Non-deterministic random shuffle
             - int >= 0: Deterministic shuffle (combined with row_id if provided)
         row_id: Optional identifier mixed into deterministic seed for per-row variation.
+        return_mapping: When True, also returns the permutation mapping list where
+            mapping[new_position] = old_index.
 
     Returns:
-        Tuple of (shuffled_options, new_answer_label, new_answer_index)
+        Tuple of (shuffled_options, new_answer_label, new_answer_index[, mapping])
         - shuffled_options: Same type as input (list or dict) with shuffled values
         - new_answer_label: Label string where the answer moved (e.g., "B", "(C)", "2.")
         - new_answer_index: 0-based index where the answer moved
+        - mapping (optional): list[int] where mapping[new_position] = old_index
 
     Examples:
         >>> opts = ["Opt A", "Opt B", "All of the above"]
-        >>> shuffled, label, idx = randomize_mcq(opts, 0, labels=["A", "B", "C"], seed=42)
+        >>> shuffled, label, idx = randomize_multiple_choice(opts, 0, labels=["A", "B", "C"], seed=42)
         >>> # First two options may shuffle, but "All of the above" stays at index 2
 
         >>> opts_dict = {"A": "Opt 1", "B": "Both of the above", "C": "Opt 2"}
-        >>> shuffled, label, idx = randomize_mcq(opts_dict, "A", seed=42, row_id="q1")
+        >>> shuffled, label, idx = randomize_multiple_choice(opts_dict, "A", seed=42, row_id="q1")
         >>> # "Both of the above" stays at position B, others may move
     """
 
@@ -52,6 +86,10 @@ def randomize_multiple_choice(
         texts = list(options)
         if labels is None:
             raise ValueError("labels must be provided when options is a list")
+        if len(labels) != len(texts):
+            raise ValueError(
+                f"labels length ({len(labels)}) must match number of options ({len(texts)}) for list inputs"
+            )
         dict_mode = False
 
     # map answer_choice to index
@@ -93,8 +131,26 @@ def randomize_multiple_choice(
         # return unchanged, but conform outputs
         if dict_mode:
             out_options = dict(zip(labels, texts))
+            if return_mapping:
+                return out_options, labels[answer_idx], answer_idx, list(range(len(texts)))
             return out_options, labels[answer_idx], answer_idx
         else:
+            if return_mapping:
+                return list(texts), labels[answer_idx], answer_idx, list(range(len(texts)))
+            return list(texts), labels[answer_idx], answer_idx
+
+    # check for label references - if found, skip randomization entirely
+    # (shuffling would break references like "D) A or B")
+    has_label_refs = any(LABEL_REF.search(t or "") for t in texts)
+    if has_label_refs:
+        if dict_mode:
+            out_options = dict(zip(labels, texts))
+            if return_mapping:
+                return out_options, labels[answer_idx], answer_idx, list(range(len(texts)))
+            return out_options, labels[answer_idx], answer_idx
+        else:
+            if return_mapping:
+                return list(texts), labels[answer_idx], answer_idx, list(range(len(texts)))
             return list(texts), labels[answer_idx], answer_idx
 
     # find anchor positions and build shuffle blocks between them
@@ -125,6 +181,100 @@ def randomize_multiple_choice(
     # rebuild output in the same shape as input
     if dict_mode:
         out_options = dict(zip(labels, texts))  # same labels, texts moved
+        if return_mapping:
+            return out_options, labels[new_answer_idx], new_answer_idx, index_map
         return out_options, labels[new_answer_idx], new_answer_idx
     else:
+        if return_mapping:
+            return texts, labels[new_answer_idx], new_answer_idx, index_map
         return texts, labels[new_answer_idx], new_answer_idx
+
+
+def randomize_multiple_choice_hf_map(
+    example: dict,
+    idx: int | None = None,
+    *,
+    seed: int = 1618,
+    options_key: str = "options",
+    answer_key: str = "answer",
+    labels: list[str] | None = None,
+    return_label: bool = True,
+) -> dict:
+    """HuggingFace datasets-friendly wrapper for randomizing MCQ options.
+
+    Designed to work seamlessly with `dataset.map(randomize_multiple_choice_hf_map, with_indices=True)`.
+
+    Args:
+        example: Dataset row as dict (from HF datasets map).
+        idx: Row index (provided by with_indices=True). Used as row_id for determinism.
+        seed: Random seed for deterministic shuffling.
+        options_key: Key in example dict containing the options list/dict.
+        answer_key: Key in example dict containing the answer (index or label).
+        labels: Optional custom labels. If None and options is a list, auto-generates ["A", "B", "C", ...].
+        return_label: If True, adds 'answer_label' field with the letter label.
+
+    Returns:
+        Dict with updated 'options' and 'answer' (and optionally 'answer_label').
+        Note: returned 'answer' is always an integer index after shuffling.
+        Determinism: when idx is None, a stable SHA-256 hash of the options content is used as row_id.
+        Can be used directly: `return randomize_multiple_choice_hf_map(example, idx, seed=42)`
+
+    Examples:
+        >>> # Basic usage with dataset.map()
+        >>> dataset = dataset.map(
+        ...     randomize_multiple_choice_hf_map,
+        ...     with_indices=True,
+        ...     fn_kwargs={'seed': 42},
+        ... )
+
+        >>> # Custom field names
+        >>> dataset = dataset.map(
+        ...     randomize_multiple_choice_hf_map,
+        ...     with_indices=True,
+        ...     fn_kwargs={'seed': 42, 'options_key': 'choices', 'answer_key': 'correct'},
+        ... )
+
+    >>> # Without indices (uses options content hash as row_id)
+        >>> def randomize_fn(example):
+        ...     return randomize_multiple_choice_hf_map(example, seed=42)
+        >>> dataset = dataset.map(randomize_fn)
+    """
+    options = example[options_key]
+    answer = example[answer_key]
+
+    # Use idx as row_id if provided, otherwise use hash of options for determinism
+    if idx is not None:
+        row_id = idx
+    else:
+        # Build a stable hash of the options content to use as row_id (deterministic across runs)
+        if isinstance(options, list):
+            # Use a non-printable separator to avoid accidental collisions
+            ser = "\x1e".join(["" if o is None else str(o) for o in options])
+        elif isinstance(options, dict):
+            # Sort by key to ensure stable ordering
+            ser = "\x1f".join([f"{k}\x1e{options[k]}" for k in sorted(options.keys())])
+        else:
+            ser = str(options)
+        row_id = int(hashlib.sha256(ser.encode()).hexdigest(), 16) & ((1 << 64) - 1)
+
+    # Auto-generate labels if not provided and options is a list
+    if labels is None and isinstance(options, list):
+        labels = [chr(ord("A") + i) for i in range(len(options))]
+
+    shuffled_options, new_label, new_idx = randomize_multiple_choice(
+        options=options,
+        answer_choice=answer,
+        labels=labels,
+        seed=seed,
+        row_id=row_id,
+    )
+
+    result = {
+        options_key: shuffled_options,
+        answer_key: new_idx,
+    }
+
+    if return_label:
+        result["answer_label"] = new_label
+
+    return result

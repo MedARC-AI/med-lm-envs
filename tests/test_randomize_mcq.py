@@ -3,6 +3,7 @@
 import pytest
 
 from medarc_verifiers.utils.randomize_mcq import randomize_multiple_choice
+from medarc_verifiers.utils import randomize_multiple_choice_hf_map
 
 
 def test_no_seed_returns_unchanged_list():
@@ -297,12 +298,23 @@ def test_invalid_answer_choice_raises():
         randomize_multiple_choice(opts, "Z", labels=labels, seed=42)
 
 
-def test_missing_labels_for_list_raises():
+def test_labels_required_for_list():
     """List input without labels should raise ValueError."""
     opts = ["Opt 1", "Opt 2", "Opt 3"]
 
     with pytest.raises(ValueError, match="labels must be provided"):
         randomize_multiple_choice(opts, 0, seed=42)
+
+
+def test_labels_not_required_for_dict():
+    """Dict input doesn't need labels parameter."""
+    opts = {"A": "Opt 1", "B": "Opt 2", "C": "Opt 3", "D": "Opt 4"}
+
+    result, new_label, new_idx = randomize_multiple_choice(opts, "D", seed=None)
+
+    # With no shuffle, answer D should stay at position 3 with label D
+    assert new_label == "D"
+    assert new_idx == 3
 
 
 def test_out_of_range_index_raises():
@@ -334,6 +346,24 @@ def test_two_options_both_anchors():
     result, _, _ = randomize_multiple_choice(opts, 0, labels=labels, seed=42)
 
     assert result == opts
+
+
+def test_consecutive_anchors_preserve_order():
+    """Consecutive anchors should remain in their original order and positions."""
+    opts = [
+        "Option 1",
+        "All of the above",
+        "None of the above",
+        "Option 4",
+    ]
+    labels = ["A", "B", "C", "D"]
+
+    result, _, _ = randomize_multiple_choice(opts, 0, labels=labels, seed=42)
+
+    # Anchors should stay exactly where they were
+    assert result[1] == "All of the above"
+    assert result[2] == "None of the above"
+    # Non-anchor blocks are: [0] and [3], which are length-1 and won't move anyway
 
 
 def test_empty_option_text():
@@ -379,3 +409,290 @@ def test_row_id_can_be_string():
 
     # Should complete without error
     assert len(result) == 3
+
+
+# --- HuggingFace datasets helper function ---
+
+
+def test_randomize_multiple_choice_hf_map_basic():
+    """randomize_multiple_choice_hf_map should work with basic example dict."""
+
+    example = {"options": ["Opt 1", "Opt 2", "Opt 3"], "answer": 0}
+
+    result = randomize_multiple_choice_hf_map(example, idx=0, seed=42)
+
+    assert "options" in result
+    assert "answer" in result
+    assert "answer_label" in result
+    assert isinstance(result["options"], list)
+    assert isinstance(result["answer"], int)
+    assert isinstance(result["answer_label"], str)
+
+
+def test_randomize_multiple_choice_hf_map_with_index():
+    """randomize_multiple_choice_hf_map should use idx as row_id for determinism."""
+
+    example = {"options": ["Opt 1", "Opt 2", "Opt 3", "Opt 4"], "answer": 0}
+
+    result1 = randomize_multiple_choice_hf_map(example, idx=0, seed=42)
+    result2 = randomize_multiple_choice_hf_map(example, idx=0, seed=42)
+    result3 = randomize_multiple_choice_hf_map(example, idx=1, seed=42)
+
+    # Same idx should give same shuffle
+    assert result1["options"] == result2["options"]
+    # Different idx should give different shuffle
+    assert result1["options"] != result3["options"]
+
+
+def test_randomize_multiple_choice_hf_map_without_index():
+    """randomize_multiple_choice_hf_map should work without idx (uses hash)."""
+
+    example = {"options": ["Opt 1", "Opt 2", "Opt 3"], "answer": 1}
+
+    result = randomize_multiple_choice_hf_map(example, seed=42)
+
+    # Should still work
+    assert result["options"][result["answer"]] == "Opt 2"
+
+
+def test_randomize_multiple_choice_hf_map_custom_keys():
+    """randomize_multiple_choice_hf_map should accept custom field names."""
+
+    example = {"choices": ["A", "B", "C"], "correct": 1}
+
+    result = randomize_multiple_choice_hf_map(example, idx=0, seed=42, options_key="choices", answer_key="correct")
+
+    assert "choices" in result
+    assert "correct" in result
+    assert result["choices"][result["correct"]] == "B"
+
+
+def test_randomize_multiple_choice_hf_map_no_label():
+    """randomize_multiple_choice_hf_map should skip answer_label if return_label=False."""
+
+    example = {"options": ["Opt 1", "Opt 2", "Opt 3"], "answer": 0}
+
+    result = randomize_multiple_choice_hf_map(example, idx=0, seed=42, return_label=False)
+
+    assert "answer_label" not in result
+    assert "options" in result
+    assert "answer" in result
+
+
+def test_randomize_multiple_choice_hf_map_preserves_anchors():
+    """randomize_multiple_choice_hf_map should preserve anchor options."""
+
+    example = {"options": ["Opt 1", "Opt 2", "All of the above"], "answer": 0}
+
+    result = randomize_multiple_choice_hf_map(example, idx=0, seed=42)
+
+    # Anchor should stay at end
+    assert result["options"][-1] == "All of the above"
+
+
+def test_randomize_multiple_choice_hf_map_hf_map_compatible():
+    """randomize_multiple_choice_hf_map return format should be map-compatible."""
+
+    example = {"question": "Q1", "options": ["A", "B", "C"], "answer": 1, "metadata": {"id": 123}}
+
+    # Simulate what map does: merge result into example
+    result = randomize_multiple_choice_hf_map(example, idx=0, seed=42)
+
+    # Result should only have the keys it needs to update
+    assert set(result.keys()) == {"options", "answer", "answer_label"}
+
+    # In real map, you'd do: return {**example, **result} or just return result
+    # Let's verify the pattern works
+    updated = {**example, **result}
+    assert updated["question"] == "Q1"  # Preserved
+    assert updated["metadata"] == {"id": 123}  # Preserved
+    assert "answer_label" in updated  # Added
+
+
+# ========================================
+# Anchor Pattern Detection Tests
+# ========================================
+
+
+def test_traditional_anchor_pattern_detection():
+    """ANCHOR regex should detect 'all/none of the above' patterns."""
+    from medarc_verifiers.utils.randomize_mcq import ANCHOR
+
+    anchors = [
+        "All of the above",
+        "None of the above",
+        "All of the following",
+        "None of the following",
+        "Both of the above",
+        "Neither of the above",
+        "Some of the above",
+    ]
+    for text in anchors:
+        assert ANCHOR.search(text), f"Should match: {text}"
+
+
+def test_label_reference_pattern_detection():
+    """LABEL_REF regex should detect options that reference other labels."""
+    from medarc_verifiers.utils.randomize_mcq import LABEL_REF
+
+    label_refs = [
+        "A or B",
+        "A and B",
+        "Both A and B",
+        "Either A or B",
+        "Neither A nor B",
+        "A, B, or C",
+        "A & B",
+        "A/B",
+        "(A) or (B)",
+        "A) and B)",
+        "[A] or [B]",
+        "Only A and B",
+    ]
+    for text in label_refs:
+        assert LABEL_REF.search(text), f"Should match: {text}"
+
+
+def test_label_reference_pattern_no_false_positives():
+    """LABEL_REF regex should not match normal medical text."""
+    from medarc_verifiers.utils.randomize_mcq import LABEL_REF
+
+    non_refs = [
+        "Vitamin A deficiency",
+        "Hepatitis B",
+        "Type A personality",
+        "Class A drug",
+        "Schedule B medication",
+        "The patient has condition A",
+        "Treatment involves A and careful monitoring",
+        "Administer drug A",
+    ]
+    for text in non_refs:
+        assert not LABEL_REF.search(text), f"Should NOT match: {text}"
+
+
+def test_traditional_anchor_stays_in_place():
+    """'All of the above' should stay at the end when shuffling."""
+    options = ["Option 1", "Option 2", "Option 3", "All of the above"]
+    labels = ["A", "B", "C", "D"]
+
+    shuffled, new_label, new_idx = randomize_multiple_choice(
+        options=options,
+        answer_choice=0,  # Answer is "Option 1"
+        labels=labels,
+        seed=42,
+    )
+
+    # "All of the above" should still be at position D (index 3)
+    assert shuffled[3] == "All of the above"
+    assert labels[3] == "D"
+
+
+def test_label_reference_skips_shuffling():
+    """Questions with label references like 'A or B' should not be shuffled."""
+    options = ["Diabetes", "Hypertension", "A or B", "Obesity"]
+    labels = ["A", "B", "C", "D"]
+
+    shuffled, new_label, new_idx = randomize_multiple_choice(
+        options=options,
+        answer_choice=0,  # Answer is "Diabetes"
+        labels=labels,
+        seed=42,
+    )
+
+    # Should return completely unchanged (no shuffling occurred)
+    assert shuffled == options
+    assert new_label == "A"
+    assert new_idx == 0
+
+
+def test_multiple_traditional_anchors_stay_in_place():
+    """Multiple 'X of the above' anchors should all stay fixed."""
+    options = ["Option 1", "None of the above", "Option 3", "All of the above"]
+    labels = ["A", "B", "C", "D"]
+
+    shuffled, new_label, new_idx = randomize_multiple_choice(
+        options=options,
+        answer_choice=0,  # Answer is "Option 1"
+        labels=labels,
+        seed=42,
+    )
+
+    # Both anchors should stay in their original positions
+    assert shuffled[1] == "None of the above"
+    assert shuffled[3] == "All of the above"
+
+
+def test_only_non_anchors_shuffle():
+    """Only non-anchor options should get shuffled."""
+    options = ["Diabetes", "Hypertension", "Obesity", "Hyperlipidemia", "Smoking", "All of the above"]
+    labels = ["A", "B", "C", "D", "E", "F"]
+
+    # Run multiple shuffles to check variability
+    results = []
+    for seed_val in range(10, 110, 20):
+        shuffled, _, _ = randomize_multiple_choice(
+            options=options,
+            answer_choice=0,
+            labels=labels,
+            seed=seed_val,
+        )
+        results.append(shuffled)
+
+        # Anchor should always stay in place
+        assert shuffled[5] == "All of the above"
+
+    # At least some variation in the non-anchor positions
+    # Check first 5 positions for variation
+    first_block_sets = [tuple(r[i] for i in range(5)) for r in results]
+    # With 5 items and 5 different seeds, we should see at least 2 different orderings
+    assert len(set(first_block_sets)) >= 2, f"Options should show variation, got: {first_block_sets}"
+
+
+def test_anchors_create_multiple_shuffle_blocks():
+    """Anchors should divide options into separate shuffle blocks."""
+    options = [
+        "Heart failure",
+        "Diabetes",
+        "None of the above",  # Anchor - divides into blocks
+        "Obesity",
+        "Hypertension",
+        "All of the above",  # Anchor
+    ]
+    labels = ["A", "B", "C", "D", "E", "F"]
+
+    shuffled, new_label, new_idx = randomize_multiple_choice(
+        options=options,
+        answer_choice=0,  # Answer is "Heart failure"
+        labels=labels,
+        seed=42,
+    )
+
+    # Anchors stay in place
+    assert shuffled[2] == "None of the above"
+    assert shuffled[5] == "All of the above"
+
+    # First block (indices 0-1) can shuffle
+    assert set(shuffled[0:2]) == {"Heart failure", "Diabetes"}
+
+    # Second block (indices 3-4) can shuffle
+    assert set(shuffled[3:5]) == {"Obesity", "Hypertension"}
+
+
+def test_label_ref_skip_preserves_answer_tracking():
+    """When shuffling is skipped due to label refs, answer tracking should still work."""
+    options = ["Diabetes", "Hypertension", "Both A and B", "Obesity"]
+    labels = ["A", "B", "C", "D"]
+
+    # Test with answer being the label reference itself
+    shuffled, new_label, new_idx = randomize_multiple_choice(
+        options=options,
+        answer_choice=2,  # Answer is "Both A and B"
+        labels=labels,
+        seed=42,
+    )
+
+    # Nothing should change
+    assert shuffled == options
+    assert new_label == "C"
+    assert new_idx == 2
