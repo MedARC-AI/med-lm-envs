@@ -1,15 +1,23 @@
 [project]
 name = "acibench"
 version = "0.1.0"
-description = "Metric-based evaluation for ACI-Bench clinical summarization."
+description = "ACI-BENCH environment for benchmarking clinical note generation from dialogue."
+tags = ["medical", "clinical", "summarization", "note-generation", "single-turn", "evaluation"]
+requires-python = ">=3.11"
 dependencies = [
-    "verifiers", "datasets", "openai", "pandas", "numpy", "evaluate",
-    "bert-score", "rouge-score", "nltk", "torch"
+    "verifiers>=0.1.4",
+    "datasets",
+    "numpy",
+    "rouge",
+    "bert-score",
+    "bleurt @ git+https://github.com/google-research/bleurt.git",
+    "requests",
+    "tqdm"
 ]
 
 [tool.prime.environment]
 loader = "acibench:load_environment"
-display_name = "ACI Bench"
+display_name = "ACI-BENCH"
 visibility = "PUBLIC"
 
 [build-system]
@@ -18,3 +26,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build]
 include = ["acibench.py"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
