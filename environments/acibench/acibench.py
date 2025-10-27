@@ -93,8 +93,10 @@ def load_environment(
 
     # Load and split the dataset
     try:
-        dataset = load_dataset("harsh-c137/aci-bench-basic", split="train")
-        # Create a reproducible 80/20 train-validation split
+        # CORRECTED LINE: Load the available 'test' split first.
+        dataset = load_dataset("harsh-c137/aci-bench-basic", split="test")
+        
+        # Now, create a reproducible 80/20 train-validation split from the loaded data.
         split_datasets = dataset.train_test_split(test_size=0.2, seed=42)
         train_ds = split_datasets["train"]
         val_ds = split_datasets["test"]
