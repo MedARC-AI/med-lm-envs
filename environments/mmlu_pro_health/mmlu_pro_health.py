@@ -1,4 +1,3 @@
-import random
 import re
 from typing import Dict
 
@@ -6,6 +5,7 @@ import verifiers as vf
 from datasets import Dataset, load_dataset
 from datasets.utils.logging import disable_progress_bar
 from medarc_verifiers.rewards.mcq_accuracy import multiple_choice_accuracy
+from medarc_verifiers.utils.randomize_mcq import randomize_multiple_choice
 from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
 disable_progress_bar()  # suppress datasets mapping progress bar
@@ -34,7 +34,13 @@ def _build_few_shot(few_shot_examples: Dataset, use_think: bool) -> str:
     return few_shot_prompt
 
 
-def _to_vf_format(ds: Dataset, few_shot_examples: Dataset, shuffle: bool, use_think: bool) -> Dataset:
+def _to_vf_format(
+    ds: Dataset,
+    few_shot_examples: Dataset,
+    shuffle_answers: bool,
+    shuffle_seed: int | None,
+    use_think: bool,
+) -> Dataset:
     """
     Shape each row for SingleTurnEnv's defaults:
       - 'question': string the env will turn into chat messages
@@ -44,7 +50,8 @@ def _to_vf_format(ds: Dataset, few_shot_examples: Dataset, shuffle: bool, use_th
     Args:
       - ds: dataset to convert to vf format
       - few_shot_examples: few-shot examples to include in the prompt
-      - shuffle: whether to shuffle the answer choices
+      - shuffle_answers: whether to shuffle the answer choices
+      - shuffle_seed: deterministic seed for choice shuffling
       - use_think: whether to use think tags
     """
     VALID = "ABCDEFGHIJ"
@@ -59,26 +66,13 @@ def _to_vf_format(ds: Dataset, few_shot_examples: Dataset, shuffle: bool, use_th
             return None
 
         # shuffle answer choices if requested
-        if shuffle and answer_letter and answer_letter in opts:
-            # get the correct answer text before shuffling
-            correct_answer_text = opts[answer_letter]
-
-            # create list of (letter, text) pairs and shuffle them
-            option_pairs = list(opts.items())
-
-            # use a deterministic seed based on the question for consistency
-            rng = random.Random(hash(question) % (2**32))
-            rng.shuffle(option_pairs)
-
-            # rebuild options dict with new letter assignments
-            letters = VALID[: len(option_pairs)]
-            opts = {letters[i]: text for i, (_, text) in enumerate(option_pairs)}
-
-            # find the new letter for the correct answer
-            for letter, text in opts.items():
-                if text == correct_answer_text:
-                    answer_letter = letter
-                    break
+        if shuffle_answers and answer_letter and answer_letter in opts:
+            opts, answer_letter, _ = randomize_multiple_choice(
+                options=opts,
+                answer_choice=answer_letter,
+                seed=shuffle_seed,
+                row_id=question,
+            )
 
         # https://github.com/TIGER-AI-Lab/MMLU-Pro/blob/main/evaluate_from_api.py#L228
         instruction = 'The following are multiple choice questions (with answers) about health. Think step by step and then finish your answer with "\\boxed{X}" where X is the correct letter choice.\n'
@@ -90,20 +84,28 @@ def _to_vf_format(ds: Dataset, few_shot_examples: Dataset, shuffle: bool, use_th
         info = dict(row)
 
         # update shuffled answer choices in the info dict
-        if shuffle:
+        if shuffle_answers:
             info["answer"] = answer_letter
             info["options"] = opts
         info["answer_text"] = opts.get(answer_letter, "")
 
         return {"question": prompt, "answer": answer_letter, "info": info}
 
-    return ds.map(_format_row, remove_columns=ds.column_names).filter(lambda row: row is not None)
+    # Disable the Datasets cache when shuffling answers
+    load_from_cache_file = False if shuffle_answers else True
+    mapped = ds.map(
+        _format_row,
+        remove_columns=ds.column_names,
+        load_from_cache_file=load_from_cache_file,
+    )
+    return mapped.filter(lambda row: row is not None, load_from_cache_file=load_from_cache_file)
 
 
 def load_environment(
     num_few_shot: int = 5,
     use_think: bool = False,
-    shuffle: bool = False,
+    shuffle_answers: bool = False,
+    shuffle_seed: int | None = 1618,
     **kwargs,
 ) -> vf.Environment:
     """
@@ -135,7 +137,9 @@ def load_environment(
 
     # -------- convert rows to vf format and shuffle row order --------
     few_shot_examples = few_shot_examples
-    test_ds = _to_vf_format(test_raw, few_shot_examples, shuffle=shuffle, use_think=use_think)
+    test_ds = _to_vf_format(
+        test_raw, few_shot_examples, shuffle_answers=shuffle_answers, shuffle_seed=shuffle_seed, use_think=use_think
+    )
     del test_raw, few_shot_examples  # free memory
 
     # -------- construct prompts and questions --------

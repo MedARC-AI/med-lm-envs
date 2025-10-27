@@ -6,6 +6,7 @@ import verifiers as vf
 from datasets import load_dataset
 from medarc_verifiers.prompts import THINK_XML_SYSTEM_PROMPT, XML_SYSTEM_PROMPT, AnswerFormat
 from medarc_verifiers.rewards.mcq_accuracy import multiple_choice_accuracy
+from medarc_verifiers.utils.randomize_mcq import randomize_multiple_choice
 from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
 
@@ -25,6 +26,8 @@ def accuracy(completion, answer: str, parser: vf.Parser, info: dict | None = Non
 def load_environment(
     use_think: bool = False,
     system_prompt: Optional[str] = None,
+    shuffle_answers: bool = False,
+    shuffle_seed: int | None = 1618,
     answer_format: AnswerFormat | str = AnswerFormat.XML,
 ) -> vf.Environment:
     """
@@ -35,19 +38,41 @@ def load_environment(
     """
     ds = load_dataset("GBaker/MedQA-USMLE-4-options")
 
-    def _map(ex):
+    def _map(ex, idx=None):
         q: str = ex["question"]
         options: Dict[str, str] = ex["options"]
         gold_letter: str = ex["answer_idx"].strip().upper()
 
+        if shuffle_answers and gold_letter in options:
+            options, gold_letter, _ = randomize_multiple_choice(
+                options=options,
+                answer_choice=gold_letter,
+                seed=shuffle_seed,
+                row_id=ex.get("id", idx),
+            )
+
         return {
             "question": _build_prompt(q, options),
             "answer": gold_letter,
-            "info": {"answer_text": options.get(gold_letter, "")},
+            "info": {
+                "answer_text": options.get(gold_letter, ""),
+                **({"options": options} if shuffle_answers else {}),
+            },
         }
 
-    train_mapped = ds["train"].map(_map, remove_columns=ds["train"].column_names)
-    test_mapped = ds["test"].map(_map, remove_columns=ds["test"].column_names)
+    load_from_cache_file = not shuffle_answers
+    train_mapped = ds["train"].map(
+        _map,
+        with_indices=True,
+        remove_columns=ds["train"].column_names,
+        load_from_cache_file=load_from_cache_file,
+    )
+    test_mapped = ds["test"].map(
+        _map,
+        with_indices=True,
+        remove_columns=ds["test"].column_names,
+        load_from_cache_file=load_from_cache_file,
+    )
 
     answer_format = AnswerFormat(answer_format) if isinstance(answer_format, str) else answer_format
     if answer_format == AnswerFormat.XML:

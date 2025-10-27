@@ -1,10 +1,9 @@
-import random
-
 import verifiers as vf
 from datasets import Dataset, load_dataset
 from datasets.utils.logging import disable_progress_bar
 from medarc_verifiers.prompts import THINK_XML_SYSTEM_PROMPT, XML_SYSTEM_PROMPT, AnswerFormat
 from medarc_verifiers.rewards.mcq_accuracy import multiple_choice_accuracy
+from medarc_verifiers.utils.randomize_mcq import randomize_multiple_choice
 from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
 disable_progress_bar()  # suppress datasets mapping progress bar
@@ -15,7 +14,12 @@ def _build_question_str(question: str, options: dict[str, str]) -> str:
     return f"Question: {question}\n\n{opts}"
 
 
-def _to_vf_format(ds: Dataset, num_options: int, shuffle: bool) -> Dataset:
+def _to_vf_format(
+    ds: Dataset,
+    num_options: int,
+    shuffle_answers: bool,
+    shuffle_seed: int | None,
+) -> Dataset:
     """
     Shape each row for SingleTurnEnv's defaults:
       - 'question': string the env will turn into chat messages
@@ -24,7 +28,8 @@ def _to_vf_format(ds: Dataset, num_options: int, shuffle: bool) -> Dataset:
 
     Args:
       - num_options: 4 or 5; if 4, strips out option "E"
-      - shuffle: whether to shuffle the answer choices
+      - shuffle_answers: whether to shuffle the answer choices
+      - shuffle_seed: deterministic seed forwarded to the shuffler
     """
     VALID = ("A", "B", "C", "D", "E")
 
@@ -42,26 +47,14 @@ def _to_vf_format(ds: Dataset, num_options: int, shuffle: bool) -> Dataset:
             return None
 
         # shuffle answer choices if requested
-        if shuffle and answer_letter and answer_letter in opts:
-            # get the correct answer text before shuffling
-            correct_answer_text = opts[answer_letter]
-
-            # create list of (letter, text) pairs and shuffle them
-            option_pairs = list(opts.items())
-
-            # use a deterministic seed based on the question for consistency
-            rng = random.Random(hash(question) % (2**32))
-            rng.shuffle(option_pairs)
-
-            # rebuild options dict with new letter assignments
-            letters = VALID[: len(option_pairs)]
-            opts = {letters[i]: text for i, (_, text) in enumerate(option_pairs)}
-
-            # find the new letter for the correct answer
-            for letter, text in opts.items():
-                if text == correct_answer_text:
-                    answer_letter = letter
-                    break
+        if shuffle_answers and answer_letter and answer_letter in opts:
+            shuffled_options, answer_letter, _ = randomize_multiple_choice(
+                options=opts,
+                answer_choice=answer_letter,
+                seed=shuffle_seed,
+                row_id=question,
+            )
+            opts = shuffled_options
 
         question_str = _build_question_str(question, opts)
 
@@ -69,7 +62,7 @@ def _to_vf_format(ds: Dataset, num_options: int, shuffle: bool) -> Dataset:
         info = dict(row)
 
         # update shuffled answer choices in the info dict
-        if shuffle:
+        if shuffle_answers:
             info["answer"] = answer_letter
             info["options"] = opts
         info["answer_text"] = opts[answer_letter]
@@ -81,13 +74,21 @@ def _to_vf_format(ds: Dataset, num_options: int, shuffle: bool) -> Dataset:
             "info": info,
         }
 
-    return ds.map(_format_row, remove_columns=ds.column_names).filter(lambda row: row is not None)
+    # Disable the Datasets cache when shuffling answers
+    load_from_cache_file = False if shuffle_answers else True
+    mapped = ds.map(
+        _format_row,
+        remove_columns=ds.column_names,
+        load_from_cache_file=load_from_cache_file,
+    )
+    return mapped.filter(lambda row: row is not None, load_from_cache_file=load_from_cache_file)
 
 
 def load_environment(
     num_options: int = 4,
     use_think: bool = False,
-    shuffle: bool = False,
+    shuffle_answers: bool = False,
+    shuffle_seed: int | None = 1618,
     answer_format: AnswerFormat | str = AnswerFormat.BOXED,
     **kwargs,
 ) -> vf.Environment:
@@ -119,7 +120,9 @@ def load_environment(
     else:
         raise ValueError("'num_options' must be 4 or 5")
 
-    test_ds = _to_vf_format(test_raw, num_options=num_options, shuffle=shuffle)
+    test_ds = _to_vf_format(
+        test_raw, num_options=num_options, shuffle_answers=shuffle_answers, shuffle_seed=shuffle_seed
+    )
     del test_raw  # free memory
 
     # normalize answer_format

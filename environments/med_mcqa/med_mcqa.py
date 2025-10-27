@@ -22,8 +22,9 @@ from typing import Any
 
 import verifiers as vf
 from datasets import load_dataset
-from medarc_verifiers.rewards.mcq_accuracy import multiple_choice_accuracy
 from medarc_verifiers.prompts import THINK_XML_SYSTEM_PROMPT, XML_SYSTEM_PROMPT, AnswerFormat
+from medarc_verifiers.rewards.mcq_accuracy import multiple_choice_accuracy
+from medarc_verifiers.utils.randomize_mcq import randomize_multiple_choice
 from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
 LETTER_INDICES = ["A", "B", "C", "D"]
@@ -53,6 +54,8 @@ def med_mcqa(line: dict[str, Any]) -> dict[str, Any]:
 def load_environment(
     use_think: bool = False,
     system_prompt: str | None = None,
+    shuffle_answers: bool = False,
+    shuffle_seed: int | None = 1618,
     answer_format: AnswerFormat | str = AnswerFormat.XML,
 ) -> vf.Environment:
     """
@@ -74,21 +77,44 @@ def load_environment(
         if not question or not any(choices):
             return None
 
+        options = [choices[0], choices[1], choices[2], choices[3]]
+        answer_idx = cop - 1
+
+        if shuffle_answers:
+            shuffled_options, _, answer_idx = randomize_multiple_choice(
+                options=options,
+                answer_choice=answer_idx,
+                labels=LETTER_INDICES,
+                seed=shuffle_seed,
+                row_id=question,
+            )
+            options = shuffled_options
+
         line = {
             "question": question,
-            "opa": choices[0],
-            "opb": choices[1],
-            "opc": choices[2],
-            "opd": choices[3],
-            "cop": cop,
+            "opa": options[0],
+            "opb": options[1],
+            "opc": options[2],
+            "opd": options[3],
+            "cop": answer_idx + 1,
         }
         mapped = med_mcqa(line)
-        mapped["info"] = {"answer_text": choices[cop - 1]}
+        mapped["info"] = {"answer_text": options[answer_idx]}
         return mapped
 
     columns_to_remove = ["question", "opa", "opb", "opc", "opd", "cop"]
-    train_mapped = train_ds.map(_map_example, remove_columns=columns_to_remove).filter(lambda x: x is not None)
-    val_mapped = val_ds.map(_map_example, remove_columns=columns_to_remove).filter(lambda x: x is not None)
+    # Disable the Datasets cache when shuffling answers
+    load_from_cache_file = False if shuffle_answers else True
+    train_mapped = train_ds.map(
+        _map_example,
+        remove_columns=columns_to_remove,
+        load_from_cache_file=load_from_cache_file,
+    ).filter(lambda x: x is not None, load_from_cache_file=load_from_cache_file)
+    val_mapped = val_ds.map(
+        _map_example,
+        remove_columns=columns_to_remove,
+        load_from_cache_file=load_from_cache_file,
+    ).filter(lambda x: x is not None, load_from_cache_file=load_from_cache_file)
 
     # normalize answer_format
     answer_format = AnswerFormat(answer_format) if isinstance(answer_format, str) else answer_format

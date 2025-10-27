@@ -4,10 +4,41 @@ import verifiers as vf
 from datasets import Dataset, load_dataset
 from medarc_verifiers.prompts import THINK_XML_SYSTEM_PROMPT, XML_SYSTEM_PROMPT, AnswerFormat
 from medarc_verifiers.rewards.mcq_accuracy import multiple_choice_accuracy
+from medarc_verifiers.utils.randomize_mcq import randomize_multiple_choice
 from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
 _VOCAB_CHOICES = ["atc", "icd10cm", "icd10proc", "icd9cm", "icd9proc"]
 _LEVEL_CHOICES = ["easy", "hard", "medium"]
+_OPTION_LABELS = ("A", "B", "C", "D")
+_OPTION_SEPARATORS = (".", ")", ":", "-")
+
+
+def _extract_question_and_options(row: dict) -> tuple[str, dict[str, str]]:
+    """Return the stem without embedded options and an ordered map of options."""
+    question = row.get("question", "") or ""
+    options: dict[str, str] = {}
+    for idx, label in enumerate(_OPTION_LABELS, start=1):
+        value = row.get(f"option{idx}", "")
+        if value not in ("", None):
+            options[label] = value
+
+    def _looks_like_option(line: str) -> bool:
+        candidate = line.strip()
+        for label in _OPTION_LABELS:
+            for sep in _OPTION_SEPARATORS:
+                if candidate.startswith(f"{label}{sep}"):
+                    return True
+        return False
+
+    question_lines = [line for line in question.splitlines() if not _looks_like_option(line)]
+    question_stem = "\n".join(question_lines).strip()
+
+    return question_stem, options
+
+
+def _format_stem_with_options(question: str, options: dict[str, str]) -> str:
+    option_block = "\n".join(f"{label}. {text}" for label, text in options.items())
+    return f"{question}\n{option_block}".strip()
 
 
 def _create_few_shot_data(few_shot_set: Dataset, num_few_shot: int, answer_format: AnswerFormat) -> dict[tuple, str]:
@@ -24,11 +55,13 @@ def _create_few_shot_data(few_shot_set: Dataset, num_few_shot: int, answer_forma
         key = (row["vocab"], row["level"])
         if key not in few_shot_examples:
             few_shot_examples[key] = []
+        question_stem, options = _extract_question_and_options(row)
+        formatted_question = _format_stem_with_options(question_stem, options)
         if len(few_shot_examples[key]) < num_few_shot:
             if answer_format == AnswerFormat.XML:
-                prompt = f"{row['question']}\nAnswer: <answer>{row['answer_id']}</answer>\n\n".replace("  ", "")
+                prompt = f"{formatted_question}\nAnswer: <answer>{row['answer_id']}</answer>\n\n".replace("  ", "")
             elif answer_format == AnswerFormat.BOXED:
-                prompt = f"{row['question']}\nAnswer: \\boxed{{{row['answer_id']}}}\n\n".replace("  ", "")
+                prompt = f"{formatted_question}\nAnswer: \\boxed{{{row['answer_id']}}}\n\n".replace("  ", "")
             else:
                 raise ValueError(f"Unsupported answer format: {answer_format=}")
             few_shot_examples[key].append(prompt)
@@ -44,6 +77,8 @@ def load_environment(
     use_think: bool = False,
     vocab: str | None = None,
     level: str | None = None,
+    shuffle_answers: bool = False,
+    shuffle_seed: int | None = 1618,
     answer_format: AnswerFormat | str = AnswerFormat.XML,
 ) -> vf.Environment:
     """MedConceptsQA multiple-choice evaluation
@@ -80,23 +115,45 @@ def load_environment(
         # few-shot examples are chosen based on the `vocab` and `level`
         few_shot_data = _create_few_shot_data(ds["dev"], num_few_shot, answer_format=answer_format)
 
-    def _map(row: dict) -> dict:
+    def _map(row: dict, idx: int | None = None) -> dict:
         vocab = row["vocab"]
         level = row["level"]
-        question = row["question"]
+        question_stem, options = _extract_question_and_options(row)
+        row_id = row.get("id") or row.get("concept_id") or idx or question_stem
         answer = row["answer_id"]
         few_shot_prompt = few_shot_data.get((vocab, level), "") if num_few_shot > 0 else ""
+
+        if shuffle_answers and answer in options:
+            options, answer, _ = randomize_multiple_choice(
+                options=options,
+                answer_choice=answer,
+                seed=shuffle_seed,
+                row_id=row_id,
+            )
+
+        formatted_question = _format_stem_with_options(question_stem, options)
 
         full_question = (
             "Answer A, B, C, D according to the answer to this multiple choice question.\n"
             + few_shot_prompt
             + ("\n" if len(few_shot_prompt) > 0 else "")
-            + question
+            + formatted_question
             + "\nAnswer:"
         )
-        return {"question": full_question, "answer": answer, "info": {"answer_text": row["answer"]}}
+        answer_text = options.get(answer, row.get("answer"))
+        info: dict[str, Any] = {"answer_text": answer_text}
+        if shuffle_answers:
+            info["options"] = options
 
-    mapped = test.map(_map, remove_columns=test.column_names)
+        return {"question": full_question, "answer": answer, "info": info}
+
+    load_from_cache_file = not shuffle_answers
+    mapped = test.map(
+        _map,
+        with_indices=True,
+        remove_columns=test.column_names,
+        load_from_cache_file=load_from_cache_file,
+    )
 
     if answer_format == AnswerFormat.XML:
         system_prompt = THINK_XML_SYSTEM_PROMPT if use_think else XML_SYSTEM_PROMPT

@@ -2,6 +2,7 @@ import verifiers as vf
 from datasets import load_dataset
 from medarc_verifiers.prompts import AnswerFormat
 from medarc_verifiers.rewards.mcq_accuracy import multiple_choice_accuracy
+from medarc_verifiers.utils.randomize_mcq import randomize_multiple_choice
 from verifiers.utils.data_utils import extract_boxed_answer
 
 
@@ -36,6 +37,8 @@ def _format_question_with_options(question: str, options: dict[str, str]) -> str
 
 def load_environment(
     use_think: bool = False,
+    shuffle_answers: bool = False,
+    shuffle_seed: int | None = 1618,
     answer_format: AnswerFormat | str = AnswerFormat.XML,
 ) -> vf.Environment:
     """
@@ -46,14 +49,25 @@ def load_environment(
     test_dataset = full_dataset["test"]
 
     def _map(example: dict) -> dict:
-        options = example.get("options") or {}
-        if not isinstance(options, dict):
-            options = {}
+        raw_options = example.get("options") or {}
+        options = dict(raw_options) if isinstance(raw_options, dict) else {}
 
         answer_letter = str(example.get("label", "")).strip().upper()
+        if shuffle_answers and answer_letter and answer_letter in options:
+            randomized_options, answer_letter, _ = randomize_multiple_choice(
+                options=options,
+                answer_choice=answer_letter,
+                seed=shuffle_seed,
+                row_id=example.get("question", None),
+            )
+            options = randomized_options
+
         answer_text = options.get(answer_letter)
 
         info = dict(example)
+        if shuffle_answers:
+            info["options"] = options
+            info["label"] = answer_letter
         info["answer_text"] = answer_text
 
         return {
@@ -62,7 +76,13 @@ def load_environment(
             "info": info,
         }
 
-    mapped = test_dataset.map(_map, remove_columns=test_dataset.column_names)
+    # Disable the Datasets cache when shuffling answers
+    load_from_cache_file = False if shuffle_answers else True
+    mapped = test_dataset.map(
+        _map,
+        remove_columns=test_dataset.column_names,
+        load_from_cache_file=load_from_cache_file,
+    )
 
     # normalize answer_format
     answer_format = AnswerFormat(answer_format) if isinstance(answer_format, str) else answer_format

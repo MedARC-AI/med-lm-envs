@@ -3,6 +3,7 @@ from typing import Dict
 import verifiers as vf
 from datasets import load_dataset
 from medarc_verifiers.rewards.mcq_accuracy import multiple_choice_accuracy
+from medarc_verifiers.utils.randomize_mcq import randomize_multiple_choice
 
 
 def _build_prompt(question: str, options: Dict[str, str]) -> str:
@@ -16,7 +17,11 @@ def _build_prompt(question: str, options: Dict[str, str]) -> str:
     )
 
 
-def load_environment(split: str = "test") -> vf.Environment:
+def load_environment(
+    split: str = "test",
+    shuffle_answers: bool = False,
+    shuffle_seed: int | None = 1618,
+) -> vf.Environment:
     """
     MetaMedQA multiple-choice accuracy eval
     - Loads HF 'maximegmd/MetaMedQA'
@@ -25,7 +30,7 @@ def load_environment(split: str = "test") -> vf.Environment:
     """
     ds = load_dataset("maximegmd/MetaMedQA", split=split)
 
-    def _map(ex):
+    def _map(ex: dict, idx: int | None = None):
         q: str = ex["question"]
         options: Dict[str, str] = ex["options"]
         gold_text: str = ex["answer"]
@@ -38,13 +43,30 @@ def load_environment(split: str = "test") -> vf.Environment:
         if gold_letter is None:
             return None
 
+        if shuffle_answers and gold_letter in options:
+            options, gold_letter, _ = randomize_multiple_choice(
+                options=options,
+                answer_choice=gold_letter,
+                seed=shuffle_seed,
+                row_id=ex.get("id", idx),
+            )
+
         return {
             "question": _build_prompt(q, options),
             "answer": gold_letter,
-            "info": {"answer_text": options.get(gold_letter, gold_text)},
+            "info": {
+                "answer_text": options.get(gold_letter, gold_text),
+                **({"options": options} if shuffle_answers else {}),
+            },
         }
 
-    mapped = ds.map(_map, remove_columns=ds.column_names).filter(lambda r: r is not None)
+    load_from_cache_file = False if shuffle_answers else True
+    mapped = ds.map(
+        _map,
+        with_indices=True,
+        remove_columns=ds.column_names,
+        load_from_cache_file=load_from_cache_file,
+    ).filter(lambda r: r is not None, load_from_cache_file=load_from_cache_file)
 
     parser = vf.Parser()
 
