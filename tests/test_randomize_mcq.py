@@ -2,8 +2,8 @@
 
 import pytest
 
+from medarc_verifiers.utils import randomize_multiple_choice_hf_map, randomize_multiple_choice_row
 from medarc_verifiers.utils.randomize_mcq import randomize_multiple_choice
-from medarc_verifiers.utils import randomize_multiple_choice_hf_map
 
 
 def test_no_seed_returns_unchanged_list():
@@ -507,6 +507,59 @@ def test_randomize_multiple_choice_hf_map_hf_map_compatible():
     assert updated["question"] == "Q1"  # Preserved
     assert updated["metadata"] == {"id": 123}  # Preserved
     assert "answer_label" in updated  # Added
+
+
+def test_randomize_multiple_choice_hf_map_answer_as_label():
+    """Setting answer_as_index=False should keep the answer as a label."""
+
+    example = {"options": ["Opt 1", "Opt 2", "Opt 3"], "answer": 0}
+
+    result = randomize_multiple_choice_hf_map(example, idx=0, seed=42, answer_as_index=False)
+
+    assert isinstance(result["answer"], str)
+    assert result["answer"] == result["answer_label"]
+
+
+# ========================================
+# Row Helper Tests
+# ========================================
+
+
+def test_randomize_multiple_choice_row_dict_options():
+    """Row helper should shuffle dict options and update answer_text."""
+
+    row = {
+        "options": {"A": "Opt 1", "B": "Opt 2", "C": "Opt 3"},
+        "answer": "A",
+        "answer_text": "Opt 1",
+        "extra": 123,
+    }
+
+    updated = randomize_multiple_choice_row(row, seed=42)
+
+    assert updated is not row
+    assert set(updated["options"].keys()) == {"A", "B", "C"}
+    assert updated["answer"] in updated["options"]
+    assert updated["answer_text"] == updated["options"][updated["answer"]]
+    # Ensure unrelated fields preserved
+    assert updated["extra"] == 123
+
+
+def test_randomize_multiple_choice_row_return_mapping():
+    """Row helper should optionally return the permutation mapping."""
+
+    row = {"options": ["Opt 1", "Opt 2", "Opt 3"], "answer": 1}
+
+    (updated, mapping) = randomize_multiple_choice_row(
+        row,
+        seed=42,
+        return_mapping=True,
+    )
+
+    assert isinstance(mapping, list)
+    assert updated["options"][mapping.index(1)] == "Opt 2"
+    assert updated["answer"] == chr(ord("A") + mapping.index(1))
+    assert updated["answer_text"] == updated["options"][mapping.index(1)]
 
 
 # ========================================

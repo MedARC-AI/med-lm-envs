@@ -27,6 +27,17 @@ LABEL_REF = re.compile(
 )
 
 
+def _stable_options_hash(options: list[str] | dict[str, str] | object) -> int:
+    """Build a stable hash from the option contents for deterministic seeding."""
+    if isinstance(options, list):
+        ser = "\x1e".join(["" if o is None else str(o) for o in options])
+    elif isinstance(options, dict):
+        ser = "\x1f".join([f"{k}\x1e{options[k]}" for k in sorted(options.keys())])
+    else:
+        ser = str(options)
+    return int(hashlib.sha256(ser.encode()).hexdigest(), 16) & ((1 << 64) - 1)
+
+
 def randomize_multiple_choice(
     options: list[str] | dict[str, str],
     answer_choice: str | int,
@@ -117,15 +128,17 @@ def randomize_multiple_choice(
             raise ValueError(f"answer_choice={answer_choice!r} not found or invalid among labels={labels}")
         answer_idx = idx
 
-    # choose RNG
     if seed is None:
         rng = None  # no shuffle
     elif seed == -1:
         rng = random.Random()
     else:
+        # choose RNG
+        if row_id is None:
+            row_id = _stable_options_hash(options)
+
         mix = f"{seed}::{row_id}" if row_id is not None else f"{seed}"
-        h = int(hashlib.sha256(mix.encode()).hexdigest(), 16) & ((1 << 64) - 1)
-        rng = random.Random(h)
+        rng = random.Random(int(hashlib.sha256(mix.encode()).hexdigest(), 16) & ((1 << 64) - 1))
 
     if rng is None:
         # return unchanged, but conform outputs
@@ -199,6 +212,7 @@ def randomize_multiple_choice_hf_map(
     answer_key: str = "answer",
     labels: list[str] | None = None,
     return_label: bool = True,
+    answer_as_index: bool = True,
 ) -> dict:
     """HuggingFace datasets-friendly wrapper for randomizing MCQ options.
 
@@ -212,11 +226,13 @@ def randomize_multiple_choice_hf_map(
         answer_key: Key in example dict containing the answer (index or label).
         labels: Optional custom labels. If None and options is a list, auto-generates ["A", "B", "C", ...].
         return_label: If True, adds 'answer_label' field with the letter label.
+        answer_as_index: When True (default), stores the shuffled answer as an index.
+            Set to False to keep the answer as its letter/label.
 
     Returns:
         Dict with updated 'options' and 'answer' (and optionally 'answer_label').
-        Note: returned 'answer' is always an integer index after shuffling.
-        Determinism: when idx is None, a stable SHA-256 hash of the options content is used as row_id.
+        Note: returned 'answer' defaults to an integer index unless `answer_as_index=False`.
+        Determinism: when idx is None, the core helper hashes the option contents.
         Can be used directly: `return randomize_multiple_choice_hf_map(example, idx, seed=42)`
 
     Examples:
@@ -242,20 +258,8 @@ def randomize_multiple_choice_hf_map(
     options = example[options_key]
     answer = example[answer_key]
 
-    # Use idx as row_id if provided, otherwise use hash of options for determinism
-    if idx is not None:
-        row_id = idx
-    else:
-        # Build a stable hash of the options content to use as row_id (deterministic across runs)
-        if isinstance(options, list):
-            # Use a non-printable separator to avoid accidental collisions
-            ser = "\x1e".join(["" if o is None else str(o) for o in options])
-        elif isinstance(options, dict):
-            # Sort by key to ensure stable ordering
-            ser = "\x1f".join([f"{k}\x1e{options[k]}" for k in sorted(options.keys())])
-        else:
-            ser = str(options)
-        row_id = int(hashlib.sha256(ser.encode()).hexdigest(), 16) & ((1 << 64) - 1)
+    # Use idx as row_id if provided
+    row_id = idx
 
     # Auto-generate labels if not provided and options is a list
     if labels is None and isinstance(options, list):
@@ -269,12 +273,77 @@ def randomize_multiple_choice_hf_map(
         row_id=row_id,
     )
 
-    result = {
-        options_key: shuffled_options,
-        answer_key: new_idx,
-    }
+    result = {options_key: shuffled_options}
+
+    if answer_as_index:
+        result[answer_key] = new_idx
+    else:
+        result[answer_key] = new_label
 
     if return_label:
         result["answer_label"] = new_label
 
     return result
+
+
+def randomize_multiple_choice_row(
+    row: dict,
+    *,
+    options_key: str = "options",
+    answer_key: str = "answer",
+    answer_text_key: str | None = "answer_text",
+    labels: list[str] | None = None,
+    seed: int | None = None,
+    row_id: str | int | None = None,
+    return_mapping: bool = False,
+) -> dict | tuple[dict, list[int]]:
+    """Randomize a single MCQ row dict and return an updated copy.
+
+    Args:
+        row: Original row dict containing at least options and answer.
+        options_key: Key in the row containing the options list/dict.
+        answer_key: Key in the row containing the answer label/index.
+        answer_text_key: Optional key to store the correct answer text after shuffling.
+        labels: Optional labels for list options; auto-generated (A, B, …) when omitted.
+        seed: Seed forwarded to `randomize_multiple_choice`.
+        row_id: Optional identifier forwarded to `randomize_multiple_choice`.
+        return_mapping: When True, also return the permutation mapping.
+
+    Returns:
+        Updated row dict (copy). When `return_mapping` is True, returns a tuple of
+        (updated_row, mapping).
+    """
+    options = row[options_key]
+    answer = row[answer_key]
+
+    if labels is None and isinstance(options, list):
+        labels = [chr(ord("A") + i) for i in range(len(options))]
+
+    randomized = randomize_multiple_choice(
+        options=options,
+        answer_choice=answer,
+        labels=labels,
+        seed=seed,
+        row_id=row_id,
+        return_mapping=return_mapping,
+    )
+
+    if return_mapping:
+        shuffled_options, new_label, new_idx, mapping = randomized
+    else:
+        shuffled_options, new_label, new_idx = randomized
+        mapping = None
+
+    updated = dict(row)
+    updated[options_key] = shuffled_options
+    updated[answer_key] = new_label
+
+    if answer_text_key is not None:
+        if isinstance(shuffled_options, dict):
+            updated[answer_text_key] = shuffled_options.get(new_label)
+        else:
+            updated[answer_text_key] = shuffled_options[new_idx]
+
+    if return_mapping:
+        return updated, mapping
+    return updated
