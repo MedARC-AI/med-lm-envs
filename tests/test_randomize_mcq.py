@@ -128,6 +128,11 @@ def test_anchor_variations_detected():
         "None of the following",
         "All of the above.",  # with punctuation
         "All of the above options",  # with suffix
+        "None of the choices are correct",
+        "All answers are correct",
+        "Some statements are true",
+        "Both options apply",
+        "None apply",
     ]
 
     for anchor in anchors:

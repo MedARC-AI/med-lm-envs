@@ -2,8 +2,31 @@ import hashlib
 import random
 import re
 
-# Matches phrases like "all/none of the above/following"
-ANCHOR = re.compile(r"\b(?:all|none|some|both|neither)\s+of\s+the\s+(?:above|following)\b", re.IGNORECASE)
+# Matches phrases like "all/none of the above/following/these" and similar variants
+ANCHOR = re.compile(
+    r"""
+    \b
+    (?:all|none|some|both|neither)
+    \s+
+    (?:of\s+(?:the\s+)?)?
+    (?:
+        above
+        |following
+        |these
+        |choices?
+        |options?
+        |answers?
+        |statements?
+        |responses?
+        |listed
+        |apply
+        |applicable
+        |them
+    )
+    \b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
 
 # Matches options that reference other option labels (e.g., "A or B", "Both A and C", "A, B, or C")
 # This broader pattern detects label references embedded anywhere in the string, not only when the
