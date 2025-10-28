@@ -26,6 +26,10 @@ class ModelParams:
     endpoints_path: str | None = None
     env_args: dict[str, Any] = field(default_factory=dict)
     env_overrides: dict[str, dict[str, Any]] = field(default_factory=dict)
+    timeout: float | None = None
+    max_connections: int | None = None
+    max_keepalive_connections: int | None = None
+    max_retries: int | None = None
 
 
 @dataclass(slots=True)
@@ -260,6 +264,19 @@ def build_run_config(data: Mapping[str, Any], base_dir: Path) -> RunConfig:
             env_overrides=_ensure_env_overrides(
                 params_mapping.get("env_overrides"),
                 f"model '{model_id}' env_overrides",
+            ),
+            timeout=_coerce_optional_float(params_mapping.get("timeout"), f"model '{model_id}' params.timeout"),
+            max_connections=_coerce_optional_int(
+                params_mapping.get("max_connections"),
+                f"model '{model_id}' params.max_connections",
+            ),
+            max_keepalive_connections=_coerce_optional_int(
+                params_mapping.get("max_keepalive_connections"),
+                f"model '{model_id}' params.max_keepalive_connections",
+            ),
+            max_retries=_coerce_optional_int(
+                params_mapping.get("max_retries"),
+                f"model '{model_id}' params.max_retries",
             ),
         )
         models[model_id] = ModelConfig(id=model_id, params=model_params)
