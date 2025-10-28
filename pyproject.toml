@@ -10,6 +10,7 @@ dependencies = [
     "verifiers>=0.1.6",
     "pyyaml>=6.0.1",
     "docstring-parser>=0.17.0",
+    "pylatexenc>=2.10",
 ]
 
 [project.scripts]
