@@ -1091,7 +1091,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     failures = [outcome for outcome in final_outcomes if outcome.status == "failed"]
     if failures:
-        logger.error("Run %s completed with %d failure(s).", run_id, len(failures))
+        detail_lines = [
+            f"  {failure.job_id} (model={failure.model_id}, env={failure.env_id})" for failure in failures
+        ]
+        logger.error("Run %s completed with %d failure(s):\n%s", run_id, len(failures), "\n".join(detail_lines))
         return 1
     logger.info("Run %s completed successfully.", run_id)
     return 0
