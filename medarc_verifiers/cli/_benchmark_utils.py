@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Helper utilities for resolving benchmark runs.
 
 Job identifiers are deterministic and follow the pattern '<model>-<env>[-<name>][-<fingerprint>]'.
@@ -92,7 +90,7 @@ def _resolve_path(value: str, base_dir: Path) -> Path:
     path = Path(value).expanduser()
     if path.is_absolute():
         return path
-    candidate = (base_dir / path)
+    candidate = base_dir / path
     if candidate.exists():
         return candidate.resolve()
     return (Path.cwd() / path).resolve()
@@ -237,9 +235,15 @@ def build_run_config(data: Mapping[str, Any], base_dir: Path) -> RunConfig:
             headers=_ensure_headers(params_mapping.get("headers"), f"model '{model_id}' params.headers"),
             sampling_args=_ensure_mapping(params_mapping.get("sampling_args"), f"model '{model_id}' sampling_args"),
             max_tokens=_coerce_optional_int(params_mapping.get("max_tokens"), f"model '{model_id}' params.max_tokens"),
-            temperature=_coerce_optional_float(params_mapping.get("temperature"), f"model '{model_id}' params.temperature"),
-            api_key_var=_coerce_optional_str(params_mapping.get("api_key_var"), f"model '{model_id}' params.api_key_var"),
-            api_base_url=_coerce_optional_str(params_mapping.get("api_base_url"), f"model '{model_id}' params.api_base_url"),
+            temperature=_coerce_optional_float(
+                params_mapping.get("temperature"), f"model '{model_id}' params.temperature"
+            ),
+            api_key_var=_coerce_optional_str(
+                params_mapping.get("api_key_var"), f"model '{model_id}' params.api_key_var"
+            ),
+            api_base_url=_coerce_optional_str(
+                params_mapping.get("api_base_url"), f"model '{model_id}' params.api_base_url"
+            ),
             endpoints_path=_resolve_optional_path(params_mapping.get("endpoints_path"), base_dir),
             env_args=_ensure_mapping(params_mapping.get("env_args"), f"model '{model_id}' env_args"),
         )
@@ -254,8 +258,8 @@ def build_run_config(data: Mapping[str, Any], base_dir: Path) -> RunConfig:
         if not isinstance(env_id, str) or not env_id:
             raise ValueError("Environment entries require a non-empty string 'id'.")
         num_examples = int(entry.get("num_examples", 5))
-        if num_examples < 1:
-            raise ValueError(f"environment '{env_id}' num_examples must be >= 1.")
+        if num_examples < 1 and num_examples != -1:
+            raise ValueError(f"environment '{env_id}' num_examples must be >= 1 or -1 for all examples.")
         rollouts_per_example = int(entry.get("rollouts_per_example", 1))
         if rollouts_per_example < 1:
             raise ValueError(f"environment '{env_id}' rollouts_per_example must be >= 1.")
@@ -279,7 +283,9 @@ def build_run_config(data: Mapping[str, Any], base_dir: Path) -> RunConfig:
             max_concurrent=max_concurrent,
             env_args=_ensure_mapping(entry.get("env_args"), f"environment '{env_id}' env_args"),
             interleave_scoring=interleave_val,
-            state_columns=_ensure_optional_str_list(entry.get("state_columns"), f"environment '{env_id}' state_columns"),
+            state_columns=_ensure_optional_str_list(
+                entry.get("state_columns"), f"environment '{env_id}' state_columns"
+            ),
             save_every=_coerce_optional_int(entry.get("save_every"), f"environment '{env_id}' save_every"),
             print_results=print_results_val,
             verbose=verbose_val,
@@ -337,7 +343,9 @@ def build_run_config(data: Mapping[str, Any], base_dir: Path) -> RunConfig:
     env_dir_str = _coerce_optional_str(env_dir_raw, "env_dir_path") or "./environments"
     env_dir_path = _resolve_optional_path(env_dir_str, base_dir) or "./environments"
 
-    endpoints_path = _resolve_optional_path(_coerce_optional_str(data.get("endpoints_path"), "endpoints_path"), base_dir)
+    endpoints_path = _resolve_optional_path(
+        _coerce_optional_str(data.get("endpoints_path"), "endpoints_path"), base_dir
+    )
 
     run_id = data.get("run_id")
     if run_id is not None and not isinstance(run_id, str):
@@ -347,10 +355,13 @@ def build_run_config(data: Mapping[str, Any], base_dir: Path) -> RunConfig:
     if not isinstance(name_value, str):
         raise ValueError("name must be a string.")
     default_api_key = _coerce_optional_str(data.get("default_api_key_var"), "default_api_key_var") or "OPENAI_API_KEY"
-    default_api_base_url = _coerce_optional_str(
-        data.get("default_api_base_url"),
-        "default_api_base_url",
-    ) or "https://api.openai.com/v1"
+    default_api_base_url = (
+        _coerce_optional_str(
+            data.get("default_api_base_url"),
+            "default_api_base_url",
+        )
+        or "https://api.openai.com/v1"
+    )
 
     run_config = RunConfig(
         name=name_value,
