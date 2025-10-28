@@ -361,11 +361,19 @@ def build_eval_config(
         params.api_key_var or run_config.default_api_key_var,
         params.api_base_url or run_config.default_api_base_url,
     )
-    client_config = ClientConfig(
-        api_key_var=api_key_var,
-        api_base_url=api_base_url,
-        extra_headers=headers or None,
-    )
+    client_kwargs: dict[str, Any] = {
+        "api_key_var": api_key_var,
+        "api_base_url": api_base_url,
+        "extra_headers": headers or None,
+    }
+    client_kwargs["timeout"] = params.timeout if params.timeout is not None else 150.0
+    if params.max_connections is not None:
+        client_kwargs["max_connections"] = params.max_connections
+    if params.max_keepalive_connections is not None:
+        client_kwargs["max_keepalive_connections"] = params.max_keepalive_connections
+    if params.max_retries is not None:
+        client_kwargs["max_retries"] = params.max_retries
+    client_config = ClientConfig(**client_kwargs)
 
     env_id = job.env.module or job.env.id
     env_args = dict(job.env.env_args)
