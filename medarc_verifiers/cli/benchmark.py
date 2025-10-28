@@ -368,7 +368,13 @@ def build_eval_config(
     )
 
     env_id = job.env.module or job.env.id
-    env_args = merge_env_args(params.env_args, dict(job.env.env_args))
+    env_args = dict(job.env.env_args)
+    env_args = merge_env_args(params.env_args, env_args)
+    env_specific = params.env_overrides.get(job.env.id)
+    if env_specific is None and job.env.module:
+        env_specific = params.env_overrides.get(job.env.module)
+    if env_specific:
+        env_args = merge_env_args(env_specific, env_args)
     env_args = merge_env_args(job.env_overrides, env_args)
     metadata = _load_env_metadata(env_id, env_metadata_cache)
     ensure_required_params(metadata, {}, env_args)

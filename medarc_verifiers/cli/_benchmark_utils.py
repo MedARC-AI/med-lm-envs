@@ -25,6 +25,7 @@ class ModelParams:
     api_base_url: str | None = None
     endpoints_path: str | None = None
     env_args: dict[str, Any] = field(default_factory=dict)
+    env_overrides: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -146,6 +147,16 @@ def _ensure_headers(value: Any, context: str) -> list[str] | dict[str, str] | No
     raise ValueError(f"{context} must be a list or mapping.")
 
 
+def _ensure_env_overrides(value: Any, context: str) -> dict[str, dict[str, Any]]:
+    mapping = _ensure_mapping(value, context)
+    overrides: dict[str, dict[str, Any]] = {}
+    for key, override in mapping.items():
+        if not isinstance(key, str) or not key:
+            raise ValueError(f"{context} keys must be non-empty strings.")
+        overrides[key] = _ensure_mapping(override, f"{context} for environment '{key}'")
+    return overrides
+
+
 def _ensure_optional_str_list(value: Any, context: str) -> list[str] | None:
     if value is None:
         return None
@@ -246,6 +257,10 @@ def build_run_config(data: Mapping[str, Any], base_dir: Path) -> RunConfig:
             ),
             endpoints_path=_resolve_optional_path(params_mapping.get("endpoints_path"), base_dir),
             env_args=_ensure_mapping(params_mapping.get("env_args"), f"model '{model_id}' env_args"),
+            env_overrides=_ensure_env_overrides(
+                params_mapping.get("env_overrides"),
+                f"model '{model_id}' env_overrides",
+            ),
         )
         models[model_id] = ModelConfig(id=model_id, params=model_params)
 
