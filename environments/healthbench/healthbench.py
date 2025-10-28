@@ -1,12 +1,13 @@
+import asyncio
 import hashlib
 import json
 import os
 import re
 from collections import defaultdict
 from pathlib import Path
-import asyncio
 
 from datasets import load_dataset
+from datasets.utils.logging import disable_progress_bar
 from openai import AsyncOpenAI
 from verifiers import JudgeRubric
 from verifiers.envs.singleturn_env import SingleTurnEnv
@@ -25,6 +26,8 @@ HEALTHBENCH_DATASET_MAPPING = {
 
 with open(Path(__file__).resolve().parent / "hb_consensus_criteria.json", "r") as fp:
     HEALTHBENCH_CONSENSUS_CRITERIA_LOOKUP = json.load(fp)
+
+disable_progress_bar()  # suppress datasets progress indicators
 
 
 HEALTHBENCH_JUDGE_TEMPLATE = """

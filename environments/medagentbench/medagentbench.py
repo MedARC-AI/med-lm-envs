@@ -9,10 +9,13 @@ from typing import Any, Dict, Optional, Tuple
 import requests
 import verifiers as vf
 from datasets import Dataset
+from datasets.utils.logging import disable_progress_bar
 from verifiers.envs.multiturn_env import MultiTurnEnv
 from verifiers.parsers.parser import Parser
 from verifiers.rubrics.rubric import Rubric
 from verifiers.types import Messages, State
+
+disable_progress_bar()  # suppress datasets progress indicators
 
 
 def verify_fhir_server(fhir_api_base):

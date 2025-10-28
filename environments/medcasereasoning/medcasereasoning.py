@@ -2,9 +2,12 @@ import os
 import re
 
 from datasets import load_dataset
+from datasets.utils.logging import disable_progress_bar
 from openai import AsyncOpenAI
 
 import verifiers as vf
+
+disable_progress_bar()  # suppress datasets progress indicators
 
 
 def load_environment(
