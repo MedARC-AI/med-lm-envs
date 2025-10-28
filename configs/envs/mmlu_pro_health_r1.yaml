@@ -1,0 +1,7 @@
+id: mmlu_pro_health-r1
+module: mmlu_pro_health
+rollouts_per_example: 1
+verbose: false
+env_args:
+  shuffle_answers: true
+  shuffle_seed: 1618

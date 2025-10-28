@@ -226,10 +226,17 @@ async def execute_jobs(
     env_metadata_cache: dict[str, Sequence[EnvParam]] = {}
     outcomes: list[JobOutcome] = []
     completed_jobs = completed_jobs or {}
-    for job in jobs:
+    total_jobs = len(jobs)
+    for index, job in enumerate(jobs, start=1):
+        job_label = f"{job.job_id} (model={job.model.id}, env={job.env.id})"
         existing = completed_jobs.get(job.job_id)
         if existing and not force:
-            logger.info("Skipping job %s (model=%s env=%s); already completed.", job.job_id, job.model.id, job.env.id)
+            logger.info(
+                "Job %d/%d %s skipped; already completed.",
+                index,
+                total_jobs,
+                job_label,
+            )
             outcomes.append(
                 JobOutcome(
                     job_id=existing.job_id,
@@ -242,7 +249,7 @@ async def execute_jobs(
                 )
             )
             continue
-        logger.info("Running job %s (model=%s env=%s).", job.job_id, job.model.id, job.env.id)
+        logger.info("Job %d/%d %s starting.", index, total_jobs, job_label)
         try:
             eval_config = build_eval_config(
                 run_config=run_config,
@@ -252,7 +259,13 @@ async def execute_jobs(
                 verbose=verbose,
             )
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Failed to build evaluation config for job %s: %s", job.job_id, exc)
+            logger.exception(
+                "Job %d/%d %s configuration failed: %s",
+                index,
+                total_jobs,
+                job_label,
+                exc,
+            )
             outcomes.append(
                 JobOutcome(
                     job_id=job.job_id,
@@ -270,7 +283,7 @@ async def execute_jobs(
             results = await run_evaluation(eval_config)
         except Exception as exc:  # noqa: BLE001
             duration = time.perf_counter() - start
-            logger.exception("Job %s failed: %s", job.job_id, exc)
+            logger.exception("Job %d/%d %s failed after %.2fs: %s", index, total_jobs, job_label, duration, exc)
             outcomes.append(
                 JobOutcome(
                     job_id=job.job_id,
@@ -293,17 +306,31 @@ async def execute_jobs(
             stage="benchmark",
         )
         outcomes.append(
-                JobOutcome(
-                    job_id=job.job_id,
-                    job_name=job.name,
-                    model_id=job.model.id,
-                    env_id=job.env.id,
-                    status="succeeded",
-                    duration_seconds=duration,
-                    results_path=str(results_dir),
-                )
+            JobOutcome(
+                job_id=job.job_id,
+                job_name=job.name,
+                model_id=job.model.id,
+                env_id=job.env.id,
+                status="succeeded",
+                duration_seconds=duration,
+                results_path=str(results_dir),
             )
+        )
+        logger.info("Job %d/%d %s completed in %.2fs.", index, total_jobs, job_label, duration)
     return outcomes
+
+
+def _ensure_root_logging(level: str) -> None:
+    """Ensure root logging emits to stderr so CLI messages are visible."""
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+        root_logger.addHandler(handler)
+    root_logger.setLevel(level.upper())
+    logging.getLogger(__name__).setLevel(level.upper())
+    httpx_logger = logging.getLogger("httpx")
+    httpx_logger.setLevel(logging.WARNING)
 
 
 def build_eval_config(
@@ -918,7 +945,9 @@ def write_summary(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    setup_logging("DEBUG" if args.verbose else "INFO")
+    log_level = "DEBUG" if args.verbose else "INFO"
+    setup_logging(log_level)
+    _ensure_root_logging(log_level)
 
     try:
         run_config, jobs_path, config_snapshot = prepare_run_config(args)

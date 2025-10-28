@@ -1,0 +1,4 @@
+id: mmlu_pro_health
+module: mmlu_pro_health
+rollouts_per_example: 1
+verbose: false

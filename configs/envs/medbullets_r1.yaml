@@ -1,0 +1,8 @@
+id: medbullets-r1
+module: medbullets
+rollouts_per_example: 1
+verbose: false
+env_args:
+  num_options: 4
+  shuffle_answers: true
+  shuffle_seed: 1618

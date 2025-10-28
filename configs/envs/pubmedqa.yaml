@@ -1,0 +1,4 @@
+id: pubmedqa
+module: pubmedqa
+rollouts_per_example: 1
+verbose: false

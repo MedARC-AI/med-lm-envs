@@ -1,0 +1,4 @@
+id: medxpertqa
+module: medxpertqa
+rollouts_per_example: 1
+verbose: false

@@ -1,0 +1,4 @@
+id: med_mcqa
+module: med_mcqa
+rollouts_per_example: 1
+verbose: false

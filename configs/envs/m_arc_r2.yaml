@@ -1,0 +1,7 @@
+id: m_arc-r2
+module: m_arc
+rollouts_per_example: 1
+verbose: false
+env_args:
+  shuffle_answers: true
+  shuffle_seed: 9331
