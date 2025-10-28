@@ -7,6 +7,7 @@ requires-python = ">=3.11"
 dependencies = [
     "datasets>=4.0.0",
     "verifiers>=0.1.2.post0",
+    "medarc_verifiers>=0.1.0",
 ]
 
 [build-system]
