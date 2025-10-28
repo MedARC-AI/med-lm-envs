@@ -6,13 +6,19 @@
 - **Tags**: biohopr, multi-hop, biomedical, question-answering, retrieval-augmented
 
 ### Datasets
-- **Primary dataset(s)**: <name(s) and brief description>
-- **Source links**: <links>
-- **Split sizes**: Eval 7,633
+- **Primary dataset(s)**: All datasets are based on the knowledge graph. [PrimeKG](https://zitniklab.hms.harvard.edu/projects/PrimeKG/). The BioHopR paper introduced 4 evaluation sets based on PrimeKG. Examples provided here: 
+  - **1-hop**: Name a disease that is related to effect/phenotype Pain. 
+  - **2-hop**(default eval): Name a disease that is related to a effect/phenotype that is associated with drug Benzyl benzoate. 
+  - **1-hop multi**: Name all diseases that are related to effect/phenotype Pain.
+  - **2-hop multi**: Name all diseases that are related to a effect/phenotype that is associated with drug Benzyl benzoate.
+
+- **Source links**: [Paper](https://arxiv.org/abs/2505.22240) | 
+[Dataset](https://huggingface.co/datasets/knowlab-research/BioHopR)
+- **Split sizes**: Eval 7,633 (for 2-hop)
 
 ### Task
 - **Type**: single-turn
-- **Parser**: <e.g., ThinkParser, XMLParser, custom>
+- **Parser**: XMLParser(default)/ThinkParser
 - **Rubric overview**: Precision based on embedded cosine similarity of list of possible answers
 
 ### Quickstart
