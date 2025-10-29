@@ -1,4 +1,6 @@
 id: metamedqa
 module: metamedqa
 rollouts_per_example: 1
+max_concurrent: 128
+num_examples: -1
 verbose: false

@@ -1,6 +1,0 @@
-id: longhealth
-module: longhealth
-rollouts_per_example: 1
-verbose: false
-env_args:
-  shuffle_docs_seed: 2718

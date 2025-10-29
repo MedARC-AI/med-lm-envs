@@ -1,9 +1,9 @@
-id: pubmedqa-r1
-module: pubmedqa
+id: longhealth-t2
+module: longhealth
 rollouts_per_example: 1
 max_concurrent: 128
 num_examples: -1
 verbose: false
 env_args:
-  shuffle_answers: true
-  shuffle_seed: 1618
+  shuffle_docs_seed: 2718
+  task: task2

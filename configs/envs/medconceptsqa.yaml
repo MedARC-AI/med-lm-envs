@@ -1,4 +1,0 @@
-id: medconceptsqa
-module: medconceptsqa
-rollouts_per_example: 1
-verbose: false

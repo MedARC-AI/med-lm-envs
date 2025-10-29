@@ -2,3 +2,6 @@ id: medcalc_bench
 module: medcalc_bench
 rollouts_per_example: 3
 verbose: false
+max_concurrent: 128
+num_examples: -1
+verbose: false
