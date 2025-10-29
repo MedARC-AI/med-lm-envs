@@ -5,6 +5,7 @@
 # ALL PROMPTS ARE FROM THE PAPER (Source: https://arxiv.org/abs/2401.14493)
 # see pgs 16-18 for the prompts from the paper and github: https://github.com/Itaymanes/K-QA/tree/main/evaluation/prompts
 
+import asyncio
 import os
 from pathlib import Path
 from typing import Any, Dict, List
@@ -30,18 +31,25 @@ def _get_raw_completion(completion) -> str:
     return str(completion or "")
 
 
-async def _extract_and_store_claims(extractor: vf.JudgeRubric, prompt, completion, info, state) -> float:
+async def _extract_and_store_claims(
+    extractor: vf.JudgeRubric,
+    prompt,
+    completion,
+    info,
+    state,
+    semaphore: asyncio.Semaphore,
+) -> float:
     # build extraction prompt and judge via the rubric
     question: str = (info or {}).get("Question", "")
     llm_answer: str = _get_raw_completion(completion)
     extraction_prompt = _decompose_free_form_answer(question, llm_answer)
-
-    raw = await extractor.judge(
-        [{"role": "user", "content": extraction_prompt}],
-        completion="",
-        answer="",
-        state=state,
-    )
+    async with semaphore:
+        raw = await extractor.judge(
+            [{"role": "user", "content": extraction_prompt}],
+            completion="",
+            answer="",
+            state=state,
+        )
 
     # Parse {"claims": [...]} like format
     json_parser = JSONParser(fields=["claims"])
@@ -58,13 +66,20 @@ async def _extract_and_store_claims(extractor: vf.JudgeRubric, prompt, completio
 
 
 # single judge call for evaluation
-async def _judge_boolean(scorer: vf.JudgeRubric, prompt_str: str, state: Dict, verbose: bool = False) -> bool:
-    raw = await scorer.judge(
-        [{"role": "user", "content": prompt_str}],
-        completion="",
-        answer="",
-        state=state,
-    )
+async def _judge_boolean(
+    scorer: vf.JudgeRubric,
+    prompt_str: str,
+    state: Dict,
+    semaphore: asyncio.Semaphore,
+    verbose: bool = False,
+) -> bool:
+    async with semaphore:
+        raw = await scorer.judge(
+            [{"role": "user", "content": prompt_str}],
+            completion="",
+            answer="",
+            state=state,
+        )
     if verbose:
         print("the answer box below: ", end="\n")
 
@@ -75,7 +90,9 @@ async def _judge_boolean(scorer: vf.JudgeRubric, prompt_str: str, state: Dict, v
 
 
 # batch call for evaluation
-async def _batch_eval(scorer: vf.JudgeRubric, question: str, info: Dict, state: Dict, verbose: bool = False) -> None:
+async def _batch_eval(
+    scorer: vf.JudgeRubric, question: str, info: Dict, state: Dict, semaphore: asyncio.Semaphore, verbose: bool = False
+) -> None:
     if "batch_eval_results" in state.get("kqa", {}):
         return
 
@@ -91,12 +108,8 @@ async def _batch_eval(scorer: vf.JudgeRubric, question: str, info: Dict, state: 
         return
 
     prompt_str = batch_eval_prompt(question, claims, must_have, gold_claims)
-    raw = await scorer.judge(
-        [{"role": "user", "content": prompt_str}],
-        completion="",
-        answer="",
-        state=state,
-    )
+    async with semaphore:
+        raw = await scorer.judge([{"role": "user", "content": prompt_str}], completion="", answer="", state=state)
 
     if verbose:
         print("question: ", question, end="\n")
@@ -125,12 +138,28 @@ def load_environment(
     judge_api_key: str | None = None,
     batch: bool = False,
     verbose: bool = False,
+    max_parallel_judges: int = 5,
     **kwargs,
 ) -> vf.Environment:
-    """
-    K-QA Environment using a FACTSCORE-style evaluation with two-phase Judge via RubricGroup:
+    """K-QA Environment using a FACTSCORE-style evaluation with two-phase Judge via RubricGroup:
       1) Extraction: decompose free-form answer into claims, store in state.
       2) Scoring: compute comprehensiveness and hallucination_rate using NLI judge.
+
+    Args:
+        extractor_model: LLM used to decompose answers into claims.
+        judge_model: LLM used for entailment/contradiction scoring.
+        extractor_base_url: Optional override for the extractor OpenAI base URL.
+        extractor_api_key: Optional override for the extractor API key.
+        judge_base_url: Optional override for the judge OpenAI base URL.
+        judge_api_key: Optional override for the judge API key.
+        batch: Whether to evaluate all claims in a single batched judge call.
+        verbose: When ``True`` prints intermediate judge outputs for debugging.
+        max_parallel_judges: Per-rollout cap on concurrent judge requests; the
+            semaphore is shared across extraction and scoring calls.
+        **kwargs: Additional loader arguments (unused).
+
+    Returns:
+        vf.Environment: Configured single-turn environment ready for evaluation.
     """
     data_fp = Path(__file__).resolve().parent / "questions_w_answers.jsonl"
     df = pd.read_json(data_fp, orient="records", lines=True)
@@ -163,19 +192,23 @@ def load_environment(
         judge_model=extractor_model,
         judge_prompt="{question}",  # prompt provided dynamically in reward
     )
+
+    # Bound concurrent judge calls per rollout to avoid overload when batch mode fans out
+    judge_semaphore = asyncio.Semaphore(max_parallel_judges)
     extractor.add_reward_func(
         lambda prompt, completion, info, state, **_: _extract_and_store_claims(
-            extractor, prompt, completion, info, state
+            extractor,
+            prompt,
+            completion,
+            info,
+            state,
+            semaphore=judge_semaphore,
         ),
         weight=0.0,
     )
 
     #  Scoring rubric using NLI prompts; reads claims from state
-    scorer = vf.JudgeRubric(
-        judge_client=judge_client,
-        judge_model=judge_model,
-        judge_prompt="{question}",
-    )
+    scorer = vf.JudgeRubric(judge_client=judge_client, judge_model=judge_model, judge_prompt="{question}")
 
     async def comprehensiveness_reward(prompt, completion, info, state, **_) -> float:
         # Adapted the code from the original code: https://github.com/Itaymanes/K-QA/blob/main/evaluation/metrics.py to compute comprehensiveness
@@ -186,7 +219,7 @@ def load_environment(
             return 1.0
 
         if batch:
-            await _batch_eval(scorer, question, info, state, verbose=verbose)
+            await _batch_eval(scorer, question, info, state, semaphore=judge_semaphore, verbose=verbose)
 
             eval_results = state.get("kqa", {}).get("batch_eval_results", {})
             comprehensiveness_results = eval_results.get("comprehensiveness", {})
@@ -205,7 +238,7 @@ def load_environment(
                 entailed = False
                 for pred in claims:
                     prompt_str = _prompt_for_is_entails(question, pred, must_claim)
-                    if await _judge_boolean(scorer, prompt_str, state, verbose=verbose):
+                    if await _judge_boolean(scorer, prompt_str, state, semaphore=judge_semaphore, verbose=verbose):
                         entailed = True
                         break
                 if entailed:
@@ -227,7 +260,7 @@ def load_environment(
             return 1.0
 
         if batch:
-            await _batch_eval(scorer, question, info, state)
+            await _batch_eval(scorer, question, info, state, semaphore=judge_semaphore, verbose=verbose)
             eval_results = state.get("kqa", {}).get("batch_eval_results", {})
             hallucination_results = eval_results.get("hallucination", {})
             contradictory_claims = hallucination_results.get("contradictory_generated_claims", [])
@@ -240,7 +273,13 @@ def load_environment(
                 contradicted = False
                 for pred in claims:
                     prompt_str = _prompt_for_has_contradiction(question, pred, gold)
-                    if await _judge_boolean(scorer, prompt_str, state, verbose=verbose):
+                    if await _judge_boolean(
+                        scorer,
+                        prompt_str,
+                        state,
+                        semaphore=judge_semaphore,
+                        verbose=verbose,
+                    ):
                         contradicted = True
                         break
                 if contradicted:
@@ -256,8 +295,4 @@ def load_environment(
     # Simple pass-through parser; reward funcs operate directly on messages/state
     parser = vf.Parser(extract_fn=lambda x: x)
 
-    return vf.SingleTurnEnv(
-        eval_dataset=dataset,
-        parser=parser,
-        rubric=rubric_group,
-    )
+    return vf.SingleTurnEnv(eval_dataset=dataset, parser=parser, rubric=rubric_group)

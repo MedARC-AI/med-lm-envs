@@ -75,6 +75,7 @@ Document any supported environment arguments and their meaning. Example:
 | `extractor_model` | str | `"gpt-4-mini"` | The model used to extract claims from the free form answer. |
 | `judge_model` | str | `gpt-4-mini` | The model used for NLI-style scoring (entailment and contradiction) |
 | `batch` | bool | `False` | Whether to run evaluation in a single batch call to the judge model. |
+| `max_parallel_judges` | int | `5` | Maximum concurrent judge requests per rollout (shared by extraction and scoring). |
 
 ### Metrics
 Summarize key metrics your rubric emits and how they’re interpreted.
