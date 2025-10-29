@@ -1,4 +1,3 @@
-
 ##################
 
 # ALL PROMPTS ARE FROM THE PAPER (Source: https://arxiv.org/abs/2401.14493)
@@ -127,6 +126,7 @@ Answer:
 Final Answer: \\boxed{{True|False}}
 """
 
+
 FORMAT_INSTRUCTIONS = (
     "Respond with a single JSON object with this exact shape:\n"
     "{\n"
@@ -135,11 +135,11 @@ FORMAT_INSTRUCTIONS = (
     "Rules:\n"
     "- Return only valid JSON. No prose, no Markdown/code fences.\n"
     "- Each item in 'claims' must be a string and self-contained.\n"
-    '- If no claims, return {\"claims\": []}.\n'
+    '- If no claims, return {"claims": []}.\n'
 )
 
 
-def _decompose_free_form_answer(question: str,llm_answer: str) -> str:
+def _decompose_free_form_answer(question: str, llm_answer: str) -> str:
     return f"""
 
 
@@ -219,8 +219,6 @@ Claims:
 """
 
 
-
-
 # CURRENTLY NOT USED (Source: https://arxiv.org/abs/2401.14493)
 def _build_eval_prompt(question: str, llm_answer: str, physician_answer: str) -> str:
     return f"""
@@ -292,10 +290,7 @@ Answer:
 """
 
 
-
-
 def _llm_generation_prompt(question: str) -> str:
-    
     return f"""
 
 # TASK:
@@ -338,7 +333,8 @@ Answer:
 """
 
 
-def batch_eval_prompt(question: str,
+def batch_eval_prompt(
+    question: str,
     llm_claims: list[str],
     must_have_claims: list[str],
     gold_claims: list[str],
@@ -350,9 +346,9 @@ def batch_eval_prompt(question: str,
  - Your task is to evaluate a set of generated claims against ground truth claims based on a given question.
  - You will evaluate two things: comprehensiveness and hallucination.
  - Respond with a single JSON object with the exact shape specified below.
- 
+
  # EVALUATION CRITERIA
- 
+
  ## 1. Comprehensiveness (Entailment)
 - Your goal is to determine which of the "Must-Have Claims" are logically entailed by any of the "Generated Claims".
 - A generated claim entails a must-have claim if the must-have claim can be reasonably inferred from the generated claim.
@@ -367,7 +363,7 @@ def batch_eval_prompt(question: str,
 
 # FORMAT OF INPUT DATA
 
- ## Question    
+ ## Question
 {"question"}
 
 ## Generated Claims
@@ -377,7 +373,7 @@ def batch_eval_prompt(question: str,
 {"must_have_claims_str"}
 
 ## Ground Truth Gold Claims (for Hallucination)
-{"gold_claims_str"} 
+{"gold_claims_str"}
 
 # INPUT DATA
 ## Question
@@ -413,4 +409,3 @@ Rules:
 
     """
     return prompt
-    
