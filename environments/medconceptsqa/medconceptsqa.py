@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Any
 
 import verifiers as vf
@@ -8,27 +9,39 @@ from medarc_verifiers.rewards.multiple_choice_accuracy import multiple_choice_ac
 from medarc_verifiers.utils.randomize_multiple_choice import randomize_multiple_choice
 from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
-disable_progress_bar()  # suppress datasets progress indicators
 
-_VOCAB_CHOICES = ["atc", "icd10cm", "icd10proc", "icd9cm", "icd9proc"]
-_LEVEL_CHOICES = ["easy", "hard", "medium"]
-_OPTION_LABELS = ("A", "B", "C", "D")
-_OPTION_SEPARATORS = (".", ")", ":", "-")
+disable_progress_bar()  # suppress datasets mapping progress bar
+
+
+class Vocab(str, Enum):
+    ATC = "atc"
+    ICD10CM = "icd10cm"
+    ICD10PROC = "icd10proc"
+    ICD9CM = "icd9cm"
+    ICD9PROC = "icd9proc"
+    ICD10CM_SAMPLE = "icd10cm_sample"
+    ALL = "all"
+
+
+class Difficulty(str, Enum):
+    EASY = "easy"
+    MEDIUM = "medium"
+    HARD = "hard"
 
 
 def _extract_question_and_options(row: dict) -> tuple[str, dict[str, str]]:
     """Return the stem without embedded options and an ordered map of options."""
     question = row.get("question", "") or ""
     options: dict[str, str] = {}
-    for idx, label in enumerate(_OPTION_LABELS, start=1):
+    for idx, label in enumerate(("A", "B", "C", "D"), start=1):
         value = row.get(f"option{idx}", "")
         if value not in ("", None):
             options[label] = value
 
     def _looks_like_option(line: str) -> bool:
         candidate = line.strip()
-        for label in _OPTION_LABELS:
-            for sep in _OPTION_SEPARATORS:
+        for label in ("A", "B", "C", "D"):
+            for sep in (".", ")", ":", "-"):
                 if candidate.startswith(f"{label}{sep}"):
                     return True
         return False
@@ -78,8 +91,8 @@ def _create_few_shot_data(few_shot_set: Dataset, num_few_shot: int, answer_forma
 def load_environment(
     num_few_shot: int = 4,
     use_think: bool = False,
-    vocab: str | None = None,
-    level: str | None = None,
+    vocab: Vocab | str = Vocab.ICD10CM_SAMPLE,
+    difficulty: Difficulty | str = Difficulty.EASY,
     shuffle_answers: bool = False,
     shuffle_seed: int | None = 1618,
     answer_format: AnswerFormat | str = AnswerFormat.XML,
@@ -93,23 +106,32 @@ def load_environment(
     Args:
         num_few_shot: number of few-shot examples to include in the prompt (default: 4)
         use_think: whether to use a ThinkParser and reasoning system prompt (default: False)
-        vocab: vocabulary to subset dataset, if `None` - choses `all` (default: None)
-        level: difficulty level to subset dataset (used in conjunction with vocab).
-            cannot be None if vocab is not None (default: None)
+        vocab: code vocabulary to subset dataset, if `icd10cm_sample` choses a subsample of
+            `icd10cm`, if `all` choses the entire dataset (default: icd10cm_sample)
+        difficulty: difficulty level to subset dataset (used in conjunction with vocab).
+            Ignored if vocab is `all` (default: easy)
+        shuffle_answers: whether to shuffle the answer choices (default: False)
+        shuffle_seed: deterministic seed forwarded to the shuffler (default: 1618)
+        answer_format: format of the answer in the model's output (default: XML)
     Returns:
         vf.Environment: the single-turn evaluation environment
     """
-    subset = "all"
-    if vocab is not None:
-        if vocab not in _VOCAB_CHOICES:
-            raise ValueError(f"Invalid vocab choice {vocab}, must be one of {_VOCAB_CHOICES}")
-        if level is None or level not in _LEVEL_CHOICES:
-            raise ValueError(f"Invalid level choice {level}, must be one of {_LEVEL_CHOICES}")
-        subset = f"{vocab}_{level}"
+    vocab = Vocab(vocab) if isinstance(vocab, str) else vocab
+    level = Difficulty(difficulty) if isinstance(difficulty, str) else difficulty
 
-    # load the entire dataset, should contain dev and test
-    ds = load_dataset("ofir408/MedConceptsQA", subset)
-    test = ds["test"]
+    if vocab is Vocab.ALL:
+        subset = "all"
+    else:
+        subset = f"{vocab.value}_{level.value}"
+
+    if vocab == Vocab.ICD10CM_SAMPLE:
+        # load only the sample subset, should contain dev and test
+        ds = load_dataset("sameedkhan/medconceptsqa-sample_medarc_15k", subset.replace("_sample", ""))
+        test = ds["test"]
+    else:
+        # load the entire dataset, should contain dev and test
+        ds = load_dataset("ofir408/MedConceptsQA", subset)
+        test = ds["test"]
 
     # normalize answer_format
     answer_format = AnswerFormat(answer_format) if isinstance(answer_format, str) else answer_format
@@ -150,7 +172,7 @@ def load_environment(
 
         return {"question": full_question, "answer": answer, "info": info}
 
-    load_from_cache_file = not shuffle_answers
+    load_from_cache_file = False if shuffle_answers else True
     mapped = test.map(
         _map,
         with_indices=True,
