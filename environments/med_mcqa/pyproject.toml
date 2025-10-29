@@ -1,0 +1,17 @@
+[project]
+name = "med_mcqa"
+description = "Med MCQA evaluation environment"
+tags = ["medical", "single-turn", "multiple-choice", "train", "eval"]
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "verifiers>=0.1.5.post0",
+    "medarc_verifiers>=0.1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+medarc_verifiers = { git = "https://github.com/MedARC-AI/med-lm-envs" }
