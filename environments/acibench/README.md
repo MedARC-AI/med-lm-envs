@@ -7,7 +7,7 @@
 
 ### Datasets
 - **Primary dataset(s)**: `harsh-c137/aci-bench-medarc-eval` on Hugging Face. This is the final, cleaned, and de-duplicated version of the ACI-BENCH corpus, containing 225 unique encounters.
-- **Source links**: [Paper](https://doi.org/10.1038/s41597-023-02487-3), [HF Dataset](https://huggingface.co/datasets/harsh-c137/aci-bench-medarc-eval)
+- **Source links**: [Paper](https://arxiv.org/abs/2306.02022), [HF Dataset](https://huggingface.co/datasets/harsh-c137/aci-bench-medarc-eval)
 - **Split sizes**: The script loads the entire dataset and performs a reproducible 80/20 split in-memory, resulting in:
     - **Train**: 180
     - **Validation**: 45
@@ -57,3 +57,7 @@ The final reward is the sum of the following three metrics, each providing a dif
 | `rouge`     | Measures the lexical overlap (exact words and sequences) between the generated and reference notes. |
 | `bertscore` | Measures the semantic similarity, understanding paraphrasing and context. A key metric for meaning. |
 | `bleurt`    | A learned metric trained to predict human judgments of quality and coherence.                 |
+
+
+### Author
+This environment was developed by **[Harsh Deshpande](https://www.linkedin.com/in/harsh-deshpande-v1/)**. Contributions include the dataset curation and cleaning (`dataset_curation_notes.md`) for Medarc's evaluation task, and creation of the verifiers environment script (`acibench.py`).
