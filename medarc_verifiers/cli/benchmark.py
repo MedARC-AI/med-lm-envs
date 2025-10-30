@@ -112,6 +112,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Resume an existing run by identifier.",
     )
     parser.add_argument(
+        "--auto-resume",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Automatically resume the most recent incomplete run when --resume is not provided (default: True).",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Re-run jobs even if matching artifacts exist.",
@@ -227,6 +233,7 @@ async def execute_jobs(
     outcomes: list[JobOutcome] = []
     completed_jobs = completed_jobs or {}
     total_jobs = len(jobs)
+
     for index, job in enumerate(jobs, start=1):
         job_label = f"{job.job_id} (model={job.model.id}, env={job.env.id})"
         existing = completed_jobs.get(job.job_id)
@@ -651,6 +658,70 @@ def load_run_manifest(run_dir: Path) -> Mapping[str, Any] | None:
         return json.load(handle)
 
 
+def _manifest_matches_target(
+    manifest: Mapping[str, Any],
+    *,
+    target_name: str | None,
+) -> bool:
+    if target_name:
+        name = manifest.get("name")
+        if isinstance(name, str) and name == target_name:
+            return True
+        return False
+    return True
+
+
+def _run_is_complete(run_dir: Path, manifest: Mapping[str, Any]) -> bool:
+    jobs = manifest.get("jobs")
+    if not isinstance(jobs, Sequence) or not jobs:
+        return False
+    summary = load_run_summary(run_dir)
+    for entry in jobs:
+        if not isinstance(entry, Mapping):
+            return False
+        job_id = entry.get("job_id")
+        if not isinstance(job_id, str):
+            return False
+        results_dir = entry.get("results_dir") if isinstance(entry.get("results_dir"), str) else job_id
+        outcome = summary.get(job_id)
+        if outcome is None:
+            summary_path = run_dir / str(results_dir) / "summary.json"
+            if not summary_path.exists():
+                return False
+            continue
+        if outcome.status not in {"succeeded", "skipped"}:
+            return False
+    return True
+
+
+def _discover_auto_resume_candidate(
+    runs_root: Path,
+    *,
+    target_name: str | None,
+) -> tuple[str, Mapping[str, Any], str] | None:
+    try:
+        candidates = sorted(
+            (child for child in runs_root.iterdir() if child.is_dir()),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return None
+
+    for child in candidates:
+        manifest = load_run_manifest(child)
+        if not isinstance(manifest, Mapping):
+            continue
+        if not _manifest_matches_target(
+            manifest,
+            target_name=target_name,
+        ):
+            continue
+        status = "completed" if _run_is_complete(child, manifest) else "incomplete"
+        return child.name, manifest, status
+    return None
+
+
 def load_completed_job_outcome(run_dir: Path, job: ResolvedJob) -> JobOutcome | None:
     job_dir = run_dir / job.job_id
     summary_path = job_dir / "summary.json"
@@ -860,7 +931,9 @@ def _build_outcome_from_manifest_entry(
         model_id=str(model_id),
         env_id=str(env_id),
         status=status,
+        duration_seconds=None,
         results_path=results_path,
+        error=None,
     )
 
 
@@ -974,6 +1047,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         logger.error("Cannot combine --resume with --run-id.")
         return 1
 
+    auto_resume_manifest: Mapping[str, Any] | None = None
+    auto_resume_status: str | None = None
+    if (
+        resume_run_id is None
+        and not args.run_id
+        and getattr(args, "auto_resume", True)
+    ):
+        candidate = _discover_auto_resume_candidate(
+            run_config.output_dir,
+            target_name=run_config.name,
+        )
+        if candidate is not None:
+            resume_run_id, auto_resume_manifest, auto_resume_status = candidate
+            if auto_resume_status == "incomplete":
+                logger.info(
+                    "Auto-resume enabled; continuing newest incomplete run '%s'. Use --no-auto-resume to disable.",
+                    resume_run_id,
+                )
+            else:
+                logger.info(
+                    "Auto-resume found latest run '%s' for '%s'; all jobs are complete.",
+                    resume_run_id,
+                    run_config.name,
+                )
+                return 0
+        else:
+            logger.debug("Auto-resume enabled but no incomplete runs were found.")
+
     run_id = resume_run_id or args.run_id or run_config.run_id or derive_run_id(run_config.name)
     jobs = expand_jobs(run_config)
 
@@ -1008,7 +1109,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not run_dir.exists():
                 logger.error("Run directory '%s' does not exist; cannot resume.", run_dir)
                 return 1
-            manifest_data = load_run_manifest(run_dir)
+            if auto_resume_manifest is not None and resume_run_id is not None:
+                manifest_data = auto_resume_manifest
+            else:
+                manifest_data = load_run_manifest(run_dir)
             if manifest_data is None:
                 logger.warning("Run %s lacks a manifest; creating a fresh snapshot before resuming.", run_id)
                 manifest = reconstruct_manifest_from_run_dir(
