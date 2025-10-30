@@ -2,6 +2,7 @@
 name = "acibench"
 version = "0.1.0"
 description = "ACI-BENCH environment for benchmarking clinical note generation from dialogue."
+authors = [{name = "Harsh Deshpande"}]
 tags = ["medical", "clinical", "summarization", "note-generation", "single-turn", "evaluation"]
 requires-python = ">=3.11"
 dependencies = [
