@@ -11,11 +11,13 @@ dependencies = [
     "pyyaml>=6.0.1",
     "docstring-parser>=0.17.0",
     "pylatexenc>=2.10",
+    "datasets[parquet]>=4.2.0",
 ]
 
 [project.scripts]
 medarc-eval = "medarc_verifiers.cli.eval:main"
 medarc-bench = "medarc_verifiers.cli.benchmark:main"
+medarc-export = "medarc_verifiers.cli.export_parquet:main"
 
 [dependency-groups]
 dev = [

@@ -241,6 +241,28 @@ Run everything with:
 uv run benchmark run --jobs configs/jobs.yaml
 ```
 
+## Export evaluation runs to Parquet
+
+The exporter CLI assembles completed run artifacts into environment-level Parquet datasets suitable for analytics or Hugging Face uploads.
+
+```bash
+uv run medarc-export \
+  --runs-dir runs \
+  --output-dir exports \
+  --filter-status succeeded \
+  --partition-by model \
+  --dry-run
+```
+
+- `--filter-status` restricts discovery to manifest statuses of interest (defaults to all entries).
+- `--dry-run` gathers schema details without writing files; combine with `--schema-only` to skip Parquet output entirely.
+- `--partition-by` splits each environment dataset into Parquet files keyed by the provided columns (e.g., `model`, `job_run_id`).
+- Prompt and completion payloads are excluded by default to keep files compact; pass `--include-io` to retain them.
+- `--validate` enables sanity checks on row counts compared to metadata; add `--strict` to treat warnings as errors.
+- `--overwrite` replaces existing environment export directories inside `--output-dir`.
+
+When not in `--dry-run` or `--schema-only` mode, the CLI writes one directory per `env_id`, each containing either a single `data.parquet` file or partitioned files (e.g., `model-gpt-4_1-mini.parquet`). An `env_index.json` manifest summarises row counts, partition columns, and dataset paths for downstream tooling.
+
 The loader expands each referenced file (individual model/env mappings or the shared jobs list) before scheduling the run. Paths are resolved relative to the jobs file.
 
 - When `models` or `envs` point to directories, every `*.yaml` / `*.yml` file inside is loaded in sorted order. Paths are resolved relative to the jobs file first, then relative to the repository root.
