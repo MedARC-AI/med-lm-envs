@@ -196,6 +196,30 @@ uv run benchmark run --jobs configs/jobs.yaml --resume medarc-baseline-20240101-
 
 The manifest merges updated configurations on resume, so adding a new model or environment entry will schedule only the new combinations while retaining prior results in `run_summary.json`.
 
+### Matrix expansion
+
+Environment entries can fan out into multiple variants by adding a `matrix` mapping. Each key lists the values to vary, and the CLI takes the cartesian product to build derived configs. Values matching `EnvironmentConfig` fields (for example `num_examples`, `rollouts_per_example`, `max_concurrent`) are applied at the top level; all other keys land in `env_args`. Use `null` in a value list to keep the parent value for that combo.
+
+```yaml
+envs:
+  - id: medconceptsqa-base
+    module: medconceptsqa
+    num_examples: -1
+    env_args:
+      shuffle_answers: true
+    matrix:
+      difficulty: [easy, medium, hard]
+      shuffle_seed: [1618, 9331]
+    matrix_id_format: "{base}-{difficulty}-s{shuffle_seed}"
+```
+
+The example above expands into six variants (`medconceptsqa-base-easy-s1618`, …, `medconceptsqa-base-hard-s9331`) that inherit the shared settings. Optional helpers:
+
+- `matrix_exclude`: list of partial assignments to drop (e.g., `[{difficulty: easy, shuffle_seed: 9331}]`).
+- `matrix_id_format`: custom template; `{base}` plus each matrix key is available. Without it, IDs default to `base-key-value`.
+
+Entries without `matrix` continue to work unchanged. The loader validates duplicate IDs and unknown exclusions so mistakes surface early.
+
 ### Split configuration files
 
 For larger suites you can keep per-model, per-environment, and job matrices in separate YAML documents:

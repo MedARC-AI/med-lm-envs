@@ -12,6 +12,7 @@ dependencies = [
     "docstring-parser>=0.17.0",
     "pylatexenc>=2.10",
     "datasets[parquet]>=4.2.0",
+    "pydantic>=2.12.3",
 ]
 
 [project.scripts]
