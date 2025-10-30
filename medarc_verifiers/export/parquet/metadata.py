@@ -9,7 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from pydantic import ValidationError
+
 from medarc_verifiers.export.parquet.discovery import RunRecord
+from medarc_verifiers.export.parquet.schemas import MetadataModel
 
 logger = logging.getLogger(__name__)
 
@@ -44,32 +47,30 @@ def load_normalized_metadata(record: RunRecord) -> NormalizedMetadata | None:
     except (OSError, ValueError) as exc:  # noqa: FBT003
         logger.warning("Failed to parse metadata for %s: %s", record.metadata_path, exc)
         return None
-    if not isinstance(payload, Mapping):
-        logger.debug("metadata.json for %s is not a mapping; skipping.", record.job_id)
+    try:
+        metadata_model = MetadataModel.model_validate(payload)
+    except ValidationError as exc:
+        logger.warning("Metadata schema validation failed for %s: %s", record.metadata_path, exc)
         return None
 
-    base_env_id = _coerce_optional_str(payload.get("env_id"))
-    env_args = _ensure_mapping(payload.get("env_args"), "metadata.env_args")
+    env_args = metadata_model.env_args
     env_columns = _build_env_columns(env_args)
-    variant_id = _compute_variant_id(record, env_args, base_env_id)
+    variant_id = _compute_variant_id(record, env_args, metadata_model.env_id)
 
-    model = _coerce_optional_str(payload.get("model"))
-    num_examples = _coerce_optional_int(payload.get("num_examples"))
-    rollouts = _coerce_optional_int(payload.get("rollouts_per_example"))
-    sampling_args = _ensure_mapping(payload.get("sampling_args"), "metadata.sampling_args")
+    raw_metadata = metadata_model.model_dump(mode="python")
 
     return NormalizedMetadata(
         record=record,
         metadata_path=record.metadata_path,
-        raw_metadata=payload,
-        base_env_id=base_env_id or record.manifest_env_id or "",
-        model=model,
+        raw_metadata=raw_metadata,
+        base_env_id=(metadata_model.env_id or record.manifest_env_id or ""),
+        model=metadata_model.model,
         env_args=env_args,
         env_columns=env_columns,
         variant_id=variant_id,
-        num_examples=num_examples,
-        rollouts_per_example=rollouts,
-        sampling_args=sampling_args,
+        num_examples=metadata_model.num_examples,
+        rollouts_per_example=metadata_model.rollouts_per_example,
+        sampling_args=metadata_model.sampling_args,
     )
 
 
@@ -82,19 +83,11 @@ def _compute_variant_id(
     normalized_payload = {
         "manifest_env_id": record.manifest_env_id,
         "base_env_id": base_env_id,
-        "env_args": _normalize_for_hash(env_args),
+        "env_args": dict(sorted(env_args.items())),
     }
     payload_json = json.dumps(normalized_payload, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
     return digest[:VARIANT_HASH_PREFIX_LENGTH]
-
-
-def _normalize_for_hash(env_args: Mapping[str, Any]) -> Mapping[str, Any]:
-    normalized: dict[str, Any] = {}
-    for key in sorted(env_args):
-        value = env_args[key]
-        normalized[key] = value
-    return normalized
 
 
 def _build_env_columns(env_args: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -104,15 +97,6 @@ def _build_env_columns(env_args: Mapping[str, Any]) -> Mapping[str, Any]:
             continue
         columns[f"env_{key}"] = _coerce_scalar(value)
     return columns
-
-
-def _ensure_mapping(value: Any, context: str) -> Mapping[str, Any]:
-    if value is None:
-        return {}
-    if isinstance(value, Mapping):
-        return dict(value)
-    logger.debug("Expected mapping for %s but received %r; defaulting to empty mapping.", context, value)
-    return {}
 
 
 def _coerce_scalar(value: Any) -> Any:
@@ -137,24 +121,6 @@ def _coerce_scalar(value: Any) -> Any:
         return json.dumps(value, sort_keys=True)
     except TypeError:
         return str(value)
-
-
-def _coerce_optional_str(value: Any) -> str | None:
-    if isinstance(value, str) and value:
-        return value
-    return None
-
-
-def _coerce_optional_int(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
-    if isinstance(value, str):
-        return _try_parse_int(value.strip())
-    return None
 
 
 def _try_parse_int(value: str) -> int | None:

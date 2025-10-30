@@ -55,33 +55,19 @@ def load_enriched_rows(
         if drop_fields:
             for field in drop_fields:
                 enriched.pop(field, None)
+        # Remove known heavy or redundant columns that are handled elsewhere.
+        enriched.pop("info", None)
+        enriched.pop("sampling_args", None)
         enriched.update(metadata.env_columns)
         enriched.update(
             {
                 "env_id": metadata.base_env_id,
-                "manifest_env_id": record.manifest_env_id,
-                "variant_id": metadata.variant_id,
-                "job_run_id": record.manifest.job_run_id,
-                "run_name": record.manifest.run_name,
-                "job_id": record.job_id,
+                "job_id": record.manifest.job_run_id,
                 "model": metadata.model or record.model_id,
-                "results_path": str(record.results_path),
-                "metadata_path": str(record.metadata_path),
-                "summary_path": str(record.summary_path),
-                "run_manifest_path": str(record.manifest.manifest_path),
-                "created_at": record.manifest.created_at,
-                "updated_at": record.manifest.updated_at,
-                "config_source": record.manifest.config_source,
-                "config_checksum": record.manifest.config_checksum,
-                "rollout_index": rollout_index,
-                "intra_rollout_index": intra_rollout_fn(position),
+                "rollout_index": rollout_index or intra_rollout_fn(position),
                 "position": position,
                 "status": record.status,
-                "duration_seconds": record.duration_seconds,
                 "error": record.error,
-                "num_examples": metadata.num_examples,
-                "rollouts_per_example": metadata.rollouts_per_example,
-                "sampling_args": metadata.sampling_args,
             }
         )
         enriched_rows.append(enriched)

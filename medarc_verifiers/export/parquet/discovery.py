@@ -6,7 +6,16 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, Mapping, MutableMapping, Sequence
+from typing import Any, Dict, Iterable, Iterator, Mapping, Sequence
+
+from pydantic import ValidationError
+
+from medarc_verifiers.export.parquet.schemas import (
+    ManifestJob,
+    RunManifestModel,
+    RunSummaryModel,
+    SummaryEntry,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +101,8 @@ def iter_run_records(
             continue
         summary_map = _load_run_summary(run_dir)
         for job_entry in job_entries:
-            record = _build_run_record(manifest_info, job_entry, summary_map)
+            summary_entry = summary_map.get(job_entry.job_id)
+            record = _build_run_record(manifest_info, job_entry, summary_entry)
             if record is None:
                 continue
             if normalized_status and record.status not in normalized_status:
@@ -102,42 +112,31 @@ def iter_run_records(
 
 def _build_run_record(
     manifest: RunManifestInfo,
-    job_entry: Mapping[str, Any],
-    summary_map: Mapping[str, Mapping[str, Any]],
+    job_entry: ManifestJob,
+    summary_entry: SummaryEntry | None,
 ) -> RunRecord | None:
-    job_id = job_entry.get("job_id")
-    if not isinstance(job_id, str) or not job_id:
-        logger.debug(
-            "Skipping job entry without a valid job_id in %s",
-            manifest.manifest_path,
-        )
+    job_id = job_entry.job_id
+    if not job_id:
+        logger.debug("Skipping job entry without a valid job_id in %s", manifest.manifest_path)
         return None
-    results_dir_name = _coerce_results_dir(job_entry)
+    results_dir_name = job_entry.results_dir or job_id
     results_dir = manifest.run_dir / results_dir_name
     metadata_path = results_dir / "metadata.json"
     results_path = results_dir / "results.jsonl"
     summary_path = results_dir / "summary.json"
-    summary_entry = summary_map.get(job_id, {})
 
-    status = summary_entry.get("status", DEFAULT_STATUS)
-    if not isinstance(status, str):
-        status = DEFAULT_STATUS
-    status = status.lower()
-
-    duration_seconds = _coerce_optional_float(summary_entry.get("duration_seconds"))
-    error_value = summary_entry.get("error")
-    error = str(error_value) if error_value is not None else None
+    status = (summary_entry.status or DEFAULT_STATUS).lower() if summary_entry else DEFAULT_STATUS
+    duration_seconds = summary_entry.duration_seconds if summary_entry else None
+    error = summary_entry.error if summary_entry else None
 
     return RunRecord(
         manifest=manifest,
         job_id=job_id,
-        job_name=_coerce_optional_str(job_entry.get("job_name")),
-        model_id=_coerce_optional_str(job_entry.get("model_id")),
-        manifest_env_id=_coerce_optional_str(job_entry.get("env_id")),
-        env_overrides=_ensure_mapping(job_entry.get("env_overrides"), "env_overrides"),
-        sampling_overrides=_ensure_mapping(
-            job_entry.get("sampling_overrides"), "sampling_overrides"
-        ),
+        job_name=job_entry.job_name,
+        model_id=job_entry.model_id,
+        manifest_env_id=job_entry.env_id,
+        env_overrides=job_entry.env_overrides,
+        sampling_overrides=job_entry.sampling_overrides,
         results_dir_name=results_dir_name,
         results_dir=results_dir,
         metadata_path=metadata_path,
@@ -152,7 +151,7 @@ def _build_run_record(
     )
 
 
-def _load_manifest(run_dir: Path) -> tuple[RunManifestInfo | None, Sequence[Mapping[str, Any]]]:
+def _load_manifest(run_dir: Path) -> tuple[RunManifestInfo | None, Sequence[ManifestJob]]:
     manifest_path = run_dir / "run_manifest.json"
     if not manifest_path.exists():
         logger.debug("Skipping %s: no run_manifest.json present.", run_dir)
@@ -163,39 +162,34 @@ def _load_manifest(run_dir: Path) -> tuple[RunManifestInfo | None, Sequence[Mapp
         logger.warning("Failed to parse manifest %s: %s", manifest_path, exc)
         return None, ()
 
-    job_run_id = manifest_payload.get("run_id") or run_dir.name
-    run_name = manifest_payload.get("name") if isinstance(manifest_payload.get("name"), str) else None
-    created_at = manifest_payload.get("created_at") if isinstance(manifest_payload.get("created_at"), str) else None
-    updated_at = manifest_payload.get("updated_at") if isinstance(manifest_payload.get("updated_at"), str) else None
-    config_source = manifest_payload.get("config_source") if isinstance(manifest_payload.get("config_source"), str) else None
-    config_checksum = manifest_payload.get("config_checksum") if isinstance(manifest_payload.get("config_checksum"), str) else None
-    config_snapshot = manifest_payload.get("config_snapshot")
-    if isinstance(config_snapshot, MutableMapping):
-        config_snapshot = dict(config_snapshot)
-    else:
-        config_snapshot = None
+    try:
+        manifest_model = RunManifestModel.model_validate(manifest_payload)
+    except ValidationError as exc:
+        logger.warning("Manifest schema validation failed for %s: %s", manifest_path, exc)
+        return None, ()
+
+    job_run_id = manifest_model.run_id or run_dir.name
 
     manifest_info = RunManifestInfo(
         job_run_id=job_run_id,
-        run_name=run_name,
+        run_name=manifest_model.name,
         manifest_path=manifest_path,
         run_dir=run_dir,
-        created_at=created_at,
-        updated_at=updated_at,
-        config_source=config_source,
-        config_checksum=config_checksum,
-        config_snapshot=config_snapshot,
+        created_at=manifest_model.created_at,
+        updated_at=manifest_model.updated_at,
+        config_source=manifest_model.config_source,
+        config_checksum=manifest_model.config_checksum,
+        config_snapshot=manifest_model.config_snapshot,
         run_summary_path=run_dir / "run_summary.json",
     )
 
-    jobs = manifest_payload.get("jobs")
-    if not isinstance(jobs, Sequence):
+    if not manifest_model.jobs:
         logger.debug("Manifest %s has no jobs array.", manifest_path)
         return manifest_info, ()
-    return manifest_info, jobs
+    return manifest_info, manifest_model.jobs
 
 
-def _load_run_summary(run_dir: Path) -> Mapping[str, Mapping[str, Any]]:
+def _load_run_summary(run_dir: Path) -> Mapping[str, SummaryEntry]:
     summary_path = run_dir / "run_summary.json"
     if not summary_path.exists():
         return {}
@@ -204,17 +198,15 @@ def _load_run_summary(run_dir: Path) -> Mapping[str, Mapping[str, Any]]:
     except (OSError, ValueError) as exc:  # noqa: FBT003
         logger.warning("Failed to parse run summary %s: %s", summary_path, exc)
         return {}
-    entries = payload.get("jobs")
-    if not isinstance(entries, Iterable):
+    try:
+        summary_model = RunSummaryModel.model_validate(payload)
+    except ValidationError as exc:
+        logger.warning("Run summary schema validation failed for %s: %s", summary_path, exc)
         return {}
-    summary: Dict[str, Mapping[str, Any]] = {}
-    for entry in entries:
-        if not isinstance(entry, Mapping):
-            continue
-        job_id = entry.get("job_id")
-        if not isinstance(job_id, str) or not job_id:
-            continue
-        summary[job_id] = entry
+    summary: Dict[str, SummaryEntry] = {}
+    for entry in summary_model.jobs:
+        if entry.job_id:
+            summary[entry.job_id] = entry
     return summary
 
 
@@ -230,37 +222,6 @@ def _normalize_status_filter(statuses: Sequence[str] | None) -> tuple[str, ...]:
         normalized.append(value)
         seen.add(value)
     return tuple(normalized)
-
-
-def _ensure_mapping(value: Any, context: str) -> Mapping[str, Any]:
-    if value is None:
-        return {}
-    if isinstance(value, Mapping):
-        return dict(value)
-    logger.debug("Expected mapping for %s but received %r; defaulting to empty mapping.", context, value)
-    return {}
-
-
-def _coerce_results_dir(job_entry: Mapping[str, Any]) -> str:
-    results_dir = job_entry.get("results_dir")
-    if isinstance(results_dir, str) and results_dir:
-        return results_dir
-    job_id = job_entry.get("job_id")
-    if isinstance(job_id, str) and job_id:
-        return job_id
-    return "results"
-
-
-def _coerce_optional_str(value: Any) -> str | None:
-    if isinstance(value, str) and value:
-        return value
-    return None
-
-
-def _coerce_optional_float(value: Any) -> float | None:
-    if isinstance(value, (int, float)):
-        return float(value)
-    return None
 
 
 __all__ = [

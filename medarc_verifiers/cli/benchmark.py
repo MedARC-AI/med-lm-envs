@@ -832,7 +832,9 @@ def reconstruct_manifest_from_run_dir(
         "config_source": (
             summary_payload.get("config_source")
             if summary_payload and summary_payload.get("config_source") is not None
-            else str(config_source) if config_source else None
+            else str(config_source)
+            if config_source
+            else None
         ),
         "config_checksum": _compute_config_checksum(snapshot_copy),
         "run": {
@@ -950,9 +952,7 @@ def merge_run_outcomes(
     manifest_entries: Sequence[Mapping[str, Any]]
     if manifest is not None:
         manifest_entries = [
-            entry
-            for entry in manifest.get("jobs", [])
-            if isinstance(entry, Mapping) and "job_id" in entry
+            entry for entry in manifest.get("jobs", []) if isinstance(entry, Mapping) and "job_id" in entry
         ]
     else:
         manifest_entries = []
@@ -1049,11 +1049,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     auto_resume_manifest: Mapping[str, Any] | None = None
     auto_resume_status: str | None = None
-    if (
-        resume_run_id is None
-        and not args.run_id
-        and getattr(args, "auto_resume", True)
-    ):
+    if resume_run_id is None and not args.run_id and getattr(args, "auto_resume", True):
         candidate = _discover_auto_resume_candidate(
             run_config.output_dir,
             target_name=run_config.name,
@@ -1087,16 +1083,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.install_envs:
-        env_ids = sorted({job.env.id for job in jobs})
-        if env_ids:
+        # Get unique module names from environment configs (not variant IDs)
+        env_modules = sorted({run_config.envs[job.env].module or job.env for job in jobs})
+        if env_modules:
             logger.info(
                 "Installing %d environment(s) from '%s' before benchmarking.",
-                len(env_ids),
+                len(env_modules),
                 run_config.env_dir_path,
             )
-            for env_id in env_ids:
-                logger.info("Installing environment '%s'.", env_id)
-                install_environment(env=env_id, path=run_config.env_dir_path, from_repo=False, branch="main")
+            for env_module in env_modules:
+                logger.info("Installing environment '%s'.", env_module)
+                install_environment(env=env_module, path=run_config.env_dir_path, from_repo=False, branch="main")
 
     run_config.run_id = run_id
     manifest: dict[str, Any] | None = None
@@ -1203,9 +1200,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     failures = [outcome for outcome in final_outcomes if outcome.status == "failed"]
     if failures:
-        detail_lines = [
-            f"  {failure.job_id} (model={failure.model_id}, env={failure.env_id})" for failure in failures
-        ]
+        detail_lines = [f"  {failure.job_id} (model={failure.model_id}, env={failure.env_id})" for failure in failures]
         logger.error("Run %s completed with %d failure(s):\n%s", run_id, len(failures), "\n".join(detail_lines))
         return 1
     logger.info("Run %s completed successfully.", run_id)

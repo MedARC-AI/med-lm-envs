@@ -5,8 +5,10 @@ The optional fingerprint is appended only when multiple jobs share the same base
 """
 
 import hashlib
+import itertools
 import json
-from dataclasses import dataclass, field
+from copy import deepcopy
+from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping
@@ -173,6 +175,136 @@ def _sanitize_slug(value: str) -> str:
     return "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in value)
 
 
+_MATRIX_FIELDS = {"matrix", "matrix_exclude", "matrix_id_format"}
+_ENV_CONFIG_SCALAR_FIELDS: set[str] | None = None
+
+
+def _get_env_config_scalar_fields() -> set[str]:
+    global _ENV_CONFIG_SCALAR_FIELDS
+    if _ENV_CONFIG_SCALAR_FIELDS is None:
+        excluded = {"id", "module", "env_args", "state_columns"}
+        _ENV_CONFIG_SCALAR_FIELDS = {field_.name for field_ in fields(EnvironmentConfig) if field_.name not in excluded}
+    return _ENV_CONFIG_SCALAR_FIELDS
+
+
+def _format_matrix_value(value: Any) -> str:
+    if value is None:
+        return "base"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _matches_matrix_exclude(combo: dict[str, Any], pattern: dict[str, Any]) -> bool:
+    return all(combo.get(key) == value for key, value in pattern.items())
+
+
+def _expand_environment_entry(entry: dict[str, Any], *, scalar_fields: set[str]) -> list[dict[str, Any]]:
+    matrix_raw = entry.get("matrix")
+    base_payload = {key: deepcopy(value) for key, value in entry.items() if key not in _MATRIX_FIELDS}
+    env_id = base_payload.get("id")
+    if not isinstance(env_id, str) or not env_id:
+        raise ValueError("Environment entries require a non-empty string 'id'.")
+    base_env_args = _ensure_mapping(base_payload.get("env_args"), f"environment '{env_id}' env_args")
+    base_payload["env_args"] = base_env_args
+
+    if matrix_raw is None:
+        return [base_payload]
+
+    if not isinstance(matrix_raw, MutableMapping):
+        raise ValueError(f"environment '{env_id}' matrix must be a mapping of parameter names to lists of values.")
+
+    matrix: dict[str, list[Any]] = {}
+    reserved_keys = {"id", "module", "env_args", "state_columns"}
+    for key, values in matrix_raw.items():
+        if not isinstance(key, str) or not key:
+            raise ValueError(f"environment '{env_id}' matrix keys must be non-empty strings.")
+        if key in reserved_keys:
+            raise ValueError(f"environment '{env_id}' matrix cannot vary '{key}'.")
+        if isinstance(values, tuple):
+            values = list(values)
+        elif not isinstance(values, list):
+            raise ValueError(f"environment '{env_id}' matrix['{key}'] must be a list of values.")
+        if not values:
+            raise ValueError(f"environment '{env_id}' matrix['{key}'] must contain at least one value.")
+        matrix[key] = list(values)
+
+    exclude_raw = entry.get("matrix_exclude")
+    exclude_list: list[dict[str, Any]] = []
+    if exclude_raw is not None:
+        if not isinstance(exclude_raw, list):
+            raise ValueError(f"environment '{env_id}' matrix_exclude must be a list of mappings.")
+        for pattern in exclude_raw:
+            if not isinstance(pattern, MutableMapping):
+                raise ValueError(f"environment '{env_id}' matrix_exclude entries must be mappings.")
+            pattern_dict = dict(pattern)
+            invalid_keys = set(pattern_dict) - set(matrix)
+            if invalid_keys:
+                invalid = ", ".join(sorted(invalid_keys))
+                raise ValueError(f"environment '{env_id}' matrix_exclude entry references unknown keys: {invalid}.")
+            exclude_list.append(pattern_dict)
+
+    id_format = entry.get("matrix_id_format")
+    if id_format is not None and not isinstance(id_format, str):
+        raise ValueError(f"environment '{env_id}' matrix_id_format must be a string when provided.")
+
+    matrix_keys = list(matrix.keys())
+    matrix_values = [matrix[key] for key in matrix_keys]
+
+    variants: list[dict[str, Any]] = []
+    seen_variant_ids: set[str] = set()
+    for combo_values in itertools.product(*matrix_values) if matrix_keys else [()]:
+        combo = dict(zip(matrix_keys, combo_values))
+        if any(_matches_matrix_exclude(combo, pattern) for pattern in exclude_list):
+            continue
+
+        variant = {key: deepcopy(value) for key, value in base_payload.items()}
+        env_args = variant.setdefault("env_args", {})
+        if not isinstance(env_args, MutableMapping):
+            raise ValueError(f"environment '{env_id}' env_args must be a mapping.")
+
+        for key, value in combo.items():
+            if value is None:
+                continue
+            if key in scalar_fields:
+                variant[key] = value
+            else:
+                env_args[key] = value
+
+        format_values = {key: _format_matrix_value(value) for key, value in combo.items()}
+        format_values["base"] = env_id
+        if id_format:
+            try:
+                variant_id = id_format.format(**format_values)
+            except KeyError as exc:
+                missing = exc.args[0]
+                raise ValueError(
+                    f"environment '{env_id}' matrix_id_format references unknown key '{missing}'."
+                ) from exc
+        else:
+            suffix_parts = [f"{key}-{_format_matrix_value(value)}" for key, value in combo.items() if value is not None]
+            variant_id = env_id if not suffix_parts else f"{env_id}-{'-'.join(suffix_parts)}"
+
+        if not isinstance(variant_id, str) or not variant_id:
+            raise ValueError(f"environment '{env_id}' matrix generated an invalid id '{variant_id!r}'.")
+        if variant_id in seen_variant_ids:
+            raise ValueError(f"environment '{env_id}' matrix generated duplicate id '{variant_id}'.")
+        seen_variant_ids.add(variant_id)
+
+        if not isinstance(env_args, dict):
+            env_args = dict(env_args)
+            variant["env_args"] = env_args
+
+        variant["id"] = variant_id
+        variant["_matrix_base_id"] = env_id  # Track the base ID for job expansion
+        variants.append(variant)
+
+    if not variants:
+        raise ValueError(f"environment '{env_id}' matrix produced no variants after exclusions.")
+
+    return variants
+
+
 def _load_mapping_entries(source: Any, base_dir: Path, context: str) -> list[dict[str, Any]]:
     if source is None:
         return []
@@ -284,11 +416,29 @@ def build_run_config(data: Mapping[str, Any], base_dir: Path) -> RunConfig:
     env_entries = _load_mapping_entries(data.get("envs"), base_dir, "envs")
     if not env_entries:
         raise ValueError("Run configuration must define at least one environment.")
+
+    scalar_fields = _get_env_config_scalar_fields()
+    expanded_env_entries: list[dict[str, Any]] = []
+    for entry in env_entries:
+        expanded_env_entries.extend(_expand_environment_entry(entry, scalar_fields=scalar_fields))
+    env_entries = expanded_env_entries
+
     envs: dict[str, EnvironmentConfig] = {}
+    # Track matrix base IDs -> expanded IDs for job expansion
+    matrix_base_to_expanded: dict[str, list[str]] = {}
+
     for entry in env_entries:
         env_id = entry.get("id")
         if not isinstance(env_id, str) or not env_id:
             raise ValueError("Environment entries require a non-empty string 'id'.")
+        if env_id in envs:
+            raise ValueError(f"Duplicate environment id '{env_id}' in configuration.")
+
+        # Track matrix expansions
+        matrix_base_id = entry.get("_matrix_base_id")
+        if matrix_base_id:
+            matrix_base_to_expanded.setdefault(matrix_base_id, []).append(env_id)
+
         num_examples = int(entry.get("num_examples", 5))
         if num_examples < 1 and num_examples != -1:
             raise ValueError(f"environment '{env_id}' num_examples must be >= 1 or -1 for all examples.")
@@ -351,9 +501,20 @@ def build_run_config(data: Mapping[str, Any], base_dir: Path) -> RunConfig:
                 raise ValueError(f"Job references unknown model '{model_id}'.")
             shared_env_args = _ensure_mapping(entry.get("env_args"), f"job ({model_id}) env_args")
             shared_sampling_args = _ensure_mapping(entry.get("sampling_args"), f"job ({model_id}) sampling_args")
+
+            # Expand environment references: if an env_id matches a matrix base ID, expand to all variants
+            expanded_env_ids: list[str] = []
             for env_id in env_ids:
-                if env_id not in envs:
+                if env_id in envs:
+                    # Direct match
+                    expanded_env_ids.append(env_id)
+                elif env_id in matrix_base_to_expanded:
+                    # Matrix base ID - expand to all variants
+                    expanded_env_ids.extend(matrix_base_to_expanded[env_id])
+                else:
                     raise ValueError(f"Job references unknown environment '{env_id}'.")
+
+            for env_id in expanded_env_ids:
                 jobs.append(
                     JobConfig(
                         model=model_id,
