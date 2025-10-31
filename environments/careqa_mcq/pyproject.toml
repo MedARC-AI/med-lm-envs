@@ -1,0 +1,22 @@
+[project]
+name = "careqa_mcq"
+description = "Evaluation environment for the HPAI-BSC/CareQA MCQ dataset"
+tags = ["healthcare", "medical-qa", "mcq", "clinical", "single-turn"]
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "verifiers>=0.1.4",
+    "datasets>=2.13.0"
+]
+
+[tool.prime.environment]
+loader = "careqa_mcq:load_environment"
+display_name = "CareQA"
+visibility = "PUBLIC"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["careqa_mcq.py"]
