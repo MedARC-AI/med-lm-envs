@@ -580,9 +580,7 @@ def build_run_config(data: Mapping[str, Any], base_dir: Path) -> RunConfig:
                     inline_model = ModelConfig(id=model_id, params=ModelParams(**inline_params))
                     existing_model = models.get(model_id)
                     if existing_model is not None and existing_model != inline_model:
-                        raise ValueError(
-                            f"Inline model definition for '{model_id}' conflicts with existing model."
-                        )
+                        raise ValueError(f"Inline model definition for '{model_id}' conflicts with existing model.")
                     models[model_id] = existing_model or inline_model
                 model_label = _coerce_optional_str(model_spec, f"{context} label") or model_id
             if not isinstance(model_id, str) or not model_id:
@@ -609,13 +607,16 @@ def build_run_config(data: Mapping[str, Any], base_dir: Path) -> RunConfig:
             # Expand environment references: if an env_id matches a matrix base ID, expand to all variants
             expanded_env_ids: list[str] = []
             for env_id in env_ids:
+                found = False
                 if env_id in envs:
                     # Direct match
                     expanded_env_ids.append(env_id)
-                elif env_id in matrix_base_to_expanded:
+                    found = True
+                if env_id in matrix_base_to_expanded:
                     # Matrix base ID - expand to all variants
                     expanded_env_ids.extend(matrix_base_to_expanded[env_id])
-                else:
+                    found = True
+                if not found:
                     raise ValueError(f"Job references unknown environment '{env_id}'.")
 
             for env_id in expanded_env_ids:
