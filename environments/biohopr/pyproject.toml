@@ -1,0 +1,23 @@
+[project]
+name = "biohopr"
+description = "BioHopR multiple-hop biomedical question answering evaluation"
+tags = ["biohopr", "multi-hop", "biomedical", "question-answering", "retrieval-augmented"]
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "verifiers>=0.1.6.post0",
+    "sentence-transformers>=5.0.0",
+    "medarc_verifiers>=0.1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+medarc_verifiers = { git = "https://github.com/MedARC-AI/med-lm-envs" }
+
+[tool.prime.environment]
+loader = "biohopr:load_environment"
+display_name = "BioHopR"
+visibility = "PUBLIC"
