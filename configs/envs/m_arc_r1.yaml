@@ -1,8 +1,0 @@
-id: m_arc-r1
-module: m_arc
-max_concurrent: 128
-num_examples: -1
-verbose: false
-env_args:
-  shuffle_answers: true
-  shuffle_seed: 1618

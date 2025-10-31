@@ -1,12 +1,15 @@
-- id: metamedqa
-  module: metamedqa
+- id: medbullets
+  module: medbullets
   rollouts_per_example: 1
   max_concurrent: 128
   num_examples: -1
   verbose: false
+  matrix:
+    num_options: [4, 5]
+  matrix_id_format: "{base}-op{num_options}"
 
-- id: metamedqa
-  module: metamedqa
+- id: medbullets
+  module: medbullets
   rollouts_per_example: 1
   max_concurrent: 128
   num_examples: -1
@@ -14,5 +17,6 @@
   env_args:
     shuffle_answers: true
   matrix:
+    num_options: [4, 5]
     shuffle_seed: [1618, 9331]
-  matrix_id_format: "{base}-r{shuffle_seed}"
+  matrix_id_format: "{base}-op{num_options}-r{shuffle_seed}"

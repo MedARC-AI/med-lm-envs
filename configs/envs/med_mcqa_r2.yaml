@@ -1,9 +1,0 @@
-id: med_mcqa-r2
-module: med_mcqa
-rollouts_per_example: 1
-max_concurrent: 128
-num_examples: -1
-verbose: false
-env_args:
-  shuffle_answers: true
-  shuffle_seed: 9331
