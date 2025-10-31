@@ -171,6 +171,97 @@ def _ensure_optional_str_list(value: Any, context: str) -> list[str] | None:
     return [str(item) for item in value]
 
 
+def _parse_model_entry(entry: Mapping[str, Any], base_dir: Path) -> ModelConfig:
+    if not isinstance(entry, MutableMapping):
+        raise ValueError("Model entries must be mappings.")
+    entry_dict = dict(entry)
+    model_id = entry_dict.get("id")
+    if not isinstance(model_id, str) or not model_id:
+        raise ValueError("Model entries require a non-empty string 'id'.")
+    params_raw = entry_dict.get("params")
+    if params_raw is None:
+        params_mapping = entry_dict
+        context_prefix = f"model '{model_id}'"
+    else:
+        params_mapping = _ensure_mapping(params_raw, f"model '{model_id}' params")
+        context_prefix = f"model '{model_id}' params"
+    model_params = ModelParams(
+        model=_coerce_optional_str(params_mapping.get("model"), f"{context_prefix}.model"),
+        headers=_ensure_headers(params_mapping.get("headers"), f"{context_prefix}.headers"),
+        sampling_args=_ensure_mapping(params_mapping.get("sampling_args"), f"{context_prefix} sampling_args"),
+        max_tokens=_coerce_optional_int(params_mapping.get("max_tokens"), f"{context_prefix}.max_tokens"),
+        temperature=_coerce_optional_float(params_mapping.get("temperature"), f"{context_prefix}.temperature"),
+        api_key_var=_coerce_optional_str(
+            params_mapping.get("api_key_var"),
+            f"{context_prefix}.api_key_var",
+        ),
+        api_base_url=_coerce_optional_str(
+            params_mapping.get("api_base_url"),
+            f"{context_prefix}.api_base_url",
+        ),
+        endpoints_path=_resolve_optional_path(params_mapping.get("endpoints_path"), base_dir),
+        env_args=_ensure_mapping(params_mapping.get("env_args"), f"{context_prefix} env_args"),
+        env_overrides=_ensure_env_overrides(params_mapping.get("env_overrides"), f"{context_prefix} env_overrides"),
+        timeout=_coerce_optional_float(params_mapping.get("timeout"), f"{context_prefix}.timeout"),
+        max_connections=_coerce_optional_int(
+            params_mapping.get("max_connections"),
+            f"{context_prefix}.max_connections",
+        ),
+        max_keepalive_connections=_coerce_optional_int(
+            params_mapping.get("max_keepalive_connections"),
+            f"{context_prefix}.max_keepalive_connections",
+        ),
+        max_retries=_coerce_optional_int(
+            params_mapping.get("max_retries"),
+            f"{context_prefix}.max_retries",
+        ),
+    )
+    return ModelConfig(id=model_id, params=model_params)
+
+
+def _collect_inline_model_params(
+    entry: Mapping[str, Any],
+    *,
+    base_dir: Path,
+    context: str,
+) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    if "headers" in entry:
+        params["headers"] = _ensure_headers(entry["headers"], f"{context} headers")
+    if "max_tokens" in entry:
+        params["max_tokens"] = _coerce_optional_int(entry["max_tokens"], f"{context} max_tokens")
+    if "temperature" in entry:
+        params["temperature"] = _coerce_optional_float(entry["temperature"], f"{context} temperature")
+    if "api_key_var" in entry:
+        params["api_key_var"] = _coerce_optional_str(entry["api_key_var"], f"{context} api_key_var")
+    if "api_base_url" in entry:
+        params["api_base_url"] = _coerce_optional_str(entry["api_base_url"], f"{context} api_base_url")
+    if "endpoints_path" in entry:
+        endpoints_path = entry["endpoints_path"]
+        params["endpoints_path"] = _resolve_optional_path(
+            _coerce_optional_str(endpoints_path, f"{context} endpoints_path"),
+            base_dir,
+        )
+    if "env_overrides" in entry:
+        params["env_overrides"] = _ensure_env_overrides(entry["env_overrides"], f"{context} env_overrides")
+    if "env_args" in entry:
+        params["env_args"] = _ensure_mapping(entry["env_args"], f"{context} env_args")
+    if "sampling_args" in entry:
+        params["sampling_args"] = _ensure_mapping(entry["sampling_args"], f"{context} sampling_args")
+    if "timeout" in entry:
+        params["timeout"] = _coerce_optional_float(entry["timeout"], f"{context} timeout")
+    if "max_connections" in entry:
+        params["max_connections"] = _coerce_optional_int(entry["max_connections"], f"{context} max_connections")
+    if "max_keepalive_connections" in entry:
+        params["max_keepalive_connections"] = _coerce_optional_int(
+            entry["max_keepalive_connections"],
+            f"{context} max_keepalive_connections",
+        )
+    if "max_retries" in entry:
+        params["max_retries"] = _coerce_optional_int(entry["max_retries"], f"{context} max_retries")
+    return params
+
+
 def _sanitize_slug(value: str) -> str:
     return "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in value)
 
@@ -332,6 +423,21 @@ def _load_mapping_entries(source: Any, base_dir: Path, context: str) -> list[dic
     raise ValueError(f"{context} must be a list of mappings or paths to YAML files.")
 
 
+def _load_inline_model_entries(source: Any) -> list[dict[str, Any]]:
+    if source is None:
+        return []
+    if isinstance(source, MutableMapping):
+        return [dict(source)]
+    if isinstance(source, list):
+        entries: list[dict[str, Any]] = []
+        for item in source:
+            if not isinstance(item, MutableMapping):
+                raise ValueError("models entries must be mappings.")
+            entries.append(dict(item))
+        return entries
+    raise ValueError("models must be provided as a list of mappings.")
+
+
 def _load_job_entries(source: Any, base_dir: Path) -> list[dict[str, Any]]:
     if source is None:
         return []
@@ -368,50 +474,11 @@ def load_run_config(config_path: Path) -> RunConfig:
 
 def build_run_config(data: Mapping[str, Any], base_dir: Path) -> RunConfig:
     data = dict(data)
-    models_entries = _load_mapping_entries(data.get("models"), base_dir, "models")
-    if not models_entries:
-        raise ValueError("Run configuration must define at least one model.")
+    models_entries = _load_inline_model_entries(data.get("models"))
     models: dict[str, ModelConfig] = {}
     for entry in models_entries:
-        model_id = entry.get("id")
-        if not isinstance(model_id, str) or not model_id:
-            raise ValueError("Model entries require a non-empty string 'id'.")
-        params_mapping = _ensure_mapping(entry.get("params"), f"model '{model_id}' params")
-        model_params = ModelParams(
-            model=_coerce_optional_str(params_mapping.get("model"), f"model '{model_id}' params.model"),
-            headers=_ensure_headers(params_mapping.get("headers"), f"model '{model_id}' params.headers"),
-            sampling_args=_ensure_mapping(params_mapping.get("sampling_args"), f"model '{model_id}' sampling_args"),
-            max_tokens=_coerce_optional_int(params_mapping.get("max_tokens"), f"model '{model_id}' params.max_tokens"),
-            temperature=_coerce_optional_float(
-                params_mapping.get("temperature"), f"model '{model_id}' params.temperature"
-            ),
-            api_key_var=_coerce_optional_str(
-                params_mapping.get("api_key_var"), f"model '{model_id}' params.api_key_var"
-            ),
-            api_base_url=_coerce_optional_str(
-                params_mapping.get("api_base_url"), f"model '{model_id}' params.api_base_url"
-            ),
-            endpoints_path=_resolve_optional_path(params_mapping.get("endpoints_path"), base_dir),
-            env_args=_ensure_mapping(params_mapping.get("env_args"), f"model '{model_id}' env_args"),
-            env_overrides=_ensure_env_overrides(
-                params_mapping.get("env_overrides"),
-                f"model '{model_id}' env_overrides",
-            ),
-            timeout=_coerce_optional_float(params_mapping.get("timeout"), f"model '{model_id}' params.timeout"),
-            max_connections=_coerce_optional_int(
-                params_mapping.get("max_connections"),
-                f"model '{model_id}' params.max_connections",
-            ),
-            max_keepalive_connections=_coerce_optional_int(
-                params_mapping.get("max_keepalive_connections"),
-                f"model '{model_id}' params.max_keepalive_connections",
-            ),
-            max_retries=_coerce_optional_int(
-                params_mapping.get("max_retries"),
-                f"model '{model_id}' params.max_retries",
-            ),
-        )
-        models[model_id] = ModelConfig(id=model_id, params=model_params)
+        model_config = _parse_model_entry(entry, base_dir)
+        models[model_config.id] = model_config
 
     env_entries = _load_mapping_entries(data.get("envs"), base_dir, "envs")
     if not env_entries:
@@ -477,15 +544,52 @@ def build_run_config(data: Mapping[str, Any], base_dir: Path) -> RunConfig:
     jobs_entries = _load_job_entries(data.get("jobs"), base_dir)
     jobs: list[JobConfig] = []
     if not jobs_entries:
+        if not models:
+            raise ValueError("Run configuration must define at least one model.")
         for model_id in models:
             for env_id in envs:
                 jobs.append(JobConfig(model=model_id, env=env_id))
     else:
         for entry in jobs_entries:
-            model_id = entry.get("model")
+            model_spec = entry.get("model")
+            inline_model = None
+            model_label: str | None = None
+            if isinstance(model_spec, MutableMapping):
+                inline_model = _parse_model_entry(model_spec, base_dir)
+                existing_model = models.get(inline_model.id)
+                if existing_model is not None and existing_model != inline_model:
+                    raise ValueError(f"Inline model definition for '{inline_model.id}' conflicts with existing model.")
+                models[inline_model.id] = existing_model or inline_model
+                model_id = inline_model.id
+                model_label = inline_model.params.model or inline_model.id
+            else:
+                model_id_override = entry.get("model_id")
+                if model_id_override is not None:
+                    model_id = _coerce_optional_str(model_id_override, "job model_id")
+                    if model_id is None:
+                        raise ValueError("job model_id must be a non-empty string when provided.")
+                else:
+                    model_id = model_spec
+                if not isinstance(model_id, str) or not model_id:
+                    raise ValueError("Job entries require a non-empty 'model'.")
+                context = f"job model '{model_id}'"
+                inline_params = _collect_inline_model_params(entry, base_dir=base_dir, context=context)
+                if inline_params or model_id not in models:
+                    model_value = _coerce_optional_str(model_spec, f"{context} value")
+                    inline_params.setdefault("model", model_value)
+                    inline_model = ModelConfig(id=model_id, params=ModelParams(**inline_params))
+                    existing_model = models.get(model_id)
+                    if existing_model is not None and existing_model != inline_model:
+                        raise ValueError(
+                            f"Inline model definition for '{model_id}' conflicts with existing model."
+                        )
+                    models[model_id] = existing_model or inline_model
+                model_label = _coerce_optional_str(model_spec, f"{context} label") or model_id
             if not isinstance(model_id, str) or not model_id:
                 raise ValueError("Job entries require a non-empty 'model'.")
             job_name = _coerce_optional_str(entry.get("name"), f"job ({model_id}) name")
+            if job_name is None:
+                job_name = model_label or model_id
             env_values = entry.get("envs")
             if env_values is not None:
                 if not isinstance(env_values, list):

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from medarc_verifiers.cli._benchmark_utils import build_run_config
+from medarc_verifiers.cli._benchmark_utils import build_run_config, expand_jobs
 
 
 def _base_config(tmp_path: Path) -> dict:
@@ -136,3 +136,93 @@ def test_matrix_updates_scalar_fields(tmp_path: Path) -> None:
     assert run_config.envs["env-top-n5-r1"].rollouts_per_example == 1
     assert run_config.envs["env-top-n7-r2"].num_examples == 7
     assert run_config.envs["env-top-n7-r2"].rollouts_per_example == 2
+
+
+def test_inline_model_definition_in_job(tmp_path: Path) -> None:
+    config = {
+        "name": "inline-model",
+        "output_dir": str(tmp_path / "runs"),
+        "envs": [
+            {
+                "id": "env-inline",
+                "module": "env_module",
+            }
+        ],
+        "jobs": [
+            {
+                "model": {
+                    "id": "inline-model-id",
+                    "params": {"model": "openai/inline-test", "max_tokens": 256},
+                },
+                "env": "env-inline",
+            }
+        ],
+    }
+
+    run_config = build_run_config(config, tmp_path)
+    assert "inline-model-id" in run_config.models
+
+    resolved_jobs = expand_jobs(run_config)
+    assert len(resolved_jobs) == 1
+    resolved_job = resolved_jobs[0]
+    assert resolved_job.model.id == "inline-model-id"
+    assert resolved_job.model.params.model == "openai/inline-test"
+
+
+def test_top_level_job_model_params(tmp_path: Path) -> None:
+    config = {
+        "name": "top-level",
+        "output_dir": str(tmp_path / "runs"),
+        "envs": [
+            {
+                "id": "env-top-level",
+                "module": "env_module",
+            }
+        ],
+        "jobs": [
+            {
+                "model": "openai/gpt-oss-20b",
+                "api_base_url": "http://localhost:8000/v1",
+                "sampling_args": {"temperature": 0.3},
+                "env_args": {"max_tokens": 1024},
+                "envs": ["env-top-level"],
+            }
+        ],
+    }
+
+    run_config = build_run_config(config, tmp_path)
+    assert "openai/gpt-oss-20b" in run_config.models
+    model_cfg = run_config.models["openai/gpt-oss-20b"]
+    assert model_cfg.params.api_base_url == "http://localhost:8000/v1"
+    assert model_cfg.params.model == "openai/gpt-oss-20b"
+    assert model_cfg.params.sampling_args == {"temperature": 0.3}
+    assert model_cfg.params.env_args == {"max_tokens": 1024}
+
+    resolved_jobs = expand_jobs(run_config)
+    assert resolved_jobs[0].name == "openai/gpt-oss-20b"
+
+
+def test_model_id_override_defaults_name(tmp_path: Path) -> None:
+    config = {
+        "name": "model-id",
+        "output_dir": str(tmp_path / "runs"),
+        "envs": [
+            {
+                "id": "env-id",
+                "module": "env_module",
+            }
+        ],
+        "jobs": [
+            {
+                "model": "openai/gpt-oss-20b",
+                "model_id": "gpt-oss-20b",
+                "envs": ["env-id"],
+            }
+        ],
+    }
+
+    run_config = build_run_config(config, tmp_path)
+    assert "gpt-oss-20b" in run_config.models
+    model_cfg = run_config.models["gpt-oss-20b"]
+    assert model_cfg.params.model == "openai/gpt-oss-20b"
+    assert run_config.jobs[0].name == "openai/gpt-oss-20b"

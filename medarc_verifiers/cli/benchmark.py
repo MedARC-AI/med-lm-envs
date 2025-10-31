@@ -90,11 +90,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to the benchmark configuration YAML file.",
     )
     parser.add_argument(
-        "--models",
-        "-M",
-        help="Override the models source with a YAML file or directory; falls back to the config entry or '<config_dir>/models'.",
-    )
-    parser.add_argument(
         "--envs",
         "-E",
         help="Override the environments source with a YAML file or directory; falls back to the config entry or '<config_dir>/envs'.",
@@ -156,14 +151,10 @@ def prepare_run_config(args: argparse.Namespace) -> tuple[RunConfig, Path, Mappi
 
     base_dir = jobs_path.parent
 
-    if args.models:
-        data["models"] = str(Path(args.models).expanduser())
-    elif "models" not in data:
-        models_dir = data.pop("models_dir", None)
-        if models_dir is not None:
-            data["models"] = str(Path(models_dir).expanduser())
-        else:
-            data["models"] = str(base_dir / "models")
+    if "models_dir" in data:
+        raise ValueError(
+            "The 'models_dir' setting is no longer supported; inline model definitions directly in the jobs configuration."
+        )
 
     if args.envs:
         data["envs"] = str(Path(args.envs).expanduser())
