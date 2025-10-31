@@ -142,19 +142,11 @@ uv run medarc-eval mmlu_pro_health --print-env-schema
 
 ## Benchmark CLI
 
-Use the `benchmark` command to run a series of model/environment evaluations sequentially. Invoke it with `--jobs <path>`; the referenced YAML can inline models and environments or they can live alongside the file under `models/` and `envs/`. By default, run artifacts are written to `<jobs_dir>/../runs`. A single-file example looks like this:
+Use the `benchmark` command to run a series of model/environment evaluations sequentially. Invoke it with `--jobs <path>`; the referenced YAML must define models inline (either in a top-level `models` list or directly on each job entry) and can reference environments inline or via a sibling `envs/` directory. By default, run artifacts are written to `<jobs_dir>/../runs`. A single-file example looks like this:
 
 ```yaml
 name: medarc-baseline
 output_dir: runs
-models:
-  - id: gpt-4.1-mini
-    params:
-      model: gpt-4.1-mini
-      sampling_args:
-        temperature: 0.1
-      env_args:
-        judge_name: gpt-4.1-mini
 envs:
   - id: medqa
     module: medqa
@@ -162,9 +154,27 @@ envs:
     rollouts_per_example: 1
 jobs:
   - model: gpt-4.1-mini
+    temperature: 0.1
+    env_args:
+      judge_name: gpt-4.1-mini
     env: medqa
-    seed: 123
 ```
+
+Inline models accept the same parameters that previously lived under `params` (`api_base_url`, `api_key_var`, `headers`, `sampling_args`, `env_overrides`, connection limits, etc.). If you prefer to reuse a model across several jobs, add it once under a top-level `models` list:
+
+```yaml
+models:
+  - id: gpt-4.1-mini
+    model: gpt-4.1-mini
+    api_base_url: https://api.openai.com/v1
+    timeout: 120
+
+jobs:
+  - model: gpt-4.1-mini
+    envs: [medqa, medbullets]
+```
+
+A job without an explicit `name` defaults to the `model` string (or `model_id` when provided). The legacy `configs/models/*.yaml` files and `models_dir` option are no longer supported; migrate any remaining entries by copying their contents into either a top-level `models` list or directly into each job definition as shown above.
 
 If `jobs` is omitted the CLI evaluates every model × environment pair defined in the config. Run a dry run to inspect the expanded matrix:
 
@@ -222,43 +232,41 @@ Entries without `matrix` continue to work unchanged. The loader validates duplic
 
 ### Split configuration files
 
-For larger suites you can keep per-model, per-environment, and job matrices in separate YAML documents:
+For larger suites you can still keep environment definitions in dedicated YAML files while keeping models inline. A common layout is:
 
 ```
 configs/
-├── models/
-│   ├── gpt4-mini.yaml
-│   └── medarc-judge.yaml
 ├── envs/
 │   ├── medqa.yaml
 │   └── medcasereasoning.yaml
 └── jobs.yaml
 ```
 
-`gpt4-mini.yaml`
-```yaml
-id: gpt-4.1-mini
-params:
-  model: gpt-4.1-mini
-```
-
-`medqa.yaml`
+`envs/medqa.yaml`
 ```yaml
 id: medqa
+module: medqa
 num_examples: 25
 rollouts_per_example: 1
 ```
 
 `jobs.yaml`
 ```yaml
-- model: gpt-4.1-mini
-  envs:
-    - medqa
-    - medcasereasoning
-- model: medarc-judge
-  env: medqa
-  seed: 314
+name: medarc-suite
+envs: ./envs
+jobs:
+  - model: gpt-4.1-mini
+    api_base_url: https://api.openai.com/v1
+    envs:
+      - medqa
+      - medcasereasoning
+  - model: medarc/oss-judge
+    model_id: oss-judge
+    headers:
+      X-Trace-Id: judge-run
+    env: medqa
 ```
+
 Run everything with:
 
 ```bash
@@ -287,10 +295,11 @@ uv run medarc-export \
 
 When not in `--dry-run` or `--schema-only` mode, the CLI writes one directory per `env_id`, each containing either a single `data.parquet` file or partitioned files (e.g., `model-gpt-4_1-mini.parquet`). An `env_index.json` manifest summarises row counts, partition columns, and dataset paths for downstream tooling.
 
-The loader expands each referenced file (individual model/env mappings or the shared jobs list) before scheduling the run. Paths are resolved relative to the jobs file.
+The loader expands each referenced file (environment mappings or the shared jobs list) before scheduling the run. Paths are resolved relative to the jobs file.
 
-- When `models` or `envs` point to directories, every `*.yaml` / `*.yml` file inside is loaded in sorted order. Paths are resolved relative to the jobs file first, then relative to the repository root.
+- When `envs` points to a directory, every `*.yaml` / `*.yml` file inside is loaded in sorted order. Paths are resolved relative to the jobs file first, then relative to the repository root.
+- Inline models must be declared either at the job level or under a top-level `models` list within the same YAML document.
 - When a job mapping supplies `envs`, the CLI fans out one evaluation per environment; omit `envs` (and `env`) to target every environment defined in the run.
 - Optional `env_args`, `sampling_args`, and `seed` entries on the job apply to each generated evaluation. If an environment expects a `seed` argument, include it inside `env_args` explicitly.
-- Override defaults with CLI flags such as `--models`, `--envs`, `--env-dir-path`, and `--endpoints-path` when you want to load definitions from a different location.
+- Override defaults with CLI flags such as `--envs`, `--env-dir-path`, and `--endpoints-path` when you want to load definitions from a different location.
 - Job folders are named after the job's `name`; when omitted, the CLI generates `<model>-<random>-<env>` automatically.
