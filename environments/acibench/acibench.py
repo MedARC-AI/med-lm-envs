@@ -10,12 +10,14 @@ each transcript (listener type, writer type) and the section headers from the gr
 note to generate a highly specific and tailored prompt for the LLM.
 
 Reference to the original paper and dataset:
-@article{Yim_2023,
-    author = {Yim, Wen-wai and Fu, Yujuan and Ben Abacha, Asma and Snider, Neal and Lin, Thomas and Yetisgen, Meliha},
-    title = {Aci-bench: a Novel Ambient Clinical Intelligence Dataset for Benchmarking Automatic Visit Note Generation},
-    journal = {Scientific Data},
-    year = {2023},
-    ...
+@article{aci-bench,
+  author = {Wen{-}wai Yim and
+                Yujuan Fu and
+                Asma {Ben Abacha} and
+                Neal Snider and Thomas Lin and Meliha Yetisgen},
+  title = {ACI-BENCH: a Novel Ambient Clinical Intelligence Dataset for Benchmarking Automatic Visit Note Generation},
+  journal = {Nature Scientific Data},
+  year = {2023}
 }
 """
 
