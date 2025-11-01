@@ -6,18 +6,17 @@
 - **Tags**: `medical`, `clinical`, `summarization`, `note-generation`, `single-turn`, `evaluation`
 
 ### Datasets
-- **Primary dataset(s)**: `harsh-c137/aci-bench-medarc-eval` on Hugging Face. This is the final, cleaned, and de-duplicated version of the ACI-BENCH corpus, containing 225 unique encounters.
+- **Primary dataset(s)**: `harsh-c137/aci-bench-medarc-eval` on Hugging Face. This is the cleaned, and de-duplicated version of the ACI-BENCH corpus, containing 387 unique encounters.
 - **Source links**: [Paper](https://arxiv.org/abs/2306.02022), [HF Dataset](https://huggingface.co/datasets/harsh-c137/aci-bench-medarc-eval)
-- **Split sizes**: The script loads the entire dataset and performs a reproducible 80/20 split in-memory, resulting in:
-    - **Train**: 180
-    - **Validation**: 45
+- **Split sizes**: The script loads the entire dataset and performs a reproducible 20/80 split in-memory, resulting in:
+    - **Train**: 77
+    - **Validation**: 310
 
 ### Task
 - **Type**: `single-turn`
 - **Parser**: `vf.Parser` using a custom function to extract the text content from the model's completion object.
-- **Dynamic Prompting**: Before each evaluation, the script inspects the ground-truth `note`. It extracts all lines written in ALL CAPS (e.g., "HISTORY OF PRESENT ILLNESS", "ASSESSMENT AND PLAN") and dynamically injects them into the prompt. This provides the model with the exact structure and order of section headers it is expected to generate, ensuring a fair evaluation.
+- **Context-Aware Dynamic Prompting**: This is the core feature of the environment. Before each evaluation, the script inspects the metadata of the transcript (`transcript_listener` and `transcript_writer`) and the section headers of the ground-truth `note`. It then generates a highly-tailored prompt that instructs the model on how to handle the specific type of conversation (e.g., natural dialogue, dictation, or interaction with a virtual assistant) and provides the exact section headers to use.
 - **Rubric overview**: The rubric calculates three key metrics to evaluate the quality of the generated clinical note: ROUGE, BERTScore, and BLEURT.
-
 ### Quickstart
 Run a default zero-shot evaluation using an OpenAI model:
 
