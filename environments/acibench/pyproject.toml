@@ -1,0 +1,32 @@
+[project]
+name = "acibench"
+version = "0.1.0"
+description = "ACI-BENCH environment for benchmarking clinical note generation from dialogue."
+authors = [{name = "Harsh Deshpande"}]
+tags = ["medical", "clinical", "summarization", "note-generation", "single-turn", "evaluation"]
+requires-python = ">=3.11"
+dependencies = [
+    "verifiers>=0.1.4",
+    "datasets",
+    "numpy",
+    "rouge",
+    "bert-score",
+    "bleurt @ git+https://github.com/google-research/bleurt.git",
+    "requests",
+    "tqdm"
+]
+
+[tool.prime.environment]
+loader = "acibench:load_environment"
+display_name = "ACI-BENCH"
+visibility = "PUBLIC"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["acibench.py"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
