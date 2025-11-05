@@ -19,7 +19,7 @@
 ### Task
 - **Type**: single-turn
 - **Parser**: XMLParser(default)/ThinkParser
-- **Rubric overview**: Precision based on embedded cosine similarity of list of possible answers
+- **Rubric overview**: LLM as a Judge or Precision based on embedded cosine similarity of list of possible answers
 
 ### Quickstart
 Run an evaluation with default settings:
@@ -46,7 +46,10 @@ Document any supported environment arguments and their meaning. Example:
 | `system_prompt` | str | `None` | Optional custom system prompt. |
 | `answer_format` | str | `AnswerFormat.XML` | Determines how to parse completion for answer. Also sets system prompt if `system_prompt` not set. |
 | `task` | str | `biohopr_hop2` | The task to evaluate against. Determines which prompts are used from the BioHopR paper. Valid options are `['biohopr_hop1','biohopr_hop2','biohopr_hop1_multi','biohopr_hop2_multi', 'all']`. `task` also set for verifiers dataset for use with EnvGroup and RubricGroup |
-
+| `eval_method` | str | `judge` | Whether to use metrics from paper, or llm as a judge. Values: "judge" , "metrics", or "judge-only"
+| `judge_model` | str | `gpt-4o-mini` | Model name to use for judging
+| `judge_base_url` | str | `None` | Optional base URL for custom OpenAI-compatible API endpoint
+| `judge_api_key` | str | `None` | Optional API key for OpenAI-compatible API endpoint
 
 ### Metrics
 Summarize key metrics your rubric emits and how they’re interpreted.
@@ -54,5 +57,6 @@ Summarize key metrics your rubric emits and how they’re interpreted.
 | Metric | Meaning |
 | ------ | ------- |
 | `reward` | Main scalar reward (weighted sum of criteria). Is the same as `embedded_precision` |
+| `llm_as_a_judge` | Reward function that uses LLM judge to evaluate medical diagnosis equivalence. |
 | `embedded_precision` | Precision based on embedded cosine similarity. A completion is embedded, that compared to a list of possible answer embeddings. If cosine similarity is >tau(0.9) then it is considered a true positive. Final score is true_positives/predicted_responses. |
 
