@@ -4,6 +4,9 @@ description = "LongHealth: A Question Answering Benchmark with Long Clinical Doc
 tags = ["medical", "long-context"]
 version = "0.1.0"
 requires-python = ">=3.10"
+authors = [
+    { name = "Shamus Sim Zi Yang", email = "shamus.sim@monash.edu" },
+]
 dependencies = [
     "verifiers>=0.1.5.post0",
     "medarc_verifiers>=0.1.0",
