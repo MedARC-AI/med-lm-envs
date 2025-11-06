@@ -11,20 +11,19 @@ Originally licensed Apache-2.0 license
 }
 """
 
+from enum import Enum
 import json
 import os
 import random
-from typing import Any, Literal
+from typing import Any
 
 import verifiers as vf
 from datasets import Dataset
 from medarc_verifiers.rewards.multiple_choice_accuracy import multiple_choice_accuracy
 from medarc_verifiers.utils.randomize_multiple_choice import randomize_multiple_choice
-from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
 # Reuse the system prompt from the original LongHealth implementation
-LONGHEALTH_SYSTEM_PROMPT = """
-You are a highly skilled and detail-oriented assistant, specifically trained to assist medical professionals in interpreting and extracting key information from medical documents. Your primary responsibility will be to analyze discharge letters from hospitals. When you receive one or more of these letters, you will be expected to carefully review the contents and accurately answer multiple-choice questions related to these documents. 
+LONGHEALTH_SYSTEM_PROMPT = """You are a highly skilled and detail-oriented assistant, specifically trained to assist medical professionals in interpreting and extracting key information from medical documents. Your primary responsibility will be to analyze discharge letters from hospitals. When you receive one or more of these letters, you will be expected to carefully review the contents and accurately answer multiple-choice questions related to these documents. 
 
 Your answers should be:
 1. Accurate: Make sure your answers are based on the information provided in the letters.
@@ -33,6 +32,12 @@ Your answers should be:
 
 Remember, your job is to streamline the physician's decision-making process by providing them with accurate and relevant information from discharge summaries. Efficiency and reliability are key.
 """
+
+
+class LongHealthTask(str, Enum):
+    TASK1 = "task1"
+    TASK2 = "task2"
+    ALL = "all"
 
 
 def _build_longhealth_prompt(
@@ -456,29 +461,21 @@ def _prepare_task2_data(
     return examples
 
 
-def accuracy(completion: Any, answer: str, parser: vf.Parser, info: dict | None = None, **kwargs) -> float:
-    try:
-        parsed = parser.parse_answer(completion) or ""
-        prefix = None
-    except Exception as e:
-        parsed = completion
-        prefix = "The correct answer is"
+def accuracy(completion: Any, answer: str, info: dict | None = None, **kwargs) -> float:
     answer_text = info.get("correct_answer_text", None) if info else None
     is_correct = multiple_choice_accuracy(
-        llm_answer=parsed, answer_letter=answer, answer_text=answer_text, prefix=prefix
+        llm_answer=completion, answer_letter=answer, answer_text=answer_text, prefix="The correct answer is"
     )
     return 1.0 if is_correct else 0.0
 
 
 def load_environment(
-    task: Literal["task1", "task2", "all"] = "task1",
+    task: str | LongHealthTask = LongHealthTask.TASK1,
     max_context_tokens: int = 16000,
-    use_think: bool = False,
     shuffle_docs: bool = True,
     doc_shuffle_seed: int | None = -1,
     shuffle_answers: bool = False,
     shuffle_seed: int | None = 1618,
-    use_longhealth_system_prompt: bool = True,
     max_examples: int = -1,
     **kwargs,
 ) -> vf.Environment:
@@ -489,12 +486,10 @@ def load_environment(
             - "task2": Negation detection + identification (Task 2 & 3)
             - "all": Both tasks combined
         max_context_tokens: Maximum tokens for document context (~14k for 16k models)
-        use_think: Whether to use <think></think> tags for reasoning
         shuffle_docs: Whether to shuffle document order (tests positional bias)
         doc_shuffle_seed: Seed for document shuffling (-1 for random each time)
         shuffle_answers: Whether to shuffle multiple-choice answers
         shuffle_seed: Seed for answer shuffling (None to disable, -1 for nondeterministic)
-        use_longhealth_system_prompt: Use LongHealth-specific system prompt
         max_examples: Limit number of examples (-1 for all)
 
     Returns:
@@ -527,16 +522,18 @@ def load_environment(
     if effective_doc_seed == -1 and not shuffle_answers and shuffle_seed not in (None, 1618):
         effective_doc_seed = shuffle_seed
 
+    task = LongHealthTask(task) if isinstance(task, str) else task
+
     # Prepare data based on task
-    if task == "task1":
+    if task == LongHealthTask.TASK1:
         examples = _prepare_task1_data(
             benchmark, max_context_tokens, shuffle_docs, effective_doc_seed, shuffle_answers, shuffle_seed
         )
-    elif task == "task2":
+    elif task == LongHealthTask.TASK2:
         examples = _prepare_task2_data(
             benchmark, max_context_tokens, shuffle_docs, effective_doc_seed, shuffle_answers, shuffle_seed
         )
-    elif task == "all":
+    elif task == LongHealthTask.ALL:
         task1_examples = _prepare_task1_data(
             benchmark, max_context_tokens, shuffle_docs, effective_doc_seed, shuffle_answers, shuffle_seed
         )
@@ -554,17 +551,7 @@ def load_environment(
     # Convert to HuggingFace Dataset
     eval_dataset = Dataset.from_list(examples)
 
-    # Setup parser and system prompt
-    parser = vf.ThinkParser(extract_boxed_answer) if use_think else vf.Parser(extract_boxed_answer)
-
-    if use_longhealth_system_prompt:
-        system_prompt = LONGHEALTH_SYSTEM_PROMPT
-    else:
-        system_prompt = THINK_BOXED_SYSTEM_PROMPT if use_think else BOXED_SYSTEM_PROMPT
-
     # Create rubric with accuracy reward
-    rubric = vf.Rubric(funcs=[accuracy], weights=[1.0], parser=parser)
+    rubric = vf.Rubric(funcs=[accuracy], weights=[1.0])
 
-    return vf.SingleTurnEnv(
-        eval_dataset=eval_dataset, system_prompt=system_prompt, parser=parser, rubric=rubric, **kwargs
-    )
+    return vf.SingleTurnEnv(eval_dataset=eval_dataset, system_prompt=LONGHEALTH_SYSTEM_PROMPT, rubric=rubric, **kwargs)
