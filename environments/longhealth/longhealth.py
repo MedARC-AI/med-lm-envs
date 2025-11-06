@@ -461,10 +461,11 @@ def _prepare_task2_data(
     return examples
 
 
-def accuracy(completion: Any, answer: str, info: dict | None = None, **kwargs) -> float:
+def accuracy(completion: Any, answer: str, parser: vf.Parser, info: dict | None = None, **kwargs) -> float:
+    parsed = parser.parse_answer(completion) or ""
     answer_text = info.get("correct_answer_text", None) if info else None
     is_correct = multiple_choice_accuracy(
-        llm_answer=completion, answer_letter=answer, answer_text=answer_text, prefix="The correct answer is"
+        llm_answer=parsed, answer_letter=answer, answer_text=answer_text, prefix="The correct answer is"
     )
     return 1.0 if is_correct else 0.0
 
@@ -544,6 +545,8 @@ def load_environment(
     else:
         raise ValueError(f"Unknown task: {task}. Must be 'task1', 'task2', or 'all'")
 
+    parser = vf.Parser()
+
     # Limit examples if requested
     if max_examples > 0:
         examples = examples[:max_examples]
@@ -552,6 +555,8 @@ def load_environment(
     eval_dataset = Dataset.from_list(examples)
 
     # Create rubric with accuracy reward
-    rubric = vf.Rubric(funcs=[accuracy], weights=[1.0])
+    rubric = vf.Rubric(funcs=[accuracy], parser=parser, weights=[1.0])
 
-    return vf.SingleTurnEnv(eval_dataset=eval_dataset, system_prompt=LONGHEALTH_SYSTEM_PROMPT, rubric=rubric, **kwargs)
+    return vf.SingleTurnEnv(
+        eval_dataset=eval_dataset, system_prompt=LONGHEALTH_SYSTEM_PROMPT, rubric=rubric, parser=parser, **kwargs
+    )
