@@ -1,9 +1,16 @@
+from enum import Enum
 import verifiers as vf
 from datasets import load_dataset
 from medarc_verifiers.prompts import AnswerFormat
 from medarc_verifiers.rewards.multiple_choice_accuracy import multiple_choice_accuracy
 from medarc_verifiers.utils.randomize_multiple_choice import randomize_multiple_choice
 from verifiers.utils.data_utils import extract_boxed_answer
+
+
+class QuestionType(str, Enum):
+    REASONING = "reasoning"
+    UNDERSTANDING = "understanding"
+    ALL = "all"
 
 
 def _get_system_prompt(use_think: bool, answer_format: AnswerFormat) -> str:
@@ -36,6 +43,7 @@ def _format_question_with_options(question: str, options: dict[str, str]) -> str
 
 
 def load_environment(
+    question_type: str | QuestionType = QuestionType.ALL,
     use_think: bool = False,
     shuffle_answers: bool = False,
     shuffle_seed: int | None = 1618,
@@ -47,6 +55,9 @@ def load_environment(
     """
     full_dataset = load_dataset("TsinghuaC3I/MedXpertQA", "Text")
     test_dataset = full_dataset["test"]
+    question_type = QuestionType(question_type) if isinstance(question_type, str) else question_type
+    if question_type != QuestionType.ALL:
+        test_dataset = test_dataset.filter(lambda x: str(x["question_type"]).strip().lower() == question_type.value)
 
     def _map(example: dict) -> dict:
         raw_options = example.get("options") or {}
@@ -74,6 +85,7 @@ def load_environment(
             "question": _format_question_with_options(example.get("question", ""), options),
             "answer": answer_letter if answer_letter else "",
             "info": info,
+            "task": question_type.value,
         }
 
     # Disable the Datasets cache when shuffling answers
