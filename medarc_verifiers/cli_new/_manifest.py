@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Sequence
 
 from medarc_verifiers.cli_new._job_builder import ResolvedJob
+from medarc_verifiers.cli_new.utils.shared import compute_checksum, resolve_env_identifier_or
 from medarc_verifiers.utils.pathing import project_root, to_project_relative
 
 MANIFEST_FILENAME = "run_manifest.json"
@@ -42,11 +43,8 @@ def _prune_nones(value: Any) -> Any:
 
 
 def _compute_checksum(payload: Mapping[str, Any]) -> str:
-    """Compute a deterministic checksum for a payload."""
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
-    import hashlib
-
-    return hashlib.sha256(encoded).hexdigest()
+    """Backward-compatible wrapper around shared.compute_checksum."""
+    return compute_checksum(payload)
 
 
 def compute_snapshot_checksum(snapshot: Mapping[str, Any]) -> str:
@@ -108,18 +106,15 @@ def _extract_seeds(env_args: Mapping[str, Any], sampling_args: Mapping[str, Any]
 
 
 def _resolve_env_identifier(job: ResolvedJob) -> str:
-    if job.env.id:
-        return job.env.id
-    if job.env.module:
-        return job.env.module
-    return job.job_id
+    return resolve_env_identifier_or(job.env, job.job_id)
 
 
 def _resolve_model_identifier(job: ResolvedJob) -> str:
-    if job.model.id:
-        return job.model.id
-    if job.model.model:
-        return job.model.model
+    mid = getattr(job.model, "id", None)
+    if mid:
+        return mid
+    if getattr(job.model, "model", None):
+        return job.model.model  # type: ignore[return-value]
     return job.job_id
 
 
@@ -295,7 +290,14 @@ class RunManifest:
         entry["reason"] = reason
         entry["ended_at"] = entry.get("ended_at") or timestamp()
         if source_entry:
-            for key in ("duration_seconds", "avg_reward", "metrics", "num_examples", "rollouts_per_example", "artifacts"):
+            for key in (
+                "duration_seconds",
+                "avg_reward",
+                "metrics",
+                "num_examples",
+                "rollouts_per_example",
+                "artifacts",
+            ):
                 if key in source_entry:
                     entry[key] = source_entry[key]
         if results_dir:

@@ -11,11 +11,29 @@ from pathlib import Path
 from omegaconf import OmegaConf
 
 from ._schemas import EnvironmentConfigSchema, RunConfigSchema
-from .utils.endpoint_utils import EnvMetadataCache, load_env_metadata
-from .utils.env_args import validate_env_arg_values
+from .utils.endpoint_utils import EnvMetadataCache
+from .utils.env_args import validate_env_args_or_raise
 
 logger = logging.getLogger(__name__)
 DEFAULT_ENV_FILE_SUFFIXES = (".yaml", ".yml")
+
+# Reserved keys that must not be included in matrix sweeps.
+RESERVED_MATRIX_KEYS = {
+    "id",
+    "module",
+    "env_args",
+    "matrix",
+    "matrix_exclude",
+    "matrix_id_format",
+    "matrix_base_id",
+    "state_columns",
+}
+
+# Scalar fields (non-env_args) that may be overridden by matrix combos.
+SCALAR_FIELD_NAMES = {
+    name for name in EnvironmentConfigSchema.model_fields if name not in RESERVED_MATRIX_KEYS and name != "env_args"
+}
+
 
 class ConfigFormatError(ValueError):
     """Raised when a configuration file cannot be interpreted as a mapping."""
@@ -55,20 +73,7 @@ def load_run_config(path: str | Path, *, env_default_root: str | Path | None = N
 
 
 def _expand_env_matrices(envs: dict[str, EnvironmentConfigSchema]) -> dict[str, EnvironmentConfigSchema]:
-    scalar_fields = {
-        name
-        for name in EnvironmentConfigSchema.model_fields
-        if name
-        not in {
-            "id",
-            "module",
-            "env_args",
-            "matrix",
-            "matrix_exclude",
-            "matrix_id_format",
-            "matrix_base_id",
-        }
-    }
+    scalar_fields = SCALAR_FIELD_NAMES
     expanded: dict[str, EnvironmentConfigSchema] = {}
     for env_id, env in envs.items():
         env_with_id = env if env.id else env.model_copy(update={"id": env_id})
@@ -99,18 +104,8 @@ def _expand_single_environment(
     base_id = env.id
     if not base_id:
         raise ValueError("environment entries must specify an id.")
-    reserved_keys = {
-        "id",
-        "module",
-        "env_args",
-        "matrix",
-        "matrix_exclude",
-        "matrix_id_format",
-        "matrix_base_id",
-        "state_columns",
-    }
     for key in matrix:
-        if key in reserved_keys:
+        if key in RESERVED_MATRIX_KEYS:
             raise ValueError(f"environment '{base_id}' matrix cannot vary '{key}'.")
 
     exclude_patterns = env.matrix_exclude or []
@@ -172,7 +167,9 @@ def _expand_single_environment(
     return variants
 
 
-def _normalize_config_fields(data: Mapping[str, Any], *, base_dir: Path, env_default_root: Path | None) -> dict[str, Any]:
+def _normalize_config_fields(
+    data: Mapping[str, Any], *, base_dir: Path, env_default_root: Path | None
+) -> dict[str, Any]:
     """Apply include expansion and shape normalization before schema validation."""
 
     normalized = dict(data)
@@ -286,6 +283,46 @@ def _ensure_no_duplicates(
         target[key] = value
 
 
+def _ingest_entries(
+    entry: Any,
+    *,
+    base_dir: Path,
+    context: str,
+    default_id: str | None,
+    collect_fn,
+    adapt_fn,
+    entry_label: str,
+    **collect_kwargs: Any,
+) -> dict[str, Any]:
+    """Generic ingest helper to normalize singular or included entries into a keyed dict.
+
+    - When ``entry`` is a mapping: adapt and ensure an id (using ``default_id`` when missing).
+    - Otherwise: collect entries via ``collect_fn`` and adapt each one.
+    - ``entry_label`` is used for error messages (e.g., "models['foo']").
+    """
+    accumulated: dict[str, Any] = {}
+    if isinstance(entry, Mapping):
+        adapted = adapt_fn(dict(entry))
+        if isinstance(adapted, dict) and default_id and not adapted.get("id"):
+            adapted["id"] = default_id
+        item_id = adapted.get("id")
+        if not item_id:
+            raise ValueError(f"{context} entries must include an 'id'.")
+        accumulated[str(item_id)] = adapted
+        return accumulated
+
+    sub_entries = collect_fn(entry, base_dir=base_dir, context=context, **collect_kwargs)
+    for sub_entry in sub_entries:
+        adapted = adapt_fn(sub_entry)
+        if isinstance(adapted, dict) and default_id and not adapted.get("id"):
+            adapted["id"] = default_id
+        item_id = adapted.get("id")
+        if not item_id:
+            raise ValueError(f"{context} entries must include an 'id'.")
+        accumulated[str(item_id)] = adapted
+    return accumulated
+
+
 def _ingest_model_entries(
     entry: Any,
     *,
@@ -293,27 +330,15 @@ def _ingest_model_entries(
     context: str,
     default_id: str | None = None,
 ) -> dict[str, Any]:
-    accumulated: dict[str, Any] = {}
-    if isinstance(entry, Mapping):
-        adapted = _adapt_model_entry(dict(entry))
-        if isinstance(adapted, dict) and default_id and not adapted.get("id"):
-            adapted["id"] = default_id
-        model_id = adapted.get("id")
-        if not model_id:
-            raise ValueError(f"{context} entries must include an 'id'.")
-        accumulated[str(model_id)] = adapted
-        return accumulated
-
-    sub_entries = _collect_model_entries(entry, base_dir=base_dir, context=context)
-    for sub_entry in sub_entries:
-        adapted = _adapt_model_entry(sub_entry)
-        if isinstance(adapted, dict) and default_id and not adapted.get("id"):
-            adapted["id"] = default_id
-        model_id = adapted.get("id")
-        if not model_id:
-            raise ValueError(f"{context} entries must include an 'id'.")
-        accumulated[str(model_id)] = adapted
-    return accumulated
+    return _ingest_entries(
+        entry,
+        base_dir=base_dir,
+        context=context,
+        default_id=default_id,
+        collect_fn=_collect_model_entries,
+        adapt_fn=_adapt_model_entry,
+        entry_label="model",
+    )
 
 
 def _ingest_env_entries(
@@ -324,27 +349,16 @@ def _ingest_env_entries(
     default_id: str | None = None,
     env_default_root: Path | None = None,
 ) -> dict[str, Any]:
-    accumulated: dict[str, Any] = {}
-    if isinstance(entry, Mapping):
-        adapted = _adapt_env_entry(dict(entry))
-        if isinstance(adapted, dict) and default_id and not adapted.get("id"):
-            adapted["id"] = default_id
-        env_id = adapted.get("id")
-        if not env_id:
-            raise ValueError(f"{context} entries must include an 'id'.")
-        accumulated[str(env_id)] = adapted
-        return accumulated
-
-    sub_entries = _collect_env_entries(entry, base_dir=base_dir, context=context, env_default_root=env_default_root)
-    for sub_entry in sub_entries:
-        adapted = _adapt_env_entry(sub_entry)
-        if isinstance(adapted, dict) and default_id and not adapted.get("id"):
-            adapted["id"] = default_id
-        env_id = adapted.get("id")
-        if not env_id:
-            raise ValueError(f"{context} entries must include an 'id'.")
-        accumulated[str(env_id)] = adapted
-    return accumulated
+    return _ingest_entries(
+        entry,
+        base_dir=base_dir,
+        context=context,
+        default_id=default_id,
+        collect_fn=_collect_env_entries,
+        adapt_fn=_adapt_env_entry,
+        entry_label="environment",
+        env_default_root=env_default_root,
+    )
 
 
 def _collect_model_entries(source: Any, *, base_dir: Path, context: str) -> list[dict[str, Any]]:
@@ -603,25 +617,17 @@ def _validate_env_args(envs: Iterable[EnvironmentConfigSchema]) -> None:
     cache: EnvMetadataCache = {}
     for env in envs:
         env_module = env.module or env.matrix_base_id or env.id
-        try:
-            metadata = load_env_metadata(env_module, cache=cache)
-        except ImportError as exc:
-            logger.warning("Cannot validate env_args for '%s': %s", env.id, exc)
+        if not env_module:
             continue
-        if not metadata:
-            continue
-
-        param_map = {param.name: param for param in metadata if getattr(param, "supports_cli", True)}
-        unknown = sorted(set(env.env_args) - set(param_map))
-        if unknown:
-            valid_params = ", ".join(sorted(param_map)) or "<none>"
-            msg = (
-                f"Environment '{env.id}' env_args contain unknown parameters: {', '.join(unknown)}."
-                f" Valid parameters: {valid_params}."
-            )
-            raise ValueError(msg)
-
-        validate_env_arg_values(env.id, env.env_args, metadata)
+        # Centralized validation: unknown/type checks; do not enforce requireds at load time.
+        validate_env_args_or_raise(
+            env_module,
+            env.env_args,
+            metadata=None,
+            metadata_cache=cache,
+            allow_unknown=False,
+            enforce_required=False,
+        )
 
 
 __all__ = ["ConfigFormatError", "load_run_config"]

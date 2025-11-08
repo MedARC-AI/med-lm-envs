@@ -8,7 +8,19 @@ import inspect
 import logging
 import types
 from dataclasses import dataclass
-from typing import Annotated, Any, Iterable, Mapping, Optional, Sequence, Tuple, Union, get_args, get_origin, get_type_hints
+from typing import (
+    Annotated,
+    Any,
+    Iterable,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 from docstring_parser import ParseError
 from docstring_parser import parse as parse_docstring
@@ -102,14 +114,51 @@ def validate_env_arg_values(
     if not env_args:
         return
 
-    param_map = {
-        param.name: param for param in metadata if getattr(param, "supports_cli", True)
-    }
+    param_map = {param.name: param for param in metadata if getattr(param, "supports_cli", True)}
     for name, value in env_args.items():
         param = param_map.get(name)
         if param is None:
             continue
         _validate_env_arg_value(env_id, param, value)
+
+
+def validate_env_args_or_raise(
+    env_id: str,
+    env_args: Mapping[str, Any],
+    metadata: Sequence[EnvParam] | None = None,
+    *,
+    metadata_cache: dict | None = None,
+    allow_unknown: bool = False,
+    enforce_required: bool = False,
+) -> None:
+    """Validate env args using environment metadata.
+
+    - Loads metadata when not provided (with optional cache), tolerating ImportError by logging and returning early.
+    - Validates unknown parameters (unless allow_unknown).
+    - Optionally enforces required params when ``enforce_required`` is True.
+    - Validates value types/choices for known params.
+    """
+    if metadata is None:
+        try:
+            from .endpoint_utils import load_env_metadata  # local import to avoid circular dependency
+
+            metadata = load_env_metadata(env_id, cache=metadata_cache)  # type: ignore[arg-type]
+        except ImportError as exc:
+            logger.warning("Skipping env_args validation for '%s': %s", env_id, exc)
+            return
+    if not metadata:
+        return
+
+    param_names = {param.name for param in metadata if getattr(param, "supports_cli", True)}
+    unknown = sorted(set(env_args) - param_names)
+    if unknown and not allow_unknown:
+        valid_params = ", ".join(sorted(param_names)) or "<none>"
+        raise ValueError(
+            f"Environment '{env_id}' env_args contain unknown parameters: {', '.join(unknown)}. Valid parameters: {valid_params}."
+        )
+    if enforce_required:
+        ensure_required_params(metadata, {}, env_args)
+    validate_env_arg_values(env_id, env_args, metadata)
 
 
 def gather_env_cli_metadata(env_id: str) -> list[EnvParam]:
@@ -404,9 +453,7 @@ def _validate_env_arg_value(env_id: str, param: EnvParam, value: Any) -> None:
     if param.choices:
         if value not in param.choices:
             allowed = ", ".join(map(repr, param.choices))
-            raise ValueError(
-                f"Environment '{env_id}' env_args.{param.name} must be one of: {allowed}."
-            )
+            raise ValueError(f"Environment '{env_id}' env_args.{param.name} must be one of: {allowed}.")
 
     if param.is_list:
         if not isinstance(value, (list, tuple)):
@@ -444,4 +491,5 @@ __all__ = [
     "ensure_required_params",
     "gather_env_cli_metadata",
     "validate_env_arg_values",
+    "validate_env_args_or_raise",
 ]

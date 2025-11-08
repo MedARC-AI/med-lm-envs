@@ -6,10 +6,10 @@ import asyncio
 import contextlib
 import logging
 import shutil
-from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Literal, Sequence
+from pydantic import BaseModel, field_validator
 
 from verifiers.types import ClientConfig, EvalConfig, GenerateOutputs
 from verifiers.utils.eval_utils import run_evaluation
@@ -26,24 +26,23 @@ from medarc_verifiers.cli_new.utils.endpoint_utils import (
     load_env_metadata,
     resolve_model_endpoint,
 )
-from medarc_verifiers.cli_new.utils.env_args import validate_env_arg_values
+from medarc_verifiers.cli_new.utils.env_args import validate_env_args_or_raise
 from medarc_verifiers.cli_new.utils.shared import (
     build_headers,
-    ensure_required_params,
     ensure_root_logging,
+    resolve_env_identifier,
 )
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass(slots=True)
-class ExecutorSettings:
+class ExecutorSettings(BaseModel):
     """Run-level options controlling how jobs are executed."""
 
     run_id: str
     output_dir: Path
     env_dir: Path
-    endpoints_path: Path | None
+    endpoints_path: Path | None = None
     default_api_key_var: str
     default_api_base_url: str
     log_level: str = "INFO"
@@ -58,15 +57,20 @@ class ExecutorSettings:
     cli_env_args: dict[str, Any] | None = None
     cli_sampling_args: dict[str, Any] | None = None
 
-    def __post_init__(self) -> None:
-        self.output_dir = Path(self.output_dir).expanduser()
-        self.env_dir = Path(self.env_dir).expanduser()
-        if self.endpoints_path is not None:
-            self.endpoints_path = Path(self.endpoints_path).expanduser()
+    @field_validator("output_dir", "env_dir", mode="before")
+    @classmethod
+    def _expand_path(cls, value: Path | str) -> Path:
+        return Path(value).expanduser()
+
+    @field_validator("endpoints_path", mode="before")
+    @classmethod
+    def _expand_optional_path(cls, value: Path | str | None) -> Path | None:
+        if value is None:
+            return None
+        return Path(value).expanduser()
 
 
-@dataclass(slots=True)
-class JobExecutionResult:
+class JobExecutionResult(BaseModel):
     """Outcome emitted for each executed job."""
 
     job_id: str
@@ -241,19 +245,7 @@ def _build_eval_config(
         logger.warning("Skipping env_args validation for '%s': %s", env_id, exc)
     else:
         if metadata:
-            param_map = {
-                param.name: param for param in metadata if getattr(param, "supports_cli", True)
-            }
-            unknown = sorted(set(env_args) - set(param_map))
-            if unknown:
-                valid_params = ", ".join(sorted(param_map)) or "<none>"
-                msg = (
-                    f"Environment '{env_id}' env_args contain unknown parameters: {', '.join(unknown)}."
-                    f" Valid parameters: {valid_params}."
-                )
-                raise ValueError(msg)
-        ensure_required_params(metadata, {}, env_args)
-        validate_env_arg_values(env_id, env_args, metadata)
+            validate_env_args_or_raise(env_id, env_args, metadata, enforce_required=True)
 
     max_concurrent = env_cfg.max_concurrent or settings.default_max_concurrent
     if env_cfg.verbose is None:
@@ -305,12 +297,8 @@ def _load_endpoints_for_model(
 
 
 def _resolve_environment_id(env_cfg: EnvironmentConfigSchema) -> str:
-    """Resolve the import path to use when loading an environment."""
-    if env_cfg.module:
-        return env_cfg.module
-    if env_cfg.id:
-        return env_cfg.id
-    raise ValueError("Environment entries must define 'id' or 'module'.")
+    """Resolve the import path to use when loading an environment (shared)."""
+    return resolve_env_identifier(env_cfg)
 
 
 def _normalize_headers(value: list[str] | dict[str, str] | None) -> dict[str, str] | None:

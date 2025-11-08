@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass
 from typing import Any, Iterable
 
 from ._schemas import EnvironmentConfigSchema, ModelConfigSchema, RunConfigSchema
+from .utils.shared import compute_checksum, slugify
 
 
 @dataclass(slots=True)
@@ -160,9 +159,9 @@ def _build_job_id(
     sampling_overrides: dict[str, Any],
     used_ids: set[str],
 ) -> str:
-    segments = [_sanitize_slug(model_id), _sanitize_slug(env_id)]
+    segments = [slugify(model_id), slugify(env_id)]
     if job_name:
-        segments.append(_sanitize_slug(job_name))
+        segments.append(slugify(job_name))
     base = "-".join(filter(None, segments)) or "job"
     job_id = base
     if job_id not in used_ids:
@@ -175,19 +174,13 @@ def _build_job_id(
         "env_overrides": env_overrides,
         "sampling_overrides": sampling_overrides,
     }
-    fingerprint = hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
-    ).hexdigest()[:10]
+    fingerprint = compute_checksum(payload)[:10]
     job_id = f"{base}-{fingerprint}"
     suffix = 1
     while job_id in used_ids:
         suffix += 1
         job_id = f"{base}-{fingerprint}{suffix}"
     return job_id
-
-
-def _sanitize_slug(value: str) -> str:
-    return "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in value)
 
 
 __all__ = ["ResolvedJob", "build_jobs"]

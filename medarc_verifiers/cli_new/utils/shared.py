@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Mapping, Sequence
+import hashlib
+import json
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable as _Iterable
 
 from verifiers import setup_logging
 
@@ -17,8 +19,30 @@ from .env_args import (
     build_headers,
     ensure_required_params,
 )
+
 STATE_COLUMNS_SEPARATOR = ","
 _LOGGING_INITIALIZED = False
+
+
+def slugify(value: str) -> str:
+    """Create a filesystem/ID friendly slug from an arbitrary string.
+
+    Preserves alphanumerics, ``-`` and ``_``; replaces everything else with ``-``
+    and trims leading/trailing separators. Returns ``"run"`` when empty.
+    """
+    slug = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in value).strip("-")
+    return slug or "run"
+
+
+def compute_checksum(payload: Any) -> str:
+    """Compute a deterministic SHA256 checksum for arbitrary JSON-like payloads.
+
+    Uses json.dumps with sorted keys and compact separators; falls back to ``str`` for unknown types.
+    """
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def coerce_json_mapping(value: Any, *, flag: str) -> dict[str, Any]:
     """Ensure a decoded JSON value is a mapping."""
     if value is None:
@@ -126,11 +150,59 @@ def _sanitize(value: Any) -> Any:
     return repr(value)
 
 
+def build_headers_with_file(
+    header_values: _Iterable[str] | None,
+    header_file: Path | None,
+) -> dict[str, str]:
+    """Build headers from CLI values plus optional file.
+
+    The file is newline-delimited ``Name: Value`` entries. Values from the file
+    override duplicates from the CLI list, matching existing single-run behavior.
+    """
+    headers = build_headers(header_values)
+    if header_file is None:
+        return headers
+    try:
+        contents = Path(header_file).expanduser().read_text(encoding="utf-8")
+    except OSError as exc:  # pragma: no cover - I/O guarded by parser in tests
+        raise ValueError(f"Failed to read header file '{header_file}': {exc}") from exc
+    file_headers = build_headers(line.strip() for line in contents.splitlines() if line.strip())
+    headers.update(file_headers)
+    return headers
+
+
+def resolve_env_identifier(env_cfg: Any) -> str:
+    """Resolve the import identifier to use for an environment config.
+
+    Expects an object with attributes ``module`` and ``id``; raises ValueError if neither is set.
+    """
+    module = getattr(env_cfg, "module", None)
+    eid = getattr(env_cfg, "id", None)
+    if module:
+        return module
+    if eid:
+        return eid
+    raise ValueError("Environment entries must define 'id' or 'module'.")
+
+
+def resolve_env_identifier_or(env_cfg: Any, fallback: str) -> str:
+    """Resolve environment identifier or return provided fallback when missing."""
+    try:
+        return resolve_env_identifier(env_cfg)
+    except ValueError:
+        return fallback
+
+
 __all__ = [
+    "slugify",
+    "compute_checksum",
     "MissingEnvParamError",
     "HEADER_SEPARATOR",
     "STATE_COLUMNS_SEPARATOR",
     "build_headers",
+    "build_headers_with_file",
+    "resolve_env_identifier",
+    "resolve_env_identifier_or",
     "coerce_json_mapping",
     "merge_sampling_args",
     "flatten_state_columns",

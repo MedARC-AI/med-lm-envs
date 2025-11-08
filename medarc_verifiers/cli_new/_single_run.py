@@ -30,7 +30,7 @@ from medarc_verifiers.cli_new.utils.shared import (
     merge_env_args,
     merge_sampling_args,
     resolve_endpoint_selection,
-    build_headers,
+    build_headers_with_file,
 )
 
 logger = logging.getLogger(__name__)
@@ -117,7 +117,7 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
     )
 
     try:
-        headers = _build_headers(args.header, args.header_file)
+        headers = build_headers_with_file(args.header, args.header_file)
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -272,9 +272,9 @@ def build_base_parser(*, require_env: bool, add_help: bool) -> argparse.Argument
         "--save-dataset",
         "-s",
         dest="save_results",
-        action="store_true",
-        default=False,
-        help="Save evaluation results to disk (accepts legacy --save-dataset alias).",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Save evaluation results to disk (use --no-save-results to disable; accepts legacy --save-dataset alias).",
     )
     parser.add_argument(
         "--save-every",
@@ -392,22 +392,6 @@ def extract_env_cli_args(
 def parse_state_columns_arg(value: str) -> list[str]:
     columns = [part.strip() for part in value.split(STATE_COLUMNS_SEPARATOR)]
     return [column for column in columns if column]
-
-
-def _build_headers(
-    header_values: Sequence[str] | None,
-    header_file: Path | None,
-) -> dict[str, str]:
-    headers = build_headers(header_values)
-    if header_file is None:
-        return headers
-    try:
-        contents = Path(header_file).expanduser().read_text(encoding="utf-8")
-    except OSError as exc:
-        raise ValueError(f"Failed to read header file '{header_file}': {exc}") from exc
-    file_headers = build_headers(line.strip() for line in contents.splitlines() if line.strip())
-    headers.update(file_headers)
-    return headers
 
 
 def _print_env_first_error() -> None:

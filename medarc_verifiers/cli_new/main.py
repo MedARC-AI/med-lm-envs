@@ -31,6 +31,7 @@ from medarc_verifiers.cli_new._manifest import (
 from medarc_verifiers.cli_new._single_run import run_single_mode
 from medarc_verifiers.cli_new.utils.overrides import build_cli_override
 from medarc_verifiers.utils.pathing import from_project_relative
+from medarc_verifiers.cli_new.utils.shared import slugify
 
 logger = logging.getLogger(__name__)
 HELP_FLAGS = {"-h", "--help"}
@@ -615,13 +616,9 @@ def _filter_jobs(jobs: Sequence[ResolvedJob], job_filters: Sequence[str] | None)
 
 
 def _generate_run_id(name: str) -> str:
-    base = _slugify(name or "run")
+    base = slugify(name or "run")
     timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     return f"{base}-{timestamp}"
-
-
-def _slugify(value: str) -> str:
-    return "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in value).strip("-") or "run"
 
 
 def _coerce_optional_str(value: str | None) -> str | None:
