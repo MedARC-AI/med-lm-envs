@@ -10,8 +10,10 @@ from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Sequence
 
 from medarc_verifiers.cli_new._job_builder import ResolvedJob
+from medarc_verifiers.utils.pathing import project_root, to_project_relative
 
 MANIFEST_FILENAME = "run_manifest.json"
+PROJECT_ROOT = project_root()
 
 
 def timestamp() -> str:
@@ -27,6 +29,15 @@ def _normalize_data(value: Any) -> Any:
         return {str(key): _normalize_data(val) for key, val in value.items()}
     if isinstance(value, (list, tuple, set)):
         return [_normalize_data(item) for item in value]
+    return value
+
+
+def _prune_nones(value: Any) -> Any:
+    """Strip None-valued fields to keep manifests compact."""
+    if isinstance(value, dict):
+        return {key: _prune_nones(val) for key, val in value.items() if val is not None}
+    if isinstance(value, list):
+        return [_prune_nones(item) for item in value]
     return value
 
 
@@ -61,8 +72,8 @@ def _canonicalize_job_config(
     sampling_args: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Produce a normalized payload describing how the job will run."""
-    model_payload = json.loads(job.model.model_dump_json())
-    env_payload = json.loads(job.env.model_dump_json())
+    model_payload = _prune_nones(json.loads(job.model.model_dump_json()))
+    env_payload = _prune_nones(json.loads(job.env.model_dump_json()))
     return {
         "job_id": job.job_id,
         "job_name": job.name,
@@ -71,6 +82,19 @@ def _canonicalize_job_config(
         "env_args": _normalize_data(env_args),
         "sampling_args": _normalize_data(sampling_args),
     }
+
+
+def _relativize_results_dir(value: str | Path, *, run_dir: Path) -> str:
+    """Ensure results directories are stored relative to the project root."""
+    candidate = Path(value)
+    if not candidate.is_absolute():
+        if candidate.parts and candidate.parts[0] == "runs":
+            candidate = (PROJECT_ROOT / candidate).resolve()
+        else:
+            candidate = (run_dir / candidate).resolve()
+    else:
+        candidate = candidate.resolve()
+    return to_project_relative(candidate)
 
 
 def _extract_seeds(env_args: Mapping[str, Any], sampling_args: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -174,21 +198,26 @@ class RunManifest:
     def job_entry(self, job_id: str) -> MutableMapping[str, Any] | None:
         return self._index.get(job_id)
 
+    @property
+    def run_dir(self) -> Path:
+        return self.path.parent
+
     def ensure_job(
         self,
         job: ResolvedJob,
         *,
         env_args: Mapping[str, Any],
         sampling_args: Mapping[str, Any],
-        results_dir: str,
+        results_dir: Path,
     ) -> MutableMapping[str, Any]:
         entry = self._index.get(job.job_id)
+        normalized_results_dir = _relativize_results_dir(results_dir, run_dir=self.run_dir)
         if entry is None:
             entry = build_job_entry(
                 job,
                 env_args=env_args,
                 sampling_args=sampling_args,
-                results_dir=results_dir,
+                results_dir=normalized_results_dir,
             )
             self._jobs.append(entry)
             self._index[job.job_id] = entry
@@ -200,7 +229,7 @@ class RunManifest:
         entry["checksum"] = _compute_checksum(config_payload)
         entry["env_id"] = entry.get("env_id") or _resolve_env_identifier(job)
         entry["model_id"] = entry.get("model_id") or _resolve_model_identifier(job)
-        entry.setdefault("results_dir", results_dir)
+        entry.setdefault("results_dir", normalized_results_dir)
         entry.setdefault("seeds", _extract_seeds(env_args, sampling_args))
         return entry
 
@@ -233,7 +262,7 @@ class RunManifest:
         entry["reason"] = None
         entry["ended_at"] = timestamp()
         entry["duration_seconds"] = duration_seconds
-        entry["results_dir"] = str(results_dir)
+        entry["results_dir"] = _relativize_results_dir(results_dir, run_dir=self.run_dir)
         entry["artifacts"] = list(artifacts)
         entry["avg_reward"] = avg_reward
         entry["metrics"] = dict(metrics)
@@ -256,7 +285,7 @@ class RunManifest:
         job_id: str,
         *,
         reason: str,
-        results_dir: str | None = None,
+        results_dir: str | Path | None = None,
         source_entry: Mapping[str, Any] | None = None,
     ) -> None:
         entry = self._index.get(job_id)
@@ -270,7 +299,7 @@ class RunManifest:
                 if key in source_entry:
                     entry[key] = source_entry[key]
         if results_dir:
-            entry["results_dir"] = results_dir
+            entry["results_dir"] = _relativize_results_dir(results_dir, run_dir=self.run_dir)
         self._refresh_summary()
 
     def _refresh_summary(self, *, save: bool = True) -> None:
@@ -313,12 +342,14 @@ class RunManifest:
     ) -> RunManifest:
         run_dir.mkdir(parents=True, exist_ok=True)
         path = run_dir / MANIFEST_FILENAME
+        normalized_snapshot = _normalize_data(config_snapshot)
+        compact_snapshot = _prune_nones(normalized_snapshot)
         payload: MutableMapping[str, Any] = {
             "version": 1,
             "run_id": run_id,
             "name": run_name,
             "config_source": str(config_source),
-            "config_snapshot": _normalize_data(config_snapshot),
+            "config_snapshot": compact_snapshot,
             "config_checksum": compute_snapshot_checksum(config_snapshot),
             "created_at": timestamp(),
             "updated_at": timestamp(),
@@ -334,7 +365,7 @@ class RunManifest:
                 job,
                 env_args=env_args,
                 sampling_args=sampling_args,
-                results_dir=str((run_dir / job.job_id).resolve()),
+                results_dir=(run_dir / job.job_id),
             )
         manifest._refresh_summary(save=True)
         return manifest

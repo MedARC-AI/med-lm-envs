@@ -212,6 +212,9 @@ class JobConfigSchema(BaseModel):
     name: str | None = Field(default=None, description="Optional human-friendly job label.")
 
 
+DEFAULT_RUN_OUTPUT_DIR = Path("runs") / "raw"
+
+
 class RunConfigSchema(BaseModel):
     """Top-level configuration for unified CLI runs."""
 
@@ -221,7 +224,7 @@ class RunConfigSchema(BaseModel):
         ..., description="Map of environment id -> configuration.", min_length=1
     )
     jobs: list[JobConfigSchema] = Field(default_factory=list)
-    output_dir: Path = Field(default_factory=lambda: Path("runs"))
+    output_dir: Path = Field(default_factory=lambda: DEFAULT_RUN_OUTPUT_DIR)
 
 
 __all__ = [

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import logging
 from itertools import product
-from pathlib import Path
 from collections.abc import Iterable, Mapping
 from typing import Any
+from pathlib import Path
 
 from omegaconf import OmegaConf
 
@@ -15,7 +15,7 @@ from .utils.endpoint_utils import EnvMetadataCache, load_env_metadata
 from .utils.env_args import validate_env_arg_values
 
 logger = logging.getLogger(__name__)
-
+DEFAULT_ENV_FILE_SUFFIXES = (".yaml", ".yml")
 
 class ConfigFormatError(ValueError):
     """Raised when a configuration file cannot be interpreted as a mapping."""
@@ -28,39 +28,25 @@ def _load_raw_config(path: Path) -> Any:
     return OmegaConf.to_container(cfg, resolve=True)
 
 
-def _convert_legacy_root_list(entries: list[Any], *, base_dir: Path) -> dict[str, Any]:
-    """Support legacy list-based roots used by early configs."""
-    if not entries:
-        raise ConfigFormatError("Legacy list-based configs cannot be empty.")
-
-    merged: dict[str, Any] = {}
-    for index, item in enumerate(entries):
-        if not isinstance(item, Mapping):
-            raise ConfigFormatError(
-                f"Legacy config entry {index} must be a mapping, got {type(item).__name__}."
-            )
-        merged.update(item)
-
-    expected_keys = {"name", "models", "envs", "jobs"}
-    if not expected_keys.intersection(merged):
-        raise ConfigFormatError("Legacy list root must define models/envs/jobs entries.")
-
-    return merged
-
-
-def load_run_config(path: str | Path) -> RunConfigSchema:
+def load_run_config(path: str | Path, *, env_default_root: str | Path | None = None) -> RunConfigSchema:
     """Load a run configuration file into the top-level schema."""
     resolved_path = Path(path).expanduser().resolve()
+    env_default_root_path = Path(env_default_root).expanduser().resolve() if env_default_root is not None else None
     data = _load_raw_config(resolved_path)
-
-    if isinstance(data, list):
-        data = _convert_legacy_root_list(data, base_dir=resolved_path.parent)
 
     if not isinstance(data, dict):
         msg = f"Configuration root must be a mapping, got {type(data).__name__}."
         raise ConfigFormatError(msg)
 
-    data = _apply_legacy_adapter(data, base_dir=resolved_path.parent)
+    if "envs" not in data or data["envs"] in (None, [], {}):
+        if env_default_root_path is None:
+            raise ConfigFormatError(
+                "Configuration must define 'envs' or --env-config-root must supply a discovery directory."
+            )
+        data = dict(data)
+        data["envs"] = str(env_default_root_path)
+
+    data = _normalize_config_fields(data, base_dir=resolved_path.parent, env_default_root=env_default_root_path)
 
     run_config = RunConfigSchema(**data)
     expanded_envs = _expand_env_matrices(run_config.envs)
@@ -132,9 +118,7 @@ def _expand_single_environment(
         invalid_keys = set(pattern) - set(matrix)
         if invalid_keys:
             invalid = ", ".join(sorted(invalid_keys))
-            raise ValueError(
-                f"environment '{base_id}' matrix_exclude entry references unknown keys: {invalid}."
-            )
+            raise ValueError(f"environment '{base_id}' matrix_exclude entry references unknown keys: {invalid}.")
 
     matrix_keys = list(matrix.keys())
     matrix_values = [matrix[key] for key in matrix_keys]
@@ -188,21 +172,25 @@ def _expand_single_environment(
     return variants
 
 
-def _apply_legacy_adapter(data: dict[str, Any], *, base_dir: Path) -> dict[str, Any]:
-    """Normalize legacy configuration shapes before schema validation."""
+def _normalize_config_fields(data: Mapping[str, Any], *, base_dir: Path, env_default_root: Path | None) -> dict[str, Any]:
+    """Apply include expansion and shape normalization before schema validation."""
 
-    adapted = dict(data)
+    normalized = dict(data)
 
-    if "models" in adapted:
-        adapted["models"] = _normalize_models_field(adapted["models"], base_dir=base_dir)
+    if "models" in normalized:
+        normalized["models"] = _normalize_models_field(normalized["models"], base_dir=base_dir)
 
-    if "envs" in adapted:
-        adapted["envs"] = _normalize_envs_field(adapted["envs"], base_dir=base_dir)
+    if "envs" in normalized:
+        normalized["envs"] = _normalize_envs_field(
+            normalized["envs"],
+            base_dir=base_dir,
+            env_default_root=env_default_root,
+        )
 
-    if "jobs" in adapted:
-        adapted["jobs"] = _normalize_jobs_field(adapted["jobs"], base_dir=base_dir)
+    if "jobs" in normalized:
+        normalized["jobs"] = _normalize_jobs_field(normalized["jobs"], base_dir=base_dir)
 
-    return adapted
+    return normalized
 
 
 def _normalize_models_field(value: Any, *, base_dir: Path) -> dict[str, Any]:
@@ -231,19 +219,26 @@ def _normalize_models_field(value: Any, *, base_dir: Path) -> dict[str, Any]:
     return normalized
 
 
-def _normalize_envs_field(value: Any, *, base_dir: Path) -> dict[str, Any]:
+def _normalize_envs_field(value: Any, *, base_dir: Path, env_default_root: Path | None) -> dict[str, Any]:
     if value is None:
         return {}
 
     if isinstance(value, Mapping) and all(isinstance(v, Mapping) for v in value.values()):
         normalized: dict[str, Any] = {}
         for key, entry in value.items():
-            ingested = _ingest_env_entries(entry, base_dir=base_dir, context=f"envs['{key}']", default_id=str(key))
+            ingested = _ingest_env_entries(
+                entry,
+                base_dir=base_dir,
+                context=f"envs['{key}']",
+                default_id=str(key),
+                env_default_root=env_default_root,
+            )
             _ensure_no_duplicates(normalized, ingested, entry_type="environment")
         return normalized
 
-    entries = _collect_env_entries(value, base_dir=base_dir, context="envs")
+    entries = _collect_env_entries(value, base_dir=base_dir, context="envs", env_default_root=env_default_root)
     normalized: dict[str, Any] = {}
+    duplicate_counts: dict[str, int] = {}
     for entry in entries:
         adapted = _adapt_env_entry(entry)
         if not isinstance(adapted, dict):
@@ -251,10 +246,27 @@ def _normalize_envs_field(value: Any, *, base_dir: Path) -> dict[str, Any]:
         env_id = adapted.get("id")
         if not env_id:
             raise ValueError("Legacy environment entries must include an 'id'.")
-        if env_id in normalized:
-            raise ValueError(f"Duplicate environment id '{env_id}' in configuration.")
-        normalized[str(env_id)] = adapted
+        env_key = str(env_id)
+        if env_key in normalized:
+            # Legacy env files often include multiple blocks with the same base id that
+            # later expand into unique matrix variants (e.g., seeded shuffles). Preserve
+            # every occurrence by assigning deterministic synthetic keys while keeping
+            # the original id for downstream matrix expansion.
+            duplicate_counts[env_key] = duplicate_counts.get(env_key, 1) + 1
+            env_key = _make_duplicate_key(env_key, duplicate_counts[env_key], normalized)
+        else:
+            duplicate_counts[env_key] = 1
+        normalized[env_key] = adapted
     return normalized
+
+
+def _make_duplicate_key(base: str, count: int, existing: Mapping[str, Any]) -> str:
+    suffix = count
+    while True:
+        candidate = f"{base}__dup__{suffix}"
+        if candidate not in existing:
+            return candidate
+        suffix += 1
 
 
 def _normalize_jobs_field(value: Any, *, base_dir: Path) -> list[dict[str, Any]]:
@@ -310,6 +322,7 @@ def _ingest_env_entries(
     base_dir: Path,
     context: str,
     default_id: str | None = None,
+    env_default_root: Path | None = None,
 ) -> dict[str, Any]:
     accumulated: dict[str, Any] = {}
     if isinstance(entry, Mapping):
@@ -322,7 +335,7 @@ def _ingest_env_entries(
         accumulated[str(env_id)] = adapted
         return accumulated
 
-    sub_entries = _collect_env_entries(entry, base_dir=base_dir, context=context)
+    sub_entries = _collect_env_entries(entry, base_dir=base_dir, context=context, env_default_root=env_default_root)
     for sub_entry in sub_entries:
         adapted = _adapt_env_entry(sub_entry)
         if isinstance(adapted, dict) and default_id and not adapted.get("id"):
@@ -335,15 +348,25 @@ def _ingest_env_entries(
 
 
 def _collect_model_entries(source: Any, *, base_dir: Path, context: str) -> list[dict[str, Any]]:
-    return _collect_entries(source, base_dir=base_dir, context=context, entry_description="models")
+    return _collect_entries(
+        source, base_dir=base_dir, context=context, entry_description="models", env_default_root=None
+    )
 
 
-def _collect_env_entries(source: Any, *, base_dir: Path, context: str) -> list[dict[str, Any]]:
-    return _collect_entries(source, base_dir=base_dir, context=context, entry_description="envs")
+def _collect_env_entries(
+    source: Any, *, base_dir: Path, context: str, env_default_root: Path | None
+) -> list[dict[str, Any]]:
+    return _collect_entries(
+        source,
+        base_dir=base_dir,
+        context=context,
+        entry_description="envs",
+        env_default_root=env_default_root,
+    )
 
 
 def _collect_job_entries(source: Any, *, base_dir: Path) -> list[dict[str, Any]]:
-    return _collect_entries(source, base_dir=base_dir, context="jobs", entry_description="jobs")
+    return _collect_entries(source, base_dir=base_dir, context="jobs", entry_description="jobs", env_default_root=None)
 
 
 def _collect_entries(
@@ -352,13 +375,20 @@ def _collect_entries(
     base_dir: Path,
     context: str,
     entry_description: str,
+    env_default_root: Path | None,
 ) -> list[dict[str, Any]]:
     if source is None:
         return []
     if isinstance(source, Mapping):
         return [dict(source)]
     if isinstance(source, (str, Path)):
-        return _collect_entries_from_path(source, base_dir=base_dir, context=context, entry_description=entry_description)
+        return _collect_entries_from_path(
+            source,
+            base_dir=base_dir,
+            context=context,
+            entry_description=entry_description,
+            env_default_root=env_default_root,
+        )
     if isinstance(source, list):
         entries: list[dict[str, Any]] = []
         for index, item in enumerate(source):
@@ -372,6 +402,7 @@ def _collect_entries(
                         base_dir=base_dir,
                         context=item_context,
                         entry_description=entry_description,
+                        env_default_root=env_default_root,
                     )
                 )
             else:
@@ -386,16 +417,18 @@ def _collect_entries_from_path(
     base_dir: Path,
     context: str,
     entry_description: str,
+    env_default_root: Path | None,
 ) -> list[dict[str, Any]]:
     path = _resolve_include_path(source, base_dir=base_dir)
+    if not path.exists() and entry_description == "envs":
+        fallback = _resolve_default_env_path(source, base_dir=base_dir, env_default_root=env_default_root)
+        if fallback is not None:
+            path = fallback
     if not path.exists():
         raise FileNotFoundError(f"{context} path '{path}' does not exist.")
     if path.is_dir():
         if entry_description not in {"envs", "jobs"}:
-            msg = (
-                f"{context} path '{path}' must be a file. Directory includes are only supported"
-                " for envs and jobs."
-            )
+            msg = f"{context} path '{path}' must be a file. Directory includes are only supported for envs and jobs."
             raise ValueError(msg)
         entries: list[dict[str, Any]] = []
         for child in sorted(path.iterdir()):
@@ -406,6 +439,7 @@ def _collect_entries_from_path(
                         base_dir=child.parent,
                         context=f"{context}/{child.name}",
                         entry_description=entry_description,
+                        env_default_root=env_default_root,
                     )
                 )
         return entries
@@ -415,10 +449,7 @@ def _collect_entries_from_path(
         if not loaded:
             return []
         if not all(isinstance(v, Mapping) for v in loaded.values()):
-            msg = (
-                f"{context} included {entry_description} must be a mapping of id→mapping or a"
-                " list of mappings."
-            )
+            msg = f"{context} included {entry_description} must be a mapping of id→mapping or a list of mappings."
             raise ValueError(msg)
         entries: list[dict[str, Any]] = []
         for key, value in loaded.items():
@@ -435,9 +466,7 @@ def _collect_entries_from_path(
         return entries
     if loaded is None:
         return []
-    raise ValueError(
-        f"{context} included {entry_description} must be a mapping of id→mapping or a list of mappings."
-    )
+    raise ValueError(f"{context} included {entry_description} must be a mapping of id→mapping or a list of mappings.")
 
 
 def _resolve_include_path(source: str | Path, *, base_dir: Path) -> Path:
@@ -447,6 +476,28 @@ def _resolve_include_path(source: str | Path, *, base_dir: Path) -> Path:
     else:
         path = path.resolve()
     return path
+
+
+def _resolve_default_env_path(source: str | Path, *, base_dir: Path, env_default_root: Path | None) -> Path | None:
+    raw_source = Path(source)
+    if raw_source.is_absolute() or env_default_root is None:
+        return None
+
+    normalized = env_default_root if env_default_root.is_absolute() else env_default_root.resolve()
+    candidates = _candidate_env_paths(normalized, raw_source)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _candidate_env_paths(root: Path, relative_entry: Path) -> list[Path]:
+    base = root / relative_entry
+    candidates = [base]
+    if not relative_entry.suffix:
+        for suffix in DEFAULT_ENV_FILE_SUFFIXES:
+            candidates.append((root / relative_entry).with_suffix(suffix))
+    return [candidate.resolve() for candidate in candidates]
 
 
 def _adapt_model_entry(entry: Any) -> Any:
@@ -525,15 +576,9 @@ def _build_matrix_variant_id(
             variant_id = id_format.format(**format_values)
         except KeyError as exc:  # noqa: F841
             missing = exc.args[0]
-            raise ValueError(
-                f"environment '{base_id}' matrix_id_format references unknown key '{missing}'."
-            ) from exc
+            raise ValueError(f"environment '{base_id}' matrix_id_format references unknown key '{missing}'.") from exc
     else:
-        suffix_parts = [
-            f"{key}-{_format_matrix_value(value)}"
-            for key, value in combo.items()
-            if value is not None
-        ]
+        suffix_parts = [f"{key}-{_format_matrix_value(value)}" for key, value in combo.items() if value is not None]
         variant_id = base_id if not suffix_parts else f"{base_id}-{'-'.join(suffix_parts)}"
 
     if not isinstance(variant_id, str) or not variant_id:

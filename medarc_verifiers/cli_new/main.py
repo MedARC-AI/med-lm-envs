@@ -12,6 +12,13 @@ from pathlib import Path
 from textwrap import dedent
 from typing import Any, Mapping, Sequence
 
+try:
+    from rich.console import Console
+    from rich.table import Table
+except ImportError:  # pragma: no cover - rich is optional at runtime
+    Console = None  # type: ignore[assignment]
+    Table = None  # type: ignore[assignment]
+
 from medarc_verifiers.cli_new._config_loader import ConfigFormatError, load_run_config
 from medarc_verifiers.cli_new._job_builder import ResolvedJob, build_jobs
 from medarc_verifiers.cli_new._job_executor import ExecutorSettings, JobExecutionResult, execute_jobs
@@ -23,6 +30,7 @@ from medarc_verifiers.cli_new._manifest import (
 )
 from medarc_verifiers.cli_new._single_run import run_single_mode
 from medarc_verifiers.cli_new.utils.overrides import build_cli_override
+from medarc_verifiers.utils.pathing import from_project_relative
 
 logger = logging.getLogger(__name__)
 HELP_FLAGS = {"-h", "--help"}
@@ -30,7 +38,8 @@ HELP_FLAGS = {"-h", "--help"}
 DEFAULT_API_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_API_KEY_VAR = "OPENAI_API_KEY"
 DEFAULT_ENV_DIR = Path("environments")
-DEFAULT_MAX_CONCURRENT = 32
+DEFAULT_ENV_CONFIG_ROOT = Path("configs") / "envs"
+DEFAULT_MAX_CONCURRENT = 128
 
 
 def build_batch_parser() -> argparse.ArgumentParser:
@@ -49,10 +58,10 @@ def build_batch_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--auto-resume",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=True,
         help=(
-            "Resume a prior run for this configuration. When --run-id is omitted, "
-            "the latest matching run is selected automatically."
+            "Automatically resume the newest matching run (default: enabled). "
+            "Pass --no-auto-resume to force a fresh run."
         ),
     )
     parser.add_argument("--force", action="store_true", help="Re-run every job regardless of manifest state.")
@@ -67,6 +76,12 @@ def build_batch_parser() -> argparse.ArgumentParser:
         type=Path,
         default=DEFAULT_ENV_DIR,
         help="Directory containing environments (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--env-config-root",
+        type=Path,
+        default=DEFAULT_ENV_CONFIG_ROOT,
+        help="Directory containing environment YAMLs for auto-discovery (default: %(default)s).",
     )
     parser.add_argument("--endpoints-path", type=Path, help="Override the default endpoints registry path.")
     parser.add_argument(
@@ -156,8 +171,8 @@ def _run_batch_mode(argv: Sequence[str]) -> int:
     except ValueError as exc:
         parser.error(str(exc))
 
-    if args.auto_resume and args.regen:
-        parser.error("Cannot combine --auto-resume with --regen.")
+    if args.regen:
+        args.auto_resume = False
     if args.regen and args.run_id and args.regen == args.run_id:
         parser.error("--regen target must differ from the destination --run-id.")
 
@@ -174,7 +189,8 @@ def _run_batch_mode(argv: Sequence[str]) -> int:
 
 def _execute_batch(args: argparse.Namespace) -> int:
     config_path = Path(args.config).expanduser()
-    run_config = load_run_config(config_path)
+    env_root_override = Path(args.env_config_root).expanduser().resolve() if args.env_config_root else None
+    run_config = load_run_config(config_path, env_default_root=env_root_override)
 
     run_name = args.name or run_config.name
     output_dir = Path(args.output_dir).expanduser() if args.output_dir else Path(run_config.output_dir).expanduser()
@@ -222,6 +238,14 @@ def _execute_batch(args: argparse.Namespace) -> int:
     runnable_ids = manifest_plan.runnable_job_ids
     selected_ids = {job.job_id for job in selected_jobs}
     planned_jobs = [job for job in jobs if job.job_id in runnable_ids and job.job_id in selected_ids]
+
+    _print_job_plan(
+        selected_jobs,
+        manifest=manifest_plan.manifest,
+        runnable_job_ids=runnable_ids,
+        discovered_total=len(jobs),
+        dry_run=bool(args.dry_run),
+    )
 
     if not planned_jobs:
         if manifest_plan.reused_job_ids:
@@ -375,39 +399,49 @@ def _prepare_manifest_plan(
             logger.info("Reused %d completed job(s) from '%s'.", len(reused), regen_source)
         return ManifestPlan(manifest=manifest, runnable_job_ids=runnable, reused_job_ids=reused)
 
+    manifest: RunManifest | None = None
     if auto_resume:
         # If a specific run_id is provided, resume it; otherwise discover a candidate
         if run_id:
             run_dir = _run_dir_for(run_id)
             manifest_path = run_dir / MANIFEST_FILENAME
-            if not run_dir.exists() or not manifest_path.exists():
+            if run_dir.exists() and manifest_path.exists():
+                manifest = RunManifest.load(manifest_path, persist=persist)
+                existing_checksum = manifest.payload.get("config_checksum")
+                if existing_checksum and existing_checksum != checksum:
+                    raise ValueError(
+                        f"Run '{run_id}' was created from a different configuration. Use --regen {run_id} to seed a new run."
+                    )
+            elif run_dir.exists():
                 raise ValueError(f"Run '{run_id}' is missing {MANIFEST_FILENAME}; cannot auto-resume.")
-            manifest = RunManifest.load(manifest_path, persist=persist)
-            existing_checksum = manifest.payload.get("config_checksum")
-            if existing_checksum and existing_checksum != checksum:
-                raise ValueError(
-                    f"Run '{run_id}' was created from a different configuration. Use --regen {run_id} to seed a new run."
+            else:
+                logger.info(
+                    "Auto-resume requested for run '%s', but no prior run exists. Starting a fresh run with this id.",
+                    run_id,
                 )
         else:
             candidate = _find_auto_resume_candidate(output_dir, expected_checksum=checksum)
             if candidate is None:
-                raise ValueError(
-                    "No existing run found to auto-resume for this configuration. "
-                    "Provide --run-id or omit --auto-resume to start a new run."
+                logger.info(
+                    "Auto-resume enabled but no matching run exists in %s; starting a fresh run. "
+                    "Use --no-auto-resume to always start new runs.",
+                    output_dir,
                 )
-            run_dir = candidate
-            manifest_path = run_dir / MANIFEST_FILENAME
-            manifest = RunManifest.load(manifest_path, persist=persist)
+            else:
+                run_dir = candidate
+                manifest_path = run_dir / MANIFEST_FILENAME
+                manifest = RunManifest.load(manifest_path, persist=persist)
 
-        runnable = _plan_auto_resume_jobs(
-            manifest=manifest,
-            jobs=jobs,
-            env_args_map=env_args_map,
-            sampling_args_map=sampling_args_map,
-            force_all=force_all,
-            forced_envs=forced_envs,
-        )
-        return ManifestPlan(manifest=manifest, runnable_job_ids=runnable, reused_job_ids=set())
+        if manifest is not None:
+            runnable = _plan_auto_resume_jobs(
+                manifest=manifest,
+                jobs=jobs,
+                env_args_map=env_args_map,
+                sampling_args_map=sampling_args_map,
+                force_all=force_all,
+                forced_envs=forced_envs,
+            )
+            return ManifestPlan(manifest=manifest, runnable_job_ids=runnable, reused_job_ids=set())
 
     # Fresh run: generate a new run id if not provided
     dest_run_id = run_id or _generate_run_id(run_name)
@@ -545,10 +579,22 @@ def _plan_regen_jobs(
             and seed_entry.get("status") == "completed"
             and seed_entry.get("checksum") == entry.get("checksum")
         ):
+            seed_results_dir = seed_entry.get("results_dir")
+            resolved_results_dir: Path | str | None = None
+            if isinstance(seed_results_dir, str):
+                seed_path = Path(seed_results_dir)
+                if seed_path.is_absolute():
+                    resolved_results_dir = seed_path
+                elif seed_path.parts and seed_path.parts[0] == "runs":
+                    resolved_results_dir = from_project_relative(seed_path)
+                else:
+                    resolved_results_dir = (seed_manifest.run_dir / seed_path).resolve()
+            elif isinstance(seed_results_dir, Path):
+                resolved_results_dir = seed_results_dir
             manifest.record_job_skip(
                 job.job_id,
                 reason="up_to_date",
-                results_dir=seed_entry.get("results_dir"),
+                results_dir=resolved_results_dir or seed_results_dir,
                 source_entry=seed_entry,
             )
             reused.add(job.job_id)
@@ -613,6 +659,89 @@ def _print_general_help() -> None:
         First argument must be the environment slug for single runs. Use 'medarc-new bench --help' for batch mode options."""
     )
     print(message)
+
+
+def _print_job_plan(
+    jobs: Sequence[ResolvedJob],
+    *,
+    manifest: RunManifest | None,
+    runnable_job_ids: set[str],
+    discovered_total: int,
+    dry_run: bool,
+) -> None:
+    """Render a human-friendly summary of the jobs scheduled for execution."""
+    listed_total = len(jobs)
+    scheduled_total = sum(1 for job in jobs if job.job_id in runnable_job_ids)
+    caption_parts: list[str] = [f"{listed_total} job(s) listed"]
+    caption_parts.append(f"{scheduled_total} to {'dry-run' if dry_run else 'run'}")
+    if discovered_total != listed_total:
+        caption_parts.append(f"{discovered_total} discovered")
+    caption = " | ".join(part for part in caption_parts if part)
+
+    if not jobs:
+        logger.info("No jobs to display (%s).", caption)
+        return
+
+    def _format_label(primary: str | None, secondary: str | None) -> str:
+        if primary and secondary and primary != secondary:
+            return f"{primary} ({secondary})"
+        return primary or secondary or "-"
+
+    def _resolve_status(job_id: str, entry: Mapping[str, Any] | None) -> str:
+        if job_id in runnable_job_ids:
+            return "next"
+        if entry and entry.get("status") == "completed":
+            return "completed"
+        return "pending"
+
+    entries = {}
+    if manifest is not None:
+        entries = {entry.get("job_id"): entry for entry in manifest.jobs if entry.get("job_id")}
+
+    if Console is None or Table is None:
+        lines = []
+        for index, job in enumerate(jobs, start=1):
+            entry = entries.get(job.job_id)
+            model_label = _format_label(job.model.id, job.model.model)
+            env_label = _format_label(job.env.id, job.env.module)
+            status = _resolve_status(job.job_id, entry)
+            text = (
+                f"{index:02d}. {job.job_id} | status={status} | name={job.name or '-'} | "
+                f"model={model_label} | env={env_label} | examples={job.env.num_examples} | "
+                f"rollouts={job.env.rollouts_per_example}"
+            )
+            lines.append(text)
+        logger.info("Planned jobs (%s):\n%s", caption, "\n".join(lines))
+        return
+
+    console = Console()
+    table = Table(title="Planned Jobs", caption=caption, expand=True)
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("Job ID", style="bold cyan", overflow="fold")
+    table.add_column("Status", style="yellow")
+    table.add_column("Name", style="white", overflow="fold")
+    table.add_column("Model", style="magenta", overflow="fold")
+    table.add_column("Environment", style="green", overflow="fold")
+    table.add_column("Examples", justify="right")
+    table.add_column("Rollouts", justify="right")
+
+    for index, job in enumerate(jobs, start=1):
+        entry = entries.get(job.job_id)
+        model_label = _format_label(job.model.id, job.model.model)
+        env_label = _format_label(job.env.id, job.env.module)
+        status = _resolve_status(job.job_id, entry)
+        table.add_row(
+            str(index),
+            job.job_id,
+            status,
+            job.name or "-",
+            model_label,
+            env_label,
+            str(job.env.num_examples),
+            str(job.env.rollouts_per_example),
+        )
+
+    console.print(table)
 
 
 if __name__ == "__main__":  # pragma: no cover
