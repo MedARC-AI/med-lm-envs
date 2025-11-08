@@ -7,7 +7,9 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping, MutableMapping, Sequence
+from typing import Any, Mapping, Sequence
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from medarc_verifiers.cli_new._job_builder import ResolvedJob
 from medarc_verifiers.cli_new.utils.shared import compute_checksum, resolve_env_identifier_or
@@ -17,39 +19,58 @@ MANIFEST_FILENAME = "run_manifest.json"
 PROJECT_ROOT = project_root()
 
 
+class ManifestJobEntry(BaseModel):
+    """Pydantic model describing a single manifest job entry."""
+
+    model_config = ConfigDict(extra="allow")
+
+    job_id: str
+    job_name: str | None = None
+    env_id: str | None = None
+    model_id: str | None = None
+    status: str = "pending"
+    reason: str | None = None
+    attempt: int = 0
+    started_at: str | None = None
+    ended_at: str | None = None
+    duration_seconds: float | None = None
+    results_dir: str | None = None
+    artifacts: list[str] = Field(default_factory=list)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    avg_reward: float | None = None
+    num_examples: int | None = None
+    rollouts_per_example: int | None = None
+    checksum: str
+    config: dict[str, Any] = Field(default_factory=dict)
+    seeds: dict[str, Any] | None = None
+
+
+class RunManifestModel(BaseModel):
+    """Root manifest payload persisted to disk."""
+
+    model_config = ConfigDict(extra="allow")
+
+    version: int = 1
+    run_id: str
+    name: str
+    config_source: str
+    config_snapshot: dict[str, Any]
+    config_checksum: str
+    created_at: str
+    updated_at: str
+    regen_source: str | None = None
+    jobs: list[ManifestJobEntry] = Field(default_factory=list)
+    summary: dict[str, int] = Field(default_factory=dict)
+
+
 def timestamp() -> str:
     """Return an ISO8601 timestamp in UTC."""
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _normalize_data(value: Any) -> Any:
-    """Recursively convert values to JSON-serializable structures."""
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, dict):
-        return {str(key): _normalize_data(val) for key, val in value.items()}
-    if isinstance(value, (list, tuple, set)):
-        return [_normalize_data(item) for item in value]
-    return value
-
-
-def _prune_nones(value: Any) -> Any:
-    """Strip None-valued fields to keep manifests compact."""
-    if isinstance(value, dict):
-        return {key: _prune_nones(val) for key, val in value.items() if val is not None}
-    if isinstance(value, list):
-        return [_prune_nones(item) for item in value]
-    return value
-
-
-def _compute_checksum(payload: Mapping[str, Any]) -> str:
-    """Backward-compatible wrapper around shared.compute_checksum."""
-    return compute_checksum(payload)
-
-
 def compute_snapshot_checksum(snapshot: Mapping[str, Any]) -> str:
     """Public helper to compute the checksum for a config snapshot."""
-    return _compute_checksum(_normalize_data(snapshot))
+    return compute_checksum(snapshot)
 
 
 def compute_job_checksum(
@@ -60,7 +81,7 @@ def compute_job_checksum(
 ) -> str:
     """Expose job checksum calculations for resume/regeneration workflows."""
     payload = _canonicalize_job_config(job, env_args=env_args, sampling_args=sampling_args)
-    return _compute_checksum(payload)
+    return compute_checksum(payload)
 
 
 def _canonicalize_job_config(
@@ -70,15 +91,15 @@ def _canonicalize_job_config(
     sampling_args: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Produce a normalized payload describing how the job will run."""
-    model_payload = _prune_nones(json.loads(job.model.model_dump_json()))
-    env_payload = _prune_nones(json.loads(job.env.model_dump_json()))
+    model_payload = json.loads(job.model.model_dump_json(exclude_none=True))
+    env_payload = json.loads(job.env.model_dump_json(exclude_none=True))
     return {
         "job_id": job.job_id,
         "job_name": job.name,
-        "model": _normalize_data(model_payload),
-        "env": _normalize_data(env_payload),
-        "env_args": _normalize_data(env_args),
-        "sampling_args": _normalize_data(sampling_args),
+        "model": model_payload,
+        "env": env_payload,
+        "env_args": _to_jsonable(env_args),
+        "sampling_args": _to_jsonable(sampling_args),
     }
 
 
@@ -105,6 +126,19 @@ def _extract_seeds(env_args: Mapping[str, Any], sampling_args: Mapping[str, Any]
     return seeds or None
 
 
+def _to_jsonable(value: Any) -> Any:
+    """Convert arbitrary data to JSON-serializable structures (default=str)."""
+    return json.loads(json.dumps(value, default=str))
+
+
+def _drop_nones(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: _drop_nones(v) for k, v in value.items() if v is not None}
+    if isinstance(value, list):
+        return [_drop_nones(v) for v in value]
+    return value
+
+
 def _resolve_env_identifier(job: ResolvedJob) -> str:
     return resolve_env_identifier_or(job.env, job.job_id)
 
@@ -124,36 +158,36 @@ def build_job_entry(
     env_args: Mapping[str, Any],
     sampling_args: Mapping[str, Any],
     results_dir: str,
-) -> dict[str, Any]:
+) -> ManifestJobEntry:
     """Build the manifest entry recorded for a job."""
     config_payload = _canonicalize_job_config(job, env_args=env_args, sampling_args=sampling_args)
-    checksum = _compute_checksum(config_payload)
-    return {
-        "job_id": job.job_id,
-        "job_name": job.name,
-        "env_id": _resolve_env_identifier(job),
-        "model_id": _resolve_model_identifier(job),
-        "status": "pending",
-        "reason": None,
-        "attempt": 0,
-        "started_at": None,
-        "ended_at": None,
-        "duration_seconds": None,
-        "results_dir": results_dir,
-        "artifacts": [],
-        "metrics": {},
-        "avg_reward": None,
-        "num_examples": None,
-        "rollouts_per_example": None,
-        "checksum": checksum,
-        "config": config_payload,
-        "seeds": _extract_seeds(env_args, sampling_args),
-    }
+    checksum = compute_checksum(config_payload)
+    return ManifestJobEntry(
+        job_id=job.job_id,
+        job_name=job.name,
+        env_id=_resolve_env_identifier(job),
+        model_id=_resolve_model_identifier(job),
+        status="pending",
+        reason=None,
+        attempt=0,
+        started_at=None,
+        ended_at=None,
+        duration_seconds=None,
+        results_dir=results_dir,
+        artifacts=[],
+        metrics={},
+        avg_reward=None,
+        num_examples=None,
+        rollouts_per_example=None,
+        checksum=checksum,
+        config=config_payload,
+        seeds=_extract_seeds(env_args, sampling_args),
+    )
 
 
-def _summarize_jobs(entries: Sequence[Mapping[str, Any]]) -> dict[str, int]:
-    counter = Counter(entry.get("status", "pending") for entry in entries)
-    skipped = sum(1 for entry in entries if entry.get("reason") in {"up_to_date", "skipped"})
+def _summarize_jobs(entries: Sequence[ManifestJobEntry]) -> dict[str, int]:
+    counter = Counter((entry.status or "pending") for entry in entries)
+    skipped = sum(1 for entry in entries if entry.reason in {"up_to_date", "skipped"})
     summary = {
         "total": len(entries),
         "pending": counter.get("pending", 0),
@@ -170,27 +204,30 @@ class RunManifest:
     """In-memory representation of a run manifest."""
 
     path: Path
-    payload: MutableMapping[str, Any]
+    model: RunManifestModel
     persist: bool = True
 
     def __post_init__(self) -> None:
-        self.payload.setdefault("jobs", [])
-        self._jobs: list[MutableMapping[str, Any]] = list(self.payload["jobs"])
-        self.payload["jobs"] = self._jobs
-        self._index: dict[str, MutableMapping[str, Any]] = {
-            entry["job_id"]: entry for entry in self._jobs if "job_id" in entry
-        }
-        self.payload.setdefault("summary", _summarize_jobs(self._jobs))
+        self._jobs: list[ManifestJobEntry] = list(self.model.jobs)
+        self.model.jobs = self._jobs
+        self._index: dict[str, ManifestJobEntry] = {entry.job_id: entry for entry in self._jobs if entry.job_id}
+        if not self.model.summary:
+            self.model.summary = _summarize_jobs(self._jobs)
 
     @property
-    def jobs(self) -> list[MutableMapping[str, Any]]:
+    def jobs(self) -> list[ManifestJobEntry]:
         return self._jobs
 
     @property
     def summary(self) -> Mapping[str, Any]:
-        return self.payload.get("summary", {})
+        return self.model.summary
 
-    def job_entry(self, job_id: str) -> MutableMapping[str, Any] | None:
+    @property
+    def payload(self) -> dict[str, Any]:
+        """Dictionary representation (back-compat)."""
+        return self.model.model_dump()
+
+    def job_entry(self, job_id: str) -> ManifestJobEntry | None:
         return self._index.get(job_id)
 
     @property
@@ -204,7 +241,7 @@ class RunManifest:
         env_args: Mapping[str, Any],
         sampling_args: Mapping[str, Any],
         results_dir: Path,
-    ) -> MutableMapping[str, Any]:
+    ) -> ManifestJobEntry:
         entry = self._index.get(job.job_id)
         normalized_results_dir = _relativize_results_dir(results_dir, run_dir=self.run_dir)
         if entry is None:
@@ -220,22 +257,22 @@ class RunManifest:
             return entry
 
         config_payload = _canonicalize_job_config(job, env_args=env_args, sampling_args=sampling_args)
-        entry["config"] = config_payload
-        entry["checksum"] = _compute_checksum(config_payload)
-        entry["env_id"] = entry.get("env_id") or _resolve_env_identifier(job)
-        entry["model_id"] = entry.get("model_id") or _resolve_model_identifier(job)
-        entry.setdefault("results_dir", normalized_results_dir)
-        entry.setdefault("seeds", _extract_seeds(env_args, sampling_args))
+        entry.config = config_payload
+        entry.checksum = compute_checksum(config_payload)
+        entry.env_id = entry.env_id or _resolve_env_identifier(job)
+        entry.model_id = entry.model_id or _resolve_model_identifier(job)
+        entry.results_dir = entry.results_dir or normalized_results_dir
+        entry.seeds = entry.seeds or _extract_seeds(env_args, sampling_args)
         return entry
 
     def record_job_start(self, job_id: str) -> None:
         entry = self._index.get(job_id)
         if not entry:
             return
-        entry["status"] = "running"
-        entry["reason"] = None
-        entry["started_at"] = timestamp()
-        entry["attempt"] = int(entry.get("attempt", 0)) + 1
+        entry.status = "running"
+        entry.reason = None
+        entry.started_at = timestamp()
+        entry.attempt = int(entry.attempt or 0) + 1
         self._refresh_summary()
 
     def record_job_completion(
@@ -253,26 +290,26 @@ class RunManifest:
         entry = self._index.get(job_id)
         if not entry:
             return
-        entry["status"] = "completed"
-        entry["reason"] = None
-        entry["ended_at"] = timestamp()
-        entry["duration_seconds"] = duration_seconds
-        entry["results_dir"] = _relativize_results_dir(results_dir, run_dir=self.run_dir)
-        entry["artifacts"] = list(artifacts)
-        entry["avg_reward"] = avg_reward
-        entry["metrics"] = dict(metrics)
-        entry["num_examples"] = num_examples
-        entry["rollouts_per_example"] = rollouts_per_example
+        entry.status = "completed"
+        entry.reason = None
+        entry.ended_at = timestamp()
+        entry.duration_seconds = duration_seconds
+        entry.results_dir = _relativize_results_dir(results_dir, run_dir=self.run_dir)
+        entry.artifacts = list(artifacts)
+        entry.avg_reward = avg_reward
+        entry.metrics = dict(metrics)
+        entry.num_examples = num_examples
+        entry.rollouts_per_example = rollouts_per_example
         self._refresh_summary()
 
     def record_job_failure(self, job_id: str, *, error: str, duration_seconds: float | None = None) -> None:
         entry = self._index.get(job_id)
         if not entry:
             return
-        entry["status"] = "failed"
-        entry["reason"] = error
-        entry["ended_at"] = timestamp()
-        entry["duration_seconds"] = duration_seconds
+        entry.status = "failed"
+        entry.reason = error
+        entry.ended_at = timestamp()
+        entry.duration_seconds = duration_seconds
         self._refresh_summary()
 
     def record_job_skip(
@@ -286,10 +323,17 @@ class RunManifest:
         entry = self._index.get(job_id)
         if not entry:
             return
-        entry["status"] = "completed"
-        entry["reason"] = reason
-        entry["ended_at"] = entry.get("ended_at") or timestamp()
+        entry.status = "completed"
+        entry.reason = reason
+        entry.ended_at = entry.ended_at or timestamp()
+
+        def _maybe_get(source: Mapping[str, Any] | ManifestJobEntry, key: str) -> Any:
+            if isinstance(source, Mapping):
+                return source.get(key)
+            return getattr(source, key)
+
         if source_entry:
+            is_mapping = isinstance(source_entry, Mapping)
             for key in (
                 "duration_seconds",
                 "avg_reward",
@@ -298,15 +342,18 @@ class RunManifest:
                 "rollouts_per_example",
                 "artifacts",
             ):
-                if key in source_entry:
-                    entry[key] = source_entry[key]
+                if is_mapping:
+                    if key in source_entry:
+                        setattr(entry, key, source_entry[key])
+                else:
+                    setattr(entry, key, getattr(source_entry, key))
         if results_dir:
-            entry["results_dir"] = _relativize_results_dir(results_dir, run_dir=self.run_dir)
+            entry.results_dir = _relativize_results_dir(results_dir, run_dir=self.run_dir)
         self._refresh_summary()
 
     def _refresh_summary(self, *, save: bool = True) -> None:
-        self.payload["summary"] = _summarize_jobs(self._jobs)
-        self.payload["updated_at"] = timestamp()
+        self.model.summary = _summarize_jobs(self._jobs)
+        self.model.updated_at = timestamp()
         if save:
             self.save()
 
@@ -316,7 +363,7 @@ class RunManifest:
         tmp_path = self.path.with_suffix(".tmp")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with tmp_path.open("w", encoding="utf-8") as handle:
-            json.dump(self.payload, handle, indent=2, sort_keys=True)
+            json.dump(self.model.model_dump(exclude_none=True), handle, indent=2, sort_keys=True)
         tmp_path.replace(self.path)
 
     @classmethod
@@ -325,7 +372,8 @@ class RunManifest:
             raise FileNotFoundError(f"Run manifest '{path}' not found.")
         with path.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
-        return cls(path=path, payload=payload, persist=persist)
+        model = RunManifestModel.model_validate(payload)
+        return cls(path=path, model=model, persist=persist)
 
     @classmethod
     def create(
@@ -344,14 +392,12 @@ class RunManifest:
     ) -> RunManifest:
         run_dir.mkdir(parents=True, exist_ok=True)
         path = run_dir / MANIFEST_FILENAME
-        normalized_snapshot = _normalize_data(config_snapshot)
-        compact_snapshot = _prune_nones(normalized_snapshot)
-        payload: MutableMapping[str, Any] = {
+        payload: Mapping[str, Any] = {
             "version": 1,
             "run_id": run_id,
             "name": run_name,
             "config_source": str(config_source),
-            "config_snapshot": compact_snapshot,
+            "config_snapshot": _drop_nones(_to_jsonable(config_snapshot)),
             "config_checksum": compute_snapshot_checksum(config_snapshot),
             "created_at": timestamp(),
             "updated_at": timestamp(),
@@ -359,7 +405,8 @@ class RunManifest:
             "jobs": [],
             "summary": {},
         }
-        manifest = cls(path=path, payload=payload, persist=persist)
+        model = RunManifestModel.model_validate(payload)
+        manifest = cls(path=path, model=model, persist=persist)
         for job in jobs:
             env_args = env_args_map[job.job_id]
             sampling_args = sampling_args_map[job.job_id]
@@ -376,6 +423,8 @@ class RunManifest:
 __all__ = [
     "MANIFEST_FILENAME",
     "RunManifest",
+    "RunManifestModel",
+    "ManifestJobEntry",
     "build_job_entry",
     "compute_job_checksum",
     "compute_snapshot_checksum",

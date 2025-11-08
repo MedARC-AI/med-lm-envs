@@ -17,7 +17,7 @@ from verifiers.utils.eval_utils import run_evaluation
 from medarc_verifiers.cli.utils.reporting import compute_average, compute_metric_averages
 from medarc_verifiers.cli_new._job_builder import ResolvedJob
 from medarc_verifiers.cli_new._manifest import RunManifest
-from medarc_verifiers.cli_new._schemas import EnvironmentConfigSchema, ModelConfigSchema
+from medarc_verifiers.cli_new._schemas import ModelConfigSchema
 from medarc_verifiers.cli_new.utils.endpoint_utils import (
     EndpointRegistry,
     EndpointRegistryCache,
@@ -28,8 +28,9 @@ from medarc_verifiers.cli_new.utils.endpoint_utils import (
 )
 from medarc_verifiers.cli_new.utils.env_args import validate_env_args_or_raise
 from medarc_verifiers.cli_new.utils.shared import (
-    build_headers,
+    DEFAULT_BATCH_MAX_CONCURRENT,
     ensure_root_logging,
+    normalize_headers,
     resolve_env_identifier,
 )
 
@@ -52,7 +53,7 @@ class ExecutorSettings(BaseModel):
     hf_hub_dataset_name: str | None = None
     max_concurrent_generation: int | None = None
     max_concurrent_scoring: int | None = None
-    default_max_concurrent: int = 32
+    default_max_concurrent: int = DEFAULT_BATCH_MAX_CONCURRENT
     dry_run: bool = False
     cli_env_args: dict[str, Any] | None = None
     cli_sampling_args: dict[str, Any] | None = None
@@ -98,7 +99,7 @@ def execute_jobs(
 
     results: list[JobExecutionResult] = []
     for index, job in enumerate(jobs, start=1):
-        env_identifier = _resolve_environment_id(job.env)
+        env_identifier = resolve_env_identifier(job.env)
         model_identifier = job.model.id or job.model.model or job.job_id
         job_label = f"{job.job_id} env={env_identifier} model={model_identifier}"
         logger.info("Job %d/%d starting: %s", index, len(jobs), job_label)
@@ -204,7 +205,7 @@ def _build_eval_config(
     model_cfg = job.model
     env_cfg = job.env
 
-    headers = _normalize_headers(model_cfg.headers)
+    headers = normalize_headers(model_cfg.headers)
     endpoints = _load_endpoints_for_model(model_cfg, settings, cache=endpoints_cache)
     model_alias = model_cfg.model or model_cfg.id
     if not model_alias:
@@ -234,7 +235,7 @@ def _build_eval_config(
         client_kwargs["max_retries"] = model_cfg.max_retries
     client_config = ClientConfig(**client_kwargs)
 
-    env_id = _resolve_environment_id(env_cfg)
+    env_id = resolve_env_identifier(env_cfg)
     env_args = dict(job.env_args)
     if settings.cli_env_args:
         env_args.update(settings.cli_env_args)
@@ -294,20 +295,6 @@ def _load_endpoints_for_model(
     if registry_path is None:
         return {}
     return load_endpoint_registry(registry_path, cache=cache)
-
-
-def _resolve_environment_id(env_cfg: EnvironmentConfigSchema) -> str:
-    """Resolve the import path to use when loading an environment (shared)."""
-    return resolve_env_identifier(env_cfg)
-
-
-def _normalize_headers(value: list[str] | dict[str, str] | None) -> dict[str, str] | None:
-    """Normalize header structures into a mapping."""
-    if value is None:
-        return None
-    if isinstance(value, dict):
-        return {str(key): str(item) for key, item in value.items()}
-    return build_headers(value)
 
 
 def _materialize_results(job_dir: Path, run_dir: Path, results: GenerateOutputs) -> list[str]:

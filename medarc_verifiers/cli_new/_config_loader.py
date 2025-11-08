@@ -5,29 +5,17 @@ from __future__ import annotations
 import logging
 from itertools import product
 from collections.abc import Iterable, Mapping
-from typing import Any
+from typing import Any, Callable
 from pathlib import Path
 
 from omegaconf import OmegaConf
 
-from ._schemas import EnvironmentConfigSchema, RunConfigSchema
-from .utils.endpoint_utils import EnvMetadataCache
+from ._schemas import EnvironmentConfigSchema, RunConfigSchema, RESERVED_MATRIX_KEYS
+from .utils.endpoint_utils import EnvMetadataCache, load_env_metadata
 from .utils.env_args import validate_env_args_or_raise
 
 logger = logging.getLogger(__name__)
 DEFAULT_ENV_FILE_SUFFIXES = (".yaml", ".yml")
-
-# Reserved keys that must not be included in matrix sweeps.
-RESERVED_MATRIX_KEYS = {
-    "id",
-    "module",
-    "env_args",
-    "matrix",
-    "matrix_exclude",
-    "matrix_id_format",
-    "matrix_base_id",
-    "state_columns",
-}
 
 # Scalar fields (non-env_args) that may be overridden by matrix combos.
 SCALAR_FIELD_NAMES = {
@@ -48,6 +36,12 @@ def _load_raw_config(path: Path) -> Any:
 
 def load_run_config(path: str | Path, *, env_default_root: str | Path | None = None) -> RunConfigSchema:
     """Load a run configuration file into the top-level schema."""
+    # Loader responsibilities:
+    # 1. Read and resolve OmegaConf input (supporting includes and defaults).
+    # 2. Normalize models/envs/jobs into canonical mappings or lists.
+    # 3. Let Pydantic schemas handle structural validation and coercion.
+    # 4. Expand environment matrices into concrete variants.
+    # 5. Perform lightweight env_args validation using environment metadata.
     resolved_path = Path(path).expanduser().resolve()
     env_default_root_path = Path(env_default_root).expanduser().resolve() if env_default_root is not None else None
     data = _load_raw_config(resolved_path)
@@ -104,16 +98,6 @@ def _expand_single_environment(
     base_id = env.id
     if not base_id:
         raise ValueError("environment entries must specify an id.")
-    for key in matrix:
-        if key in RESERVED_MATRIX_KEYS:
-            raise ValueError(f"environment '{base_id}' matrix cannot vary '{key}'.")
-
-    exclude_patterns = env.matrix_exclude or []
-    for pattern in exclude_patterns:
-        invalid_keys = set(pattern) - set(matrix)
-        if invalid_keys:
-            invalid = ", ".join(sorted(invalid_keys))
-            raise ValueError(f"environment '{base_id}' matrix_exclude entry references unknown keys: {invalid}.")
 
     matrix_keys = list(matrix.keys())
     matrix_values = [matrix[key] for key in matrix_keys]
@@ -121,7 +105,9 @@ def _expand_single_environment(
     seen_ids: set[str] = set()
 
     base_env_args = dict(env.env_args)
-    module_name = env.module or env.id
+    module_name = env.module or env.id  # prefer explicit module override when present
+
+    exclude_patterns = env.matrix_exclude or []
 
     combos: Iterable[tuple[Any, ...]]
     if matrix_keys:
@@ -204,9 +190,9 @@ def _normalize_models_field(value: Any, *, base_dir: Path) -> dict[str, Any]:
     entries = _collect_model_entries(value, base_dir=base_dir, context="models")
     normalized: dict[str, Any] = {}
     for entry in entries:
-        adapted = _adapt_model_entry(entry)
-        if not isinstance(adapted, dict):
+        if not isinstance(entry, Mapping):
             raise ValueError("Model entries must be mappings.")
+        adapted = dict(entry)
         model_id = adapted.get("id")
         if not model_id:
             raise ValueError("Legacy model entries must include an 'id'.")
@@ -237,9 +223,9 @@ def _normalize_envs_field(value: Any, *, base_dir: Path, env_default_root: Path 
     normalized: dict[str, Any] = {}
     duplicate_counts: dict[str, int] = {}
     for entry in entries:
-        adapted = _adapt_env_entry(entry)
-        if not isinstance(adapted, dict):
+        if not isinstance(entry, Mapping):
             raise ValueError("Environment entries must be mappings.")
+        adapted = dict(entry)
         env_id = adapted.get("id")
         if not env_id:
             raise ValueError("Legacy environment entries must include an 'id'.")
@@ -290,7 +276,7 @@ def _ingest_entries(
     context: str,
     default_id: str | None,
     collect_fn,
-    adapt_fn,
+    adapt_fn: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     entry_label: str,
     **collect_kwargs: Any,
 ) -> dict[str, Any]:
@@ -301,8 +287,9 @@ def _ingest_entries(
     - ``entry_label`` is used for error messages (e.g., "models['foo']").
     """
     accumulated: dict[str, Any] = {}
+    adapter = adapt_fn or (lambda payload: payload)
     if isinstance(entry, Mapping):
-        adapted = adapt_fn(dict(entry))
+        adapted = adapter(dict(entry))
         if isinstance(adapted, dict) and default_id and not adapted.get("id"):
             adapted["id"] = default_id
         item_id = adapted.get("id")
@@ -313,7 +300,7 @@ def _ingest_entries(
 
     sub_entries = collect_fn(entry, base_dir=base_dir, context=context, **collect_kwargs)
     for sub_entry in sub_entries:
-        adapted = adapt_fn(sub_entry)
+        adapted = adapter(sub_entry)
         if isinstance(adapted, dict) and default_id and not adapted.get("id"):
             adapted["id"] = default_id
         item_id = adapted.get("id")
@@ -336,7 +323,7 @@ def _ingest_model_entries(
         context=context,
         default_id=default_id,
         collect_fn=_collect_model_entries,
-        adapt_fn=_adapt_model_entry,
+        adapt_fn=dict,
         entry_label="model",
     )
 
@@ -355,7 +342,7 @@ def _ingest_env_entries(
         context=context,
         default_id=default_id,
         collect_fn=_collect_env_entries,
-        adapt_fn=_adapt_env_entry,
+        adapt_fn=dict,
         entry_label="environment",
         env_default_root=env_default_root,
     )
@@ -514,52 +501,6 @@ def _candidate_env_paths(root: Path, relative_entry: Path) -> list[Path]:
     return [candidate.resolve() for candidate in candidates]
 
 
-def _adapt_model_entry(entry: Any) -> Any:
-    if not isinstance(entry, dict):
-        return entry
-
-    normalized = dict(entry)
-    params = normalized.pop("params", None)
-    if isinstance(params, dict):
-        merged = {**params, **normalized}
-        merged.setdefault("id", normalized.get("id"))
-        normalized = merged
-
-    env_args = normalized.get("env_args")
-    if env_args is None:
-        normalized["env_args"] = {}
-    elif isinstance(env_args, dict):
-        normalized["env_args"] = dict(env_args)
-    else:
-        raise ValueError("model env_args must be a mapping when provided.")
-
-    env_overrides = normalized.get("env_overrides")
-    if env_overrides is None:
-        normalized["env_overrides"] = {}
-    elif isinstance(env_overrides, dict):
-        normalized["env_overrides"] = {str(key): dict(value) for key, value in env_overrides.items()}
-    else:
-        raise ValueError("model env_overrides must be a mapping when provided.")
-
-    return normalized
-
-
-def _adapt_env_entry(entry: Any) -> Any:
-    if not isinstance(entry, dict):
-        return entry
-
-    normalized = dict(entry)
-    env_args = normalized.get("env_args")
-    if env_args is None:
-        normalized["env_args"] = {}
-    elif isinstance(env_args, dict):
-        normalized["env_args"] = dict(env_args)
-    else:
-        raise ValueError("environment env_args must be a mapping when provided.")
-
-    return normalized
-
-
 def _adapt_job_entry(entry: Any) -> Any:
     if not isinstance(entry, dict):
         return entry
@@ -619,11 +560,16 @@ def _validate_env_args(envs: Iterable[EnvironmentConfigSchema]) -> None:
         env_module = env.module or env.matrix_base_id or env.id
         if not env_module:
             continue
+        try:
+            metadata = load_env_metadata(env_module, cache=cache)
+        except ImportError as exc:
+            logger.warning("Skipping env_args validation for '%s': %s", env_module, exc)
+            continue
         # Centralized validation: unknown/type checks; do not enforce requireds at load time.
         validate_env_args_or_raise(
             env_module,
             env.env_args,
-            metadata=None,
+            metadata=metadata,
             metadata_cache=cache,
             allow_unknown=False,
             enforce_required=False,

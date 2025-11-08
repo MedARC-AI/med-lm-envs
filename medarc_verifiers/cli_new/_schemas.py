@@ -7,6 +7,17 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+RESERVED_MATRIX_KEYS = {
+    "id",
+    "module",
+    "env_args",
+    "matrix",
+    "matrix_exclude",
+    "matrix_id_format",
+    "matrix_base_id",
+    "state_columns",
+}
+
 
 # NOTE: These schema definitions are intentionally incomplete. They provide
 # the structural scaffolding required to start wiring the config loader and
@@ -37,6 +48,22 @@ class ModelConfigSchema(BaseModel):
     max_connections: int | None = Field(None, ge=1)
     max_keepalive_connections: int | None = Field(None, ge=1)
     max_retries: int | None = Field(None, ge=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def merge_legacy_params(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        params = data.get("params")
+        if not isinstance(params, dict):
+            return data
+        merged = dict(params)
+        for key, value in data.items():
+            if key == "params":
+                continue
+            merged[key] = value
+        merged.setdefault("id", data.get("id"))
+        return merged
 
     @field_validator("headers")
     @classmethod
@@ -201,6 +228,25 @@ class EnvironmentConfigSchema(BaseModel):
             raise ValueError("matrix_id_format must be a non-empty string when provided.")
         return value
 
+    @model_validator(mode="after")
+    def validate_matrix_constraints(self) -> "EnvironmentConfigSchema":
+        matrix = self.matrix or {}
+        if matrix:
+            base_id = self.id or "<environment>"
+            for key in matrix:
+                if key in RESERVED_MATRIX_KEYS:
+                    raise ValueError(f"environment '{base_id}' matrix cannot vary '{key}'.")
+            matrix_keys = set(matrix)
+            if self.matrix_exclude:
+                for pattern in self.matrix_exclude:
+                    invalid_keys = set(pattern) - matrix_keys
+                    if invalid_keys:
+                        invalid = ", ".join(sorted(invalid_keys))
+                        raise ValueError(
+                            f"environment '{base_id}' matrix_exclude entry references unknown keys: {invalid}."
+                        )
+        return self
+
 
 class JobConfigSchema(BaseModel):
     """Schema for job entries mapping models to environments."""
@@ -232,4 +278,5 @@ __all__ = [
     "EnvironmentConfigSchema",
     "JobConfigSchema",
     "RunConfigSchema",
+    "RESERVED_MATRIX_KEYS",
 ]

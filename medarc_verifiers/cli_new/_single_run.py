@@ -24,13 +24,14 @@ from medarc_verifiers.cli_new.utils.overrides import build_cli_override
 from medarc_verifiers.cli_new.utils.shared import (
     HEADER_SEPARATOR,
     STATE_COLUMNS_SEPARATOR,
+    DEFAULT_SINGLE_RUN_MAX_CONCURRENT,
     ensure_required_params,
     ensure_root_logging,
     flatten_state_columns,
     merge_env_args,
     merge_sampling_args,
+    normalize_headers,
     resolve_endpoint_selection,
-    build_headers_with_file,
 )
 
 logger = logging.getLogger(__name__)
@@ -117,7 +118,7 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
     )
 
     try:
-        headers = build_headers_with_file(args.header, args.header_file)
+        headers = normalize_headers(args.header, header_file=args.header_file)
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -236,7 +237,13 @@ def build_base_parser(*, require_env: bool, add_help: bool) -> argparse.Argument
     )
     parser.add_argument("--num-examples", "-n", type=int, default=5, help="Number of examples to evaluate.")
     parser.add_argument("--rollouts-per-example", "-r", type=int, default=3, help="Number of rollouts per example.")
-    parser.add_argument("--max-concurrent", "-c", type=int, default=32, help="Maximum number of concurrent requests.")
+    parser.add_argument(
+        "--max-concurrent",
+        "-c",
+        type=int,
+        default=DEFAULT_SINGLE_RUN_MAX_CONCURRENT,
+        help="Maximum number of concurrent requests.",
+    )
     parser.add_argument(
         "--max-concurrent-generation", type=int, default=None, help="Maximum number of concurrent generation requests."
     )

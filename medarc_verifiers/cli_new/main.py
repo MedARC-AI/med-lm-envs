@@ -24,6 +24,7 @@ from medarc_verifiers.cli_new._job_builder import ResolvedJob, build_jobs
 from medarc_verifiers.cli_new._job_executor import ExecutorSettings, JobExecutionResult, execute_jobs
 from medarc_verifiers.cli_new._manifest import (
     MANIFEST_FILENAME,
+    ManifestJobEntry,
     RunManifest,
     compute_job_checksum,
     compute_snapshot_checksum,
@@ -31,7 +32,7 @@ from medarc_verifiers.cli_new._manifest import (
 from medarc_verifiers.cli_new._single_run import run_single_mode
 from medarc_verifiers.cli_new.utils.overrides import build_cli_override
 from medarc_verifiers.utils.pathing import from_project_relative
-from medarc_verifiers.cli_new.utils.shared import slugify
+from medarc_verifiers.cli_new.utils.shared import DEFAULT_BATCH_MAX_CONCURRENT, slugify
 
 logger = logging.getLogger(__name__)
 HELP_FLAGS = {"-h", "--help"}
@@ -40,7 +41,6 @@ DEFAULT_API_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_API_KEY_VAR = "OPENAI_API_KEY"
 DEFAULT_ENV_DIR = Path("environments")
 DEFAULT_ENV_CONFIG_ROOT = Path("configs") / "envs"
-DEFAULT_MAX_CONCURRENT = 128
 
 
 def build_batch_parser() -> argparse.ArgumentParser:
@@ -126,7 +126,7 @@ def build_batch_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-concurrent",
         type=int,
-        default=DEFAULT_MAX_CONCURRENT,
+        default=DEFAULT_BATCH_MAX_CONCURRENT,
         help="Default max concurrency when environments omit a value.",
     )
     parser.add_argument("--max-concurrent-generation", type=int, help="Override generation concurrency for all jobs.")
@@ -260,7 +260,7 @@ def _execute_batch(args: argparse.Namespace) -> int:
         return 0
 
     settings = ExecutorSettings(
-        run_id=manifest_plan.manifest.payload.get("run_id", ""),
+        run_id=manifest_plan.manifest.model.run_id or "",
         output_dir=output_dir,
         env_dir=Path(args.env_dir).expanduser(),
         endpoints_path=Path(args.endpoints_path).expanduser() if args.endpoints_path else None,
@@ -408,7 +408,7 @@ def _prepare_manifest_plan(
             manifest_path = run_dir / MANIFEST_FILENAME
             if run_dir.exists() and manifest_path.exists():
                 manifest = RunManifest.load(manifest_path, persist=persist)
-                existing_checksum = manifest.payload.get("config_checksum")
+                existing_checksum = manifest.model.config_checksum
                 if existing_checksum and existing_checksum != checksum:
                     raise ValueError(
                         f"Run '{run_id}' was created from a different configuration. Use --regen {run_id} to seed a new run."
@@ -525,7 +525,7 @@ def _plan_auto_resume_jobs(
 ) -> set[str]:
     job_lookup = {job.job_id: job for job in jobs}
     runnable: set[str] = set()
-    manifest_job_ids = {entry.get("job_id") for entry in manifest.jobs if entry.get("job_id")}
+    manifest_job_ids = {entry.job_id for entry in manifest.jobs if entry.job_id}
     new_jobs = set(job_lookup) - manifest_job_ids
     if new_jobs:
         logger.info(
@@ -534,7 +534,7 @@ def _plan_auto_resume_jobs(
             ", ".join(sorted(new_jobs)),
         )
     for entry in manifest.jobs:
-        job_id = entry.get("job_id")
+        job_id = entry.job_id
         if not job_id:
             continue
         job = job_lookup.get(job_id)
@@ -546,13 +546,13 @@ def _plan_auto_resume_jobs(
             env_args=env_args_map[job_id],
             sampling_args=sampling_args_map[job_id],
         )
-        if entry.get("checksum") != expected_checksum:
+        if entry.checksum != expected_checksum:
             raise ValueError(
                 f"Job '{job_id}' arguments changed since the manifest was recorded; use --regen to create a new run."
             )
-        env_id = (entry.get("env_id") or job.env.id or job.job_id).lower()
+        env_id = (entry.env_id or job.env.id or job.job_id).lower()
         forced = force_all or env_id in forced_envs
-        if forced or entry.get("status") != "completed":
+        if forced or entry.status != "completed":
             runnable.add(job_id)
     return runnable
 
@@ -572,15 +572,15 @@ def _plan_regen_jobs(
         if entry is None:
             continue
         seed_entry = seed_manifest.job_entry(job.job_id)
-        env_id = (entry.get("env_id") or job.env.id or job.job_id).lower()
+        env_id = (entry.env_id or job.env.id or job.job_id).lower()
         forced = force_all or env_id in forced_envs
         if (
             not forced
             and seed_entry is not None
-            and seed_entry.get("status") == "completed"
-            and seed_entry.get("checksum") == entry.get("checksum")
+            and seed_entry.status == "completed"
+            and seed_entry.checksum == entry.checksum
         ):
-            seed_results_dir = seed_entry.get("results_dir")
+            seed_results_dir = seed_entry.results_dir
             resolved_results_dir: Path | str | None = None
             if isinstance(seed_results_dir, str):
                 seed_path = Path(seed_results_dir)
@@ -684,16 +684,16 @@ def _print_job_plan(
             return f"{primary} ({secondary})"
         return primary or secondary or "-"
 
-    def _resolve_status(job_id: str, entry: Mapping[str, Any] | None) -> str:
+    def _resolve_status(job_id: str, entry: ManifestJobEntry | None) -> str:
         if job_id in runnable_job_ids:
             return "next"
-        if entry and entry.get("status") == "completed":
+        if entry and entry.status == "completed":
             return "completed"
         return "pending"
 
     entries = {}
     if manifest is not None:
-        entries = {entry.get("job_id"): entry for entry in manifest.jobs if entry.get("job_id")}
+        entries = {entry.job_id: entry for entry in manifest.jobs if entry.job_id}
 
     if Console is None or Table is None:
         lines = []
