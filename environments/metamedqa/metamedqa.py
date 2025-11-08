@@ -21,6 +21,7 @@ def load_environment(
     split: str = "test",
     shuffle_answers: bool = False,
     shuffle_seed: int | None = 1618,
+    **kwargs,
 ) -> vf.Environment:
     """
     MetaMedQA multiple-choice accuracy eval
