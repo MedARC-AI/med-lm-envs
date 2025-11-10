@@ -1,0 +1,377 @@
+"""Discovery helpers for the exporter process subcommand."""
+
+from __future__ import annotations
+
+import json
+import logging
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, Iterator, Mapping, Sequence
+
+from pydantic import ValidationError
+
+from medarc_verifiers.cli_new._manifest import MANIFEST_FILENAME, ManifestJobEntry, RunManifestModel
+from medarc_verifiers.utils.pathing import from_project_relative
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_STATUS = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class RunManifestInfo:
+    """Metadata describing a run directory and its manifest."""
+
+    job_run_id: str
+    run_name: str | None
+    manifest_path: Path
+    run_dir: Path
+    created_at: str | None
+    updated_at: str | None
+    config_source: str | None
+    config_checksum: str | None
+    run_summary_path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class RunRecord:
+    """Resolved job entry enriched with filesystem paths and status info."""
+
+    manifest: RunManifestInfo
+    job_id: str
+    job_name: str | None
+    model_id: str | None
+    manifest_env_id: str | None
+    results_dir_name: str
+    results_dir: Path
+    metadata_path: Path
+    results_path: Path
+    summary_path: Path
+    has_metadata: bool
+    has_results: bool
+    has_summary: bool
+    status: str
+    duration_seconds: float | None
+    reason: str | None
+    started_at: str | None
+    ended_at: str | None
+    num_examples: int | None
+    rollouts_per_example: int | None
+    seeds: Mapping[str, Any] | None
+    env_args: Mapping[str, Any]
+    sampling_args: Mapping[str, Any]
+    env_config: Mapping[str, Any] | None
+    model_config: Mapping[str, Any] | None
+
+
+def discover_run_records(
+    runs_dir: Path | str,
+    *,
+    filter_status: Sequence[str] | None = None,
+) -> list[RunRecord]:
+    """Return all discovered run records within the provided runs directory."""
+    return list(iter_run_records(runs_dir, filter_status=filter_status))
+
+
+def iter_run_records(
+    runs_dir: Path | str,
+    *,
+    filter_status: Sequence[str] | None = None,
+) -> Iterator[RunRecord]:
+    """Yield run records for each job entry found under the runs directory."""
+    runs_path = Path(runs_dir)
+    if not runs_path.exists():
+        logger.debug("Runs directory %s does not exist; nothing to process.", runs_path)
+        return
+
+    normalized_status = _normalize_status_filter(filter_status)
+
+    try:
+        run_dirs = sorted(path for path in runs_path.iterdir() if path.is_dir())
+    except OSError as exc:  # noqa: FBT003
+        logger.warning("Failed to list runs directory %s: %s", runs_path, exc)
+        return
+
+    for run_dir in run_dirs:
+        manifest_info, job_entries = _load_manifest(run_dir)
+        if manifest_info is None:
+            continue
+        summary_map = _load_run_summary(run_dir)
+        for job_entry in job_entries:
+            summary_entry = summary_map.get(job_entry.job_id or "")
+            record = _build_run_record(manifest_info, job_entry, summary_entry)
+            if record is None:
+                continue
+            if normalized_status and record.status not in normalized_status:
+                continue
+            yield record
+
+
+def _build_run_record(
+    manifest: RunManifestInfo,
+    job_entry: ManifestJobEntry,
+    summary_entry: Mapping[str, Any] | None,
+) -> RunRecord | None:
+    job_id = job_entry.job_id
+    if not job_id:
+        logger.debug("Skipping job entry without a valid job_id in %s", manifest.manifest_path)
+        return None
+
+    results_dir_name, results_dir = _resolve_results_dir(job_entry.results_dir, job_id, manifest.run_dir)
+    metadata_path = results_dir / "metadata.json"
+    results_path = results_dir / "results.jsonl"
+    summary_path = results_dir / "summary.json"
+
+    status = DEFAULT_STATUS
+    duration_seconds = None
+    reason: str | None = None
+
+    if summary_entry:
+        status = (str(summary_entry.get("status", DEFAULT_STATUS)) or DEFAULT_STATUS).lower()
+        duration_seconds = summary_entry.get("duration_seconds")
+        reason = summary_entry.get("error")
+    elif job_entry.status:
+        status = job_entry.status.lower()
+        reason = job_entry.reason
+
+    config_payload = job_entry.config or {}
+    env_config = _ensure_mapping(config_payload.get("env"))
+    model_config = _ensure_mapping(config_payload.get("model"))
+    env_args = _ensure_mapping(env_config.get("env_args"))
+    sampling_args = _ensure_mapping(model_config.get("sampling_args"))
+
+    return RunRecord(
+        manifest=manifest,
+        job_id=job_id,
+        job_name=job_entry.job_name,
+        model_id=job_entry.model_id,
+        manifest_env_id=job_entry.env_id,
+        results_dir_name=results_dir_name,
+        results_dir=results_dir,
+        metadata_path=metadata_path,
+        results_path=results_path,
+        summary_path=summary_path,
+        has_metadata=metadata_path.exists(),
+        has_results=results_path.exists(),
+        has_summary=summary_path.exists(),
+        status=status,
+        duration_seconds=duration_seconds,
+        reason=reason or job_entry.reason,
+        started_at=job_entry.started_at,
+        ended_at=job_entry.ended_at,
+        num_examples=job_entry.num_examples,
+        rollouts_per_example=job_entry.rollouts_per_example,
+        seeds=job_entry.seeds,
+        env_args=env_args,
+        sampling_args=sampling_args,
+        env_config=env_config,
+        model_config=model_config,
+    )
+
+
+def _ensure_mapping(value: Any) -> Mapping[str, Any]:
+    if isinstance(value, Mapping):
+        return value
+    return {}
+
+
+def _resolve_results_dir(
+    stored_value: str | None,
+    job_id: str,
+    run_dir: Path,
+) -> tuple[str, Path]:
+    """Interpret manifest results_dir values which may be job-relative, rooted at runs/, or absolute."""
+    name = stored_value or job_id
+    candidate = Path(name)
+    if candidate.is_absolute():
+        return name, candidate
+    if candidate.parts and candidate.parts[0] == "runs":
+        resolved = from_project_relative(candidate)
+        return name, resolved
+    return name, (run_dir / candidate).resolve()
+
+
+def _load_manifest(run_dir: Path) -> tuple[RunManifestInfo | None, Sequence[ManifestJobEntry]]:
+    manifest_path = run_dir / MANIFEST_FILENAME
+    if not manifest_path.exists():
+        logger.debug("Skipping %s: no %s present.", run_dir, MANIFEST_FILENAME)
+        return None, ()
+    try:
+        manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:  # noqa: FBT003
+        logger.warning("Failed to parse manifest %s: %s", manifest_path, exc)
+        return None, ()
+
+    try:
+        manifest_model = RunManifestModel.model_validate(manifest_payload)
+    except ValidationError as exc:
+        logger.warning("Manifest schema validation failed for %s: %s", manifest_path, exc)
+        return None, ()
+
+    job_run_id = manifest_model.run_id or run_dir.name
+
+    manifest_info = RunManifestInfo(
+        job_run_id=job_run_id,
+        run_name=manifest_model.name,
+        manifest_path=manifest_path,
+        run_dir=run_dir,
+        created_at=manifest_model.created_at,
+        updated_at=manifest_model.updated_at,
+        config_source=manifest_model.config_source,
+        config_checksum=manifest_model.config_checksum,
+        run_summary_path=run_dir / "run_summary.json",
+    )
+
+    if not manifest_model.jobs:
+        logger.debug("Manifest %s has no jobs array.", manifest_path)
+        return manifest_info, ()
+    return manifest_info, manifest_model.jobs
+
+
+def _load_run_summary(run_dir: Path) -> Mapping[str, Mapping[str, Any]]:
+    summary_path = run_dir / "run_summary.json"
+    if not summary_path.exists():
+        return {}
+    try:
+        payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:  # noqa: FBT003
+        logger.warning("Failed to parse run summary %s: %s", summary_path, exc)
+        return {}
+    jobs = payload.get("jobs")
+    if not isinstance(jobs, list):
+        return {}
+    summary: Dict[str, Mapping[str, Any]] = {}
+    for entry in jobs:
+        job_id = entry.get("job_id") if isinstance(entry, Mapping) else None
+        if not job_id:
+            continue
+        summary[job_id] = entry
+    return summary
+
+
+def _normalize_status_filter(statuses: Sequence[str] | None) -> tuple[str, ...]:
+    if not statuses:
+        return ()
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for status in statuses:
+        value = status.strip().lower()
+        if not value or value in seen:
+            continue
+        normalized.append(value)
+        seen.add(value)
+    return tuple(normalized)
+
+
+def deduplicate_records_by_latest(records: Sequence[RunRecord]) -> list[RunRecord]:
+    """Keep only the latest record per (model_id, env_id) combination.
+
+    When multiple runs contain the same model+env pair, keeps only the most recent
+    based on timestamp comparison. Displays a Rich table for any skipped older runs.
+
+    Uses config.env.id as the environment identifier, falling back to manifest_env_id.
+    This ensures proper separation of environment variants (e.g., longhealth-task1 vs task2).
+
+    Args:
+        records: All discovered run records
+
+    Returns:
+        Filtered list containing only the latest record per (model, env) pair
+    """
+    from collections import defaultdict
+
+    try:
+        from rich.console import Console
+        from rich.table import Table
+    except ImportError:
+        Console = None  # type: ignore[assignment]
+        Table = None  # type: ignore[assignment]
+
+    # Group by (model_id, env_id from config)
+    groups: Dict[tuple[str, str], list[RunRecord]] = defaultdict(list)
+
+    for record in records:
+        model_id = record.model_id or "unknown"
+        # Prefer config.env.id over manifest_env_id for accurate environment identification
+        env_id = (record.env_config.get("id") if record.env_config else record.manifest_env_id) or "unknown"
+        key = (model_id, env_id)
+        groups[key].append(record)
+
+    # Keep latest from each group and collect skip info
+    latest_records: list[RunRecord] = []
+    skipped_info: list[tuple[str, str, str, str, str, str]] = []
+
+    for (model_id, env_id), group_records in groups.items():
+        if len(group_records) == 1:
+            latest_records.append(group_records[0])
+            continue
+
+        # Find latest by timestamp (ended_at > started_at > created_at)
+        latest = max(
+            group_records,
+            key=lambda r: (
+                r.ended_at or "",
+                r.started_at or "",
+                r.manifest.created_at or "",
+            ),
+        )
+        latest_records.append(latest)
+
+        # Collect info about skipped runs (sorted by timestamp for clarity)
+        skipped_records = [r for r in group_records if r is not latest]
+        skipped_records.sort(key=lambda r: (r.ended_at or "", r.started_at or "", r.manifest.created_at or ""))
+
+        for record in skipped_records:
+            skipped_timestamp = record.ended_at or record.started_at or "N/A"
+            kept_timestamp = latest.ended_at or latest.started_at or "N/A"
+            skipped_run_id = record.manifest.job_run_id
+            kept_run_id = latest.manifest.job_run_id
+            skipped_info.append((model_id, env_id, skipped_run_id, skipped_timestamp, kept_run_id, kept_timestamp))
+
+    # Display results
+    if skipped_info:
+        if Console is not None and Table is not None:
+            console = Console()
+            table = Table(
+                title=f"Deduplication: Skipped {len(skipped_info)} older run(s)",
+                caption="Only the latest run per model+env will be processed",
+                show_header=True,
+                header_style="bold cyan",
+            )
+            table.add_column("Model", style="magenta")
+            table.add_column("Environment", style="green")
+            table.add_column("Skipped Run", style="dim", overflow="fold")
+            table.add_column("Time", style="dim")
+            table.add_column("Kept Run", style="yellow", overflow="fold")
+            table.add_column("Time", style="bold green")
+
+            for model_id, env_id, skipped_run_id, skipped_ts, kept_run_id, kept_ts in skipped_info:
+                table.add_row(model_id, env_id, skipped_run_id, skipped_ts, kept_run_id, kept_ts)
+
+            console.print(table)
+        else:
+            # Fallback to simple logging if Rich is not available
+            for model_id, env_id, skipped_run_id, skipped_ts, kept_run_id, kept_ts in skipped_info:
+                logger.warning(
+                    "Skipping older run: model=%s env=%s run=%s ended_at=%s (keeping: %s ended_at=%s)",
+                    model_id,
+                    env_id,
+                    skipped_run_id,
+                    skipped_ts,
+                    kept_run_id,
+                    kept_ts,
+                )
+            logger.warning(
+                "Deduplicated %d older run(s). Only processing latest runs per model+env.", len(skipped_info)
+            )
+
+    return latest_records
+
+
+__all__ = [
+    "RunManifestInfo",
+    "RunRecord",
+    "discover_run_records",
+    "iter_run_records",
+    "deduplicate_records_by_latest",
+]

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from medarc_verifiers.cli_new import main
+from medarc_verifiers.cli_new.process import ProcessResult
 from medarc_verifiers.cli_new.utils.env_args import EnvParam
 
 
@@ -130,6 +131,58 @@ def test_cli_runs_configuration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert manifest["jobs"][0]["status"] == "completed"
 
 
+def test_cli_env_config_root_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    config_path = config_dir / "jobs.yaml"
+    _write_config(
+        config_path,
+        """
+        models:
+          model-a: {}
+        envs:
+          - custom_env
+        jobs:
+          - model: model-a
+            env: custom_env
+        """,
+    )
+
+    shared_envs = tmp_path / "shared_envs"
+    shared_envs.mkdir()
+    (shared_envs / "custom_env.yaml").write_text(
+        """
+        - id: custom_env
+          module: custom_env
+        """,
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("medarc_verifiers.cli_new._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+
+    async def fake_run(config):
+        return _stub_cli_result()
+
+    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", fake_run)
+
+    output_dir = tmp_path / "runs_out"
+    exit_code = main.main(
+        [
+            "bench",
+            "--config",
+            str(config_path),
+            "--output-dir",
+            str(output_dir),
+            "--env-config-root",
+            str(shared_envs),
+        ]
+    )
+
+    assert exit_code == 0
+
+
 ##
 
 
@@ -204,6 +257,127 @@ def test_regen_reuses_completed_jobs(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     assert regen_manifest["regen_source"] == base_run
 
 
+def test_regen_accepts_path_to_run_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """--regen can be a direct path to a run directory, not only a run-id under output_dir."""
+    config_path = tmp_path / "config.yaml"
+    _write_config(
+        config_path,
+        """
+        models:
+          model-a: {}
+        envs:
+          medqa: {}
+        jobs:
+          - model: model-a
+            env: medqa
+        """,
+    )
+
+    monkeypatch.setattr("medarc_verifiers.cli_new._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+
+    async def fake_run(config):
+        return _stub_cli_result()
+
+    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", fake_run)
+
+    output_dir = tmp_path / "runs_out"
+    base_run = output_dir / "base-run"
+    # First run to create a seed manifest
+    assert (
+        main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir), "--run-id", "base-run"]) == 0
+    )
+
+    # Now use --regen with an explicit path to the run directory
+    regen_id = "regen-run"
+    exit_code = main.main(
+        [
+            "bench",
+            "--config",
+            str(config_path),
+            "--output-dir",
+            str(output_dir),
+            "--run-id",
+            regen_id,
+            "--regen",
+            str(base_run),
+        ]
+    )
+    assert exit_code == 0
+    regen_manifest = json.loads((output_dir / regen_id / "run_manifest.json").read_text())
+    assert regen_manifest["regen_source"] == str(base_run)
+
+
+def test_regen_in_place_when_no_run_id(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """When --regen is given without --run-id, update the seed run directory in-place (no new run)."""
+    # Initial config with one job
+    config_path = tmp_path / "config.yaml"
+    _write_config(
+        config_path,
+        """
+                models:
+                    model-a: {}
+                envs:
+                    medqa: {}
+                jobs:
+                    - model: model-a
+                        env: medqa
+                """,
+    )
+
+    monkeypatch.setattr("medarc_verifiers.cli_new._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+
+    async def fake_run(config):
+        return _stub_cli_result()
+
+    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", fake_run)
+
+    output_dir = tmp_path / "runs_out"
+    # Create the seed/base run
+    assert main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir), "--run-id", "base"]) == 0
+    base_dir = output_dir / "base"
+    base_manifest_path = base_dir / "run_manifest.json"
+    assert base_manifest_path.exists()
+    base_manifest = json.loads(base_manifest_path.read_text())
+    assert base_manifest["summary"]["completed"] == 1
+
+    # Update the config to add a second job
+    _write_config(
+        config_path,
+        """
+                models:
+                    model-a: {}
+                    model-b: {}
+                envs:
+                    medqa: {}
+                jobs:
+                    - model: model-a
+                        env: medqa
+                    - model: model-b
+                        env: medqa
+                """,
+    )
+
+    # Run bench with --regen using the path to the base run, without --run-id
+    exit_code = main.main(
+        ["bench", "--config", str(config_path), "--output-dir", str(output_dir), "--regen", str(base_dir)]
+    )
+    assert exit_code == 0
+
+    # Ensure no new run directory was created; only the base run exists
+    run_dirs = sorted(p.name for p in output_dir.iterdir() if p.is_dir())
+    assert run_dirs == ["base"]
+
+    # The base manifest should now contain both jobs and report 2 completed
+    updated_manifest = json.loads(base_manifest_path.read_text())
+    job_ids = sorted(entry["job_id"] for entry in updated_manifest["jobs"])
+    assert job_ids == ["model-a-medqa", "model-b-medqa"]
+    assert updated_manifest["summary"]["completed"] == 2
+
+
 def test_auto_resume_discovery_without_run_id(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Auto-resume should discover a prior matching run when --run-id is omitted."""
     config_path = tmp_path / "config.yaml"
@@ -254,7 +428,7 @@ jobs:
 
     monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", resume_run)
 
-    exit_code = main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir), "--auto-resume"])
+    exit_code = main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir)])
     assert exit_code == 0
     assert len(calls) == 1  # only the failed job should be re-run
 
@@ -264,37 +438,64 @@ jobs:
     assert manifest_after["summary"]["failed"] == 0
 
 
-def test_auto_resume_no_candidate_fails_cleanly(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Auto-resume without a matching prior run should fail and not create a new run."""
+def test_no_auto_resume_forces_new_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Passing --no-auto-resume should ignore existing manifests and start a new run."""
     config_path = tmp_path / "config.yaml"
     _write_config(
         config_path,
         """
 models:
   model-a: {}
+  model-b: {}
 envs:
   medqa: {}
 jobs:
   - model: model-a
     env: medqa
+  - model: model-b
+    env: medqa
         """,
     )
 
-    # Stubs to avoid external calls; ensure execution is not invoked
     monkeypatch.setattr("medarc_verifiers.cli_new._config_loader.load_env_metadata", lambda *args, **kwargs: [])
     monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_env_metadata", lambda *args, **kwargs: [])
     monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
 
-    async def fail_if_called(*args, **kwargs):  # pragma: no cover - should not be called
-        raise AssertionError("run_evaluation should not be called when no candidate to auto-resume")
+    async def first_run(config):
+        return _stub_cli_result()
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", fail_if_called)
+    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", first_run)
 
     output_dir = tmp_path / "runs_out"
-    # No prior runs exist; this should fail with exit code 1 and not create a run dir
-    exit_code = main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir), "--auto-resume"])
-    assert exit_code == 1
-    assert not output_dir.exists() or not any(output_dir.iterdir())
+    run_id = "baseline-run"
+    assert main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir), "--run-id", run_id]) == 0
+
+    manifest_path = output_dir / run_id / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["jobs"][0]["status"] = "failed"
+    manifest["jobs"][0]["reason"] = "boom"
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+
+    calls: list[int] = []
+
+    async def fresh_run(config):
+        calls.append(1)
+        return _stub_cli_result()
+
+    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", fresh_run)
+
+    preexisting = {child.name for child in output_dir.iterdir()}
+    exit_code = main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir), "--no-auto-resume"])
+    assert exit_code == 0
+    assert len(calls) == 2  # both jobs rerun in the fresh run
+
+    post = {child.name for child in output_dir.iterdir()}
+    new_runs = post - preexisting
+    assert run_id in post
+    assert len(new_runs) == 1
+    new_run_id = next(iter(new_runs))
+    assert new_run_id != run_id
+    assert (output_dir / new_run_id / "run_manifest.json").exists()
 
 
 def test_single_run_help_lists_env_section_and_header_file(
@@ -482,3 +683,55 @@ def test_sampling_precedence_and_none_behavior(
     assert exit_code == 0
     config = json.loads(capsys.readouterr().out)
     assert "max_tokens" not in config["sampling_args"]
+
+
+def test_process_cli_builds_options(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    env_root = tmp_path / "envs"
+    env_root.mkdir()
+    (env_root / "demo.yaml").write_text(
+        """
+        - id: demo-env
+          export:
+            keep_columns: [info]
+            include_prompt_completion: true
+        """,
+        encoding="utf-8",
+    )
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(options, env_export_map):
+        captured["options"] = options
+        captured["env_export_map"] = env_export_map
+        return ProcessResult(records_processed=0, rows_processed=0, env_groups=[], env_summaries=[], hf_summary=None)
+
+    monkeypatch.setattr("medarc_verifiers.cli_new.main.run_process", fake_run)
+
+    exit_code = main.main(
+        [
+            "process",
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--output-dir",
+            str(tmp_path / "processed"),
+            "--env-config-root",
+            str(env_root),
+            "--status",
+            "completed",
+            "--include-prompt-completion",
+            "--keep-column",
+            "reward",
+            "--hf-repo",
+            "medarc/demo",
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0
+    options = captured["options"]
+    assert options.include_prompt_completion is True
+    assert options.keep_columns == ("reward",)
+    assert options.status_filter == ("completed",)
+    assert options.hf_config is not None
+    env_map = captured["env_export_map"]
+    assert "demo-env" in env_map

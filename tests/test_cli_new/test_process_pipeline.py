@@ -1,0 +1,132 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from medarc_verifiers.cli_new._schemas import EnvironmentExportConfig
+from medarc_verifiers.cli_new.process import ProcessOptions, run_process
+
+
+def _write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _setup_run(tmp_path: Path) -> Path:
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "run-1"
+    results_dir = run_dir / "demo-job"
+    manifest = {
+        "run_id": "run-1",
+        "name": "demo",
+        "config_source": "configs/demo.yaml",
+        "config_snapshot": {"jobs": []},
+        "config_checksum": "abc123",
+        "created_at": "2024-01-01T00:00:00Z",
+        "updated_at": "2024-01-01T00:00:00Z",
+        "jobs": [
+            {
+                "job_id": "demo-job",
+                "env_id": "demo-env-rollout3",
+                "model_id": "gpt-mini",
+                "results_dir": "demo-job",
+                "checksum": "deadbeef",
+            }
+        ],
+    }
+    _write_json(run_dir / "run_manifest.json", manifest)
+    metadata = {
+        "env_id": "demo-env-rollout3",
+        "env_args": {},
+        "sampling_args": {},
+    }
+    _write_json(results_dir / "metadata.json", metadata)
+    results = [
+        {
+            "example_id": "ex-1",
+            "prompt": "Question?",
+            "completion": "Answer",
+            "info": {"debug": True},
+            "reward": 1.0,
+        }
+    ]
+    results_path = results_dir / "results.jsonl"
+    results_path.parent.mkdir(parents=True, exist_ok=True)
+    with results_path.open("w", encoding="utf-8") as handle:
+        for row in results:
+            handle.write(json.dumps(row) + "\n")
+    return runs_dir
+
+
+def test_run_process_respects_env_export_defaults(tmp_path: Path) -> None:
+    runs_dir = _setup_run(tmp_path)
+    options = ProcessOptions(
+        runs_dir=runs_dir,
+        output_dir=tmp_path / "processed",
+        exporter_version="0.1.0",
+        dry_run=True,
+    )
+    env_export = {
+        "demo-env": EnvironmentExportConfig(
+            keep_columns=["info"],
+            include_prompt_completion=True,
+        )
+    }
+
+    result = run_process(options, env_export_map=env_export)
+
+    assert result.records_processed == 1
+    assert result.rows_processed == 1
+    group = result.env_groups[0]
+    row = group.rows[0]
+    assert row["prompt"] == "Question?"
+    assert row["completion"] == "Answer"
+    assert row["info"] == {"debug": True}
+    assert group.env_id == "demo-env-rollout3"
+    assert group.base_env_id == "demo-env"
+
+
+def test_run_process_cli_overrides_env_export(tmp_path: Path) -> None:
+    runs_dir = _setup_run(tmp_path)
+    options = ProcessOptions(
+        runs_dir=runs_dir,
+        output_dir=tmp_path / "processed",
+        exporter_version="0.1.0",
+        dry_run=True,
+        include_prompt_completion=False,
+        keep_columns=("reward",),
+    )
+    env_export = {
+        "demo-env": EnvironmentExportConfig(
+            keep_columns=["info"],
+            include_prompt_completion=True,
+        )
+    }
+
+    result = run_process(options, env_export_map=env_export)
+    row = result.env_groups[0].rows[0]
+    assert "prompt" not in row
+    assert "completion" not in row
+    assert "info" not in row
+    assert row["reward"] == 1.0
+
+
+def test_run_process_respects_combine_rollouts_override(tmp_path: Path) -> None:
+    runs_dir = _setup_run(tmp_path)
+    options = ProcessOptions(
+        runs_dir=runs_dir,
+        output_dir=tmp_path / "processed",
+        exporter_version="0.1.0",
+        dry_run=True,
+    )
+    env_export = {
+        "demo-env-rollout3": EnvironmentExportConfig(
+            keep_columns=[],
+            combine_rollouts=False,
+        )
+    }
+
+    result = run_process(options, env_export_map=env_export)
+    group = result.env_groups[0]
+    assert group.env_id == "demo-env-rollout3"
+    assert group.base_env_id == "demo-env-rollout3"

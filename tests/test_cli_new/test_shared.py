@@ -14,6 +14,7 @@ from medarc_verifiers.cli_new.utils.shared import (
     flatten_state_columns,
     merge_env_args,
     merge_sampling_args,
+    normalize_headers,
     resolve_endpoint_selection,
 )
 from medarc_verifiers.utils.cli_env_args import EnvParam
@@ -46,6 +47,15 @@ def test_merge_sampling_args_precedence() -> None:
 def test_build_headers_accepts_list() -> None:
     headers = build_headers(["X-Trace: 123", "Authorization: Bearer token"])
     assert headers == {"X-Trace": "123", "Authorization": "Bearer token"}
+
+
+def test_normalize_headers_file_overrides_cli(tmp_path: Path) -> None:
+    header_file = tmp_path / "headers.txt"
+    header_file.write_text("X-Trace: from-file\nX-New: added\n", encoding="utf-8")
+
+    headers = normalize_headers(["X-Trace: from-cli"], header_file=header_file)
+
+    assert headers == {"X-Trace": "from-file", "X-New": "added"}
 
 
 def test_coerce_json_mapping_requires_object() -> None:

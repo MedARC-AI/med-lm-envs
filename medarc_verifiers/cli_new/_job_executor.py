@@ -8,7 +8,7 @@ import logging
 import shutil
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Literal, Sequence
+from typing import Any, Literal, Sequence, Mapping
 from pydantic import BaseModel, field_validator
 
 from verifiers.types import ClientConfig, EvalConfig, GenerateOutputs
@@ -97,14 +97,18 @@ def execute_jobs(
     run_dir = settings.output_dir / settings.run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    job_statuses: dict[str, str] = {job.job_id: "pending" for job in jobs}
     results: list[JobExecutionResult] = []
-    for index, job in enumerate(jobs, start=1):
+    interrupted = False
+
+    for index, job in enumerate(jobs):
         env_identifier = resolve_env_identifier(job.env)
         model_identifier = job.model.id or job.model.model or job.job_id
-        job_label = f"{job.job_id} env={env_identifier} model={model_identifier}"
-        logger.info("Job %d/%d starting: %s", index, len(jobs), job_label)
+        job_label = f"{job.job_id} (env={env_identifier}, model={model_identifier})"
+        logger.info("Job %d/%d starting: %s", index + 1, len(jobs), job_label)
         job_dir = (run_dir / job.job_id).resolve()
         job_dir.mkdir(parents=True, exist_ok=True)
+        job_statuses[job.job_id] = "running"
 
         if settings.dry_run:
             logger.info("Dry run enabled; skipping execution for job '%s'.", job.job_id)
@@ -115,6 +119,8 @@ def execute_jobs(
                     output_path=job_dir,
                 )
             )
+            job_statuses[job.job_id] = "skipped"
+            _log_job_progress_window(jobs, index, job_statuses, event="dry-run skip")
             continue
 
         if manifest is not None:
@@ -127,37 +133,79 @@ def execute_jobs(
                 endpoints_cache=endpoints_cache,
                 env_metadata_cache=env_metadata_cache,
             )
+        except KeyboardInterrupt:
+            logger.warning("Interrupted while preparing job %s.", job_label)
+            if manifest is not None:
+                manifest.record_job_failure(job.job_id, error="interrupted by user")
+            interruption_message = f"{job_label} interrupted by user"
+            results.append(
+                JobExecutionResult(
+                    job_id=job.job_id,
+                    status="failed",
+                    error=interruption_message,
+                    output_path=job_dir,
+                )
+            )
+            job_statuses[job.job_id] = "interrupted"
+            _log_job_progress_window(jobs, index, job_statuses, event="interruption", note="during preparation")
+            interrupted = True
+            break
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Failed to prepare evaluation config for job '%s': %s", job.job_id, exc)
+            error_message = f"{job_label} preparation failed: {exc}"
+            logger.exception("%s", error_message)
             if manifest is not None:
                 manifest.record_job_failure(job.job_id, error=str(exc))
             results.append(
                 JobExecutionResult(
                     job_id=job.job_id,
                     status="failed",
-                    error=str(exc),
+                    error=error_message,
                     output_path=job_dir,
                 )
             )
+            job_statuses[job.job_id] = "failed"
+            _log_job_progress_window(jobs, index, job_statuses, event="failure", note="during preparation")
             continue
 
         start = perf_counter()
         try:
             eval_result = asyncio.run(run_evaluation(eval_config))
+        except KeyboardInterrupt:
+            duration = perf_counter() - start
+            logger.warning("Job %s interrupted by user after %.2fs.", job_label, duration)
+            if manifest is not None:
+                manifest.record_job_failure(job.job_id, error="interrupted by user", duration_seconds=duration)
+            interruption_message = f"{job_label} interrupted by user"
+            results.append(
+                JobExecutionResult(
+                    job_id=job.job_id,
+                    status="failed",
+                    error=interruption_message,
+                    duration_seconds=duration,
+                    output_path=job_dir,
+                )
+            )
+            job_statuses[job.job_id] = "interrupted"
+            _log_job_progress_window(jobs, index, job_statuses, event="interruption")
+            interrupted = True
+            break
         except Exception as exc:  # noqa: BLE001
             duration = perf_counter() - start
-            logger.exception("Job '%s' failed after %.2fs: %s", job.job_id, duration, exc)
+            error_message = f"{job_label} failed after {duration:.2f}s: {exc}"
+            logger.exception("%s", error_message)
             if manifest is not None:
                 manifest.record_job_failure(job.job_id, error=str(exc), duration_seconds=duration)
             results.append(
                 JobExecutionResult(
                     job_id=job.job_id,
                     status="failed",
-                    error=str(exc),
+                    error=error_message,
                     duration_seconds=duration,
                     output_path=job_dir,
                 )
             )
+            job_statuses[job.job_id] = "failed"
+            _log_job_progress_window(jobs, index, job_statuses, event="failure")
             continue
 
         duration = perf_counter() - start
@@ -190,6 +238,11 @@ def execute_jobs(
                 result=eval_result,
             )
         )
+        job_statuses[job.job_id] = "completed"
+        _log_job_progress_window(jobs, index, job_statuses, event="completion")
+
+    if interrupted:
+        logger.warning("Execution interrupted by user; %d job(s) left pending.", len(jobs) - len(results))
 
     return results
 
@@ -338,6 +391,41 @@ def _extract_avg_reward(results: GenerateOutputs) -> float | None:
     if metadata_avg is not None:
         return float(metadata_avg)
     return None
+
+
+def _log_job_progress_window(
+    jobs: Sequence[ResolvedJob],
+    center_index: int,
+    job_statuses: Mapping[str, str],
+    *,
+    event: str,
+    note: str | None = None,
+) -> None:
+    if not jobs:
+        return
+    start = max(0, center_index - 1)
+    end = min(len(jobs), center_index + 2)
+    lines: list[str] = []
+    header = "Segment | Job ID | Status | Model | Env | Name"
+    divider = "-" * len(header)
+    lines.append(header)
+    lines.append(divider)
+    for idx in range(start, end):
+        job = jobs[idx]
+        segment = "current" if idx == center_index else ("previous" if idx < center_index else "next")
+        status = job_statuses.get(job.job_id, "pending")
+        model_label = job.model.id or job.model.model or "-"
+        try:
+            env_label = resolve_env_identifier(job.env)
+        except ValueError:
+            env_label = job.env.id or job.job_id
+        lines.append(
+            f"{segment:8} | {job.job_id:20} | {status:10} | {model_label:15} | {env_label:20} | {job.name or '-'}"
+        )
+    label = f"Job progress after {event}"
+    if note:
+        label = f"{label} ({note})"
+    logger.info("%s:\n%s", label, "\n".join(lines))
 
 
 __all__ = ["ExecutorSettings", "JobExecutionResult", "execute_jobs"]

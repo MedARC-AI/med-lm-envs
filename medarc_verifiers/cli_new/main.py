@@ -19,6 +19,9 @@ except ImportError:  # pragma: no cover - rich is optional at runtime
     Console = None  # type: ignore[assignment]
     Table = None  # type: ignore[assignment]
 
+import yaml
+from pydantic import ValidationError
+
 from medarc_verifiers.cli_new._config_loader import ConfigFormatError, load_run_config
 from medarc_verifiers.cli_new._job_builder import ResolvedJob, build_jobs
 from medarc_verifiers.cli_new._job_executor import ExecutorSettings, JobExecutionResult, execute_jobs
@@ -30,9 +33,12 @@ from medarc_verifiers.cli_new._manifest import (
     compute_snapshot_checksum,
 )
 from medarc_verifiers.cli_new._single_run import run_single_mode
+from medarc_verifiers.cli_new.process import ProcessOptions, ProcessResult, run_process
+from medarc_verifiers.cli_new.process.hf_sync import HFSyncConfig
 from medarc_verifiers.cli_new.utils.overrides import build_cli_override
-from medarc_verifiers.utils.pathing import from_project_relative
 from medarc_verifiers.cli_new.utils.shared import DEFAULT_BATCH_MAX_CONCURRENT, slugify
+from medarc_verifiers.utils.pathing import from_project_relative
+from medarc_verifiers.cli_new._schemas import EnvironmentConfigSchema, EnvironmentExportConfig
 
 logger = logging.getLogger(__name__)
 HELP_FLAGS = {"-h", "--help"}
@@ -41,6 +47,9 @@ DEFAULT_API_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_API_KEY_VAR = "OPENAI_API_KEY"
 DEFAULT_ENV_DIR = Path("environments")
 DEFAULT_ENV_CONFIG_ROOT = Path("configs") / "envs"
+DEFAULT_RUNS_RAW_DIR = Path("runs") / "raw"
+DEFAULT_PROCESSED_DIR = Path("runs") / "processed"
+PROCESS_COMMAND = "process"
 
 
 def build_batch_parser() -> argparse.ArgumentParser:
@@ -53,7 +62,7 @@ def build_batch_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id", help="Override the generated run identifier.")
     parser.add_argument("--name", help="Override the human-friendly run name (defaults to the config name).")
     parser.add_argument(
-        "--regen",
+        "--restart",
         help="Seed jobs from a previous run identifier (reuse completed jobs when configs match).",
     )
     parser.add_argument(
@@ -134,6 +143,81 @@ def build_batch_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_process_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="medarc-new process",
+        description="Process MedARC run outputs into Parquet datasets and optional HF uploads.",
+    )
+    parser.add_argument(
+        "--runs-dir",
+        type=Path,
+        default=DEFAULT_RUNS_RAW_DIR,
+        help="Directory containing raw run outputs (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=DEFAULT_PROCESSED_DIR,
+        help="Directory to store processed parquet files (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--env-config-root",
+        type=Path,
+        default=DEFAULT_ENV_CONFIG_ROOT,
+        help="Directory containing environment YAMLs for export settings (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--status",
+        action="append",
+        help="Filter runs by manifest status (repeatable).",
+    )
+    parser.add_argument(
+        "--include-prompt-completion",
+        dest="include_prompt_completion",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Include prompt/completion columns (default: env config or false).",
+    )
+    parser.add_argument("--keep-column", action="append", help="Extra column to keep (repeatable).")
+    parser.add_argument("--drop-column", action="append", help="Column to drop (repeatable).")
+    parser.add_argument(
+        "--combine-rollouts",
+        dest="combine_rollouts",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Combine rollout suffixes when deriving base env ids (default: env config or true).",
+    )
+    parser.add_argument(
+        "--no-deduplicate",
+        dest="no_deduplicate",
+        action="store_true",
+        default=False,
+        help="Include all runs (don't deduplicate by latest per model+env).",
+    )
+    parser.add_argument("--exporter-version", default="dev", help="Exporter version tag to embed in outputs.")
+    parser.add_argument("--processed-at", help="Override processed_at timestamp (ISO8601).")
+    parser.add_argument("--dry-run", action="store_true", help="Plan processing without writing outputs.")
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing parquet files.")
+
+    parser.add_argument("--hf-repo", help="Hugging Face repo id for dataset sync.")
+    parser.add_argument(
+        "--hf-merge",
+        choices=("append", "update", "replace"),
+        default="append",
+        help="Merge strategy when syncing to HF (default: %(default)s).",
+    )
+    parser.add_argument("--hf-branch", help="Target HF branch.")
+    parser.add_argument("--hf-token", help="Auth token for HF operations.")
+    parser.add_argument(
+        "--hf-private",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Push dataset as private (default: false).",
+    )
+
+    return parser
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Unified CLI entry point."""
     args_list = list(argv) if argv is not None else sys.argv[1:]
@@ -148,6 +232,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args_list[0] == "bench":
         return _run_batch_mode(args_list[1:])
+    if args_list[0] == PROCESS_COMMAND:
+        return _run_process_mode(args_list[1:])
 
     return run_single_mode(args_list)
 
@@ -172,13 +258,16 @@ def _run_batch_mode(argv: Sequence[str]) -> int:
     except ValueError as exc:
         parser.error(str(exc))
 
-    if args.regen:
+    if args.restart:
         args.auto_resume = False
-    if args.regen and args.run_id and args.regen == args.run_id:
-        parser.error("--regen target must differ from the destination --run-id.")
+    # Allow in-place regeneration when --run-id matches --regen
+    # (previously disallowed). If equality is intended, we'll update the seed run in place.
 
     try:
         return _execute_batch(args)
+    except KeyboardInterrupt:
+        logger.warning("Batch run interrupted by user.")
+        return 1
     except ConfigFormatError as exc:
         parser.error(str(exc))
     except SystemExit:  # pragma: no cover - argparse already handled messaging
@@ -186,6 +275,67 @@ def _run_batch_mode(argv: Sequence[str]) -> int:
     except Exception as exc:  # noqa: BLE001
         logger.exception("Unhandled error: %s", exc)
         return 1
+
+
+def _run_process_mode(argv: Sequence[str]) -> int:
+    parser = build_process_parser()
+    args = parser.parse_args(argv)
+
+    try:
+        env_export_map = _load_env_export_map(args.env_config_root)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to load environment export configs: %s", exc)
+        env_export_map = {}
+
+    hf_config = None
+    if args.hf_repo:
+        hf_config = HFSyncConfig(
+            repo_id=args.hf_repo,
+            merge_strategy=args.hf_merge,
+            branch=args.hf_branch,
+            private=bool(args.hf_private),
+            dry_run=args.dry_run,
+            token=args.hf_token,
+        )
+
+    processed_with_args = {
+        "status": args.status or [],
+        "include_prompt_completion": args.include_prompt_completion,
+        "keep_columns": args.keep_column or [],
+        "drop_columns": args.drop_column or [],
+        "combine_rollouts": args.combine_rollouts,
+        "deduplicate_latest": not args.no_deduplicate,
+        "dry_run": args.dry_run,
+        "overwrite": args.overwrite,
+        "hf_repo": args.hf_repo,
+        "hf_merge": args.hf_merge,
+    }
+
+    options = ProcessOptions(
+        runs_dir=args.runs_dir,
+        output_dir=args.output_dir,
+        exporter_version=args.exporter_version,
+        processed_at=args.processed_at,
+        processed_with_args=processed_with_args,
+        status_filter=args.status or (),
+        include_prompt_completion=args.include_prompt_completion,
+        keep_columns=args.keep_column or (),
+        drop_columns=args.drop_column or (),
+        combine_rollouts=args.combine_rollouts,
+        deduplicate_latest=not args.no_deduplicate,
+        dry_run=args.dry_run,
+        overwrite=args.overwrite,
+        hf_config=hf_config,
+    )
+
+    try:
+        result = run_process(options, env_export_map=env_export_map)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Process pipeline failed: %s", exc)
+        return 1
+
+    _log_process_result(result)
+    return 0
 
 
 def _execute_batch(args: argparse.Namespace) -> int:
@@ -213,7 +363,7 @@ def _execute_batch(args: argparse.Namespace) -> int:
         args.cli_env_args or {},
         args.cli_sampling_args or {},
     )
-    config_snapshot = run_config.model_dump()
+    config_checksum = compute_snapshot_checksum(run_config.model_dump())
     forced_envs = _parse_forced_envs(args.forced)
 
     try:
@@ -222,11 +372,11 @@ def _execute_batch(args: argparse.Namespace) -> int:
             run_id=run_id,
             run_name=run_name,
             config_path=config_path,
-            config_snapshot=config_snapshot,
+            config_checksum=config_checksum,
             jobs=jobs,
             env_args_map=env_args_map,
             sampling_args_map=sampling_args_map,
-            regen_source=args.regen,
+            restart_source=args.restart,
             auto_resume=bool(args.auto_resume),
             force_all=bool(args.force),
             forced_envs=forced_envs,
@@ -256,6 +406,46 @@ def _execute_batch(args: argparse.Namespace) -> int:
             )
         else:
             logger.info("No jobs were scheduled after applying filters and resume settings.")
+
+        # Check if all selected jobs are completed (not just filtered out)
+        all_completed = all(
+            manifest_plan.manifest.job_entry(job.job_id)
+            and manifest_plan.manifest.job_entry(job.job_id).status == "completed"
+            for job in selected_jobs
+        )
+
+        if all_completed and selected_jobs and not args.dry_run and not args.force:
+            # Prompt user for action
+            choice = _prompt_completed_jobs_action()
+            if choice == "new":
+                logger.info("Creating a new run with all jobs...")
+                # Create a fresh run by disabling auto-resume and forcing a new run_id
+                # Recursively call with updated args to create new manifest
+                new_args = argparse.Namespace(**vars(args))
+                new_args.auto_resume = False
+                new_args.run_id = None  # Force generation of new run_id
+                new_args.restart = None
+                return _execute_batch(new_args)
+            elif choice == "rerun":
+                logger.info("Rerunning all completed jobs...")
+                # Set all selected jobs to runnable
+                runnable_ids = {job.job_id for job in selected_jobs}
+                planned_jobs = [job for job in jobs if job.job_id in runnable_ids and job.job_id in selected_ids]
+                # Continue execution below
+            elif choice == "exit":
+                logger.info("Exiting without running jobs.")
+                _log_summary([], manifest_plan.manifest)
+                return 0
+            else:  # continue/skip
+                logger.info("Continuing without running jobs.")
+                _log_summary([], manifest_plan.manifest)
+                return 0
+        else:
+            _log_summary([], manifest_plan.manifest)
+            return 0
+
+    if not planned_jobs:
+        # After prompting, still no planned jobs (shouldn't happen, but safety check)
         _log_summary([], manifest_plan.manifest)
         return 0
 
@@ -347,47 +537,77 @@ def _prepare_manifest_plan(
     run_id: str | None,
     run_name: str,
     config_path: Path,
-    config_snapshot: Mapping[str, Any],
+    config_checksum: str,
     jobs: Sequence[ResolvedJob],
     env_args_map: Mapping[str, Mapping[str, Any]],
     sampling_args_map: Mapping[str, Mapping[str, Any]],
-    regen_source: str | None,
+    restart_source: str | None,
     auto_resume: bool,
     force_all: bool,
     forced_envs: set[str],
     dry_run: bool,
 ) -> ManifestPlan:
     persist = not dry_run
-    checksum = compute_snapshot_checksum(config_snapshot)
+    checksum = config_checksum
 
     # Helper to compute run_dir lazily
     def _run_dir_for(rid: str) -> Path:
         return output_dir / rid
 
-    if regen_source:
-        seed_dir = output_dir / regen_source
-        seed_manifest_path = seed_dir / MANIFEST_FILENAME
-        if not seed_manifest_path.exists():
-            raise ValueError(f"Run '{regen_source}' does not contain {MANIFEST_FILENAME}.")
-        seed_manifest = RunManifest.load(seed_manifest_path, persist=False)
-        # Determine destination run_id/run_dir
+    if restart_source:
+        restart_path = Path(restart_source).expanduser()
+        seed_dir: Path | None = None
+        # Determine if restart_source refers to an existing run directory (path or id under output_dir)
+        if restart_path.exists() and restart_path.is_dir():
+            seed_dir = restart_path.resolve()
+        else:
+            candidate = (output_dir / restart_source).resolve()
+            if candidate.exists() and candidate.is_dir():
+                seed_dir = candidate
+        if seed_dir and (seed_dir / MANIFEST_FILENAME).exists():
+            seed_manifest = RunManifest.load(seed_dir / MANIFEST_FILENAME, persist=persist)
+            dest_run_id = seed_manifest.model.run_id
+            run_dir = seed_dir
+            logger.info(
+                "Restart in-place: extending existing run '%s' with any new jobs from current config.", dest_run_id
+            )
+            # Append any new jobs (or update checksums)
+            for job in jobs:
+                seed_manifest.ensure_job(
+                    job,
+                    env_args=env_args_map[job.job_id],
+                    sampling_args=sampling_args_map[job.job_id],
+                    results_dir=run_dir / job.job_id,
+                )
+            runnable, reused = _plan_regen_jobs(
+                manifest=seed_manifest,
+                seed_manifest=seed_manifest,
+                jobs=jobs,
+                force_all=force_all,
+                forced_envs=forced_envs,
+            )
+            return ManifestPlan(manifest=seed_manifest, runnable_job_ids=runnable, reused_job_ids=reused)
+        # Fall back to creating a new restarted run
+        if seed_dir is None:
+            raise ValueError(f"Run '{restart_source}' does not contain {MANIFEST_FILENAME}.")
+        seed_manifest = RunManifest.load(seed_dir / MANIFEST_FILENAME, persist=False)
         dest_run_id = run_id or _generate_run_id(run_name)
         run_dir = _run_dir_for(dest_run_id)
         manifest_path = run_dir / MANIFEST_FILENAME
         if run_dir.exists() and manifest_path.exists() and persist:
             raise ValueError(f"Run directory '{run_dir}' already exists; choose a different --run-id.")
-        logger.info("Regenerating run '%s' from prior run '%s'.", run_id, regen_source)
+        logger.info("Restarting run '%s' from prior run '%s'.", dest_run_id, restart_source)
         manifest = RunManifest.create(
             run_dir=run_dir,
             run_id=dest_run_id,
             run_name=run_name,
             config_source=config_path,
-            config_snapshot=config_snapshot,
+            config_checksum=checksum,
             jobs=jobs,
             env_args_map=env_args_map,
             sampling_args_map=sampling_args_map,
             persist=persist,
-            regen_source=regen_source,
+            restart_source=restart_source,
         )
         runnable, reused = _plan_regen_jobs(
             manifest=manifest,
@@ -397,7 +617,7 @@ def _prepare_manifest_plan(
             forced_envs=forced_envs,
         )
         if reused:
-            logger.info("Reused %d completed job(s) from '%s'.", len(reused), regen_source)
+            logger.info("Reused %d completed job(s) from '%s'.", len(reused), restart_source)
         return ManifestPlan(manifest=manifest, runnable_job_ids=runnable, reused_job_ids=reused)
 
     manifest: RunManifest | None = None
@@ -453,12 +673,12 @@ def _prepare_manifest_plan(
         run_id=dest_run_id,
         run_name=run_name,
         config_source=config_path,
-        config_snapshot=config_snapshot,
+        config_checksum=checksum,
         jobs=jobs,
         env_args_map=env_args_map,
         sampling_args_map=sampling_args_map,
         persist=persist,
-        regen_source=None,
+        restart_source=None,
     )
     runnable = {job.job_id for job in jobs}
     return ManifestPlan(manifest=manifest, runnable_job_ids=runnable, reused_job_ids=set())
@@ -627,6 +847,49 @@ def _coerce_optional_str(value: str | None) -> str | None:
     return value
 
 
+def _prompt_completed_jobs_action() -> str:
+    """Prompt user to choose what to do when all jobs are completed.
+
+    Returns:
+        "new", "rerun", "continue", or "exit"
+    """
+    console = Console() if Console is not None else None
+
+    message = "\n[bold yellow]All jobs are already completed.[/bold yellow]\n"
+    message += "What would you like to do?\n"
+    message += "  [bold cyan]n[/bold cyan] - Create a new run\n"
+    message += "  [bold cyan]r[/bold cyan] - Rerun all jobs (ignore completion status)\n"
+    message += "  [bold cyan]c[/bold cyan] - Continue without running (default)\n"
+    message += "  [bold cyan]e[/bold cyan] - Exit\n"
+
+    if console:
+        console.print(message)
+    else:
+        # Fallback to plain print if rich is not available
+        print(
+            message.replace("[bold yellow]", "")
+            .replace("[/bold yellow]", "")
+            .replace("[bold cyan]", "")
+            .replace("[/bold cyan]", "")
+        )
+
+    try:
+        response = input("Choose [n/r/c/e]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()  # New line after Ctrl+C
+        return "exit"
+
+    if response == "n" or response == "new":
+        return "new"
+    elif response == "r" or response == "rerun":
+        return "rerun"
+    elif response == "e" or response == "exit":
+        return "exit"
+    else:
+        # Default to continue for any other input (including empty/enter)
+        return "continue"
+
+
 def _log_summary(results: Sequence[JobExecutionResult], manifest: RunManifest | None = None) -> None:
     if manifest is not None:
         summary = manifest.summary
@@ -656,6 +919,67 @@ def _print_general_help() -> None:
         First argument must be the environment slug for single runs. Use 'medarc-new bench --help' for batch mode options."""
     )
     print(message)
+
+
+def _log_process_result(result: ProcessResult) -> None:
+    logger.info(
+        "Processed %d record(s) into %d environment dataset(s) (%d rows).",
+        result.records_processed,
+        len(result.env_summaries),
+        result.rows_processed,
+    )
+    for summary in result.env_summaries:
+        path_display = summary.output_path if not summary.dry_run else f"(planned) {summary.output_path}"
+        logger.info("  %s -> %d rows @ %s", summary.env_id or summary.base_env_id, summary.row_count, path_display)
+    if result.hf_summary:
+        logger.info(
+            "HF sync: repo=%s strategy=%s rows=%d",
+            result.hf_summary.repo_id,
+            result.hf_summary.strategy,
+            result.hf_summary.total_rows,
+        )
+
+
+def _load_env_export_map(root: Path | None) -> dict[str, EnvironmentExportConfig]:
+    if root is None:
+        return {}
+    root = Path(root).expanduser()
+    if not root.exists():
+        logger.debug("Env config root %s does not exist; skipping export overrides.", root)
+        return {}
+
+    if root.is_file():
+        files = [root]
+    else:
+        files = sorted(p for pattern in ("*.yaml", "*.yml") for p in root.rglob(pattern) if p.is_file())
+
+    export_map: dict[str, EnvironmentExportConfig] = {}
+    for path in files:
+        try:
+            payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Failed to read env config %s: %s", path, exc)
+            continue
+
+        if isinstance(payload, list):
+            entries = [entry for entry in payload if isinstance(entry, Mapping)]
+        elif isinstance(payload, Mapping):
+            entries = [payload]
+        else:
+            continue
+
+        for entry in entries:
+            try:
+                env_cfg = EnvironmentConfigSchema(**dict(entry))
+            except ValidationError:
+                continue
+            if env_cfg.export is None:
+                continue
+            keys = {env_cfg.id, env_cfg.matrix_base_id}
+            for key in filter(None, keys):
+                export_map[key] = env_cfg.export
+
+    return export_map
 
 
 def _print_job_plan(

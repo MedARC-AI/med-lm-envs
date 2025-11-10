@@ -21,6 +21,8 @@ from .env_args import (
 )
 
 STATE_COLUMNS_SEPARATOR = ","
+DEFAULT_SINGLE_RUN_MAX_CONCURRENT = 32
+DEFAULT_BATCH_MAX_CONCURRENT = 128
 _LOGGING_INITIALIZED = False
 
 
@@ -150,25 +152,37 @@ def _sanitize(value: Any) -> Any:
     return repr(value)
 
 
+def normalize_headers(
+    headers: Mapping[str, Any] | _Iterable[str] | None,
+    *,
+    header_file: Path | str | None = None,
+) -> dict[str, str] | None:
+    """Normalize headers from config mappings, CLI lists, and optional files."""
+
+    normalized: dict[str, str] = {}
+    if headers:
+        if isinstance(headers, Mapping):
+            normalized = {str(key): str(value) for key, value in headers.items()}
+        else:
+            normalized = build_headers(headers)
+
+    if header_file is not None:
+        try:
+            contents = Path(header_file).expanduser().read_text(encoding="utf-8")
+        except OSError as exc:  # pragma: no cover - I/O guarded by parser in tests
+            raise ValueError(f"Failed to read header file '{header_file}': {exc}") from exc
+        file_headers = build_headers(line.strip() for line in contents.splitlines() if line.strip())
+        normalized.update(file_headers)
+
+    return normalized or None
+
+
 def build_headers_with_file(
     header_values: _Iterable[str] | None,
     header_file: Path | None,
 ) -> dict[str, str]:
-    """Build headers from CLI values plus optional file.
-
-    The file is newline-delimited ``Name: Value`` entries. Values from the file
-    override duplicates from the CLI list, matching existing single-run behavior.
-    """
-    headers = build_headers(header_values)
-    if header_file is None:
-        return headers
-    try:
-        contents = Path(header_file).expanduser().read_text(encoding="utf-8")
-    except OSError as exc:  # pragma: no cover - I/O guarded by parser in tests
-        raise ValueError(f"Failed to read header file '{header_file}': {exc}") from exc
-    file_headers = build_headers(line.strip() for line in contents.splitlines() if line.strip())
-    headers.update(file_headers)
-    return headers
+    """Backward-compatible wrapper retained for callers expecting dictionaries."""
+    return normalize_headers(header_values, header_file=header_file) or {}
 
 
 def resolve_env_identifier(env_cfg: Any) -> str:
@@ -196,11 +210,14 @@ def resolve_env_identifier_or(env_cfg: Any, fallback: str) -> str:
 __all__ = [
     "slugify",
     "compute_checksum",
+    "DEFAULT_SINGLE_RUN_MAX_CONCURRENT",
+    "DEFAULT_BATCH_MAX_CONCURRENT",
     "MissingEnvParamError",
     "HEADER_SEPARATOR",
     "STATE_COLUMNS_SEPARATOR",
     "build_headers",
     "build_headers_with_file",
+    "normalize_headers",
     "resolve_env_identifier",
     "resolve_env_identifier_or",
     "coerce_json_mapping",

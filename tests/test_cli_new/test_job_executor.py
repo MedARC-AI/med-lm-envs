@@ -143,6 +143,8 @@ def test_execute_jobs_records_failures(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert result.status == "failed"
     assert result.error is not None
     assert "boom" in result.error
+    assert "alias-medqa" in result.error
+    assert "env=medqa" in result.error
     assert result.output_path == (tmp_path / "runs" / "run-1" / job.job_id)
 
 
@@ -263,3 +265,37 @@ def test_cli_sampling_arg_overrides_yaml(monkeypatch: pytest.MonkeyPatch, tmp_pa
 
     assert results[0].status == "succeeded"
     assert captured["config"].sampling_args["temperature"] == 0.2
+
+
+def test_execute_jobs_handles_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    async def interrupting_run(config):  # noqa: ARG001
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", interrupting_run)
+    monkeypatch.setattr(
+        "medarc_verifiers.cli_new._job_executor.load_endpoint_registry",
+        lambda path, cache=None: {},
+    )
+    monkeypatch.setattr(
+        "medarc_verifiers.cli_new._job_executor.load_env_metadata",
+        lambda env_id, cache=None: [],
+    )
+
+    model_cfg = ModelConfigSchema(id="alias")
+    env_cfg = EnvironmentConfigSchema(id="medqa")
+    job = ResolvedJob(
+        job_id="alias-medqa",
+        name="alias-medqa",
+        model=model_cfg,
+        env=env_cfg,
+        env_args={},
+        sampling_args={},
+    )
+
+    results = execute_jobs([job], _settings(tmp_path))
+
+    assert len(results) == 1
+    result = results[0]
+    assert result.status == "failed"
+    assert result.error is not None
+    assert "interrupted" in result.error.lower()

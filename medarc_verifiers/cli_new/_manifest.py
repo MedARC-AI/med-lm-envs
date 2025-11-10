@@ -54,11 +54,10 @@ class RunManifestModel(BaseModel):
     run_id: str
     name: str
     config_source: str
-    config_snapshot: dict[str, Any]
     config_checksum: str
     created_at: str
     updated_at: str
-    regen_source: str | None = None
+    restart_source: str | None = None
     jobs: list[ManifestJobEntry] = Field(default_factory=list)
     summary: dict[str, int] = Field(default_factory=dict)
 
@@ -93,13 +92,13 @@ def _canonicalize_job_config(
     """Produce a normalized payload describing how the job will run."""
     model_payload = json.loads(job.model.model_dump_json(exclude_none=True))
     env_payload = json.loads(job.env.model_dump_json(exclude_none=True))
+    env_payload["env_args"] = _to_jsonable(env_args)
+    model_payload["sampling_args"] = _to_jsonable(sampling_args)
     return {
         "job_id": job.job_id,
         "job_name": job.name,
         "model": model_payload,
         "env": env_payload,
-        "env_args": _to_jsonable(env_args),
-        "sampling_args": _to_jsonable(sampling_args),
     }
 
 
@@ -383,12 +382,12 @@ class RunManifest:
         run_id: str,
         run_name: str,
         config_source: Path,
-        config_snapshot: Mapping[str, Any],
+        config_checksum: str,
         jobs: Sequence[ResolvedJob],
         env_args_map: Mapping[str, Mapping[str, Any]],
         sampling_args_map: Mapping[str, Mapping[str, Any]],
         persist: bool = True,
-        regen_source: str | None = None,
+        restart_source: str | None = None,
     ) -> RunManifest:
         run_dir.mkdir(parents=True, exist_ok=True)
         path = run_dir / MANIFEST_FILENAME
@@ -397,11 +396,10 @@ class RunManifest:
             "run_id": run_id,
             "name": run_name,
             "config_source": str(config_source),
-            "config_snapshot": _drop_nones(_to_jsonable(config_snapshot)),
-            "config_checksum": compute_snapshot_checksum(config_snapshot),
+            "config_checksum": config_checksum,
             "created_at": timestamp(),
             "updated_at": timestamp(),
-            "regen_source": regen_source,
+            "restart_source": restart_source,
             "jobs": [],
             "summary": {},
         }

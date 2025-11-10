@@ -205,6 +205,101 @@ def test_environment_env_args_known(monkeypatch, tmp_path: Path) -> None:
     assert config.envs["medqa"].env_args == {"shuffle_answers": True}
 
 
+def test_env_paths_resolve_with_cli_default_root(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        lambda _env_id, cache=None: [],
+    )
+    configs_dir = tmp_path / "configs"
+    envs_dir = configs_dir / "envs"
+    envs_dir.mkdir(parents=True)
+    _write_yaml(
+        envs_dir / "medqa.yaml",
+        """
+        - id: medqa
+          module: medqa
+        """,
+    )
+    config_path = _write_yaml(
+        configs_dir / "jobs.yaml",
+        """
+        models:
+          - id: gpt
+        envs:
+          - medqa
+        jobs:
+          - model: gpt
+            env: medqa
+        """,
+    )
+
+    config = load_run_config(config_path, env_default_root=envs_dir)
+
+    assert "medqa" in config.envs
+
+
+def test_env_paths_use_env_config_root(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        lambda _env_id, cache=None: [],
+    )
+    shared_envs = tmp_path / "shared_envs"
+    shared_envs.mkdir()
+    _write_yaml(
+        shared_envs / "custom_env.yaml",
+        """
+        - id: custom_env
+          module: custom_env
+        """,
+    )
+    config_path = _write_yaml(
+        tmp_path / "jobs.yaml",
+        """
+        models:
+          - id: gpt
+        envs:
+          - custom_env
+        jobs:
+          - model: gpt
+            env: custom_env
+        """,
+    )
+
+    config = load_run_config(config_path, env_default_root=shared_envs)
+
+    assert "custom_env" in config.envs
+
+
+def test_envs_auto_discovered_from_env_config_root(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        lambda _env_id, cache=None: [],
+    )
+    env_root = tmp_path / "auto_envs"
+    env_root.mkdir()
+    _write_yaml(
+        env_root / "auto.yaml",
+        """
+        - id: auto_env
+          module: auto_env
+        """,
+    )
+    config_path = _write_yaml(
+        tmp_path / "config.yaml",
+        """
+        models:
+          - id: auto-model
+        jobs:
+          - model: auto-model
+            env: auto_env
+        """,
+    )
+
+    config = load_run_config(config_path, env_default_root=env_root)
+
+    assert sorted(config.envs) == ["auto_env"]
+
+
 def test_environment_env_args_missing_required(monkeypatch, tmp_path: Path) -> None:
     def fake_metadata(_env_id: str, cache=None):
         return [_FakeParam("subset", required=True)]
@@ -331,6 +426,49 @@ def test_matrix_expansion_generates_variants(monkeypatch, tmp_path: Path) -> Non
     assert {env.env_args["shuffle_seed"] for env in config.envs.values()} == {1618, 9331}
     assert all(env.env_args["shuffle_answers"] is True for env in config.envs.values())
     assert all(env.module == "medqa" for env in config.envs.values())
+
+
+def test_duplicate_env_ids_from_files_expand_variants(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        lambda _env_id, cache=None: [],
+    )
+
+    env_dir = tmp_path / "envs"
+    env_dir.mkdir()
+    _write_yaml(
+        env_dir / "longhealth.yaml",
+        """
+        - id: longhealth
+          module: longhealth
+          matrix:
+            task: ["task1", "task2"]
+          matrix_id_format: "{base}-{task}"
+        - id: longhealth
+          module: longhealth
+          matrix:
+            task: ["task3"]
+          matrix_id_format: "{base}-{task}-alt"
+        """,
+    )
+
+    config_path = _write_yaml(
+        tmp_path / "config.yaml",
+        f"""
+        envs:
+          - "{env_dir}"
+        models:
+          - id: gpt
+        jobs:
+          - model: gpt
+            env: longhealth
+        """,
+    )
+
+    config = load_run_config(config_path)
+
+    assert sorted(config.envs.keys()) == ["longhealth-task1", "longhealth-task2", "longhealth-task3-alt"]
+    assert all(env.matrix_base_id == "longhealth" for env in config.envs.values())
 
 
 def test_matrix_exclude_and_scalar_fields(monkeypatch, tmp_path: Path) -> None:

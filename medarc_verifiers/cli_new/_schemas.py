@@ -117,6 +117,34 @@ class ModelConfigSchema(BaseModel):
         return self
 
 
+class EnvironmentExportConfig(BaseModel):
+    """Optional export customization embedded in environment configs."""
+
+    keep_columns: list[str] = Field(default_factory=list)
+    drop_columns: list[str] = Field(default_factory=list)
+    include_prompt_completion: bool | None = None
+    combine_rollouts: bool = True
+
+    @field_validator("keep_columns", "drop_columns", mode="before")
+    @classmethod
+    def validate_columns(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            value = [value]
+        if not isinstance(value, list):
+            raise ValueError("Export columns must be provided as a list of strings.")
+        normalized: list[str] = []
+        for entry in value:
+            if not isinstance(entry, str):
+                raise ValueError("Export columns must be strings.")
+            trimmed = entry.strip()
+            if not trimmed:
+                raise ValueError("Export columns must be non-empty strings.")
+            normalized.append(trimmed)
+        return normalized
+
+
 class EnvironmentConfigSchema(BaseModel):
     """Schema for environment configuration entries (keyed by identifier)."""
 
@@ -139,6 +167,10 @@ class EnvironmentConfigSchema(BaseModel):
     matrix_exclude: list[dict[str, Any]] | None = Field(default=None, description="List of matrix patterns to exclude.")
     matrix_id_format: str | None = Field(default=None, description="Optional format string for matrix variant IDs.")
     matrix_base_id: str | None = Field(default=None, exclude=True)
+    export: EnvironmentExportConfig | None = Field(
+        default=None,
+        description="Optional export customization (keep/drop columns, prompt settings).",
+    )
 
     @field_validator("num_examples")
     @classmethod
@@ -276,6 +308,7 @@ class RunConfigSchema(BaseModel):
 __all__ = [
     "ModelConfigSchema",
     "EnvironmentConfigSchema",
+    "EnvironmentExportConfig",
     "JobConfigSchema",
     "RunConfigSchema",
     "RESERVED_MATRIX_KEYS",
