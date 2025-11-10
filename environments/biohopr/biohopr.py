@@ -61,13 +61,20 @@ Respond with either "EQUIVALENT" or "NOT_EQUIVALENT".
 """.strip()
 
 async def llm_as_a_judge(
-    judge, prompt, completion, answer, info: Dict, state, parser, **kwargs
+    judge, 
+    prompt: str,
+    completion: str,
+    answer: str,
+    info: Dict,
+    state: Dict,
+    parser: vf.Parser,
+    **kwargs
 ) -> float:
     """
     Reward function that uses LLM judge to evaluate medical diagnosis equivalence.
     """
-    completion = parser.parse_answer(completion)
-    if(completion is None): return 0.0
+    parsed_completion = parser.parse_answer(completion)
+    if(parsed_completion is None): return 0.0
     answers = info.get("answer", [])
     answer = ", ".join(answers)
     # Get judge response using the extracted answer
@@ -75,7 +82,6 @@ async def llm_as_a_judge(
     
     # Parse judge response
     judge_response_clean = judge_response.strip().upper()
-    
     # Return 1.0 if equivalent, 0.0 otherwise
     if "EQUIVALENT" in judge_response_clean and "NOT_EQUIVALENT" not in judge_response_clean:
         return 1.0
@@ -86,11 +92,11 @@ def _embedded_precision_f(model: SentenceTransformer):
     "Returns a function that calculates precision based on embedded cosine similarity."
     def embedded_precision(parser: vf.Parser, completion: str, info: Dict, **kwargs) -> float:
         answers = info.get("answer", [])
-        completion = parser.parse_answer(completion)
-        if(completion is None): return 0.0
-        completion = completion.lower().strip()
+        parsed_completion = parser.parse_answer(completion)
+        if(parsed_completion is None): return 0.0
+        parsed_completion = parsed_completion.lower().strip()
         answer_embeds = model.encode(answers)
-        completion_embed = model.encode(completion)
+        completion_embed = model.encode(parsed_completion)
         similarities = (answer_embeds @ completion_embed) / ( 
             norm(answer_embeds,axis=1) * norm(completion_embed) )
         return 1.0 if(similarities.max() > TAU) else 0.0
