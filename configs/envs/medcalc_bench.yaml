@@ -1,7 +1,9 @@
-id: medcalc_bench
-module: medcalc_bench
-rollouts_per_example: 3
-verbose: false
-max_concurrent: 128
-num_examples: -1
-verbose: false
+- id: medcalc_bench
+  module: medcalc_bench
+  rollouts_per_example: 3
+  verbose: false
+  max_concurrent: 128
+  num_examples: -1
+
+  export:
+    keep_columns: [extracted_answer, ground_truth, lower_bound, upper_bound]

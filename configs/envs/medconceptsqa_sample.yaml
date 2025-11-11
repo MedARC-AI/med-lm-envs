@@ -22,4 +22,4 @@
   matrix:
     difficulty: [easy, medium, hard]
     shuffle_seed: [1618, 9331]
-  matrix_id_format: "{base}-{difficulty}-r{shuffle_seed}"
+  matrix_id_format: "{base}-{difficulty}-rollout{shuffle_seed}"

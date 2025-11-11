@@ -19,4 +19,4 @@
   matrix:
     num_options: [4, 5]
     shuffle_seed: [1618, 9331]
-  matrix_id_format: "{base}-op{num_options}-r{shuffle_seed}"
+  matrix_id_format: "{base}-op{num_options}-rollout{shuffle_seed}"

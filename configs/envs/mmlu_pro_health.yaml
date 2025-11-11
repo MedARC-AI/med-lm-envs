@@ -15,4 +15,4 @@
     shuffle_answers: true
   matrix:
     shuffle_seed: [1618, 9331]
-  matrix_id_format: "{base}-r{shuffle_seed}"
+  matrix_id_format: "{base}-rollout{shuffle_seed}"
