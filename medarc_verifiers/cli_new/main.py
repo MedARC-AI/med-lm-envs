@@ -135,8 +135,8 @@ def build_batch_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-concurrent",
         type=int,
-        default=DEFAULT_BATCH_MAX_CONCURRENT,
-        help="Default max concurrency when environments omit a value.",
+        default=None,
+        help="Override env max_concurrent for all jobs (CLI > model > env > defaults).",
     )
     parser.add_argument("--max-concurrent-generation", type=int, help="Override generation concurrency for all jobs.")
     parser.add_argument("--max-concurrent-scoring", type=int, help="Override scoring concurrency for all jobs.")
@@ -198,6 +198,48 @@ def build_process_parser() -> argparse.ArgumentParser:
     parser.add_argument("--processed-at", help="Override processed_at timestamp (ISO8601).")
     parser.add_argument("--dry-run", action="store_true", help="Plan processing without writing outputs.")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing parquet files.")
+    parser.add_argument(
+        "--compute-winrates",
+        dest="compute_winrates",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Compute HELM-style win rate JSON after parquet export (use --no-compute-winrates to disable).",
+    )
+    parser.add_argument(
+        "--winrate-output",
+        type=Path,
+        help="Optional output path for winrates JSON (default: <output_dir>/winrates.json).",
+    )
+    parser.add_argument(
+        "--winrate-missing-policy",
+        choices=("zero", "neg-inf"),
+        default="neg-inf",
+        help="Missing reward policy when comparing models (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--winrate-epsilon",
+        type=float,
+        default=1e-9,
+        help="Tie tolerance epsilon for pairwise comparisons (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--winrate-min-common",
+        type=int,
+        default=0,
+        help="Minimum overlapping examples per dataset to retain a pairwise result.",
+    )
+    parser.add_argument(
+        "--winrate-weight-policy",
+        choices=("equal", "ln", "sqrt", "cap"),
+        default="ln",
+        help="Dataset weighting policy when aggregating win rates (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--winrate-weight-cap",
+        type=int,
+        default=0,
+        help="Cap applied when using --winrate-weight-policy=cap (default: %(default)s).",
+    )
 
     parser.add_argument("--hf-repo", help="Hugging Face repo id for dataset sync.")
     parser.add_argument(
@@ -309,6 +351,13 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         "overwrite": args.overwrite,
         "hf_repo": args.hf_repo,
         "hf_merge": args.hf_merge,
+        "compute_winrates": args.compute_winrates,
+        "winrate_output": str(args.winrate_output) if args.winrate_output else None,
+        "winrate_missing_policy": args.winrate_missing_policy,
+        "winrate_epsilon": args.winrate_epsilon,
+        "winrate_min_common": args.winrate_min_common,
+        "winrate_weight_policy": args.winrate_weight_policy,
+        "winrate_weight_cap": args.winrate_weight_cap,
     }
 
     options = ProcessOptions(
@@ -326,6 +375,13 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         dry_run=args.dry_run,
         overwrite=args.overwrite,
         hf_config=hf_config,
+        compute_winrates=args.compute_winrates,
+        winrate_output=args.winrate_output,
+        missing_policy=args.winrate_missing_policy,
+        epsilon=args.winrate_epsilon,
+        min_common=args.winrate_min_common,
+        weight_policy=args.winrate_weight_policy,
+        weight_cap=args.winrate_weight_cap,
     )
 
     try:
