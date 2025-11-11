@@ -94,11 +94,118 @@ def _write_group(group: AggregatedEnvRows, config: WriterConfig) -> EnvWriteSumm
             dry_run=True,
         )
 
-    if output_path.exists():
-        if not config.overwrite:
+    if output_path.exists() and not config.overwrite:
+        # Append-merge semantics: read existing file, drop duplicate job_run_ids,
+        # union schemas, concatenate, and rewrite file.
+        try:
+            existing_table = pq.read_table(output_path)
+        except Exception as exc:  # noqa: BLE001
             raise FileExistsError(
-                f"Output file {output_path} already exists. Use --overwrite to replace."
+                f"Failed to read existing output file {output_path}: {exc}. To force regeneration, use --overwrite."
+            ) from exc
+
+        # Convert both existing and new data to Polars for easy schema union and filtering
+        existing_df = pl.from_arrow(existing_table)
+        new_df = pl.from_arrow(_build_arrow_table(group))
+
+        # Deduplicate by job_run_id when possible
+        existing_job_ids: set[str] = set()
+        if "job_run_id" in existing_df.columns:
+            try:
+                existing_job_ids = set(str(x) for x in existing_df["job_run_id"].drop_nulls().unique().to_list())
+            except Exception:  # pragma: no cover - defensive
+                existing_job_ids = set()
+
+        if "job_run_id" in new_df.columns and existing_job_ids:
+            new_df = new_df.filter(~pl.col("job_run_id").is_in(list(existing_job_ids)))
+
+        # If nothing new to add, reuse existing file/stats and metadata
+        if new_df.height == 0:
+            # Attempt to recover existing exporter metadata from file
+            existing_meta_raw = existing_table.schema.metadata or {}
+            existing_export_meta: dict[str, Any] | None = None
+            if EXPORTER_METADATA_KEY in existing_meta_raw:
+                try:
+                    existing_export_meta = json.loads(existing_meta_raw[EXPORTER_METADATA_KEY].decode("utf-8"))
+                except Exception:  # pragma: no cover - malformed metadata
+                    existing_export_meta = None
+            # Fall back to computing job_run_ids from data if needed
+            if existing_export_meta is None:
+                combined_job_ids = sorted(
+                    str(x)
+                    for x in (
+                        existing_df["job_run_id"].drop_nulls().unique().to_list()
+                        if "job_run_id" in existing_df.columns
+                        else []
+                    )
+                )
+                existing_export_meta = {
+                    "exporter_version": config.exporter_version,
+                    "processed_at": config.processed_at,
+                    "schema_version": config.schema_version,
+                    "source_runs": combined_job_ids,
+                    "processed_with_args": dict(config.processed_with_args),
+                    "env_id": env_id,
+                    "base_env_id": base_env_id,
+                }
+
+            return EnvWriteSummary(
+                env_id=env_id,
+                base_env_id=base_env_id,
+                output_path=output_path,
+                row_count=existing_df.height,
+                job_run_ids=tuple(existing_export_meta.get("source_runs", [])),
+                exporter_metadata=existing_export_meta,
+                dry_run=False,
             )
+
+        # Union schemas: ensure both frames share the same columns
+        union_cols = list(sorted(set(existing_df.columns) | set(new_df.columns)))
+        for col in union_cols:
+            if col not in existing_df.columns:
+                existing_df = existing_df.with_columns(pl.lit(None).alias(col))
+            if col not in new_df.columns:
+                new_df = new_df.with_columns(pl.lit(None).alias(col))
+        existing_df = existing_df.select(union_cols)
+        new_df = new_df.select(union_cols)
+
+        combined_df = pl.concat([existing_df, new_df], how="vertical_relaxed")
+
+        # Compute combined job_run_ids from data (authoritative)
+        if "job_run_id" in combined_df.columns:
+            combined_job_ids = sorted(str(x) for x in combined_df["job_run_id"].drop_nulls().unique().to_list())
+        else:
+            combined_job_ids = sorted(set(existing_job_ids) | set(group.job_run_ids))
+
+        # Build updated metadata and write back
+        combined_table = combined_df.to_arrow()
+        meta_raw = combined_table.schema.metadata or {}
+        merged_exporter_meta = {
+            "exporter_version": config.exporter_version,
+            "processed_at": config.processed_at,
+            "schema_version": config.schema_version,
+            "source_runs": combined_job_ids,
+            "processed_with_args": dict(config.processed_with_args),
+            "env_id": env_id,
+            "base_env_id": base_env_id,
+        }
+        meta_raw = {**meta_raw, EXPORTER_METADATA_KEY: json.dumps(merged_exporter_meta, sort_keys=True).encode("utf-8")}
+        combined_table = combined_table.replace_schema_metadata(meta_raw)
+        pq.write_table(combined_table, output_path)
+
+        return EnvWriteSummary(
+            env_id=env_id,
+            base_env_id=base_env_id,
+            output_path=output_path,
+            row_count=combined_df.height,
+            job_run_ids=tuple(combined_job_ids),
+            exporter_metadata=merged_exporter_meta,
+            dry_run=False,
+        )
+
+    # Fresh write (no existing file or explicit overwrite)
+    if output_path.exists():
+        # Explicit overwrite path: remove and write anew
         output_path.unlink()
 
     table = _build_arrow_table(group)
@@ -139,23 +246,41 @@ def _write_env_index(
     summaries: Sequence[EnvWriteSummary],
     config: WriterConfig,
 ) -> None:
+    # Load existing index if present to preserve other environments
+    index_path = output_dir / "env_index.json"
+    existing: dict[str, Any] = {}
+    if index_path.exists():
+        try:
+            with index_path.open("r", encoding="utf-8") as handle:
+                existing = json.load(handle) or {}
+        except Exception:  # pragma: no cover - tolerate bad index
+            existing = {}
+
+    env_map: dict[str, Any] = {}
+    # Seed from existing
+    for item in existing.get("environments", []) or []:
+        env_id = str(item.get("env_id") or item.get("base_env_id") or "")
+        if env_id:
+            env_map[env_id] = item
+
+    # Apply/replace with new summaries
+    for summary in summaries:
+        env_map[summary.env_id] = {
+            "env_id": summary.env_id,
+            "base_env_id": summary.base_env_id,
+            "path": summary.output_path.as_posix(),
+            "row_count": summary.row_count,
+            "job_run_ids": list(summary.job_run_ids),
+            "exporter_metadata": summary.exporter_metadata,
+        }
+
     payload = {
         "processed_at": config.processed_at,
         "schema_version": config.schema_version,
         "exporter_version": config.exporter_version,
-        "environments": [
-            {
-                "env_id": summary.env_id,
-                "base_env_id": summary.base_env_id,
-                "path": summary.output_path.as_posix(),
-                "row_count": summary.row_count,
-                "job_run_ids": list(summary.job_run_ids),
-                "exporter_metadata": summary.exporter_metadata,
-            }
-            for summary in summaries
-        ],
+        "environments": [env_map[k] for k in sorted(env_map.keys())],
     }
-    index_path = output_dir / "env_index.json"
+
     with index_path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
 

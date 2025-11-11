@@ -55,31 +55,18 @@ def aggregate_rows_by_env(rows: Iterable[Mapping[str, Any]]) -> list[AggregatedE
     aggregated: list[AggregatedEnvRows] = []
     for key in sorted(groups):
         group = groups[key]
-        # Normalize rollout_index across runs within the same base_env group so
-        # that appended rollouts map to contiguous indices starting from 0.
-        # We treat each distinct (job_run_id, original_rollout_index) as a
-        # rollout cohort and remap in first-seen order.
-        cohort_map: dict[tuple[str | None, int], int] = {}
-        next_index = 0
-        normalized_rows: list[Mapping[str, Any]] = []
-        for row in group["rows"]:
-            job_run_id = row.get("job_run_id")
-            original = row.get("rollout_index")
-            try:
-                original_int = int(original) if original is not None else 0
-            except Exception:  # noqa: BLE001
-                original_int = 0
-            cohort = (str(job_run_id) if job_run_id is not None else None, original_int)
-            if cohort not in cohort_map:
-                cohort_map[cohort] = next_index
-                next_index += 1
-            remapped = dict(row)
-            remapped["rollout_index"] = cohort_map[cohort]
-            normalized_rows.append(remapped)
+        # Preserve rollout_index as assigned during row loading. That logic already:
+        # - Computes per-file multi-rollout indices using example_id occurrences, and
+        # - Uses manifest/dir-derived rollout_index for single-rollout files.
+        # Aggregation should not remap it; just pass through.
+        normalized_rows: list[Mapping[str, Any]] = list(group["rows"])  # shallow copy
+
+        # Prefer the base_env_id for the group env identifier (strips any rollout suffix).
+        out_env_id = group["base_env_id"] or group["env_id"] or key
 
         aggregated.append(
             AggregatedEnvRows(
-                env_id=group["env_id"] or key,
+                env_id=out_env_id,
                 base_env_id=group["base_env_id"] or key,
                 rows=normalized_rows,
                 column_names=tuple(sorted(group["column_names"])),

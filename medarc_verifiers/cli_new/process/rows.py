@@ -110,12 +110,24 @@ def _clean_row(
     keep: set[str],
 ) -> MutableMapping[str, Any]:
     cleaned: MutableMapping[str, Any] = {}
+
+    # First pass: process top-level keys
     for key, value in row.items():
         if key in drop and key not in keep:
             continue
         if key not in keep and not _is_primitive(value):
             continue
         cleaned[key] = value
+
+    # Second pass: extract keep_columns from info dict if present
+    info = row.get("info")
+    if keep and isinstance(info, Mapping):
+        for keep_key in keep:
+            if keep_key not in cleaned and keep_key in info:
+                value = info[keep_key]
+                if _is_primitive(value):
+                    cleaned[keep_key] = value
+
     return cleaned
 
 
