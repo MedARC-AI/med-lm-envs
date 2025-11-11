@@ -12,7 +12,7 @@ disable_progress_bar()  # suppress datasets mapping progress bar
 
 
 def _build_question(question: str, options: Dict[str, str]) -> str:
-    opts = "\n".join(f"{k}. {v}" for k, v in options.items() if v != "")
+    opts = "\n".join(f"{k}. {v}" for k, v in options.items())
     return f"Question: {question}\nOptions:\n{opts}"
 
 
@@ -59,6 +59,9 @@ def _to_vf_format(
     def _format_row(row: dict) -> dict:
         question = row.get("question", "") or ""  # question string
         opts = row.get("options", {}) or {}  # answer choices, map of letter to answer text
+
+        # filter out empty question options
+        opts = {k: v for k, v in opts.items() if v != ""}
 
         # lift the answer to top-level, normalize to a single letter
         answer_letter = (row.get("answer") or "").strip().upper()
