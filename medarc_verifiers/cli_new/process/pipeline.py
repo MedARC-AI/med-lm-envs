@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,6 +13,8 @@ from medarc_verifiers.cli_new.process import aggregate, discovery, hf_sync, meta
 from medarc_verifiers.cli_new.process.aggregate import AggregatedEnvRows
 from medarc_verifiers.cli_new.process.hf_sync import HFMergeSummary, HFSyncConfig
 from medarc_verifiers.cli_new.process.writer import EnvWriteSummary, WriterConfig
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -32,10 +35,19 @@ class ProcessOptions:
     dry_run: bool = False
     overwrite: bool = False
     hf_config: HFSyncConfig | None = None
+    compute_winrates: bool = True
+    winrate_output: Path | None = None
+    missing_policy: str = "neg-inf"
+    epsilon: float = 1e-9
+    min_common: int = 0
+    weight_policy: str = "ln"
+    weight_cap: int = 0
 
     def __post_init__(self) -> None:
         self.runs_dir = Path(self.runs_dir)
         self.output_dir = Path(self.output_dir)
+        if self.winrate_output is not None:
+            self.winrate_output = Path(self.winrate_output)
         if not self.processed_at:
             self.processed_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         self.status_filter = tuple(str(status) for status in self.status_filter)
@@ -100,6 +112,24 @@ def run_process(
     )
     env_summaries = writer.write_env_groups(env_groups, writer_config)
 
+    if options.compute_winrates:
+        if options.dry_run:
+            logger.info("Skipping win rate computation because --dry-run is enabled.")
+        else:
+            from . import winrate as _win
+
+            dataset_inputs = [(summary.env_id, summary.output_path) for summary in env_summaries]
+            cfg = _win.WinrateConfig(
+                missing_policy=options.missing_policy,
+                epsilon=options.epsilon,
+                min_common=options.min_common,
+                weight_policy=options.weight_policy,
+                weight_cap=options.weight_cap,
+            )
+            result = _win.compute_winrates(dataset_inputs, cfg)
+            winrate_path = options.winrate_output or _default_winrate_path(options)
+            _win.write_json(_win.to_json(result), winrate_path)
+
     hf_summary: HFMergeSummary | None = None
     if options.hf_config:
         hf_summary = hf_sync.sync_to_hub(env_summaries, options.hf_config)
@@ -158,6 +188,30 @@ def _resolve_combine_rollouts(
     if env_export:
         return env_export.combine_rollouts
     return True
+
+
+def _default_winrate_path(options: ProcessOptions) -> Path:
+    timestamp = _format_timestamp_for_filename(options.processed_at)
+    root = _winrate_root(options)
+    return root / "winrate" / f"winrates-{timestamp}.json"
+
+
+def _format_timestamp_for_filename(processed_at: str | None) -> str:
+    if not processed_at:
+        return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    try:
+        ts = processed_at.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(ts)
+    except ValueError:
+        return processed_at.replace(":", "-").replace(" ", "_")
+    return dt.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _winrate_root(options: ProcessOptions) -> Path:
+    parent = options.output_dir.parent
+    if parent == options.output_dir:
+        return options.output_dir
+    return parent
 
 
 __all__ = ["ProcessOptions", "ProcessResult", "run_process"]

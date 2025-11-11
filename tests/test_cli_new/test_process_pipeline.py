@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from medarc_verifiers.cli_new._schemas import EnvironmentExportConfig
 from medarc_verifiers.cli_new.process import ProcessOptions, run_process
 
@@ -130,3 +132,47 @@ def test_run_process_respects_combine_rollouts_override(tmp_path: Path) -> None:
     group = result.env_groups[0]
     assert group.env_id == "demo-env-rollout3"
     assert group.base_env_id == "demo-env-rollout3"
+
+
+def test_run_process_writes_winrates_json(tmp_path: Path) -> None:
+    runs_dir = _setup_run(tmp_path)
+    output_dir = tmp_path / "processed"
+    options = ProcessOptions(
+        runs_dir=runs_dir,
+        output_dir=output_dir,
+        exporter_version="0.1.0",
+        dry_run=False,
+        processed_at="2024-01-01T00:00:00Z",
+    )
+
+    run_process(options)
+
+    winrate_path = output_dir.parent / "winrate" / "winrates-20240101T000000Z.json"
+    assert winrate_path.exists()
+    payload = json.loads(winrate_path.read_text(encoding="utf-8"))
+    assert payload["models"]
+    model_payload = payload["models"]["gpt-mini"]
+    assert model_payload["vs"] == {}
+    assert model_payload["mean_winrate"]["n_datasets"] == 0
+    assert model_payload["mean_winrate"]["simple_mean"] is None
+    assert model_payload["mean_winrate"]["weighted_mean"] is None
+    avg_rewards = model_payload["avg_reward_per_dataset"]
+    assert len(avg_rewards) == 1
+    assert list(avg_rewards.values())[0] == pytest.approx(1.0)
+
+
+def test_run_process_can_skip_winrates(tmp_path: Path) -> None:
+    runs_dir = _setup_run(tmp_path)
+    output_dir = tmp_path / "processed"
+    options = ProcessOptions(
+        runs_dir=runs_dir,
+        output_dir=output_dir,
+        exporter_version="0.1.0",
+        dry_run=False,
+        compute_winrates=False,
+    )
+
+    run_process(options)
+
+    winrate_dir = output_dir.parent / "winrate"
+    assert not winrate_dir.exists()
