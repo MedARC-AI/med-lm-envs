@@ -555,6 +555,21 @@ def _matches_matrix_pattern(combo: dict[str, Any], pattern: dict[str, Any]) -> b
 
 
 def _validate_env_args(envs: Iterable[EnvironmentConfigSchema]) -> None:
+    """Validate env_args at config load time (lenient - no required param enforcement).
+
+    This is the first of two validation phases:
+    Phase 1 (here): Check for unknown parameters and type mismatches
+                    Do NOT enforce required parameters (allow partial configs)
+    Phase 2 (executor): Enforce required parameters after CLI overrides applied
+
+    Why two phases?
+    - Matrix expansion can create variants with different required params
+    - Users might load a config with 100 jobs but only run 5 with --job-id
+    - Failing at load time for jobs we won't run would be frustrating
+
+    This phase catches obvious mistakes (typos, wrong types) early while deferring
+    required parameter checks until execution when we know what will actually run.
+    """
     cache: EnvMetadataCache = {}
     for env in envs:
         env_module = env.module or env.matrix_base_id or env.id
@@ -565,14 +580,14 @@ def _validate_env_args(envs: Iterable[EnvironmentConfigSchema]) -> None:
         except ImportError as exc:
             logger.warning("Skipping env_args validation for '%s': %s", env_module, exc)
             continue
-        # Centralized validation: unknown/type checks; do not enforce requireds at load time.
+        # Phase 1 validation: unknown/type checks only; do not enforce requireds at load time.
         validate_env_args_or_raise(
             env_module,
             env.env_args,
             metadata=metadata,
             metadata_cache=cache,
             allow_unknown=False,
-            enforce_required=False,
+            enforce_required=False,  # Deferred to execution time
         )
 
 

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 from ._schemas import EnvironmentConfigSchema, ModelConfigSchema, RunConfigSchema
-from .utils.shared import compute_checksum, slugify
+from .utils.shared import compute_checksum, merge_dicts_with_precedence, slugify
 
 
 @dataclass(slots=True)
@@ -108,22 +108,54 @@ def _resolve_env_ids(
     return unique
 
 
+def _resolve_env_override(model: ModelConfigSchema, env: EnvironmentConfigSchema) -> dict[str, Any] | None:
+    """Resolve env-specific overrides from model config.
+
+    Tries in order:
+    1. env.id (exact match for the environment identifier)
+    2. env.matrix_base_id (for matrix-expanded variants like 'medqa-seed-1')
+    3. env.module (fallback for module-based lookup)
+
+    Returns the override dict if found, None otherwise.
+    """
+    for key in (env.id, env.matrix_base_id, env.module):
+        if key and key in model.env_overrides:
+            return model.env_overrides[key]
+    return None
+
+
 def _compose_env_args(
     env: EnvironmentConfigSchema,
     model: ModelConfigSchema,
     job_env_args: dict[str, Any],
 ) -> dict[str, Any]:
-    merged: dict[str, Any] = dict(env.env_args)
-    merged.update(model.env_args)
-    env_identifier = env.id or env.matrix_base_id
-    override = model.env_overrides.get(env_identifier) if env_identifier else None
-    if override is None and env.module:
-        override = model.env_overrides.get(env.module)
-    if override:
-        merged.update(override)
-    if job_env_args:
-        merged.update(job_env_args)
-    return merged
+    """Compose env_args following the precedence chain (lowest to highest):
+
+    Precedence order (later sources override earlier ones):
+    1. Environment config env_args (base defaults from env YAML)
+    2. Model config env_args (global model settings applied to all envs)
+    3. Model config env_overrides[env_id] (env-specific model settings)
+    4. Job config env_args (per-job overrides from jobs section)
+    5. CLI --env-arg/--env-args (applied later in executor, NOT here)
+
+    Example:
+        env.env_args = {"shuffle": False, "seed": 42}
+        model.env_args = {"seed": 123}  # Overrides env default
+        model.env_overrides["medqa"] = {"shuffle": True}  # Env-specific
+        job_env_args = {"workers": 4}  # Job-specific addition
+        → Result: {"shuffle": True, "seed": 123, "workers": 4}
+
+    Note: CLI overrides (layer 5) are applied in _job_executor._build_eval_config,
+    not here, to enable --restart functionality and manifest job reuse.
+    """
+    # Merge layers 1-4 with later ones taking precedence
+    return merge_dicts_with_precedence(
+        env.env_args,  # Layer 1: Base env defaults
+        model.env_args,  # Layer 2: Global model settings
+        _resolve_env_override(model, env),  # Layer 3: Env-specific overrides
+        job_env_args,  # Layer 4: Job-level overrides
+        # Layer 5: CLI overrides (applied later in executor)
+    )
 
 
 def _compose_sampling_args(

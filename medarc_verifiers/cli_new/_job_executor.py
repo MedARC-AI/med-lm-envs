@@ -53,7 +53,7 @@ class ExecutorSettings(BaseModel):
     hf_hub_dataset_name: str | None = None
     max_concurrent_generation: int | None = None
     max_concurrent_scoring: int | None = None
-    default_max_concurrent: int = DEFAULT_BATCH_MAX_CONCURRENT
+    max_concurrent: int | None = None  # CLI override for max_concurrent
     dry_run: bool = False
     cli_env_args: dict[str, Any] | None = None
     cli_sampling_args: dict[str, Any] | None = None
@@ -290,18 +290,46 @@ def _build_eval_config(
 
     env_id = resolve_env_identifier(env_cfg)
     env_args = dict(job.env_args)
+
+    # Apply CLI overrides (Layer 5: highest precedence)
+    # This is the final merge in the precedence chain:
+    # env.env_args → model.env_args → model.env_overrides → job.env_args → CLI
     if settings.cli_env_args:
+        # Log what CLI is overriding for debugging
+        if settings.verbose:
+            overridden_keys = set(env_args) & set(settings.cli_env_args)
+            new_keys = set(settings.cli_env_args) - set(env_args)
+            if overridden_keys:
+                logger.debug(
+                    "CLI overriding env_args for job '%s': %s",
+                    job.job_id,
+                    {k: f"{env_args[k]} → {settings.cli_env_args[k]}" for k in overridden_keys},
+                )
+            if new_keys:
+                logger.debug("CLI adding new env_args for job '%s': %s", job.job_id, list(new_keys))
         env_args.update(settings.cli_env_args)
 
+    # Phase 2 validation: Enforce required parameters now that CLI overrides are merged
+    # This is stricter than load-time validation (Phase 1 in _config_loader.py)
     try:
         metadata = load_env_metadata(env_id, cache=env_metadata_cache)
     except ImportError as exc:
         logger.warning("Skipping env_args validation for '%s': %s", env_id, exc)
     else:
         if metadata:
-            validate_env_args_or_raise(env_id, env_args, metadata, enforce_required=True)
+            # Now enforce required parameters (unlike Phase 1 which was lenient)
+            validate_env_args_or_raise(
+                env_id,
+                env_args,
+                metadata,
+                enforce_required=True,  # Strict validation before execution
+            )
 
-    max_concurrent = env_cfg.max_concurrent or settings.default_max_concurrent
+    # Resolve max_concurrent with proper precedence:
+    # 1. CLI --max-concurrent (settings.max_concurrent)
+    # 2. Environment config max_concurrent (env_cfg.max_concurrent)
+    # 3. DEFAULT_BATCH_MAX_CONCURRENT constant
+    max_concurrent = settings.max_concurrent or env_cfg.max_concurrent or DEFAULT_BATCH_MAX_CONCURRENT
     if env_cfg.verbose is None:
         verbose_flag = settings.verbose
     else:

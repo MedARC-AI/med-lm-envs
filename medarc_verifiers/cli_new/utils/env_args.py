@@ -133,10 +133,31 @@ def validate_env_args_or_raise(
 ) -> None:
     """Validate env args using environment metadata.
 
-    - Loads metadata when not provided (with optional cache), tolerating ImportError by logging and returning early.
-    - Validates unknown parameters (unless allow_unknown).
-    - Optionally enforces required params when ``enforce_required`` is True.
-    - Validates value types/choices for known params.
+    This is used in two phases with different strictness levels:
+
+    Phase 1 (config load time, enforce_required=False):
+        - Check for unknown parameters (typos in config)
+        - Validate types and choices for provided values
+        - Allow missing required parameters (configs might be partial)
+
+    Phase 2 (execution time, enforce_required=True):
+        - All Phase 1 checks PLUS
+        - Enforce that required parameters are present
+        - Happens after CLI overrides are merged
+
+    Args:
+        env_id: Environment identifier for error messages
+        env_args: Arguments to validate
+        metadata: Pre-loaded environment metadata (loads if None)
+        metadata_cache: Cache for loaded metadata
+        allow_unknown: If True, don't error on unknown parameter names
+        enforce_required: If True, error on missing required parameters
+
+    Raises:
+        ValueError: For unknown params, type mismatches, or missing required params
+
+    Note: Loads metadata when not provided (with optional cache), tolerating
+    ImportError by logging a warning and returning early.
     """
     if metadata is None:
         try:

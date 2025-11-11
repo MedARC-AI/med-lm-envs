@@ -26,6 +26,32 @@ DEFAULT_BATCH_MAX_CONCURRENT = 128
 _LOGGING_INITIALIZED = False
 
 
+def merge_dicts_with_precedence(*dicts: dict[str, Any] | None) -> dict[str, Any]:
+    """Merge dictionaries left-to-right, with later dicts taking precedence.
+
+    This is a utility for implementing override chains where each successive
+    dictionary overrides values from previous ones.
+
+    Args:
+        *dicts: Variable number of dictionaries to merge (None values are skipped)
+
+    Returns:
+        Merged dictionary with later dicts overriding earlier ones
+
+    Example:
+        base = {"a": 1, "b": 2}
+        override1 = {"b": 3, "c": 4}
+        override2 = {"c": 5, "d": 6}
+        merge_dicts_with_precedence(base, override1, override2)
+        → {"a": 1, "b": 3, "c": 5, "d": 6}
+    """
+    result: dict[str, Any] = {}
+    for d in dicts:
+        if d:
+            result.update(d)
+    return result
+
+
 def slugify(value: str) -> str:
     """Create a filesystem/ID friendly slug from an arbitrary string.
 
@@ -64,7 +90,21 @@ def merge_sampling_args(
     top_k: int | None = None,
     n: int | None = None,
 ) -> dict[str, Any]:
-    """Merge scalar sampling overrides with an arbitrary mapping."""
+    """Merge scalar sampling overrides with an arbitrary mapping.
+
+    Scalar CLI flags only apply if not already present in sampling_args.
+    This allows --sampling-args to take full precedence over individual flags.
+
+    Precedence:
+    1. sampling_args dict (from --sampling-args JSON)
+    2. Individual scalar flags (--max-tokens, --temperature, etc.)
+
+    Example:
+        sampling_args = {"temperature": 0.7}
+        max_tokens = 1000
+        temperature = 0.0  # Ignored - already in sampling_args
+        → Result: {"temperature": 0.7, "max_tokens": 1000}
+    """
     merged: dict[str, Any] = dict(sampling_args or {})
     if max_tokens is not None and "max_tokens" not in merged:
         merged["max_tokens"] = max_tokens
@@ -106,7 +146,14 @@ def resolve_endpoint_selection(
 
 
 def merge_env_args(explicit: Mapping[str, Any], json_args: Mapping[str, Any]) -> dict[str, Any]:
-    """Merge JSON-provided env args with CLI overrides (explicit wins)."""
+    """Merge JSON-provided env args with CLI overrides (explicit wins).
+
+    Precedence: explicit CLI flags (--env-arg) override JSON (--env-args).
+    Example:
+        json_args = {"seed": 42, "workers": 4}  # from --env-args
+        explicit = {"seed": 123}  # from --env-arg seed=123
+        → Result: {"seed": 123, "workers": 4}  # explicit wins
+    """
     merged: dict[str, Any] = dict(json_args)
     for key, value in explicit.items():
         if key in merged and merged[key] != value:
@@ -208,6 +255,7 @@ def resolve_env_identifier_or(env_cfg: Any, fallback: str) -> str:
 
 
 __all__ = [
+    "merge_dicts_with_precedence",
     "slugify",
     "compute_checksum",
     "DEFAULT_SINGLE_RUN_MAX_CONCURRENT",

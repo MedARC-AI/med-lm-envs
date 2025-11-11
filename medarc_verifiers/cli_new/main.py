@@ -36,7 +36,7 @@ from medarc_verifiers.cli_new._single_run import run_single_mode
 from medarc_verifiers.cli_new.process import ProcessOptions, ProcessResult, run_process
 from medarc_verifiers.cli_new.process.hf_sync import HFSyncConfig
 from medarc_verifiers.cli_new.utils.overrides import build_cli_override
-from medarc_verifiers.cli_new.utils.shared import DEFAULT_BATCH_MAX_CONCURRENT, slugify
+from medarc_verifiers.cli_new.utils.shared import slugify
 from medarc_verifiers.utils.pathing import from_project_relative
 from medarc_verifiers.cli_new._schemas import EnvironmentConfigSchema, EnvironmentExportConfig
 
@@ -519,7 +519,7 @@ def _execute_batch(args: argparse.Namespace) -> int:
         hf_hub_dataset_name=_coerce_optional_str(args.hf_hub_dataset_name),
         max_concurrent_generation=args.max_concurrent_generation,
         max_concurrent_scoring=args.max_concurrent_scoring,
-        default_max_concurrent=args.max_concurrent,
+        max_concurrent=args.max_concurrent,  # CLI override (None if not provided)
         dry_run=args.dry_run,
         cli_env_args=getattr(args, "cli_env_args", None),
         cli_sampling_args=getattr(args, "cli_sampling_args", None),
