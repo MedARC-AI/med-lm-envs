@@ -199,6 +199,13 @@ def build_process_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true", help="Plan processing without writing outputs.")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing parquet files.")
     parser.add_argument(
+        "--append",
+        dest="append",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Append/merge into existing parquet files when present (default: true). Use --no-append to error unless --overwrite is set.",
+    )
+    parser.add_argument(
         "--compute-winrates",
         dest="compute_winrates",
         action=argparse.BooleanOptionalAction,
@@ -349,6 +356,7 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         "deduplicate_latest": not args.no_deduplicate,
         "dry_run": args.dry_run,
         "overwrite": args.overwrite,
+        "append": args.append,
         "hf_repo": args.hf_repo,
         "hf_merge": args.hf_merge,
         "compute_winrates": args.compute_winrates,
@@ -374,6 +382,7 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         deduplicate_latest=not args.no_deduplicate,
         dry_run=args.dry_run,
         overwrite=args.overwrite,
+        append=args.append,
         hf_config=hf_config,
         compute_winrates=args.compute_winrates,
         winrate_output=args.winrate_output,
