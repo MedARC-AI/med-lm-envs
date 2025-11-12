@@ -13,12 +13,15 @@ dependencies = [
     "pylatexenc>=2.10",
     "datasets[parquet]>=4.2.0",
     "pydantic>=2.12.3",
+    "omegaconf>=2.3.0",
+    "polars>=1.35.1",
 ]
 
 [project.scripts]
 medarc-eval = "medarc_verifiers.cli.eval:main"
 medarc-bench = "medarc_verifiers.cli.benchmark:main"
 medarc-export = "medarc_verifiers.cli.export_parquet:main"
+medarc-new = "medarc_verifiers.cli_new.main:main"
 
 [dependency-groups]
 dev = [
