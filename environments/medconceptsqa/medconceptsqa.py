@@ -125,7 +125,7 @@ def load_environment(
 
     if vocab == Vocab.ICD10CM_SAMPLE:
         # load only the sample subset, should contain dev and test
-        ds = load_dataset("sameedkhan/medconceptsqa-sample_medarc_15k", subset.replace("_sample", ""))
+        ds = load_dataset("sameedkhan/medconceptsqa-sample_medarc_2k", subset.replace("_sample", ""))
         test = ds["test"]
     else:
         # load the entire dataset, should contain dev and test
