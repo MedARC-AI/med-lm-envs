@@ -17,8 +17,20 @@ from medarc_verifiers.cli_new.process.writer import (
 
 def _group_for_env() -> AggregatedEnvRows:
     rows = [
-        {"env_id": "demo-env-variant", "base_env_id": "demo-env", "example_id": "ex-1", "job_run_id": "run-1", "score": 1.0},
-        {"env_id": "demo-env-variant", "base_env_id": "demo-env", "example_id": "ex-2", "job_run_id": "run-2", "score": 0.5},
+        {
+            "env_id": "demo-env-variant",
+            "base_env_id": "demo-env",
+            "example_id": "ex-1",
+            "job_run_id": "run-1",
+            "score": 1.0,
+        },
+        {
+            "env_id": "demo-env-variant",
+            "base_env_id": "demo-env",
+            "example_id": "ex-2",
+            "job_run_id": "run-2",
+            "score": 0.5,
+        },
     ]
     return aggregate_rows_by_env(rows)[0]
 
@@ -76,8 +88,105 @@ def test_write_env_groups_respects_overwrite_flag(tmp_path: Path) -> None:
     )
     write_env_groups([group], config)
 
+    # Default behavior is append=True; set append=False to require explicit overwrite
+    config.append = False
     with pytest.raises(FileExistsError):
         write_env_groups([group], config)
 
     config.overwrite = True
     write_env_groups([group], config)
+
+
+def test_write_env_groups_appends_and_deduplicates(tmp_path: Path) -> None:
+    # First write with two rows (run-1, run-2)
+    group1 = _group_for_env()
+    cfg = WriterConfig(
+        output_dir=tmp_path,
+        exporter_version="0.1.0",
+        processed_at="2024-01-01T00:00:00Z",
+        processed_with_args={"include_prompt_completion": False},
+        append=True,
+    )
+    summaries1 = write_env_groups([group1], cfg)
+    out_path = summaries1[0].output_path
+    assert out_path.exists()
+
+    # Second write: one overlapping run (run-2) and one new (run-3)
+    rows2 = [
+        {
+            "env_id": "demo-env-variant",
+            "base_env_id": "demo-env",
+            "example_id": "ex-3",
+            "job_run_id": "run-2",
+            "score": 0.7,
+        },
+        {
+            "env_id": "demo-env-variant",
+            "base_env_id": "demo-env",
+            "example_id": "ex-4",
+            "job_run_id": "run-3",
+            "score": 0.9,
+        },
+    ]
+    group2 = aggregate_rows_by_env(rows2)[0]
+    write_env_groups([group2], cfg)
+
+    # Read back and check rows and metadata
+    table = pq.read_table(out_path)
+    df = table.to_pandas()
+    # Expect three unique job_run_ids: run-1, run-2, run-3
+    assert set(df["job_run_id"]) == {"run-1", "run-2", "run-3"}
+    assert len(df) == 3
+
+    meta = table.schema.metadata or {}
+    assert EXPORTER_METADATA_KEY in meta
+    embedded = json.loads(meta[EXPORTER_METADATA_KEY])
+    assert embedded["append"] is True
+    assert set(embedded["source_runs"]) == {"run-1", "run-2", "run-3"}
+
+
+def test_write_env_groups_overwrite_rebuilds_fresh(tmp_path: Path) -> None:
+    # Initial write with two rows
+    group1 = _group_for_env()
+    cfg1 = WriterConfig(
+        output_dir=tmp_path,
+        exporter_version="0.1.0",
+        processed_at="2024-01-01T00:00:00Z",
+        append=True,
+    )
+    summaries1 = write_env_groups([group1], cfg1)
+    out_path = summaries1[0].output_path
+    assert out_path.exists()
+
+    # Second write with overwrite=True and append=False, using a different single-row group
+    rows2 = [
+        {
+            "env_id": "demo-env-variant",
+            "base_env_id": "demo-env",
+            "example_id": "ex-5",
+            "job_run_id": "run-99",
+            "score": 0.2,
+        }
+    ]
+    group2 = aggregate_rows_by_env(rows2)[0]
+    cfg2 = WriterConfig(
+        output_dir=tmp_path,
+        exporter_version="0.1.0",
+        processed_at="2024-01-02T00:00:00Z",
+        append=False,
+        overwrite=True,
+    )
+    write_env_groups([group2], cfg2)
+
+    # Expect file to be rebuilt with only the new row
+    table = pq.read_table(out_path)
+    df = table.to_pandas()
+    assert list(df["job_run_id"]) == ["run-99"]
+    assert len(df) == 1
+
+    meta = table.schema.metadata or {}
+    assert EXPORTER_METADATA_KEY in meta
+    embedded = json.loads(meta[EXPORTER_METADATA_KEY])
+    # Fresh write path should mark append False and reflect only the new source run
+    assert embedded.get("append") is False
+    assert embedded["source_runs"] == ["run-99"]

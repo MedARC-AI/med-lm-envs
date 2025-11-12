@@ -1,23 +1,5 @@
 {
   "config_checksum": "ed4d807a185aa9e4e582ec021105cbd56b6c3f99142135c5e08a850a2dd38bf9",
-  "config_snapshot": {
-    "envs": {
-      "snapshot-env": {
-        "module": "environments.snapshot_env"
-      }
-    },
-    "jobs": [
-      {
-        "env": "snapshot-env",
-        "model": "snapshot-model"
-      }
-    ],
-    "models": {
-      "snapshot-model": {
-        "model": "gpt-4o-mini"
-      }
-    }
-  },
   "config_source": "configs/snapshot.yaml",
   "created_at": "2024-03-01T00:00:00Z",
   "jobs": [
@@ -83,7 +65,7 @@
     }
   ],
   "name": "Snapshot Run",
-  "regen_source": "baseline-run",
+  "restart_source": "baseline-run",
   "run_id": "snapshot-run",
   "summary": {
     "completed": 0,

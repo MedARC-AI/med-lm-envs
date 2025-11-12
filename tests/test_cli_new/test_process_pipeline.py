@@ -84,7 +84,8 @@ def test_run_process_respects_env_export_defaults(tmp_path: Path) -> None:
     assert row["prompt"] == "Question?"
     assert row["completion"] == "Answer"
     assert row["info"] == {"debug": True}
-    assert group.env_id == "demo-env-rollout3"
+    # env_id now resolves to the base environment id; rollout info remains in base_env_id/derivation
+    assert group.env_id == "demo-env"
     assert group.base_env_id == "demo-env"
 
 
@@ -130,8 +131,8 @@ def test_run_process_respects_combine_rollouts_override(tmp_path: Path) -> None:
 
     result = run_process(options, env_export_map=env_export)
     group = result.env_groups[0]
-    assert group.env_id == "demo-env-rollout3"
-    assert group.base_env_id == "demo-env-rollout3"
+    assert group.env_id == "demo-env"
+    assert group.base_env_id == "demo-env"
 
 
 def test_run_process_writes_winrates_json(tmp_path: Path) -> None:

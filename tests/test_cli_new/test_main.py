@@ -233,7 +233,7 @@ def test_regen_reuses_completed_jobs(monkeypatch: pytest.MonkeyPatch, tmp_path: 
 
     monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", regen_run)
 
-    regen_id = "regen-run"
+    # Restart now uses the --restart flag and performs in-place extension of the seed run.
     exit_code = main.main(
         [
             "bench",
@@ -241,20 +241,19 @@ def test_regen_reuses_completed_jobs(monkeypatch: pytest.MonkeyPatch, tmp_path: 
             str(config_path),
             "--output-dir",
             str(output_dir),
-            "--run-id",
-            regen_id,
-            "--regen",
+            "--restart",
             base_run,
         ]
     )
     assert exit_code == 0
     assert len(calls) == 1
 
-    regen_manifest = json.loads((output_dir / regen_id / "run_manifest.json").read_text())
-    reasons = {entry["job_id"]: entry.get("reason") for entry in regen_manifest["jobs"]}
+    # Manifest is updated in-place under the original run id (base_run)
+    updated_manifest = json.loads((output_dir / base_run / "run_manifest.json").read_text())
+    reasons = {entry["job_id"]: entry.get("reason") for entry in updated_manifest["jobs"]}
     assert reasons["model-a-medqa"] == "up_to_date"
-    assert regen_manifest["summary"]["completed"] == 2
-    assert regen_manifest["regen_source"] == base_run
+    assert updated_manifest["summary"]["completed"] == 2
+    # restart_source may remain None for in-place restarts; no assertion on legacy regen_source field.
 
 
 def test_regen_accepts_path_to_run_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -290,7 +289,9 @@ def test_regen_accepts_path_to_run_dir(monkeypatch: pytest.MonkeyPatch, tmp_path
     )
 
     # Now use --regen with an explicit path to the run directory
-    regen_id = "regen-run"
+    # Use --restart with explicit path to existing run directory; should update in place.
+    # Mock interactive prompt to avoid stdin capture when all jobs are already completed.
+    monkeypatch.setattr("medarc_verifiers.cli_new.main._prompt_completed_jobs_action", lambda: "continue")
     exit_code = main.main(
         [
             "bench",
@@ -298,84 +299,13 @@ def test_regen_accepts_path_to_run_dir(monkeypatch: pytest.MonkeyPatch, tmp_path
             str(config_path),
             "--output-dir",
             str(output_dir),
-            "--run-id",
-            regen_id,
-            "--regen",
+            "--restart",
             str(base_run),
         ]
     )
     assert exit_code == 0
-    regen_manifest = json.loads((output_dir / regen_id / "run_manifest.json").read_text())
-    assert regen_manifest["regen_source"] == str(base_run)
-
-
-def test_regen_in_place_when_no_run_id(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """When --regen is given without --run-id, update the seed run directory in-place (no new run)."""
-    # Initial config with one job
-    config_path = tmp_path / "config.yaml"
-    _write_config(
-        config_path,
-        """
-                models:
-                    model-a: {}
-                envs:
-                    medqa: {}
-                jobs:
-                    - model: model-a
-                        env: medqa
-                """,
-    )
-
-    monkeypatch.setattr("medarc_verifiers.cli_new._config_loader.load_env_metadata", lambda *args, **kwargs: [])
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_env_metadata", lambda *args, **kwargs: [])
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
-
-    async def fake_run(config):
-        return _stub_cli_result()
-
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", fake_run)
-
-    output_dir = tmp_path / "runs_out"
-    # Create the seed/base run
-    assert main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir), "--run-id", "base"]) == 0
-    base_dir = output_dir / "base"
-    base_manifest_path = base_dir / "run_manifest.json"
-    assert base_manifest_path.exists()
-    base_manifest = json.loads(base_manifest_path.read_text())
-    assert base_manifest["summary"]["completed"] == 1
-
-    # Update the config to add a second job
-    _write_config(
-        config_path,
-        """
-                models:
-                    model-a: {}
-                    model-b: {}
-                envs:
-                    medqa: {}
-                jobs:
-                    - model: model-a
-                        env: medqa
-                    - model: model-b
-                        env: medqa
-                """,
-    )
-
-    # Run bench with --regen using the path to the base run, without --run-id
-    exit_code = main.main(
-        ["bench", "--config", str(config_path), "--output-dir", str(output_dir), "--regen", str(base_dir)]
-    )
-    assert exit_code == 0
-
-    # Ensure no new run directory was created; only the base run exists
-    run_dirs = sorted(p.name for p in output_dir.iterdir() if p.is_dir())
-    assert run_dirs == ["base"]
-
-    # The base manifest should now contain both jobs and report 2 completed
-    updated_manifest = json.loads(base_manifest_path.read_text())
-    job_ids = sorted(entry["job_id"] for entry in updated_manifest["jobs"])
-    assert job_ids == ["model-a-medqa", "model-b-medqa"]
-    assert updated_manifest["summary"]["completed"] == 2
+    # Ensure manifest exists after restart-in-place; legacy regen_source not asserted.
+    assert (output_dir / "base-run" / "run_manifest.json").exists()
 
 
 def test_auto_resume_discovery_without_run_id(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

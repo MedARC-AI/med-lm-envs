@@ -46,7 +46,9 @@ def _settings(tmp_path: Path, **overrides: object) -> ExecutorSettings:
         hf_hub_dataset_name=None,
         max_concurrent_generation=None,
         max_concurrent_scoring=None,
-        default_max_concurrent=4,
+        # New concurrency precedence: CLI (--max-concurrent) > env_cfg.max_concurrent > DEFAULT_BATCH_MAX_CONCURRENT (128)
+        # Provide a placeholder so tests can inject a CLI override via overrides (max_concurrent=VALUE).
+        max_concurrent=None,
         dry_run=False,
     )
     base_kwargs.update(overrides)
@@ -108,7 +110,8 @@ def test_execute_jobs_invokes_run_evaluation(monkeypatch: pytest.MonkeyPatch, tm
     assert config.client_config.api_base_url == "https://api.resolved"
     assert config.client_config.extra_headers == {"X-Test": "1"}
     assert config.env_args == {"seed": 1}
-    assert config.max_concurrent == 4
+    # With no CLI override and no env-level max_concurrent, falls back to DEFAULT_BATCH_MAX_CONCURRENT (128)
+    assert config.max_concurrent == 128
 
 
 def test_execute_jobs_records_failures(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

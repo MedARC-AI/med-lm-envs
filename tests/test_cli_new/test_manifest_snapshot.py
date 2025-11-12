@@ -8,7 +8,11 @@ from typing import Any
 import pytest
 
 from medarc_verifiers.cli_new._job_builder import ResolvedJob
-from medarc_verifiers.cli_new._manifest import MANIFEST_FILENAME, RunManifest
+from medarc_verifiers.cli_new._manifest import (
+    MANIFEST_FILENAME,
+    RunManifest,
+    compute_snapshot_checksum,
+)
 from medarc_verifiers.cli_new._schemas import EnvironmentConfigSchema, ModelConfigSchema
 
 SNAPSHOT_ENV_VAR = "UPDATE_CLI_MANIFEST_SNAPSHOT"
@@ -62,21 +66,22 @@ def test_run_manifest_snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     monkeypatch.setattr("medarc_verifiers.cli_new._manifest.timestamp", lambda: "2024-03-01T00:00:00Z")
 
     run_dir = tmp_path / "snapshot-run"
+    snapshot_cfg = {
+        "models": {"snapshot-model": {"model": "gpt-4o-mini"}},
+        "envs": {"snapshot-env": {"module": "environments.snapshot_env"}},
+        "jobs": [{"model": "snapshot-model", "env": "snapshot-env"}],
+    }
     manifest = RunManifest.create(
         run_dir=run_dir,
         run_id="snapshot-run",
         run_name="Snapshot Run",
         config_source=Path("configs/snapshot.yaml"),
-        config_snapshot={
-            "models": {"snapshot-model": {"model": "gpt-4o-mini"}},
-            "envs": {"snapshot-env": {"module": "environments.snapshot_env"}},
-            "jobs": [{"model": "snapshot-model", "env": "snapshot-env"}],
-        },
+        config_checksum=compute_snapshot_checksum(snapshot_cfg),
         jobs=[job],
         env_args_map={job.job_id: job.env_args},
         sampling_args_map={job.job_id: job.sampling_args},
         persist=True,
-        regen_source="baseline-run",
+        restart_source="baseline-run",
     )
 
     manifest_path = manifest.path
@@ -112,16 +117,17 @@ def test_manifest_serialization_prunes_nones_and_relativizes(monkeypatch: pytest
     monkeypatch.setattr("medarc_verifiers.cli_new._manifest.PROJECT_ROOT", fake_root)
     monkeypatch.setattr("medarc_verifiers.cli_new._manifest.to_project_relative", fake_to_project_relative)
 
+    snapshot_cfg = {
+        "models": {"snapshot-model": {"model": "gpt-4o-mini"}},
+        "envs": {"snapshot-env": {"module": "environments.snapshot_env"}},
+        "jobs": [{"model": "snapshot-model", "env": "snapshot-env"}],
+    }
     manifest = RunManifest.create(
         run_dir=run_dir,
         run_id="phase5",
         run_name="Phase 5 Run",
         config_source=fake_root / "configs" / "phase5.yaml",
-        config_snapshot={
-            "models": {"snapshot-model": {"model": "gpt-4o-mini"}},
-            "envs": {"snapshot-env": {"module": "environments.snapshot_env"}},
-            "jobs": [{"model": "snapshot-model", "env": "snapshot-env"}],
-        },
+        config_checksum=compute_snapshot_checksum(snapshot_cfg),
         jobs=[job],
         env_args_map={job.job_id: job.env_args},
         sampling_args_map={job.job_id: job.sampling_args},
