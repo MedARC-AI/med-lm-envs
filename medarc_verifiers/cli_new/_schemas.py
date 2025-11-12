@@ -48,6 +48,7 @@ class ModelConfigSchema(BaseModel):
     max_connections: int | None = Field(None, ge=1)
     max_keepalive_connections: int | None = Field(None, ge=1)
     max_retries: int | None = Field(None, ge=0)
+    max_concurrent: int | None = Field(None, ge=1)
 
     @model_validator(mode="before")
     @classmethod

@@ -328,9 +328,12 @@ def _build_eval_config(
 
     # Resolve max_concurrent with proper precedence:
     # 1. CLI --max-concurrent (settings.max_concurrent)
-    # 2. Environment config max_concurrent (env_cfg.max_concurrent)
-    # 3. DEFAULT_BATCH_MAX_CONCURRENT constant
-    max_concurrent = settings.max_concurrent or env_cfg.max_concurrent or DEFAULT_BATCH_MAX_CONCURRENT
+    # 2. Model config max_concurrent (model_cfg.max_concurrent)
+    # 3. Environment config max_concurrent (env_cfg.max_concurrent)
+    # 4. DEFAULT_BATCH_MAX_CONCURRENT constant
+    max_concurrent = (
+        settings.max_concurrent or model_cfg.max_concurrent or env_cfg.max_concurrent or DEFAULT_BATCH_MAX_CONCURRENT
+    )
     if env_cfg.verbose is None:
         verbose_flag = settings.verbose
     else:
