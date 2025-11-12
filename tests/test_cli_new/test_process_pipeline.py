@@ -125,7 +125,7 @@ def test_run_process_respects_combine_rollouts_override(tmp_path: Path) -> None:
     env_export = {
         "demo-env-rollout3": EnvironmentExportConfig(
             keep_columns=[],
-            combine_rollouts=False,
+            combine_rollouts=True,
         )
     }
 
