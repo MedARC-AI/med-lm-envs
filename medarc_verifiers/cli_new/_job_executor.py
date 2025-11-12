@@ -32,6 +32,7 @@ from medarc_verifiers.cli_new.utils.shared import (
     ensure_root_logging,
     normalize_headers,
     resolve_env_identifier,
+    sanitize_sampling_args_for_openai,
 )
 
 logger = logging.getLogger(__name__)
@@ -340,6 +341,8 @@ def _build_eval_config(
     sampling_args = dict(job.sampling_args)
     if settings.cli_sampling_args:
         sampling_args.update(settings.cli_sampling_args)
+    # Route non-OpenAI kwargs (e.g., top_k, min_p) into extra_body to avoid client errors
+    sampling_args = sanitize_sampling_args_for_openai(sampling_args)
     state_columns = list(env_cfg.state_columns) if env_cfg.state_columns else None
 
     return EvalConfig(

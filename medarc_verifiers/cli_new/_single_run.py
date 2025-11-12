@@ -30,6 +30,7 @@ from medarc_verifiers.cli_new.utils.shared import (
     flatten_state_columns,
     merge_env_args,
     merge_sampling_args,
+    sanitize_sampling_args_for_openai,
     normalize_headers,
     resolve_endpoint_selection,
 )
@@ -145,13 +146,15 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         extra_headers=headers or None,
     )
 
+    sanitized_sampling_args = sanitize_sampling_args_for_openai(merged_sampling_args)
+
     eval_config = EvalConfig(
         env_id=args.env,
         env_args=merged_env_args,
         env_dir_path=str(Path(args.env_dir_path).expanduser()),
         model=resolved_model,
         client_config=client_config,
-        sampling_args=merged_sampling_args,
+        sampling_args=sanitized_sampling_args,
         num_examples=args.num_examples,
         rollouts_per_example=args.rollouts_per_example,
         max_concurrent=args.max_concurrent,
