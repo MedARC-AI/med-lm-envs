@@ -2,7 +2,6 @@
 - id: longhealth
   module: longhealth
   rollouts_per_example: 1
-  max_concurrent: 128
   num_examples: -1
   verbose: false
   env_args:
@@ -15,7 +14,6 @@
 - id: longhealth
   module: longhealth
   rollouts_per_example: 1
-  max_concurrent: 128
   num_examples: -1
   verbose: false
   env_args:
@@ -30,7 +28,6 @@
 - id: longhealth
   module: longhealth
   rollouts_per_example: 1
-  max_concurrent: 128
   num_examples: -1
   verbose: false
   env_args:
