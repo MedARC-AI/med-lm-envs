@@ -32,6 +32,7 @@ class WriterConfig:
     schema_version: int = DEFAULT_SCHEMA_VERSION
     dry_run: bool = False
     overwrite: bool = False
+    append: bool = True
 
 
 @dataclass(slots=True)
@@ -80,6 +81,7 @@ def _write_group(group: AggregatedEnvRows, config: WriterConfig) -> EnvWriteSumm
         "processed_with_args": dict(config.processed_with_args),
         "env_id": env_id,
         "base_env_id": base_env_id,
+        "append": False,
     }
     row_count = len(group.rows)
 
@@ -95,6 +97,10 @@ def _write_group(group: AggregatedEnvRows, config: WriterConfig) -> EnvWriteSumm
         )
 
     if output_path.exists() and not config.overwrite:
+        if not config.append:
+            raise FileExistsError(
+                f"Output file {output_path} exists and append is disabled. Use --overwrite to replace or enable append to merge."
+            )
         # Append-merge semantics: read existing file, drop duplicate job_run_ids,
         # union schemas, concatenate, and rewrite file.
         try:
@@ -188,6 +194,7 @@ def _write_group(group: AggregatedEnvRows, config: WriterConfig) -> EnvWriteSumm
             "processed_with_args": dict(config.processed_with_args),
             "env_id": env_id,
             "base_env_id": base_env_id,
+            "append": True,
         }
         meta_raw = {**meta_raw, EXPORTER_METADATA_KEY: json.dumps(merged_exporter_meta, sort_keys=True).encode("utf-8")}
         combined_table = combined_table.replace_schema_metadata(meta_raw)

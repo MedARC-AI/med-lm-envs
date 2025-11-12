@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -53,17 +54,15 @@ def aggregate_rows_by_env(rows: Iterable[Mapping[str, Any]]) -> list[AggregatedE
             group["job_run_ids"].add(str(job_run_id))
 
     aggregated: list[AggregatedEnvRows] = []
+    rollout_re = re.compile(r"^(.*?)-rollout\d+$")
     for key in sorted(groups):
         group = groups[key]
-        # Preserve rollout_index as assigned during row loading. That logic already:
-        # - Computes per-file multi-rollout indices using example_id occurrences, and
-        # - Uses manifest/dir-derived rollout_index for single-rollout files.
-        # Aggregation should not remap it; just pass through.
+        # Preserve rollout_index as assigned during row loading; aggregation just passes rows through.
         normalized_rows: list[Mapping[str, Any]] = list(group["rows"])  # shallow copy
-
-        # Prefer the base_env_id for the group env identifier (strips any rollout suffix).
-        out_env_id = group["base_env_id"] or group["env_id"] or key
-
+        # Canonicalize env_id by stripping trailing rollout suffix if present (keep other variant parts like task)
+        candidate_env_id = group["env_id"] or group["base_env_id"] or key
+        m = rollout_re.match(candidate_env_id)
+        out_env_id = m.group(1) if m else candidate_env_id
         aggregated.append(
             AggregatedEnvRows(
                 env_id=out_env_id,

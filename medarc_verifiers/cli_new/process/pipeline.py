@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from medarc_verifiers.cli_new._schemas import EnvironmentExportConfig
 from medarc_verifiers.cli_new.process import aggregate, discovery, hf_sync, metadata, rows, rollout, writer
@@ -42,6 +42,9 @@ class ProcessOptions:
     min_common: int = 0
     weight_policy: str = "ln"
     weight_cap: int = 0
+    append: bool = (
+        True  # when True, merge into existing parquet files; when False, treat existing file + overwrite=False as error
+    )
 
     def __post_init__(self) -> None:
         self.runs_dir = Path(self.runs_dir)
@@ -109,6 +112,7 @@ def run_process(
         processed_with_args=options.processed_with_args,
         dry_run=options.dry_run,
         overwrite=options.overwrite,
+        append=options.append,
     )
     env_summaries = writer.write_env_groups(env_groups, writer_config)
 
