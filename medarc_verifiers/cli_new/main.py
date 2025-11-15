@@ -49,6 +49,7 @@ DEFAULT_ENV_DIR = Path("environments")
 DEFAULT_ENV_CONFIG_ROOT = Path("configs") / "envs"
 DEFAULT_RUNS_RAW_DIR = Path("runs") / "raw"
 DEFAULT_PROCESSED_DIR = Path("runs") / "processed"
+BENCH_COMMAND = "bench"
 PROCESS_COMMAND = "process"
 
 
@@ -199,6 +200,13 @@ def build_process_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true", help="Plan processing without writing outputs.")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing parquet files.")
     parser.add_argument(
+        "--process-incomplete",
+        dest="process_incomplete",
+        action="store_true",
+        default=False,
+        help="Include runs where run_manifest.json summary has completed < total.",
+    )
+    parser.add_argument(
         "--append",
         dest="append",
         action=argparse.BooleanOptionalAction,
@@ -279,7 +287,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print_general_help()
         return 0
 
-    if args_list[0] == "bench":
+    if args_list[0] == BENCH_COMMAND:
         return _run_batch_mode(args_list[1:])
     if args_list[0] == PROCESS_COMMAND:
         return _run_process_mode(args_list[1:])
@@ -356,6 +364,7 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         "deduplicate_latest": not args.no_deduplicate,
         "dry_run": args.dry_run,
         "overwrite": args.overwrite,
+        "only_complete_runs": not bool(args.process_incomplete),
         "append": args.append,
         "hf_repo": args.hf_repo,
         "hf_merge": args.hf_merge,
@@ -376,6 +385,7 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         processed_with_args=processed_with_args,
         status_filter=args.status or (),
         include_prompt_completion=args.include_prompt_completion,
+        only_complete_runs=not bool(args.process_incomplete),
         keep_columns=args.keep_column or (),
         drop_columns=args.drop_column or (),
         combine_rollouts=args.combine_rollouts,

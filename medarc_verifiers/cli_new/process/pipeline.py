@@ -23,6 +23,7 @@ class ProcessOptions:
 
     runs_dir: Path
     output_dir: Path
+    only_complete_runs: bool = True
     exporter_version: str = "dev"
     processed_at: str | None = None
     processed_with_args: Mapping[str, Any] = field(default_factory=dict)
@@ -80,11 +81,14 @@ def run_process(
     records = discovery.discover_run_records(
         options.runs_dir,
         filter_status=options.status_filter or None,
+        only_complete_runs=bool(options.only_complete_runs),
     )
 
     # Deduplicate to keep only latest runs per model+env
     if options.deduplicate_latest:
         records = discovery.deduplicate_records_by_latest(records)
+
+    _print_records_table(records, options.only_complete_runs, options.runs_dir)
 
     normalized_rows: list[dict[str, Any]] = []
 
@@ -133,6 +137,7 @@ def run_process(
             result = _win.compute_winrates(dataset_inputs, cfg)
             winrate_path = options.winrate_output or _default_winrate_path(options)
             _win.write_json(_win.to_json(result), winrate_path)
+            _print_winrate_summary_markdown(result)
 
     hf_summary: HFMergeSummary | None = None
     if options.hf_config:
@@ -218,4 +223,166 @@ def _winrate_root(options: ProcessOptions) -> Path:
     return parent
 
 
+def _print_records_table(
+    records: Sequence[discovery.RunRecord], only_complete_runs: bool, runs_dir: Path | str
+) -> None:
+    """Pretty-print which models will be processed and how many jobs per model (pre-combining rollouts).
+
+    Also indicates inclusion status and lists models present in runs but excluded by filters.
+    """
+    # Discover all records (deduped) to compute completed vs total per model
+    try:
+        all_records_raw = discovery.discover_run_records(runs_dir, filter_status=None, only_complete_runs=False)
+        all_records = discovery.deduplicate_records_by_latest(all_records_raw)
+    except Exception:  # pragma: no cover - best-effort
+        all_records = list(records)
+
+    # Compute totals
+    total_by_model: dict[str, int] = {}
+    completed_by_model: dict[str, int] = {}
+    for rec in all_records:
+        model_id = rec.model_id or "unknown"
+        total_by_model[model_id] = total_by_model.get(model_id, 0) + 1
+        if (rec.status or "").lower() == "completed":
+            completed_by_model[model_id] = completed_by_model.get(model_id, 0) + 1
+
+    # Inclusion: completed == total (>0)
+    included_models: list[str] = []
+    excluded_models: list[str] = []
+    for model_id in sorted(total_by_model.keys()):
+        tot = total_by_model.get(model_id, 0)
+        comp = completed_by_model.get(model_id, 0)
+        if tot > 0 and comp == tot:
+            included_models.append(model_id)
+        else:
+            excluded_models.append(model_id)
+
+    # For title, sum completed jobs among included models
+    included_jobs_total = sum(completed_by_model.get(m, 0) for m in included_models)
+
+    try:
+        from rich.console import Console
+        from rich.table import Table
+        from rich.markup import escape
+    except Exception:
+        suffix = " (complete runs only)" if only_complete_runs else ""
+        logger.info(
+            "Processing %d job(s) across %d model(s)%s (pre-combining rollouts).",
+            included_jobs_total,
+            len(included_models),
+            suffix,
+        )
+        for model_id in included_models:
+            comp = completed_by_model.get(model_id, 0)
+            tot = total_by_model.get(model_id, 0)
+            logger.info("  - %s: %d/%d job(s) (included)", model_id, comp, tot)
+        if excluded_models:
+            logger.info("Excluded model(s):")
+            for model_id in excluded_models:
+                comp = completed_by_model.get(model_id, 0)
+                tot = total_by_model.get(model_id, 0)
+                logger.info("  - %s: %d/%d job(s) (excluded)", model_id, comp, tot)
+        return
+
+    console = Console()
+    title = f"Processing {included_jobs_total} job(s) across {len(included_models)} model(s)"
+    if only_complete_runs:
+        title += " (complete runs only)"
+    title += " [dim](pre-combining rollouts)[/dim]"
+    table = Table(title=title, show_header=True, header_style="bold cyan", caption=None)
+    table.add_column("Model", style="magenta")
+    table.add_column("Jobs (completed/total)", style="green", justify="right")
+    table.add_column("Included", style="yellow")
+
+    for model_id in included_models:
+        comp = completed_by_model.get(model_id, 0)
+        tot = total_by_model.get(model_id, 0)
+        table.add_row(escape(str(model_id)), f"{comp}/{tot}", "yes")
+    # Append excluded models with their completed/total
+    for model_id in excluded_models:
+        comp = completed_by_model.get(model_id, 0)
+        tot = total_by_model.get(model_id, 0)
+        table.add_row(escape(str(model_id)), f"{comp}/{tot}", "no")
+
+    console.print(table)
+
+
 __all__ = ["ProcessOptions", "ProcessResult", "run_process"]
+
+
+def _print_winrate_summary_markdown(result: Any) -> None:
+    """Print a compact markdown table of mean win rate per model."""
+    try:
+        models = result.models  # dict[str, dict]
+    except Exception:
+        return
+    scoreboard: list[tuple[str, float | None, float | None, int]] = []
+    for model, payload in models.items():
+        mean_wr = payload.get("mean_winrate", {}) if isinstance(payload, dict) else {}
+        simple = mean_wr.get("simple_mean")
+        weighted = mean_wr.get("weighted_mean")
+        n_ds = int(mean_wr.get("n_datasets", 0) or 0)
+        scoreboard.append((str(model), simple, weighted, n_ds))
+
+    # Sort by weighted desc, falling back to simple desc
+    def _key(item: tuple[str, float | None, float | None, int]) -> float:
+        _, sm, lw, _ = item
+        return float(lw if lw is not None else (sm if sm is not None else float("-inf")))
+
+    scoreboard.sort(key=_key, reverse=True)
+    # Prepare rows for table rendering
+    rows: list[dict[str, str]] = []
+    for model, sm, lw, n_ds in scoreboard:
+        sm_str = f"{sm:.4f}" if isinstance(sm, (int, float)) and sm is not None else "-"
+        lw_str = f"{lw:.4f}" if isinstance(lw, (int, float)) and lw is not None else "-"
+        rows.append({"Model": model, "SimpleAvg": sm_str, "LnWeighted": lw_str, "Datasets": str(n_ds)})
+
+    # Prefer tabulate for clean GitHub markdown if available
+    try:
+        from tabulate import tabulate  # type: ignore[import-not-found]
+
+        md_table = tabulate(rows, headers="keys", tablefmt="github")
+        _emit_markdown_table(md_table)
+        return
+    except Exception:
+        pass
+
+    # Fallback: try pandas via polars for to_markdown
+    try:
+        import polars as pl  # type: ignore[import-not-found]
+
+        # pandas may not be present; import inside try
+        import pandas as pd  # type: ignore[import-not-found]  # noqa: F401
+
+        df = pl.DataFrame(rows).to_pandas()
+        md_table = df.to_markdown(index=False)  # type: ignore[attr-defined]
+        _emit_markdown_table(md_table)
+        return
+    except Exception:
+        pass
+
+    # Final fallback: simple manual markdown
+    lines: list[str] = [
+        "",
+        "Mean win rate per model (HELM-style):",
+        "",
+        "| Model | SimpleAvg | LnWeighted | Datasets |",
+        "|-------|----------:|-----------:|---------:|",
+    ]
+    for row in rows:
+        lines.append(f"| {row['Model']} | {row['SimpleAvg']} | {row['LnWeighted']} | {row['Datasets']} |")
+    _emit_markdown_table("\n".join(lines))
+
+
+def _emit_markdown_table(md_text: str) -> None:
+    """Emit the markdown table to stdout using Rich Console if available, else print."""
+    header = "Mean win rate per model (HELM-style):"
+    try:
+        from rich.console import Console
+    except Exception:
+        print("\n" + header + "\n")
+        print(md_text)
+        return
+    console = Console()
+    console.print("\n" + header + "\n")
+    console.print(md_text)

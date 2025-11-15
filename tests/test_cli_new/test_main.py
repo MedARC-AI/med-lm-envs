@@ -131,6 +131,56 @@ def test_cli_runs_configuration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert manifest["jobs"][0]["status"] == "completed"
 
 
+def test_model_level_max_concurrent_applies(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    _write_config(
+        config_path,
+        """
+        models:
+          model-a:
+            model: alias-model
+            max_concurrent: 7
+        envs:
+          medqa: {}
+        jobs:
+          - model: model-a
+            env: medqa
+        """,
+    )
+
+    captured = []
+
+    async def fake_run(config):
+        captured.append(config)
+        return _stub_cli_result()
+
+    monkeypatch.setattr("medarc_verifiers.cli_new._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", fake_run)
+
+    output_dir = tmp_path / "runs_out"
+    env_dir = tmp_path / "envs"
+    env_dir.mkdir()
+
+    exit_code = main.main(
+        [
+            "bench",
+            "--config",
+            str(config_path),
+            "--output-dir",
+            str(output_dir),
+            "--env-dir",
+            str(env_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    assert len(captured) == 1
+    config = captured[0]
+    assert config.max_concurrent == 7
+
+
 def test_cli_env_config_root_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     config_dir = tmp_path / "configs"
     config_dir.mkdir()

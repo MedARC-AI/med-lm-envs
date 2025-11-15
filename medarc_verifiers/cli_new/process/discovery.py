@@ -24,6 +24,8 @@ class RunManifestInfo:
 
     job_run_id: str
     run_name: str | None
+    summary_completed: int
+    summary_total: int
     manifest_path: Path
     run_dir: Path
     created_at: str | None
@@ -68,15 +70,17 @@ def discover_run_records(
     runs_dir: Path | str,
     *,
     filter_status: Sequence[str] | None = None,
+    only_complete_runs: bool = False,
 ) -> list[RunRecord]:
     """Return all discovered run records within the provided runs directory."""
-    return list(iter_run_records(runs_dir, filter_status=filter_status))
+    return list(iter_run_records(runs_dir, filter_status=filter_status, only_complete_runs=only_complete_runs))
 
 
 def iter_run_records(
     runs_dir: Path | str,
     *,
     filter_status: Sequence[str] | None = None,
+    only_complete_runs: bool = False,
 ) -> Iterator[RunRecord]:
     """Yield run records for each job entry found under the runs directory."""
     runs_path = Path(runs_dir)
@@ -95,6 +99,9 @@ def iter_run_records(
     for run_dir in run_dirs:
         manifest_info, job_entries = _load_manifest(run_dir)
         if manifest_info is None:
+            continue
+        if only_complete_runs and manifest_info.summary_completed != manifest_info.summary_total:
+            # Skip entire run if not fully completed
             continue
         summary_map = _load_run_summary(run_dir)
         for job_entry in job_entries:
@@ -209,10 +216,21 @@ def _load_manifest(run_dir: Path) -> tuple[RunManifestInfo | None, Sequence[Mani
         return None, ()
 
     job_run_id = manifest_model.run_id or run_dir.name
+    summary_payload = manifest_model.summary or {}
+    try:
+        completed_count = int(summary_payload.get("completed", 0))
+    except Exception:
+        completed_count = 0
+    try:
+        total_count = int(summary_payload.get("total", 0))
+    except Exception:
+        total_count = 0
 
     manifest_info = RunManifestInfo(
         job_run_id=job_run_id,
         run_name=manifest_model.name,
+        summary_completed=completed_count,
+        summary_total=total_count,
         manifest_path=manifest_path,
         run_dir=run_dir,
         created_at=manifest_model.created_at,

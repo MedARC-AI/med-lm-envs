@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_DROP_COLUMNS = {"info", "sampling_args"}
 PROMPT_COMPLETION_COLUMNS = {"prompt", "completion"}
+# Top-level JSON fields we explicitly allow through even though they are not primitives.
+# These may be absent in older results and will appear as nulls in existing parquet files.
+ALLOWED_JSON_COLUMNS = {"token_usage"}
 
 
 def load_rows(
@@ -115,7 +118,8 @@ def _clean_row(
     for key, value in row.items():
         if key in drop and key not in keep:
             continue
-        if key not in keep and not _is_primitive(value):
+        is_allowed_json = key in ALLOWED_JSON_COLUMNS and isinstance(value, Mapping)
+        if key not in keep and not _is_primitive(value) and not is_allowed_json:
             continue
         cleaned[key] = value
 
@@ -125,7 +129,8 @@ def _clean_row(
         for keep_key in keep:
             if keep_key not in cleaned and keep_key in info:
                 value = info[keep_key]
-                if _is_primitive(value):
+                is_allowed_json = keep_key in ALLOWED_JSON_COLUMNS and isinstance(value, Mapping)
+                if _is_primitive(value) or is_allowed_json:
                     cleaned[keep_key] = value
 
     return cleaned
