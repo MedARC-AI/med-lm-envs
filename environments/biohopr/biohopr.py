@@ -35,7 +35,7 @@ You will be given:
 2. The ground truth diagnoses (possible answers)  
 3. A predicted diagnosis (response)
 
-Your task is to determine if the predicted diagnosis is medically equivalent to the ground truths, even if worded differently.
+Your task is to determine if the predicted diagnosis is medically equivalent to any of the ground truths, even if worded differently.
 
 Consider these guidelines:
 - Medical terms that refer to the same condition should be considered equivalent
