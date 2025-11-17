@@ -141,6 +141,12 @@ def build_batch_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--max-concurrent-generation", type=int, help="Override generation concurrency for all jobs.")
     parser.add_argument("--max-concurrent-scoring", type=int, help="Override scoring concurrency for all jobs.")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="Override request timeout in seconds for all jobs (CLI > model > default).",
+    )
     return parser
 
 
@@ -539,6 +545,7 @@ def _execute_batch(args: argparse.Namespace) -> int:
         max_concurrent_generation=args.max_concurrent_generation,
         max_concurrent_scoring=args.max_concurrent_scoring,
         max_concurrent=args.max_concurrent,  # CLI override (None if not provided)
+        timeout=args.timeout,
         dry_run=args.dry_run,
         cli_env_args=getattr(args, "cli_env_args", None),
         cli_sampling_args=getattr(args, "cli_sampling_args", None),

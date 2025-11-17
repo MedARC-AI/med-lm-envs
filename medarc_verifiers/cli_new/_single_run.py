@@ -140,11 +140,14 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         default_base_url=args.api_base_url,
     )
 
-    client_config = ClientConfig(
-        api_key_var=api_key_var,
-        api_base_url=api_base_url,
-        extra_headers=headers or None,
-    )
+    client_kwargs: dict[str, Any] = {
+        "api_key_var": api_key_var,
+        "api_base_url": api_base_url,
+        "extra_headers": headers or None,
+    }
+    if args.timeout is not None:
+        client_kwargs["timeout"] = args.timeout
+    client_config = ClientConfig(**client_kwargs)
 
     sanitized_sampling_args = sanitize_sampling_args_for_openai(merged_sampling_args)
 
@@ -252,6 +255,12 @@ def build_base_parser(*, require_env: bool, add_help: bool) -> argparse.Argument
     )
     parser.add_argument(
         "--max-concurrent-scoring", type=int, default=None, help="Maximum number of concurrent scoring requests."
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="Override request timeout in seconds (defaults to the verifier client default).",
     )
     parser.add_argument(
         "--max-tokens", "-t", type=int, default=None, help="Maximum tokens to generate (unset to use model defaults)."

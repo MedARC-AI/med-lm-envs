@@ -49,6 +49,7 @@ def _settings(tmp_path: Path, **overrides: object) -> ExecutorSettings:
         # New concurrency precedence: CLI (--max-concurrent) > env_cfg.max_concurrent > DEFAULT_BATCH_MAX_CONCURRENT (128)
         # Provide a placeholder so tests can inject a CLI override via overrides (max_concurrent=VALUE).
         max_concurrent=None,
+        timeout=None,
         dry_run=False,
     )
     base_kwargs.update(overrides)
@@ -180,6 +181,46 @@ def test_execute_jobs_respects_dry_run(monkeypatch: pytest.MonkeyPatch, tmp_path
 
     assert results[0].status == "skipped"
     assert results[0].output_path == (tmp_path / "runs" / "run-1" / job.job_id)
+
+
+def test_executor_timeout_precedence(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    captured = {}
+
+    async def fake_run(config):
+        captured["config"] = config
+        return _stub_results()
+
+    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", fake_run)
+    monkeypatch.setattr(
+        "medarc_verifiers.cli_new._job_executor.load_endpoint_registry",
+        lambda path, cache=None: {},
+    )
+    monkeypatch.setattr(
+        "medarc_verifiers.cli_new._job_executor.load_env_metadata",
+        lambda env_id, cache=None: _stub_metadata(required=False),
+    )
+
+    model_cfg = ModelConfigSchema(id="alias", timeout=5.0)
+    env_cfg = EnvironmentConfigSchema(id="medqa")
+    job = ResolvedJob(
+        job_id="alias-medqa",
+        name="alias-medqa",
+        model=model_cfg,
+        env=env_cfg,
+        env_args={},
+        sampling_args={},
+    )
+
+    # CLI override should take precedence when provided.
+    execute_jobs([job], _settings(tmp_path, timeout=10.0))
+    config = captured["config"]
+    assert config.client_config.timeout == 10.0
+
+    # Model-level timeout applies when CLI flag is absent.
+    captured.clear()
+    execute_jobs([job], _settings(tmp_path))
+    config = captured["config"]
+    assert config.client_config.timeout == 5.0
 
 
 def test_cli_env_arg_overrides_yaml(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

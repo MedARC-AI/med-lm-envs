@@ -55,6 +55,7 @@ class ExecutorSettings(BaseModel):
     max_concurrent_generation: int | None = None
     max_concurrent_scoring: int | None = None
     max_concurrent: int | None = None  # CLI override for max_concurrent
+    timeout: float | None = None
     dry_run: bool = False
     cli_env_args: dict[str, Any] | None = None
     cli_sampling_args: dict[str, Any] | None = None
@@ -279,8 +280,9 @@ def _build_eval_config(
         "api_base_url": api_base_url,
         "extra_headers": headers or None,
     }
-    if model_cfg.timeout is not None:
-        client_kwargs["timeout"] = model_cfg.timeout
+    timeout = settings.timeout if settings.timeout is not None else model_cfg.timeout
+    if timeout is not None:
+        client_kwargs["timeout"] = timeout
     if model_cfg.max_connections is not None:
         client_kwargs["max_connections"] = model_cfg.max_connections
     if model_cfg.max_keepalive_connections is not None:
