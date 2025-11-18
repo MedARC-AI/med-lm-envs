@@ -95,3 +95,8 @@ uv run vf-eval medredqa \
   -a '{"judge_model": "gpt-4o", "use_think": true}' \
   -s
 ```
+
+### Authors
+This environment has been put together by:
+
+Kunal Bagga - ([@bagga005](https://github.com/bagga005))

@@ -40,3 +40,7 @@ Summarize key metrics your rubric emits and how they’re interpreted.
 | ------ | ------- |
 | `accuracy` | Exact match on target answer |
 
+### Authors
+This environment has been put together by:
+
+Anish Mahishi - ([@macandro96](https://github.com/macandro96))

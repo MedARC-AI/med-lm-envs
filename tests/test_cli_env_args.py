@@ -1,3 +1,4 @@
+import enum
 import sys
 import types
 from collections.abc import Callable
@@ -99,6 +100,22 @@ def test_unsupported_dict_and_union(module_registry: list[str]) -> None:
 
     choice = params[1]
     assert choice.unsupported_reason == "non-optional union unsupported"
+
+
+def test_enum_str_union(module_registry: list[str]) -> None:
+    class AnswerFormat(enum.Enum):
+        XML = "xml"
+        BOXED = "boxed"
+
+    def load_environment(answer_format: AnswerFormat | str = AnswerFormat.XML) -> None:
+        """Loader mixing enum and str."""
+
+    _register_env("test_env_enum_union", load_environment, module_registry)
+    params = gather_env_cli_metadata("test_env_enum_union")
+    answer_format = params[0]
+    assert answer_format.choices == ("xml", "boxed")
+    assert answer_format.unsupported_reason is None
+    assert answer_format.default == AnswerFormat.XML
 
 
 def test_missing_annotation_uses_default_type(module_registry: list[str]) -> None:
