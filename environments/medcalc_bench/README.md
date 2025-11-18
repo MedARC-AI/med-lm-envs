@@ -6,7 +6,7 @@
 - **Tags**: medical, clinical, single-turn, numeric, date, evaluation
 
 ### Dataset
-- **Primary dataset**: `ncbi/MedCalc-Bench-v1.0`
+- **Primary dataset**: `ncbi/MedCalc-Bench-v1.2`
 - Each example includes `Patient Note`, `Question`, `Calculator ID`, `Ground Truth`, `Lower Bound`, `Upper Bound`.
 - Mapped fields in env: `question` (formatted prompt), `calc_id`, `ground_truth`, `lower_bound`, `upper_bound`.
 
