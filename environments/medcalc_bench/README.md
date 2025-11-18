@@ -12,8 +12,8 @@
 
     | Split | Count |
     | ----- | ----- |
-    | train | 1047   |
-    | test  | 100053  |
+    | train | 1100   |
+    | test  | 10544  |
 
 ### Task
 - **Type**: single-turn
