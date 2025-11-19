@@ -4,9 +4,13 @@ description = "Your environment description here"
 tags = ["placeholder-tag", "train", "eval"]
 version = "0.1.0"
 requires-python = ">=3.11"
+authors = [
+    { name = "Anish Mahishi", email = "anish.mahishi@gmail.com" },
+]
 dependencies = [
     "verifiers>=0.1.5.post0",
     "datasets>=4.1.1",
+    "medarc_verifiers>=0.1.0",
 ]
 
 [tool.prime.environment]
@@ -17,3 +21,6 @@ visibility = "PUBLIC"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv.sources]
+medarc_verifiers = { git = "https://github.com/MedARC-AI/med-lm-envs" }

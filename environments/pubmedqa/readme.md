@@ -71,3 +71,8 @@ For the original publication, cite:
 ```
 
 The evaluation code draws strongly on https://github.com/UKGovernmentBEIS/inspect_evals/tree/main/src/inspect_evals/pubmedqa for consistency across implementations. 
+
+### Authors
+This environment has been put together by:
+
+Robert Scholz - ([@rscgh](https://github.com/rscgh))

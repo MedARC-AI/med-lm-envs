@@ -17,20 +17,21 @@ Reference:
   url = {https://github.com/huggingface/lighteval}
 }
 """
-from typing import Any, Dict, Optional
+
+from typing import Any
 
 import verifiers as vf
 from datasets import load_dataset
-from verifiers.utils.data_utils import (
-    BOXED_SYSTEM_PROMPT,
-    THINK_BOXED_SYSTEM_PROMPT,
-    extract_boxed_answer,
-)
+from medarc_verifiers.prompts import THINK_XML_SYSTEM_PROMPT, XML_SYSTEM_PROMPT, AnswerFormat
+from medarc_verifiers.rewards.multiple_choice_accuracy import multiple_choice_accuracy
+from medarc_verifiers.utils.randomize_multiple_choice import randomize_multiple_choice
+from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
 LETTER_INDICES = ["A", "B", "C", "D"]
 
-def med_mcqa(line: Dict[str, Any]) -> Dict[str, Any]:
-    """Build the standard MedMCQA multiple-choice question prompt.""" 
+
+def med_mcqa(line: dict[str, Any]) -> dict[str, Any]:
+    """Build the standard MedMCQA multiple-choice question prompt."""
     query = f"Give a letter answer among A, B, C or D.\nQuestion: {line['question']}\n"
     query += "".join(
         [
@@ -39,7 +40,7 @@ def med_mcqa(line: Dict[str, Any]) -> Dict[str, Any]:
         ]
     )
     query += "Answer:"
-    
+
     result = {
         "question": query,
         "answer": LETTER_INDICES[line["cop"] - 1],
@@ -49,38 +50,14 @@ def med_mcqa(line: Dict[str, Any]) -> Dict[str, Any]:
     }
     return result
 
-def _get_text_from_completion(completion: Any) -> str:
-    """Extract a text string from a model completion."""
-    if isinstance(completion, str):
-        return completion
-    if isinstance(completion, list) and completion:
-        last_item = completion[-1]
-        if isinstance(last_item, dict):
-            return str(last_item.get("content", ""))
-        return str(last_item)
-    return str(completion)
 
-def _first_letter_ad(text: str) -> Optional[str]:
-    """Return the first A–D letter found in the text, preferring boxed answers if present."""
-    t = text or ""
-    boxed_ans = extract_boxed_answer(t)
-    if boxed_ans:
-        for ch in boxed_ans.upper():
-            if ch in LETTER_INDICES:
-                return ch
-    for ch in t.upper():
-        if ch in LETTER_INDICES:
-            return ch
-    return None
-
-def exact_match_reward(completion: Any, answer: Optional[str] = None, **kwargs) -> float:
-    """Reward 1.0 if the predicted answer matches the correct answer; 0.0 otherwise."""
-    text = _get_text_from_completion(completion)
-    predicted_ans = _first_letter_ad(text)
-    correct_ans = answer.strip().upper() if answer else None
-    return float(predicted_ans == correct_ans)
-                 
-def load_environment(use_think: bool = False, system_prompt: Optional[str] = None) -> vf.Environment:
+def load_environment(
+    use_think: bool = False,
+    system_prompt: str | None = None,
+    shuffle_answers: bool = False,
+    shuffle_seed: int | None = 1618,
+    answer_format: AnswerFormat | str = AnswerFormat.XML,
+) -> vf.Environment:
     """
     Load the MedMCQA environment with train and validation splits.
     Supports reasoning (use_think=True) or standard evaluation.
@@ -89,7 +66,7 @@ def load_environment(use_think: bool = False, system_prompt: Optional[str] = Non
     train_ds = load_dataset("lighteval/med_mcqa", split="train")
     val_ds = load_dataset("lighteval/med_mcqa", split="validation")
 
-    def _map_example(example: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _map_example(example: dict[str, Any]) -> dict[str, Any] | None:
         cop = example.get("cop", -1)
         if not isinstance(cop, int) or cop not in [1, 2, 3, 4]:
             return None
@@ -100,25 +77,65 @@ def load_environment(use_think: bool = False, system_prompt: Optional[str] = Non
         if not question or not any(choices):
             return None
 
+        options = [choices[0], choices[1], choices[2], choices[3]]
+        answer_idx = cop - 1
+
+        if shuffle_answers:
+            shuffled_options, _, answer_idx = randomize_multiple_choice(
+                options=options,
+                answer_choice=answer_idx,
+                labels=LETTER_INDICES,
+                seed=shuffle_seed,
+                row_id=question,
+            )
+            options = shuffled_options
+
         line = {
             "question": question,
-            "opa": choices[0],
-            "opb": choices[1],
-            "opc": choices[2],
-            "opd": choices[3],
-            "cop": cop,
+            "opa": options[0],
+            "opb": options[1],
+            "opc": options[2],
+            "opd": options[3],
+            "cop": answer_idx + 1,
         }
         mapped = med_mcqa(line)
+        mapped["info"] = {"answer_text": options[answer_idx]}
         return mapped
-    
-    columns_to_remove = ['question', 'opa', 'opb', 'opc', 'opd', 'cop']
-    train_mapped = train_ds.map(_map_example,  remove_columns=columns_to_remove).filter(lambda x: x is not None)
-    val_mapped = val_ds.map(_map_example,  remove_columns=columns_to_remove).filter(lambda x: x is not None)
-    
-    system_prompt = system_prompt or (THINK_BOXED_SYSTEM_PROMPT if use_think else BOXED_SYSTEM_PROMPT)
-    parser = vf.ThinkParser(extract_boxed_answer) if use_think else vf.Parser(extract_boxed_answer)
 
-    rubric = vf.Rubric(funcs=[exact_match_reward], weights=[1.0], parser=parser)
+    columns_to_remove = ["question", "opa", "opb", "opc", "opd", "cop"]
+    # Disable the Datasets cache when shuffling answers
+    load_from_cache_file = False if shuffle_answers else True
+    train_mapped = train_ds.map(
+        _map_example,
+        remove_columns=columns_to_remove,
+        load_from_cache_file=load_from_cache_file,
+    ).filter(lambda x: x is not None, load_from_cache_file=load_from_cache_file)
+    val_mapped = val_ds.map(
+        _map_example,
+        remove_columns=columns_to_remove,
+        load_from_cache_file=load_from_cache_file,
+    ).filter(lambda x: x is not None, load_from_cache_file=load_from_cache_file)
+
+    # normalize answer_format
+    answer_format = AnswerFormat(answer_format) if isinstance(answer_format, str) else answer_format
+
+    if answer_format == AnswerFormat.XML:
+        system_prompt = system_prompt or (THINK_XML_SYSTEM_PROMPT if use_think else XML_SYSTEM_PROMPT)
+        parser_fields = ["think", "answer"] if use_think else ["answer"]
+        parser = vf.XMLParser(fields=parser_fields, answer_field="answer")
+    elif answer_format == AnswerFormat.BOXED:
+        system_prompt = system_prompt or (THINK_BOXED_SYSTEM_PROMPT if use_think else BOXED_SYSTEM_PROMPT)
+        parser = vf.ThinkParser(extract_boxed_answer) if use_think else vf.Parser(extract_boxed_answer)
+    else:
+        raise ValueError(f"Unsupported answer format: {answer_format=}")
+
+    def accuracy(completion: Any, answer: str, parser: vf.Parser, info: dict[str, Any] | None = None) -> float:
+        parsed = parser.parse_answer(completion) or ""
+        answer_text = info.get("answer_text", None) if info else None
+        is_correct = multiple_choice_accuracy(llm_answer=parsed, answer_letter=answer, answer_text=answer_text)
+        return 1.0 if is_correct else 0.0
+
+    rubric = vf.Rubric(funcs=[accuracy], weights=[1.0], parser=parser)
 
     env = vf.SingleTurnEnv(
         dataset=train_mapped,
@@ -127,5 +144,5 @@ def load_environment(use_think: bool = False, system_prompt: Optional[str] = Non
         parser=parser,
         rubric=rubric,
     )
-    
+
     return env

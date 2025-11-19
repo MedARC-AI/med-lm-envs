@@ -201,6 +201,13 @@ def _infer_argparse_spec(annotation: Any, default: Any) -> ArgSpec:
         return ArgSpec("unsupported", None, None, None, False, None, reason)
 
     if _is_union(normalized):
+        union_args = get_args(normalized)
+        enum_args = [arg for arg in union_args if _is_enum(arg)]
+        non_enum_args = [arg for arg in union_args if not _is_enum(arg)]
+        if len(enum_args) == 1 and all(arg is str for arg in non_enum_args):
+            enum_cls = enum_args[0]
+            choices = tuple(member.value for member in enum_cls)
+            return ArgSpec("enum", None, choices, None, False, None, None)
         reason = "non-optional union unsupported"
         return ArgSpec("unsupported", None, None, None, False, None, reason)
 
