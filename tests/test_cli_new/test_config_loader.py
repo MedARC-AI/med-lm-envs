@@ -688,7 +688,8 @@ def test_models_can_reference_yaml_file(monkeypatch, tmp_path: Path) -> None:
         """
         - id: model-a
           model: openai/gpt-a
-          max_tokens: 256
+          sampling_args:
+            max_tokens: 256
         """,
     )
     config_path = _write_yaml(
@@ -707,7 +708,7 @@ def test_models_can_reference_yaml_file(monkeypatch, tmp_path: Path) -> None:
     config = load_run_config(config_path)
 
     assert set(config.models) == {"model-a"}
-    assert config.models["model-a"].max_tokens == 256
+    assert config.models["model-a"].sampling_args["max_tokens"] == 256
 
 
 def test_jobs_can_reference_yaml_file(monkeypatch, tmp_path: Path) -> None:
@@ -739,60 +740,3 @@ def test_jobs_can_reference_yaml_file(monkeypatch, tmp_path: Path) -> None:
 
     assert len(config.jobs) == 1
     assert config.jobs[0].model == "gpt-mini"
-
-
-def test_model_sampling_aliases_merge_into_sampling_args(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(
-        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
-        lambda _env_id, cache=None: [],
-    )
-    config_path = _write_yaml(
-        tmp_path / "config.yaml",
-        """
-        models:
-          gpt-mini:
-            model: openai/gpt-mini
-            max_tokens: 256
-            temperature: 2.5
-        envs:
-          env-a:
-            num_examples: 5
-        jobs:
-          - model: gpt-mini
-            env: env-a
-        """,
-    )
-
-    config = load_run_config(config_path)
-
-    sampling = config.models["gpt-mini"].sampling_args
-    assert sampling["max_tokens"] == 256
-    assert sampling["temperature"] == 2.5
-
-
-def test_model_sampling_args_precedence(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(
-        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
-        lambda _env_id, cache=None: [],
-    )
-    config_path = _write_yaml(
-        tmp_path / "config.yaml",
-        """
-        models:
-          gpt-mini:
-            sampling_args:
-              temperature: 0.4
-            temperature: 0.8
-        envs:
-          env-a:
-            num_examples: 5
-        jobs:
-          - model: gpt-mini
-            env: env-a
-        """,
-    )
-
-    config = load_run_config(config_path)
-
-    sampling = config.models["gpt-mini"].sampling_args
-    assert sampling["temperature"] == 0.4

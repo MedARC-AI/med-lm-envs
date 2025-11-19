@@ -12,6 +12,7 @@ from typing import Any, Mapping, Sequence
 from pydantic import BaseModel, ConfigDict, Field
 
 from medarc_verifiers.cli_new._job_builder import ResolvedJob
+from medarc_verifiers.cli_new._schemas import ModelConfigSchema
 from medarc_verifiers.cli_new.utils.shared import compute_checksum, resolve_env_identifier_or
 from medarc_verifiers.utils.pathing import project_root, to_project_relative
 
@@ -69,7 +70,19 @@ def timestamp() -> str:
 
 def compute_snapshot_checksum(snapshot: Mapping[str, Any]) -> str:
     """Public helper to compute the checksum for a config snapshot."""
-    return compute_checksum(snapshot)
+    sanitized = dict(snapshot)
+    models = sanitized.get("models")
+    if isinstance(models, Mapping):
+        sanitized_models: dict[str, Any] = {}
+        for model_id, payload in models.items():
+            if isinstance(payload, Mapping):
+                sanitized_models[str(model_id)] = {
+                    key: value for key, value in payload.items() if key not in ModelConfigSchema.resume_tolerant_fields
+                }
+            else:
+                sanitized_models[str(model_id)] = payload
+        sanitized["models"] = sanitized_models
+    return compute_checksum(sanitized)
 
 
 def compute_job_checksum(
@@ -80,7 +93,7 @@ def compute_job_checksum(
 ) -> str:
     """Expose job checksum calculations for resume/regeneration workflows."""
     payload = _canonicalize_job_config(job, env_args=env_args, sampling_args=sampling_args)
-    return compute_checksum(payload)
+    return compute_checksum(_drop_resume_tolerant_fields(payload))
 
 
 def _canonicalize_job_config(
@@ -100,6 +113,16 @@ def _canonicalize_job_config(
         "model": model_payload,
         "env": env_payload,
     }
+
+
+def _drop_resume_tolerant_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
+    cleaned = dict(payload)
+    model_payload = cleaned.get("model")
+    if isinstance(model_payload, Mapping):
+        cleaned["model"] = {
+            key: value for key, value in model_payload.items() if key not in ModelConfigSchema.resume_tolerant_fields
+        }
+    return cleaned
 
 
 def _relativize_results_dir(value: str | Path, *, run_dir: Path) -> str:

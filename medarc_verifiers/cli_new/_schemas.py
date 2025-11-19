@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -27,6 +27,16 @@ RESERVED_MATRIX_KEYS = {
 class ModelConfigSchema(BaseModel):
     """Schema for model configuration entries (keyed by identifier)."""
 
+    resume_tolerant_fields: ClassVar[set[str]] = frozenset(
+        {
+            "timeout",
+            "max_connections",
+            "max_keepalive_connections",
+            "max_retries",
+            "max_concurrent",
+        }
+    )
+
     id: str | None = Field(
         None,
         description="Optional model identifier (legacy list format).",
@@ -39,8 +49,6 @@ class ModelConfigSchema(BaseModel):
     sampling_args: dict[str, Any] = Field(default_factory=dict)
     env_args: dict[str, Any] = Field(default_factory=dict)
     env_overrides: dict[str, dict[str, Any]] = Field(default_factory=dict)
-    max_tokens: int | None = Field(None, ge=1)
-    temperature: float | None = Field(None)
     api_key_var: str | None = None
     api_base_url: str | None = None
     endpoints_path: str | None = None
@@ -103,19 +111,6 @@ class ModelConfigSchema(BaseModel):
                 raise ValueError(f"env_overrides['{env_id}'] must be a mapping.")
             normalized[env_id] = dict(override)
         return normalized
-
-    @model_validator(mode="after")
-    def merge_sampling_aliases(self) -> "ModelConfigSchema":
-        sampling = dict(self.sampling_args)
-        for field_name in ("max_tokens", "temperature"):
-            if field_name in sampling:
-                continue
-            value = getattr(self, field_name)
-            if value is not None:
-                sampling[field_name] = value
-        if sampling != self.sampling_args:
-            return self.model_copy(update={"sampling_args": sampling})
-        return self
 
 
 class EnvironmentExportConfig(BaseModel):
