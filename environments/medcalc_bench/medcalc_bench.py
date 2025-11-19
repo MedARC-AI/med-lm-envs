@@ -230,7 +230,7 @@ def load_environment(
     use_think: bool = False,
     system_prompt: Optional[str] = None,
 ) -> vf.Environment:
-    ds = load_dataset("ncbi/MedCalc-Bench-v1.0")
+    ds = load_dataset("ncbi/MedCalc-Bench-v1.2")
 
     def _map(ex):
         patient_note = ex["Patient Note"]
@@ -256,8 +256,7 @@ def load_environment(
     # Use ThinkParser to support <think> and <answer> formatting
     parser = vf.ThinkParser()
     system_prompt = """You are a helpful assistant who will assist with calculating a score given a patient note and a question. 
-Please think step-by-step to solve the question and then generate the required score. 
-You should use the patient's health status and values in the present at the time of admission prior to treatment."""
+Please think step-by-step to solve the question and then generate the required score."""
 
     rubric = vf.Rubric(funcs=[check_correctness], weights=[1.0], parser=parser)
 
