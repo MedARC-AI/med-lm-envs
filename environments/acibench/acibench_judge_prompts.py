@@ -1,6 +1,6 @@
 """
 Judge prompt template for evaluating ACI-BENCH clinical note generation.
-Adapted from MedHELM's MedDialog evaluation prompts.
+Adapted from MedHELM's ACI Bench evaluation prompts.
 """
 
 JUDGE_TEMPLATE = """\
