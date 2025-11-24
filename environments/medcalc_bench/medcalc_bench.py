@@ -6,13 +6,14 @@ from typing import Optional
 import numpy as np
 import verifiers as vf
 from datasets import load_dataset
+from medarc_verifiers.parsers import XMLParser
 
 
 def _build_prompt(patient_note, question) -> str:
-    return f"""You are a helpful assistant for calculating a score for a given patient note. 
-Please think step-by-step to solve the question and then generate the required score. 
+    return f"""You are a helpful assistant for calculating a score for a given patient note.
+Please think step-by-step to solve the question and then generate the required score.
 \n\nPatient Note: {patient_note}
-\n\nQuestion: {question}. 
+\n\nQuestion: {question}.
 
 
 Please answer the question in the following format:
@@ -25,20 +26,15 @@ Your answer here without any units, just give the number.
 """
 
 
-def extract_answer(response, calid):
+def extract_answer(response, calid, parser: XMLParser):
     calid = int(calid)
 
-    extracted_explanation = re.search(r"<think>(.*?)</think>", response, re.DOTALL | re.IGNORECASE)
-    if extracted_explanation:
-        extracted_explanation = extracted_explanation.group(1).strip()
-    else:
-        extracted_explanation = "No Explanation"
+    parsed = parser.parse(response, last=True)
+    extracted_explanation = getattr(parsed, "think", None)
+    extracted_explanation = extracted_explanation.strip() if extracted_explanation else "No Explanation"
 
-    m = re.search(r"<answer>(.*?)</answer>", response, re.DOTALL | re.IGNORECASE)
-    if m:
-        answer = m.group(1).strip()
-    else:
-        answer = "Not Found"
+    answer = getattr(parsed, "answer", None)
+    answer = answer.strip() if isinstance(answer, str) else "Not Found"
 
     if (not isinstance(answer, str)) or (len(answer.strip()) == 0):
         extracted_answer = "Not Found"
@@ -61,7 +57,6 @@ def extract_answer(response, calid):
         match = re.search(
             r"\(?[\"\']?(\d+)\s*(weeks?)?[\"\']?,?\s*[\"\']?(\d+)\s*(days?)?[\"\']?\s*\)?", extracted_answer
         )
-        ground_truth = f"({match.group(1)}, {match.group(3)})"
         extracted_answer = extracted_answer.replace("[", "(").replace("]", ")").replace("'", "").replace('"', "")
         match = re.search(
             r"\(?[\"\']?(\d+)\s*(weeks?)?[\"\']?,?\s*[\"\']?(\d+)\s*(days?)?[\"\']?\s*\)?", extracted_answer
@@ -133,8 +128,8 @@ def extract_answer(response, calid):
                         "numpy": np,
                     },
                 )
-            except:
-                print(f"Error in evaluating expression: {expression}")
+            except Exception as e:
+                print(f"Error in evaluating expression: {expression} - {e}")
                 answer = "N/A"
         else:
             match = re.search(r"(-?\d+(\.\d+)?)\s*mL/min/1.73", extracted_answer)
@@ -173,7 +168,7 @@ def check_correctness(parser, completion, info, **kwargs):
     else:
         raw = str(completion)
 
-    answer, _ = extract_answer(raw, calid)
+    answer, _ = extract_answer(raw, calid, parser)
 
     if calid in [13, 68]:
         # Output Type: date
@@ -253,9 +248,10 @@ def load_environment(
     train_mapped = ds["train"].map(_map, remove_columns=ds["train"].column_names)
     test_mapped = ds["test"].map(_map, remove_columns=ds["test"].column_names)
 
-    # Use ThinkParser to support <think> and <answer> formatting
-    parser = vf.ThinkParser()
-    system_prompt = """You are a helpful assistant who will assist with calculating a score given a patient note and a question. 
+    # Use XMLParser to support <think> and <answer> formatting without strict enforcement
+    parser = XMLParser(["think", "answer"], answer_field="answer")
+
+    system_prompt = """You are a helpful assistant who will assist with calculating a score given a patient note and a question.
 Please think step-by-step to solve the question and then generate the required score."""
 
     rubric = vf.Rubric(funcs=[check_correctness], weights=[1.0], parser=parser)

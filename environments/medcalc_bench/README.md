@@ -12,13 +12,13 @@
 
     | Split | Count |
     | ----- | ----- |
-    | train | 1100   |
-    | test  | 10543  |
+    | train | 10543 |
+    | test  | 1100  |
 
 ### Task
 - **Type**: single-turn
 - **Prompt**: `_build_prompt(patient_note, question)` instructs `<think>...</think>` and `<answer>...</answer>`.
-- **Parser**: `ThinkParser(extract_fn=extract_answer)`; `extract_answer` returns the `<answer>` content.
+- **Parser**: medarc_verifiers' `XMLParser` reads both `<think>` and `<answer>` tags.
 - **Rubric**: `check_correctness` validates by calculator type:
   - IDs 13, 68: date equality (MM/DD/YYYY)
   - ID 69: tuple `(weeks, days)` equality
@@ -43,6 +43,7 @@ uv run vf-eval medcalc-bench \
 
 Notes:
 - Use `-a` / `--env-args` to pass environment-specific configuration as a JSON object.
+- The packaged `medarc_verifiers` XMLParser suppresses the upstream warning about `<think>` and still parses `<answer>` even if `<think>` is malformed.
 
 
 ### Environment Arguments
@@ -58,6 +59,6 @@ Notes:
 | ------ | ------- |
 | `check_correctness` | (weight 1.0): validates numeric/date/tuple answers per calc ID |
 
-### Adjustments 
+### Adjustments
 
-Adjusted the prompt to output the step-by-step thinking and final answer with the <think> and <answer> tags instead of responding with a JSON. 
+Adjusted the prompt to output the step-by-step thinking and final answer with the <think> and <answer> tags instead of responding with a JSON.
