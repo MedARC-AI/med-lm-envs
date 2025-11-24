@@ -6,6 +6,7 @@ from typing import Optional
 import numpy as np
 import verifiers as vf
 from datasets import load_dataset
+from medarc_verifiers.parsers import XMLParser
 
 
 def _build_prompt(patient_note, question) -> str:
@@ -25,7 +26,7 @@ Your answer here without any units, just give the number.
 """
 
 
-def extract_answer(response, calid, parser: vf.XMLParser):
+def extract_answer(response, calid, parser: XMLParser):
     calid = int(calid)
 
     parsed = parser.parse(response, last=True)
@@ -248,7 +249,7 @@ def load_environment(
     test_mapped = ds["test"].map(_map, remove_columns=ds["test"].column_names)
 
     # Use XMLParser to support <think> and <answer> formatting without strict enforcement
-    parser = vf.XMLParser(["think", "answer"], answer_field="answer")
+    parser = XMLParser(["think", "answer"], answer_field="answer")
 
     system_prompt = """You are a helpful assistant who will assist with calculating a score given a patient note and a question.
 Please think step-by-step to solve the question and then generate the required score."""

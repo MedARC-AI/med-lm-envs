@@ -18,7 +18,7 @@
 ### Task
 - **Type**: single-turn
 - **Prompt**: `_build_prompt(patient_note, question)` instructs `<think>...</think>` and `<answer>...</answer>`.
-- **Parser**: `XMLParser(["think", "answer"], answer_field="answer")`; `extract_answer` reads both `<think>` and `<answer>` tags.
+- **Parser**: medarc_verifiers' `XMLParser` reads both `<think>` and `<answer>` tags.
 - **Rubric**: `check_correctness` validates by calculator type:
   - IDs 13, 68: date equality (MM/DD/YYYY)
   - ID 69: tuple `(weeks, days)` equality
@@ -43,7 +43,7 @@ uv run vf-eval medcalc-bench \
 
 Notes:
 - Use `-a` / `--env-args` to pass environment-specific configuration as a JSON object.
-- As of verifiers `0.1.8`, `XMLParser` will emit a warning when a `<think>` field is configured; it can be safely ignored here because parsing still succeeds even if the `<think>` tags are malformed.
+- The packaged `medarc_verifiers` XMLParser suppresses the upstream warning about `<think>` and still parses `<answer>` even if `<think>` is malformed.
 
 
 ### Environment Arguments
