@@ -159,6 +159,10 @@ class EnvironmentConfigSchema(BaseModel):
     print_results: bool = Field(False, description="Print environment results to stdout.")
     verbose: bool | None = Field(None, description="Override per-environment verbosity.")
     env_args: dict[str, Any] = Field(default_factory=dict)
+    rerun: bool = Field(
+        False,
+        description="Re-run jobs for this environment when resuming/regenerating even if previously completed.",
+    )
     matrix: dict[str, list[Any]] | None = Field(default=None, description="Parameter sweeps for expansion.")
     matrix_exclude: list[dict[str, Any]] | None = Field(default=None, description="List of matrix patterns to exclude.")
     matrix_id_format: str | None = Field(default=None, description="Optional format string for matrix variant IDs.")

@@ -446,6 +446,7 @@ def _execute_batch(args: argparse.Namespace) -> int:
     )
     config_checksum = compute_snapshot_checksum(run_config.model_dump())
     forced_envs = _parse_forced_envs(args.forced)
+    forced_envs.update(_collect_rerun_envs(run_config.envs))
 
     try:
         manifest_plan = _prepare_manifest_plan(
@@ -604,6 +605,16 @@ def _parse_forced_envs(values: Sequence[str] | None) -> set[str]:
             if value:
                 forced.add(value.lower())
     return forced
+
+
+def _collect_rerun_envs(envs: Mapping[str, EnvironmentConfigSchema]) -> set[str]:
+    rerun: set[str] = set()
+    for env in envs.values():
+        if getattr(env, "rerun", False):
+            for key in (env.id, env.module, env.matrix_base_id):
+                if key:
+                    rerun.add(str(key).lower())
+    return rerun
 
 
 @dataclass

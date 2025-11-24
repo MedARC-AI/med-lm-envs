@@ -181,6 +181,78 @@ def test_model_level_max_concurrent_applies(monkeypatch: pytest.MonkeyPatch, tmp
     assert config.max_concurrent == 7
 
 
+def test_env_rerun_flag_forces_completed_jobs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    _write_config(
+        config_path,
+        """
+        name: rerun-check
+        models:
+          model-a:
+            model: alias-model
+        envs:
+          env-a:
+            rerun: true
+        jobs:
+          - model: model-a
+            env: env-a
+        """,
+    )
+
+    captured = []
+
+    async def fake_run(config):
+        captured.append(config)
+        return _stub_cli_result()
+
+    monkeypatch.setattr("medarc_verifiers.cli_new._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", fake_run)
+
+    output_dir = tmp_path / "runs_out"
+    env_dir = tmp_path / "envs"
+    env_dir.mkdir()
+
+    exit_code = main.main(
+        [
+            "bench",
+            "--config",
+            str(config_path),
+            "--output-dir",
+            str(output_dir),
+            "--env-dir",
+            str(env_dir),
+        ]
+    )
+    assert exit_code == 0
+    assert len(captured) == 1
+    run_dirs = list(output_dir.iterdir())
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
+
+    exit_code_second = main.main(
+        [
+            "bench",
+            "--config",
+            str(config_path),
+            "--output-dir",
+            str(output_dir),
+            "--env-dir",
+            str(env_dir),
+        ]
+    )
+    assert exit_code_second == 0
+    assert len(captured) == 2
+
+    manifest_path = run_dir / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    job_entry = manifest["jobs"][0]
+    assert job_entry["status"] == "completed"
+    assert job_entry["attempt"] == 2
+    assert manifest["summary"]["completed"] == 1
+
+
 def test_cli_env_config_root_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     config_dir = tmp_path / "configs"
     config_dir.mkdir()
