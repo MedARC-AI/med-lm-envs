@@ -215,9 +215,10 @@ def execute_jobs(
 
         artifacts = _materialize_results(job_dir, run_dir, eval_result)
         avg_reward = _extract_avg_reward(eval_result)
-        metrics_avg = compute_metric_averages(eval_result.metrics)
-        num_examples = getattr(eval_result.metadata, "num_examples", None)
-        rollouts_per_example = getattr(eval_result.metadata, "rollouts_per_example", None)
+        metrics_avg = compute_metric_averages(_safe_get(eval_result, "metrics", {}))
+        metadata = _safe_get(eval_result, "metadata", None)
+        num_examples = _safe_get(metadata, "num_examples", None)
+        rollouts_per_example = _safe_get(metadata, "rollouts_per_example", None)
 
         if manifest is not None:
             manifest.record_job_completion(
@@ -386,10 +387,18 @@ def _load_endpoints_for_model(
     return load_endpoint_registry(registry_path, cache=cache)
 
 
+def _safe_get(obj: Any, key: str, default: Any = None) -> Any:
+    """Retrieve attribute or dict key, allowing newer dict-style GenerateOutputs."""
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
 def _materialize_results(job_dir: Path, run_dir: Path, results: GenerateOutputs) -> list[str]:
     """Move evaluation artifacts into the job directory and report their paths."""
     artifacts: list[str] = []
-    raw_path = getattr(results.metadata, "path_to_save", None)
+    metadata = _safe_get(results, "metadata", None)
+    raw_path = _safe_get(metadata, "path_to_save", None)
     src_path = Path(raw_path) if raw_path else job_dir
     try:
         resolved_src = src_path.resolve()
@@ -420,10 +429,12 @@ def _materialize_results(job_dir: Path, run_dir: Path, results: GenerateOutputs)
 
 def _extract_avg_reward(results: GenerateOutputs) -> float | None:
     """Compute the average reward from the evaluation payload."""
-    avg = compute_average(results.reward)
+    rewards = _safe_get(results, "reward", None)
+    avg = compute_average(rewards)
     if avg is not None:
         return avg
-    metadata_avg = getattr(results.metadata, "avg_reward", None)
+    metadata = _safe_get(results, "metadata", None)
+    metadata_avg = _safe_get(metadata, "avg_reward", None)
     if metadata_avg is not None:
         return float(metadata_avg)
     return None
