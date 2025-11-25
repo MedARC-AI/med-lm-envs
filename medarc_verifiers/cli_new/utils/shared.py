@@ -6,8 +6,6 @@ import logging
 from collections.abc import Iterable, Mapping, Sequence
 import hashlib
 import json
-import inspect
-from functools import lru_cache
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Iterable as _Iterable
@@ -119,82 +117,6 @@ def merge_sampling_args(
     if n is not None and "n" not in merged:
         merged["n"] = n
     return merged
-
-
-def sanitize_sampling_args_for_openai(sampling_args: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Return sampling args split into OpenAI-recognized kwargs and extra_body.
-
-    Any parameters not recognized by the OpenAI Chat Completions API are moved under
-    the `extra_body` key so they can be forwarded to compatible servers (e.g., vLLM/Qwen).
-    """
-    if not sampling_args:
-        return {}
-
-    allowed_keys = _get_openai_allowed_param_names()
-
-    filtered: dict[str, Any] = {}
-    extras: dict[str, Any] = {}
-    for key, value in sampling_args.items():
-        if key in allowed_keys:
-            filtered[key] = value
-        else:
-            extras[key] = value
-
-    if extras:
-        # OpenAI python client forwards unknown params via `extra_body`
-        filtered["extra_body"] = extras
-    return filtered
-
-
-@lru_cache(maxsize=1)
-def _get_openai_allowed_param_names() -> set[str]:
-    """Infer allowed kwargs for OpenAI create() by inspecting client signatures.
-
-    We union parameter names from:
-      - openai.resources.chat.completions.AsyncCompletions.create
-      - openai.resources.completions.AsyncCompletions.create
-
-    On failure, return a conservative fallback. Always include 'extra_body'.
-    """
-    try:
-        from openai.resources.chat.completions import AsyncCompletions as ChatAsyncCompletions  # type: ignore
-        from openai.resources.completions import AsyncCompletions as TextAsyncCompletions  # type: ignore
-    except Exception:
-        return {
-            "temperature",
-            "top_p",
-            "max_tokens",
-            "max_completion_tokens",
-            "n",
-            "stop",
-            "presence_penalty",
-            "frequency_penalty",
-            "logit_bias",
-            "seed",
-            "response_format",
-            "tool_choice",
-            "tools",
-            "stream",
-            "extra_body",
-        }
-
-    def _param_names(callable_obj: Any) -> set[str]:
-        try:
-            sig = inspect.signature(callable_obj)
-        except Exception:
-            return set()
-        names: set[str] = set()
-        for name, param in sig.parameters.items():
-            if name == "self":
-                continue
-            if param.kind == inspect.Parameter.VAR_POSITIONAL:
-                continue
-            names.add(name)
-        return names
-
-    allowed = _param_names(ChatAsyncCompletions.create) | _param_names(TextAsyncCompletions.create)
-    allowed.add("extra_body")
-    return allowed
 
 
 def flatten_state_columns(values: Iterable[Sequence[str]] | None) -> list[str]:
