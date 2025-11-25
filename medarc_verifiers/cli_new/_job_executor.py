@@ -32,8 +32,8 @@ from medarc_verifiers.cli_new.utils.shared import (
     ensure_root_logging,
     normalize_headers,
     resolve_env_identifier,
-    sanitize_sampling_args_for_openai,
 )
+from medarc_verifiers.utils import sanitize_sampling_args_for_openai
 
 logger = logging.getLogger(__name__)
 

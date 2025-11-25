@@ -30,10 +30,10 @@ from medarc_verifiers.cli_new.utils.shared import (
     flatten_state_columns,
     merge_env_args,
     merge_sampling_args,
-    sanitize_sampling_args_for_openai,
     normalize_headers,
     resolve_endpoint_selection,
 )
+from medarc_verifiers.utils import sanitize_sampling_args_for_openai
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +140,14 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         default_base_url=args.api_base_url,
     )
 
+    client_kwargs: dict[str, Any] = {
+        "api_key_var": api_key_var,
+        "api_base_url": api_base_url,
+        "extra_headers": headers or None,
+    }
+    if args.timeout is not None:
+        client_kwargs["timeout"] = args.timeout
+    client_config = ClientConfig(**client_kwargs)
     client_kwargs: dict[str, Any] = {
         "api_key_var": api_key_var,
         "api_base_url": api_base_url,
