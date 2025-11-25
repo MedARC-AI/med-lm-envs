@@ -210,3 +210,8 @@ __marimo__/
 
 uv.lock
 environments/healthbench/test*
+
+.vscode/
+pyrightconfig.json
+
+
