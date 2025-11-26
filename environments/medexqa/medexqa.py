@@ -1,23 +1,76 @@
 import os
-import re
+from enum import Enum
+from pathlib import Path
 
+import evaluate
+import pandas as pd
 import verifiers as vf
 from datasets import Dataset, concatenate_datasets
-from verifiers.utils.data_utils import THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
-import pandas as pd
-import evaluate
-from thefuzz import process
+from medarc_verifiers.parsers import XMLParser
+from medarc_verifiers.rewards.multiple_choice_accuracy import multiple_choice_accuracy
+from medarc_verifiers.utils import download_file, medarc_cache_dir
+from medarc_verifiers.utils.randomize_multiple_choice import randomize_multiple_choice
 from openai import AsyncOpenAI
+from verifiers.types import Info, State
 
 
-# MedExQA specialties
-SPECIALTIES = [
-    "biomedical_engineer",
-    "clinical_laboratory_scientist",
-    "clinical_psychologist",
-    "occupational_therapist",
-    "speech_pathologist",
-]
+class Specialty(str, Enum):
+    BIOMEDICAL_ENGINEER = "biomedical_engineer"
+    CLINICAL_LABORATORY_SCIENTIST = "clinical_laboratory_scientist"
+    CLINICAL_PSYCHOLOGIST = "clinical_psychologist"
+    OCCUPATIONAL_THERAPIST = "occupational_therapist"
+    SPEECH_PATHOLOGIST = "speech_pathologist"
+    ALL = "all"
+
+
+SYSTEM_PROMPT = "Provide your explanation inside <explanation>...</explanation> tags, then give your final answer inside <answer>...</answer> tags."
+
+
+JUDGE_TEMPLATE = """\
+Please act as an impartial judge and evaluate the reasoning provided by an AI assistant for a medical multiple-choice question. The assistant selected the correct answer choice.
+
+You will be given:
+- The medical question and answer options
+- Two reference reasoning traces, inside <reference_reasoning> tags
+- The assistant's reasoning, inside <assistant_reasoning> tags
+
+Your task: Determine whether the assistant's reasoning is equivalent or inequivalent by comparing it to the two reference reasoning traces.
+
+Guidelines:
+- The reference reasoning traces are always correct.
+- The assistant's reasoning is equivalent if its logic is semantically aligned with at least one reference reasoning trace. It may paraphrase or omit minor details, as long as the central reasoning and decision criteria are the same and do not conflict with that reference trace.
+- The assistant's reasoning is inequivalent if it clearly contradicts both reference reasoning traces or relies on logic that is incompatible with both traces (for example, it uses a different main reason for the answer that conflicts with the references).
+
+Begin your evaluation by comparing the assistant's reasoning to the reference traces. Identify any major differences or contradictions. Be as objective as possible. After providing your explanation, you must rule whether the assistant's reasoning is equivalent or inequivalent.
+
+Content:
+
+<question>
+{question}
+</question>
+
+<answer>
+{answer}
+</answer>
+
+<reference_reasoning>
+{reference_1}
+</reference_reasoning>
+
+<reference_reasoning>
+{reference_2}
+</reference_reasoning>
+
+<assistant_reasoning>
+{assistant_reasoning}
+</assistant_reasoning>
+
+After providing your explanation, output your final verdict of Equivalent or Inequivalent inside <verdict> tags:
+<verdict>
+[Equivalent or Inequivalent]
+</verdict>
+""".strip()
+
 
 # author prompt directly taken from https://github.com/knowlab/MedExQA/blob/9a5b34af103b0c8ba0c00906e278f6572249fafa/evaluate_pipe_MedExQA.py#L32
 def _build_question_str(question: str, options: dict[str, str]) -> str:
@@ -35,7 +88,13 @@ def _build_question_str(question: str, options: dict[str, str]) -> str:
     return f"{instruction}{question}\n{opts}\nAnswer:"
 
 
-def _to_vf_format(ds: Dataset) -> Dataset:
+def _resolve_cache_dir(cache_dir: Path | str | None = None) -> Path:
+    resolved = medarc_cache_dir(cache_dir) / "medexqa"
+    resolved.mkdir(parents=True, exist_ok=True)
+    return resolved
+
+
+def _to_vf_format(ds: Dataset, shuffle_answers: bool = False, shuffle_seed: int | None = 1618) -> Dataset:
     """Normalize raw rows into the fields expected by SingleTurnEnv.
 
     Produces rows of the form:
@@ -43,7 +102,8 @@ def _to_vf_format(ds: Dataset) -> Dataset:
       - answer: gold letter (A/B/C/D)
       - info: original fields including exp0/exp1 and specialty
     """
-    def _format_row(row: dict) -> dict:
+
+    def _format_row(row: dict, idx: int | None = None) -> dict:
         question = row.get("question", "") or ""
 
         # Build options dict from A, B, C, D columns
@@ -59,10 +119,24 @@ def _to_vf_format(ds: Dataset) -> Dataset:
         if answer_letter not in ("A", "B", "C", "D"):
             return None
 
+        if shuffle_answers and answer_letter in opts:
+            opts, answer_letter, _ = randomize_multiple_choice(
+                options=opts,
+                answer_choice=answer_letter,
+                seed=shuffle_seed,
+                row_id=row.get("question") or idx,
+            )
+
+        answer_text = opts.get(answer_letter, "")
+
         question_str = _build_question_str(question, opts)
 
         # Keep original data in info
         info = dict(row)
+        info["answer_text"] = answer_text
+        info["answer"] = answer_letter
+        if shuffle_answers:
+            info["options"] = opts
 
         return {
             "question": question_str,
@@ -70,14 +144,16 @@ def _to_vf_format(ds: Dataset) -> Dataset:
             "info": info,
         }
 
-    return ds.map(_format_row, remove_columns=ds.column_names).filter(lambda row: row is not None)
+    return ds.map(
+        _format_row, with_indices=True, remove_columns=ds.column_names, load_from_cache_file=not shuffle_answers
+    ).filter(lambda row: row is not None)
 
 
 def load_environment(
-    use_think: bool = False,
     use_explanations: bool = True,
-    mcq_weight: float = 0.5,
-    explanation_weight: float = 0.5,
+    shuffle_answers: bool = False,
+    shuffle_seed: int | None = 1618,
+    cache_dir: Path | str | None = None,
     specialty: list[str] | str | None = None,  # list of short codes or full names; None/"ALL" => all
     explanation_metrics: list[str] | str | None = None,  # None/"all" => average of all four
     # Optional judge settings
@@ -85,61 +161,50 @@ def load_environment(
     judge_model: str = "gpt-4o-mini",
     judge_base_url: str | None = None,
     judge_api_key: str | None = None,
-    **kwargs
+    **kwargs,
 ) -> vf.Environment:
     """
     Single-turn MedExQA environment using HuggingFace `bluesky333/MedExQA` dataset
 
     Key behaviors:
       - User prompt embeds the authors' instruction and the options (authors' format).
-      - System prompt: empty (normal) or THINK_BOXED (think mode).
+      - System prompt: asks for reasoning in <rationale> tags and final answer in <answer> tags.
       - Specialty selection: accepts list or string; loads requested specialties (None/ALL => all).
-      - MCQ accuracy: authors' regex+fuzzy extraction; returns 0 or 100.
-      - Explanation score: lexical metrics (ROUGE-L, BLEU, METEOR, BERTScore) averaged 0–100; 0 if answer wrong.
-      - Optional judge mode: explanation scored by JudgeRubric (0–100).
+      - Optional answer shuffling for robustness (keeps options in info when enabled).
+      - Unified scoring: MCQ must be correct or the score is 0; if MCQ is correct but explanation fails, score is 0.5; if both pass, score is 1.0.
+      - Explanation check: lexical metrics (ROUGE-L, BLEU, METEOR, BERTScore) or JudgeRubric (LLM-as-a-judge).
     """
 
     # Load specialties (one or more)
     # Note: MedExQA only has dev and test splits, no train split
     # Load TSV files directly since HF dataset has column name issues
 
-    # Resolve allowed specialties up-front and only load those files
-    code_map = {
-        "BE": "biomedical_engineer",
-        "CLS": "clinical_laboratory_scientist",
-        "CP": "clinical_psychologist",
-        "OT": "occupational_therapist",
-        "SLP": "speech_pathologist",
-        "ALL": "all",
-    }
-    allowed_names: set[str]
-    if specialty is None or (isinstance(specialty, str) and (specialty.upper() in ("ALL", ""))):
-        allowed_names = set(SPECIALTIES)
-    elif isinstance(specialty, str):
-        allowed_names = {code_map.get(specialty.upper(), specialty)}
-    else:
-        tmp = set()
-        for s in specialty:
-            name = code_map.get((s or "").upper(), s)
-            if name and name != "all":
-                tmp.add(name)
-        allowed_names = tmp if tmp else set(SPECIALTIES)
-    macro_active = len(allowed_names) > 1
+    cache_path = _resolve_cache_dir(cache_dir)
+    cache_path.mkdir(parents=True, exist_ok=True)
 
-    # Load all requested specialties
+    # Resolve allowed specialties up-front and only load those files
+    if specialty is None:
+        specialty = Specialty.ALL
+    else:
+        specialty = Specialty(specialty) if isinstance(specialty, str) else specialty
+
+    if specialty == Specialty.ALL:
+        selected_specialties = [specialty for specialty in Specialty if specialty != Specialty.ALL]
+    else:
+        selected_specialties = [specialty]
+
+    # Load all requested specialties (with caching)
     test_datasets = []
-    for sp_name in SPECIALTIES:
-        if sp_name not in allowed_names:
-            continue
+    for sp in selected_specialties:
+        sp_name = sp.value
         try:
             url = f"https://huggingface.co/datasets/bluesky333/MedExQA/resolve/main/test/{sp_name}_test.tsv"
+            dest_path = cache_path / f"{sp_name}_test.tsv"
+            download_file(url=url, dest=dest_path, verify=False)
             df = pd.read_csv(
-                url,
-                sep='\t',
-                header=None,
-                names=["question", "A", "B", "C", "D", "exp0", "exp1", "answer"]
+                dest_path, sep="\t", header=None, names=["question", "A", "B", "C", "D", "exp0", "exp1", "answer"]
             )
-            df['specialty'] = sp_name
+            df["specialty"] = sp_name
             ds_part = Dataset.from_pandas(df, preserve_index=False)
             test_datasets.append(ds_part)
         except Exception as e:
@@ -148,56 +213,20 @@ def load_environment(
 
     # Concatenate and format for verifiers - no training dataset available
     test_combined = concatenate_datasets(test_datasets) if test_datasets else None
-    test_ds = _to_vf_format(test_combined) if test_combined else None
+    test_ds = (
+        _to_vf_format(test_combined, shuffle_answers=shuffle_answers, shuffle_seed=shuffle_seed)
+        if test_combined
+        else None
+    )
 
     # Shuffle examples if multiple specialties were selected
-    if macro_active and test_ds is not None:
+    if len(selected_specialties) > 1 and test_ds is not None:
         try:
             test_ds = test_ds.shuffle(seed=int(kwargs.get("seed", 0)))
         except Exception:
             pass
 
-    # Setup system prompt - empty for normal; use think-boxed for think mode
-    system_prompt = THINK_BOXED_SYSTEM_PROMPT if use_think else ""
-
-    # Parser for extracting \\boxed{} answers
-    parser = (
-        vf.ThinkParser(extract_fn=extract_boxed_answer) if use_think
-        else vf.Parser(extract_fn=extract_boxed_answer)
-    )
-
-    def correct_answer_reward_func(parser, completion, answer, **kwargs) -> float:
-        """Reward function for MCQ accuracy."""
-        response = parser.parse_answer(completion) or ""
-        return 1.0 if response == answer else 0.0
-
-    # (shuffling handled above when multiple specialties)
-
-    # Helpers (authors' answer extraction logic)
-    def process_before_extraction(gen: str, choice_dict: dict[str, str]) -> str:
-        for key, val in sorted(choice_dict.items(), key=lambda x: len(x[1] or ""), reverse=True):
-            pattern = re.compile(re.escape((val or "").rstrip(".")), re.IGNORECASE)
-            gen = pattern.sub(key, gen)
-        return gen
-
-    def extract_choice(gen: str, choice_list: list[str]) -> str:
-        res = re.search(r"(?:(?:[Cc]hoose)|(?:(?:[Aa]nswer|[Cc]hoice)(?![^ABCD]{0,20}?(?:n't|not))[^ABCD]{0,10}?\b(?:|is|:|be))\b)[^ABCD]{0,20}?\b(A|B|C|D)\b", gen)
-        if res is None:
-            res = re.search(r"\b(A|B|C|D)\b(?![^ABCD]{0,8}?(?:n't|not)[^ABCD]{0,5}?(?:correct|right))[^ABCD]{0,10}?\b(?:correct|right)\b", gen)
-        if res is None:
-            res = re.search(r"^(A|B|C|D)(?:\.|,|:|$)", gen)
-        if res is None:
-            res = re.search(r"(?<![a-zA-Z])(A|B|C|D)(?![a-zA-Z=])", gen)
-        if res is None:
-            best = process.extractOne(gen, choice_list)
-            choices = ["A", "B", "C", "D"]
-            return choices[choice_list.index(best[0])] if best else ""
-        return res.group(1)
-
-    def extract_answer_letter(completion_text: str, options: dict[str, str]) -> str:
-        gen = process_before_extraction(completion_text or "", options)
-        pred = extract_choice(gen, [options.get(c, "") for c in ["A", "B", "C", "D"]])
-        return (pred or "").upper()
+    parser = XMLParser(fields=["explanation", "answer"], answer_field="answer")
 
     # Lexical Metrics selection; pass individually or None/'all'/'overall' => average of all four
     base_metrics = ["rougeL", "bleu", "meteor", "bertscore"]
@@ -206,7 +235,9 @@ def load_environment(
     else:
         if isinstance(explanation_metrics, str) and explanation_metrics.lower() in ("all", "overall"):
             selected_metrics = base_metrics
-        elif isinstance(explanation_metrics, list) and any(str(m).lower() in ("all", "overall") for m in explanation_metrics):
+        elif isinstance(explanation_metrics, list) and any(
+            str(m).lower() in ("all", "overall") for m in explanation_metrics
+        ):
             selected_metrics = base_metrics
         else:
             selected_metrics = explanation_metrics
@@ -250,35 +281,27 @@ def load_environment(
         if not metric_vals:
             return 0.0
         # always average across selected metrics
-        return (sum(metric_vals) / len(metric_vals))
+        return sum(metric_vals) / len(metric_vals)
 
     # Note: No per-example macro scaling.
 
-    def _get_completion_text(completion_obj) -> str:
-        if isinstance(completion_obj, list) and completion_obj:
-            return completion_obj[-1].get("content", "") or ""
-        return completion_obj if isinstance(completion_obj, str) else str(completion_obj)
+    def _is_correct(parser, completion, answer: str, info: dict | None = None) -> bool:
+        completion_text = completion or ""
+        parsed = parser.parse_answer(completion) or completion_text
+        answer_text = (info or {}).get("answer_text", "")
+        return multiple_choice_accuracy(llm_answer=parsed, answer_letter=answer, answer_text=answer_text)
 
-    def answer_accuracy_reward(parser, completion, answer, **kwargs) -> float:
-        completion_text = _get_completion_text(completion)
+    def combined_reward(parser, completion, answer, **kwargs) -> float:
+        """Gate explanation scoring on MCQ correctness."""
         info = kwargs.get("info", {}) or {}
-        options = {"A": info.get("A", ""), "B": info.get("B", ""), "C": info.get("C", ""), "D": info.get("D", "")}
-        gold = (answer or "").strip().upper()
-        pred_letter = extract_answer_letter(completion_text, options)
-        base = 100.0 if pred_letter == gold else 0.0
-        return base
-
-    def explanation_reward(parser, completion, answer, **kwargs) -> float:
-        completion_text = _get_completion_text(completion)
-        info = kwargs.get("info", {}) or {}
-        options = {"A": info.get("A", ""), "B": info.get("B", ""), "C": info.get("C", ""), "D": info.get("D", "")}
-        gold = (answer or "").strip().upper()
-        pred_letter = extract_answer_letter(completion_text, options)
-        if pred_letter != gold:
-            base = 0.0
-        else:
-            base = compute_expl_score(completion_text, info.get("exp0", ""), info.get("exp1", ""))
-        return base
+        if not _is_correct(parser, completion, answer, info):
+            return 0.0
+        if not use_explanations:
+            return 1.0
+        completion_text = completion or ""
+        expl_score = compute_expl_score(completion_text, info.get("exp0", ""), info.get("exp1", ""))
+        explanation_passes = expl_score > 0.0
+        return 1.0 if explanation_passes else 0.5
 
     # Optional: Use LLM-as-judge for explanation instead of lexical metrics
     if use_explanations and use_judge:
@@ -289,75 +312,68 @@ def load_environment(
             judge_model=judge_model,
             judge_prompt="{question}",
         )
+        judge_parser = XMLParser(fields=["verdict"], answer_field="verdict")
 
-        async def explanation_judge_reward(judge, prompt, completion, answer, state, **kwargs) -> float:
-            completion_text = _get_completion_text(completion)
-            info = kwargs.get("info", {}) or {}
-            options = {"A": info.get("A", ""), "B": info.get("B", ""), "C": info.get("C", ""), "D": info.get("D", "")}
-            gold = (answer or "").strip().upper()
-            pred_letter = extract_answer_letter(completion_text, options)
-            if pred_letter != gold:
-                base = 0.0
-            else:
-                # Build judge prompt
-                question = info.get("question", "")
-                opts_str = "\n".join(f"{k}. {options.get(k, '')}" for k in ["A","B","C","D"]) 
-                formatted_question = f"{question}\n{opts_str}"
-                exp0 = info.get("exp0", "")
-                exp1 = info.get("exp1", "")
-                full_prompt = (
-                    "You are evaluating the quality of a medical explanation.\n\n"
-                    "**Question:**\n" + formatted_question + "\n\n"
-                    "**Correct Answer:** " + str(answer) + "\n\n"
-                    "**Reference Explanation 1:**\n" + str(exp0) + "\n\n"
-                    "**Reference Explanation 2:**\n" + str(exp1) + "\n\n"
-                    "**Model's Response:**\n" + completion_text + "\n\n"
-                    "Evaluate whether the model's explanation is medically accurate, relevant, and demonstrates understanding of the medical concepts. The explanation should justify why the answer is correct.\n\n"
-                    "Compare the model's explanation quality to the reference explanations. Consider:\n"
-                    "- Medical accuracy\n"
-                    "- Relevance to the question\n"
-                    "- Clarity and completeness\n"
-                    "- Proper use of medical concepts\n\n"
-                    "Respond with a score from 0.0 to 1.0:\n"
-                    "- 1.0 = Excellent (as good as or better than references)\n"
-                    "- 0.75 = Good (mostly correct with minor issues)\n"
-                    "- 0.5 = Acceptable (partially correct)\n"
-                    "- 0.25 = Poor (significant errors)\n"
-                    "- 0.0 = Wrong or irrelevant\n\n"
-                    "Respond with ONLY a number between 0.0 and 1.0."
-                )
-                judge_response = await judge_rubric.judge(
-                    [{"role": "user", "content": full_prompt}],
-                    "",
-                    "",
-                    state,
-                    **kwargs,
-                )
-                try:
-                    score_str = str(judge_response).strip()
-                    import re as _re
-                    number_match = _re.search(r"(\d+\.?\d*)", score_str)
-                    explanation_score = float(number_match.group(1)) if number_match else 0.0
-                except Exception:
-                    explanation_score = 0.0
-                base = max(0.0, min(1.0, explanation_score)) * 100.0
-            return base
+        async def combined_judge_reward(judge, prompt, completion, answer, state: State, info: Info) -> float:
+            answer = answer.strip().upper()
+            answer_text = info.get("answer_text", "")
+            parsed = parser.parse(completion, last=True)
+            model_answer = getattr(parsed, "answer", None)
+            model_rational = getattr(parsed, "explanation", None)
 
-        # Use JudgeRubric with two metrics: answer accuracy (sync), explanation judge (async)
-        judge_rubric.add_reward_func(answer_accuracy_reward, weight=mcq_weight)
-        judge_rubric.add_reward_func(explanation_judge_reward, weight=explanation_weight)
+            is_correct = multiple_choice_accuracy(
+                llm_answer=model_answer, answer_letter=answer, answer_text=answer_text
+            )
+
+            if not is_correct:
+                return 0.0
+
+            options = info.get(
+                "options",
+                {"A": info.get("A", ""), "B": info.get("B", ""), "C": info.get("C", ""), "D": info.get("D", "")},
+            )
+
+            question = info.get("question", "")
+            opts_str = "\n".join(f"{k}. {options.get(k, '')}" for k in ["A", "B", "C", "D"])
+            formatted_question = f"{question}\n{opts_str}"
+
+            full_prompt = JUDGE_TEMPLATE.format(
+                question=formatted_question,
+                answer=answer,
+                reference_1=info.get("exp0", ""),
+                reference_2=info.get("exp1", ""),
+                assistant_reasoning=model_rational,
+            )
+
+            judge_response = await judge_rubric.judge(full_prompt, "", "", state)
+
+            try:
+                verdict = judge_parser.parse_answer(judge_response)
+                verdict_norm = verdict.strip().lower()
+                explanation_passes = "equivalent" in verdict_norm and "inequivalent" not in verdict_norm
+
+                info.setdefault("judge_feedback", []).append(
+                    {
+                        "verdict": verdict,
+                        "raw_judge": str(judge_response),
+                    }
+                )
+            except Exception:
+                explanation_passes = False
+            return 1.0 if explanation_passes else 0.5
+
+        judge_rubric.add_reward_func(combined_judge_reward, weight=1.0)
         rubric = judge_rubric
     else:
-        # Keep metrics separate (and a combine drewad with tunable weights)
-        rubric = vf.Rubric(funcs=[answer_accuracy_reward, explanation_reward], weights=[mcq_weight, explanation_weight], parser=parser)
+        rubric = vf.Rubric(funcs=[combined_reward], weights=[1.0], parser=parser)
 
     env = vf.SingleTurnEnv(
         dataset=None,  # No training split available
         eval_dataset=test_ds,
-        system_prompt=system_prompt,
+        system_prompt=SYSTEM_PROMPT,
         parser=parser,
         rubric=rubric,
-        **kwargs
+        **kwargs,
     )
 
     return env

@@ -12,7 +12,7 @@ dependencies = [
     "rouge-score>=0.1.2",
     "sacrebleu>=2.4.0",
     "bert-score>=0.3.13",
-    "thefuzz>=0.22.1",
+    "medarc_verifiers>=0.1.0",
 ]
 
 [build-system]
@@ -21,6 +21,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build]
 include = ["medexqa.py"]
+
+[tool.uv.sources]
+medarc_verifiers = { git = "https://github.com/MedARC-AI/med-lm-envs" }
 
 [tool.prime.environment]
 # lets Prime/vf-eval know where the loader lives in a flat repo
