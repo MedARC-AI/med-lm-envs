@@ -161,6 +161,11 @@ r1: [100.0, 100.0, 100.0, 100.0, 100.0, 0.0, 100.0, 100.0, 100.0, 100.0]
 explanation_reward: avg - 28.832, std - 10.577
 r1: [35.58, 31.618, 28.316, 33.239, 38.249, 0.0, 33.915, 32.653, 33.741, 21.006]
 ```
+### Authors
+This environment has been put together by:
+
+Nishant Mishra - ([mnishant2](https://github.com/mnishant2))
+
 ### Citation
 
 ```bibtex

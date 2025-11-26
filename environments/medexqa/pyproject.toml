@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "MedExQA Evaluation - Medical QA with Multiple Explanations"
 readme = "README.md"
 requires-python = ">=3.11"
+authors = [
+    { name = "Nishant Mishra", email = "mnishant2@gmail.com" },
+]
 dependencies = [
     "datasets>=4.0.0",
     "verifiers>=0.1.2.post0",
