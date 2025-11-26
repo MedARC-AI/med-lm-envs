@@ -6,6 +6,7 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "verifiers>=0.1.3.post0",
+    "medarc_verifiers>=0.1.0",
 ]
 
 [tool.prime.environment]
@@ -19,3 +20,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build]
 include = ["medbullets.py"]
+
+[tool.uv.sources]
+medarc_verifiers = { git = "https://github.com/MedARC-AI/med-lm-envs" }

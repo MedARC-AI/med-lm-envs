@@ -1,0 +1,24 @@
+[project]
+name = "medicationqa"
+description = "Medication QA (MedInfo 2019) – consumer medication question answering benchmark"
+tags = ["medical", "qa", "consumer", "single-turn", "llm-judge"]
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "verifiers>=0.1.4",
+    "requests",
+    "medarc_verifiers>=0.1.0",
+    "openpyxl"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+medarc_verifiers = { git = "https://github.com/MedARC-AI/med-lm-envs" }
+
+[tool.prime.environment]
+loader = "medicationqa:load_environment"
+display_name = "MedicationQA"
+visibility = "PUBLIC"

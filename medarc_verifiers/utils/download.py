@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -18,7 +19,7 @@ def download_file(
     """Download URL to 'dest' with retries/backoff, no overwrite, atomic write."""
     dest = Path(dest)
     if dest.exists():
-        return dest  # do not redownload
+        return dest
 
     dest.parent.mkdir(parents=True, exist_ok=True)
 
@@ -36,7 +37,6 @@ def download_file(
     verify_param: bool | str = verify
 
     if verify_param is False:
-        # Suppress warnings for intentionally insecure requests
         requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)  # type: ignore[attr-defined]
 
     try:
@@ -62,10 +62,18 @@ def download_file(
             msg = "Temporary file was not created during download."
             raise RuntimeError(msg)
 
-        tmp_path.replace(dest)  # atomic move
+        tmp_path.replace(dest)
         return dest
     except Exception:
-        # Clean up partial file on failure
         if tmp_path is not None:
             tmp_path.unlink(missing_ok=True)
         raise
+
+
+def medarc_cache_dir(cache_dir: Path | str | None) -> Path:
+    if cache_dir is None:
+        env_override = os.getenv("MEDARC_CACHE_DIR")
+        if env_override:
+            return Path(env_override)
+        return Path.home() / ".cache" / "medarc"
+    return Path(cache_dir)
