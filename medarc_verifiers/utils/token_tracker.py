@@ -18,12 +18,65 @@ class TokenTracker:
     STATE_KEY = "token_usage"
 
     @staticmethod
+    def _safe_get(obj, key, default=None):
+        """Get attribute or dict item safely."""
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    @staticmethod
+    def _get_usage_field(usage, field, default=0):
+        """Return a usage field from dicts or objects."""
+        if usage is None:
+            return default
+        if isinstance(usage, dict):
+            return usage.get(field, default)
+        return getattr(usage, field, default)
+
+    @staticmethod
+    def _update_usage_stats(stats: dict, usage) -> None:
+        """
+        Update a stats dict in-place with information from a usage object.
+        Only adds optional keys (reasoning_tokens, cost) if present.
+        """
+        # Basic token counts
+        stats["prompt"] = stats.get("prompt", 0) + (TokenTracker._get_usage_field(usage, "prompt_tokens", 0) or 0)
+        stats["completion"] = stats.get("completion", 0) + (
+            TokenTracker._get_usage_field(usage, "completion_tokens", 0) or 0
+        )
+        stats["total"] = stats.get("total", 0) + (TokenTracker._get_usage_field(usage, "total_tokens", 0) or 0)
+
+        # Reasoning tokens (if available)
+        completion_details = TokenTracker._get_usage_field(usage, "completion_tokens_details", None)
+        if completion_details is not None:
+            reasoning_tokens = TokenTracker._get_usage_field(completion_details, "reasoning_tokens", None)
+            if reasoning_tokens is not None:
+                stats["reasoning_tokens"] = stats.get("reasoning_tokens", 0) + (reasoning_tokens or 0)
+
+        # Cost (if available)
+        cost = TokenTracker._get_usage_field(usage, "cost", None)
+        if cost is not None:
+            stats["cost"] = stats.get("cost", 0.0) + cost
+
+    @staticmethod
     def init_tracking(state: dict) -> None:
         """Initialize token tracking structure in state."""
         if TokenTracker.STATE_KEY not in state:
             state[TokenTracker.STATE_KEY] = {
-                "model": {"prompt": 0, "completion": 0, "total": 0},
-                "judge": {"prompt": 0, "completion": 0, "total": 0},
+                "model": {
+                    "prompt": 0,
+                    "completion": 0,
+                    "total": 0,
+                    "cost": 0.0,
+                },
+                "judge": {
+                    "prompt": 0,
+                    "completion": 0,
+                    "total": 0,
+                    "cost": 0.0,
+                },
             }
 
     @staticmethod
@@ -36,10 +89,9 @@ class TokenTracker:
         """
         TokenTracker.init_tracking(state)
 
-        if hasattr(response, "usage") and response.usage:
-            state[TokenTracker.STATE_KEY]["judge"]["prompt"] += response.usage.prompt_tokens
-            state[TokenTracker.STATE_KEY]["judge"]["completion"] += response.usage.completion_tokens
-            state[TokenTracker.STATE_KEY]["judge"]["total"] += response.usage.total_tokens
+        usage = TokenTracker._safe_get(response, "usage", None)
+        if usage:
+            TokenTracker._update_usage_stats(state[TokenTracker.STATE_KEY]["judge"], usage)
 
 
 def install_patches() -> bool:
@@ -163,30 +215,69 @@ def install_patches() -> bool:
                 dataset = original_make_dataset(results, **kwargs)
 
                 # Build token_usage dict for each rollout
+                states = TokenTracker._safe_get(results, "state", []) or []
                 token_data = []
-                for state in results.state:
+                for state in states:
                     # Extract model tokens from existing state["responses"]
-                    model_tokens = {"prompt": 0, "completion": 0, "total": 0}
-                    for response in state.get("responses", []):
-                        if hasattr(response, "usage") and response.usage:
-                            model_tokens["prompt"] += response.usage.prompt_tokens
-                            model_tokens["completion"] += response.usage.completion_tokens
-                            model_tokens["total"] += response.usage.total_tokens
+                    model_tokens = {
+                        "prompt": 0,
+                        "completion": 0,
+                        "total": 0,
+                        "cost": 0.0,
+                    }
+
+                    # Legacy path: old verifiers stored raw responses under state["responses"]
+                    for response in TokenTracker._safe_get(state, "responses", []) or []:
+                        usage = TokenTracker._safe_get(response, "usage", None)
+                        if usage:
+                            TokenTracker._update_usage_stats(model_tokens, usage)
+                    # Current path: responses live inside trajectory steps
+                    for step in TokenTracker._safe_get(state, "trajectory", []) or []:
+                        response = TokenTracker._safe_get(step, "response", None)
+                        usage = TokenTracker._safe_get(response, "usage", None)
+                        if usage:
+                            TokenTracker._update_usage_stats(model_tokens, usage)
 
                     # Get judge tokens from our patch
-                    judge_tokens = state.get(TokenTracker.STATE_KEY, {}).get(
-                        "judge", {"prompt": 0, "completion": 0, "total": 0}
+                    judge_tokens = TokenTracker._safe_get(state, TokenTracker.STATE_KEY, {}) or {}
+                    judge_tokens = judge_tokens.get(
+                        "judge",
+                        {
+                            "prompt": 0,
+                            "completion": 0,
+                            "total": 0,
+                            "cost": 0.0,
+                        },
                     )
 
                     # Calculate totals
                     total_tokens = {
-                        "prompt": model_tokens["prompt"] + judge_tokens["prompt"],
-                        "completion": model_tokens["completion"] + judge_tokens["completion"],
-                        "total": model_tokens["total"] + judge_tokens["total"],
+                        "prompt": model_tokens.get("prompt", 0) + judge_tokens.get("prompt", 0),
+                        "completion": model_tokens.get("completion", 0) + judge_tokens.get("completion", 0),
+                        "total": model_tokens.get("total", 0) + judge_tokens.get("total", 0),
                     }
 
+                    # Reasoning tokens if either side has them
+                    if "reasoning_tokens" in model_tokens or "reasoning_tokens" in judge_tokens:
+                        total_tokens["reasoning_tokens"] = model_tokens.get("reasoning_tokens", 0) + judge_tokens.get(
+                            "reasoning_tokens", 0
+                        )
+
+                    # Cost if either side has it
+                    if "cost" in model_tokens or "cost" in judge_tokens:
+                        total_tokens["cost"] = float(model_tokens.get("cost", 0.0)) + float(
+                            judge_tokens.get("cost", 0.0)
+                        )
+
                     # Single dict with all token data
-                    token_data.append({"model": model_tokens, "judge": judge_tokens, "total": total_tokens})
+                    token_data.append(
+                        {
+                            "model": model_tokens,
+                            "judge": judge_tokens,
+                            "total": total_tokens,
+                            "cost": total_tokens.get("cost", 0.0),
+                        }
+                    )
 
                 # Add single column with dict
                 dataset = dataset.add_column("token_usage", token_data)
