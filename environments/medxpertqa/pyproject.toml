@@ -1,0 +1,27 @@
+[project]
+name = "medxpertqa"
+description = "MedXpertQA is a highly challenging and comprehensive benchmark designed to evaluate expert-level medical knowledge and advanced reasoning capabilities. We use the text subset for now."
+tags = ["eval"]
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "verifiers>=0.1.4",
+    "datasets>=4.0.0",
+    "medarc_verifiers>=0.1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["medxpertqa.py"]
+
+[tool.uv.sources]
+medarc_verifiers = { git = "https://github.com/MedARC-AI/med-lm-envs" }
+
+[tool.prime.environment]
+# lets Prime/vf-eval know where the loader lives in a flat repo
+loader = "medxpertqa:load_environment"
+display_name = "MedXpertQA"
+visibility = "PUBLIC"
