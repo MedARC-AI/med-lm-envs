@@ -139,3 +139,62 @@ Print the detected environment schema:
 ```bash
 uv run medarc-eval mmlu_pro_health --print-env-schema
 ```
+
+## Token Tracking
+
+Token usage is automatically tracked when using `medarc-eval`. Each result/rollout includes a `token_usage` column with nested dict:
+
+```json
+{
+  "token_usage": {
+    "model": {"prompt": 450, "completion": 280, "total": 730},
+    "judge": {"prompt": 3200, "completion": 150, "total": 3350},
+    "total": {"prompt": 3650, "completion": 430, "total": 4080}
+  }
+}
+```
+
+### Using with medarc-eval (Recommended)
+
+Token tracking works automatically:
+
+```bash
+uv run medarc-eval medqa -m gpt-4.1-mini -n 5 -s
+```
+
+### Using with vf-eval
+
+To enable token tracking with `vf-eval`, add `medarc_verifiers` as a dependency in your environment's `pyproject.toml`:
+
+```toml
+[project]
+dependencies = [
+    "verifiers>=0.1.2.post0",
+    "medarc_verifiers>=0.1.0",
+]
+
+[tool.uv.sources]
+medarc_verifiers = { git = "https://github.com/MedARC-AI/med-lm-envs" }
+```
+
+Then reinstall the environment:
+
+```bash
+uv pip install -e ./environments/your-env
+vf-eval your-env -m gpt-4.1-mini -n 5 -s
+```
+
+### Disabling Token Tracking
+
+```bash
+export MEDARC_DISABLE_TOKEN_TRACKING=true
+```
+
+### Notes
+
+- Works with any OpenAI-compatible provider
+- Tokens extracted from API `response.usage` field
+- If provider doesn't return usage data, defaults to 0
+- Model tokens include all inference API calls
+- Judge tokens include all LLM-as-judge calls via `judge()` method (e.g., FactScore: 6-20 verification calls per example)
+- **Note**: Some judge implementations (e.g., FactScore claim extraction) make additional API calls (claim extraction) that are currently not tracked not part of judge() calls or get stored in state["responses"]. These represent a small overhead (~10-20% of total judge tokens) and are present in existing implementations like MedRedQA, keep in mind when calculating.
