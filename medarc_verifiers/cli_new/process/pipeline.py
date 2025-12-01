@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -46,12 +47,14 @@ class ProcessOptions:
     append: bool = (
         True  # when True, merge into existing parquet files; when False, treat existing file + overwrite=False as error
     )
+    max_workers: int = 4
 
     def __post_init__(self) -> None:
         self.runs_dir = Path(self.runs_dir)
         self.output_dir = Path(self.output_dir)
         if self.winrate_output is not None:
             self.winrate_output = Path(self.winrate_output)
+        self.max_workers = max(1, int(self.max_workers))
         if not self.processed_at:
             self.processed_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         self.status_filter = tuple(str(status) for status in self.status_filter)
@@ -141,35 +144,63 @@ def run_process(
     env_summaries: list[EnvWriteSummary] = []
     rows_processed = 0
 
-    env_iter: Iterable[tuple[str, list[_RecordWork]]] = grouped.items()
+    env_items = sorted(grouped.items())
     try:
-        from rich.progress import track
+        if options.max_workers <= 1 or len(env_items) <= 1:
+            env_iter: Iterable[tuple[str, list[_RecordWork]]] = env_items
+            try:
+                from rich.progress import track
 
-        env_iter = track(sorted(grouped.items()), description="Processing datasets", transient=True)
-    except Exception:
-        env_iter = grouped.items()
+                env_iter = track(env_items, description="Processing datasets", transient=True)
+            except Exception:
+                env_iter = env_items
 
-    try:
-        for _, work_items in env_iter:
-            row_buffer: list[dict[str, Any]] = []
-            for work in work_items:
-                row_batch = rows.load_rows(
-                    work.normalized,
-                    include_prompt_completion=work.include_prompt,
-                    keep_columns=work.keep_columns,
-                    drop_columns=work.drop_columns,
-                )
-                row_buffer.extend(row_batch)
-            aggregated = aggregate.aggregate_rows_by_env(row_buffer)
-            rows_processed += len(row_buffer)
+            for _, work_items in env_iter:
+                aggregated, row_count = _process_env_group(work_items)
+                rows_processed += row_count
+                env_groups.extend(aggregated)
+                summaries = writer.write_env_groups(aggregated, writer_config, write_index=False)
+                env_summaries.extend(summaries)
+                if not options.dry_run:
+                    for group in aggregated:
+                        group.rows.clear()
+        else:
+            executor: ProcessPoolExecutor | None = None
+            futures = []
+            try:
+                executor = ProcessPoolExecutor(max_workers=options.max_workers)
+                for _, work_items in env_items:
+                    futures.append(executor.submit(_process_env_group, work_items))
 
-            env_groups.extend(aggregated)
-            summaries = writer.write_env_groups(aggregated, writer_config, write_index=False)
-            env_summaries.extend(summaries)
+                future_iter: Iterable[Any] = as_completed(futures)
+                try:
+                    from rich.progress import track
 
-            if not options.dry_run:
-                for group in aggregated:
-                    group.rows.clear()
+                    future_iter = track(future_iter, total=len(futures), description="Processing datasets", transient=True)
+                except Exception:
+                    future_iter = as_completed(futures)
+
+                for future in future_iter:
+                    aggregated, row_count = future.result()
+                    rows_processed += row_count
+                    env_groups.extend(aggregated)
+                    summaries = writer.write_env_groups(aggregated, writer_config, write_index=False)
+                    env_summaries.extend(summaries)
+                    if not options.dry_run:
+                        for group in aggregated:
+                            group.rows.clear()
+            except KeyboardInterrupt:
+                logger.warning("Processing cancelled by user; shutting down workers.")
+                for f in futures:
+                    f.cancel()
+                executor.shutdown(cancel_futures=True)
+                raise
+            finally:
+                if executor is not None:
+                    try:
+                        executor.shutdown(wait=True, cancel_futures=False)
+                    except Exception:
+                        pass
     except KeyboardInterrupt:
         logger.warning("Processing cancelled by user; partial outputs may exist.")
         raise
@@ -442,3 +473,18 @@ def _emit_markdown_table(md_text: str) -> None:
     console = Console()
     console.print("\n" + header + "\n")
     console.print(md_text)
+
+
+def _process_env_group(work_items: Sequence[_RecordWork]) -> tuple[list[AggregatedEnvRows], int]:
+    """Load and aggregate all rows for a single environment."""
+    row_buffer: list[dict[str, Any]] = []
+    for work in work_items:
+        row_batch = rows.load_rows(
+            work.normalized,
+            include_prompt_completion=work.include_prompt,
+            keep_columns=work.keep_columns,
+            drop_columns=work.drop_columns,
+        )
+        row_buffer.extend(row_batch)
+    aggregated = aggregate.aggregate_rows_by_env(row_buffer)
+    return aggregated, len(row_buffer)

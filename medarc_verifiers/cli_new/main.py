@@ -261,6 +261,12 @@ def build_process_parser() -> argparse.ArgumentParser:
         default=0,
         help="Cap applied when using --winrate-weight-policy=cap (default: %(default)s).",
     )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=4,
+        help="Number of parallel workers for processing datasets (default: %(default)s). Use 1 to disable multiprocessing.",
+    )
 
     parser.add_argument("--hf-repo", help="Hugging Face repo id for dataset sync.")
     parser.add_argument(
@@ -381,6 +387,7 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         "winrate_min_common": args.winrate_min_common,
         "winrate_weight_policy": args.winrate_weight_policy,
         "winrate_weight_cap": args.winrate_weight_cap,
+        "max_workers": args.max_workers,
     }
 
     options = ProcessOptions(
@@ -407,6 +414,7 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         min_common=args.winrate_min_common,
         weight_policy=args.winrate_weight_policy,
         weight_cap=args.winrate_weight_cap,
+        max_workers=args.max_workers,
     )
 
     try:
