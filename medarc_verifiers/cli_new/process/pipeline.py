@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from medarc_verifiers.cli_new._schemas import EnvironmentExportConfig
 from medarc_verifiers.cli_new.process import aggregate, discovery, hf_sync, metadata, rows, rollout, writer
@@ -70,6 +70,16 @@ class ProcessResult:
     hf_summary: HFMergeSummary | None
 
 
+@dataclass(slots=True)
+class _RecordWork:
+    """Per-record settings for row loading."""
+
+    normalized: metadata.NormalizedMetadata
+    include_prompt: bool
+    keep_columns: Sequence[str]
+    drop_columns: Sequence[str]
+
+
 def run_process(
     options: ProcessOptions,
     *,
@@ -90,9 +100,16 @@ def run_process(
 
     _print_records_table(records, options.only_complete_runs, options.runs_dir)
 
-    normalized_rows: list[dict[str, Any]] = []
+    grouped: dict[str, list[_RecordWork]] = {}
+    record_iter: Iterable[Any] = records
+    try:
+        from rich.progress import track
 
-    for record in records:
+        record_iter = track(records, description="Reading run outputs", transient=True)
+    except Exception:
+        record_iter = records
+
+    for record in record_iter:
         env_export = _resolve_env_export(record.manifest_env_id, env_export_map)
         include_prompt = _resolve_include_prompt(options, env_export)
         keep_columns = _resolve_columns(options.keep_columns, env_export.keep_columns if env_export else ())
@@ -100,15 +117,16 @@ def run_process(
         combine_rollouts = _resolve_combine_rollouts(options, env_export)
 
         normalized = metadata.load_normalized_metadata(record, combine_rollouts=combine_rollouts)
-        row_batch = rows.load_rows(
-            normalized,
-            include_prompt_completion=include_prompt,
-            keep_columns=keep_columns,
-            drop_columns=drop_columns,
+        env_key = normalized.base_env_id or normalized.manifest_env_id or record.manifest_env_id or record.job_id
+        grouped.setdefault(env_key, []).append(
+            _RecordWork(
+                normalized=normalized,
+                include_prompt=include_prompt,
+                keep_columns=keep_columns,
+                drop_columns=drop_columns,
+            )
         )
-        normalized_rows.extend(row_batch)
 
-    env_groups = aggregate.aggregate_rows_by_env(normalized_rows)
     writer_config = WriterConfig(
         output_dir=options.output_dir,
         exporter_version=options.exporter_version,
@@ -118,7 +136,45 @@ def run_process(
         overwrite=options.overwrite,
         append=options.append,
     )
-    env_summaries = writer.write_env_groups(env_groups, writer_config)
+
+    env_groups: list[AggregatedEnvRows] = []
+    env_summaries: list[EnvWriteSummary] = []
+    rows_processed = 0
+
+    env_iter: Iterable[tuple[str, list[_RecordWork]]] = grouped.items()
+    try:
+        from rich.progress import track
+
+        env_iter = track(sorted(grouped.items()), description="Processing datasets", transient=True)
+    except Exception:
+        env_iter = grouped.items()
+
+    try:
+        for _, work_items in env_iter:
+            row_buffer: list[dict[str, Any]] = []
+            for work in work_items:
+                row_batch = rows.load_rows(
+                    work.normalized,
+                    include_prompt_completion=work.include_prompt,
+                    keep_columns=work.keep_columns,
+                    drop_columns=work.drop_columns,
+                )
+                row_buffer.extend(row_batch)
+            aggregated = aggregate.aggregate_rows_by_env(row_buffer)
+            rows_processed += len(row_buffer)
+
+            env_groups.extend(aggregated)
+            summaries = writer.write_env_groups(aggregated, writer_config, write_index=False)
+            env_summaries.extend(summaries)
+
+            if not options.dry_run:
+                for group in aggregated:
+                    group.rows.clear()
+    except KeyboardInterrupt:
+        logger.warning("Processing cancelled by user; partial outputs may exist.")
+        raise
+
+    writer.write_env_index(env_summaries, writer_config)
 
     if options.compute_winrates:
         if options.dry_run:
@@ -145,7 +201,7 @@ def run_process(
 
     return ProcessResult(
         records_processed=len(records),
-        rows_processed=len(normalized_rows),
+        rows_processed=rows_processed,
         env_groups=env_groups,
         env_summaries=env_summaries,
         hf_summary=hf_summary,

@@ -7,7 +7,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 import polars as pl
 import pyarrow as pa
@@ -49,8 +49,10 @@ class EnvWriteSummary:
 
 
 def write_env_groups(
-    groups: Sequence[AggregatedEnvRows],
+    groups: Sequence[AggregatedEnvRows] | Iterable[AggregatedEnvRows],
     config: WriterConfig,
+    *,
+    write_index: bool = True,
 ) -> list[EnvWriteSummary]:
     """Write each aggregated environment to `<env_id>.parquet`."""
     output_dir = config.output_dir
@@ -65,8 +67,19 @@ def write_env_groups(
     if config.dry_run or not summaries:
         return summaries
 
-    _write_env_index(output_dir, summaries, config)
+    if write_index:
+        _write_env_index(output_dir, summaries, config)
     return summaries
+
+
+def write_env_index(
+    summaries: Sequence[EnvWriteSummary],
+    config: WriterConfig,
+) -> None:
+    """Write env_index.json from collected summaries."""
+    if config.dry_run or not summaries:
+        return
+    _write_env_index(config.output_dir, summaries, config)
 
 
 def _write_group(group: AggregatedEnvRows, config: WriterConfig) -> EnvWriteSummary:
@@ -300,4 +313,4 @@ def _slugify(value: str) -> str:
     return slug or "env"
 
 
-__all__ = ["EnvWriteSummary", "WriterConfig", "write_env_groups"]
+__all__ = ["EnvWriteSummary", "WriterConfig", "write_env_groups", "write_env_index"]

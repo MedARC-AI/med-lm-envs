@@ -8,7 +8,7 @@ import math
 from dataclasses import dataclass
 from itertools import combinations
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 import polars as pl
 
@@ -195,7 +195,15 @@ def compute_winrates(
     n_questions_by_ds: dict[str, int] = {}
     models_by_ds: dict[str, list[str]] = {}
 
-    for dataset_name, parquet_path in datasets:
+    dataset_iter: Iterable[tuple[str, Path | str]] = datasets
+    try:
+        from rich.progress import track
+
+        dataset_iter = track(datasets, description="Computing win rates", transient=True)
+    except Exception:
+        dataset_iter = datasets
+
+    for dataset_name, parquet_path in dataset_iter:
         stats = _safe_process_dataset(dataset_name, parquet_path, cfg)
         if not stats:
             continue
