@@ -6,7 +6,7 @@
     {
       "artifacts": [],
       "attempt": 0,
-      "checksum": "5ba0364bc8e1b725d20a6cd485a2b5b563c666ec9004a223562c6710ba4d2af7",
+      "checksum": "f7ab901e0b12e4d91d67e6594df0099152c1ffb8b42afd0aecc833e898e08a4a",
       "config": {
         "env": {
           "env_args": {
@@ -21,6 +21,7 @@
           "module": "environments.snapshot_env",
           "num_examples": 3,
           "print_results": false,
+          "rerun": false,
           "rollouts_per_example": 2,
           "state_columns": [
             "student_answer",

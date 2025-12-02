@@ -37,13 +37,6 @@ class ProcessOptions:
     dry_run: bool = False
     overwrite: bool = False
     hf_config: HFSyncConfig | None = None
-    compute_winrates: bool = True
-    winrate_output: Path | None = None
-    missing_policy: str = "neg-inf"
-    epsilon: float = 1e-9
-    min_common: int = 0
-    weight_policy: str = "ln"
-    weight_cap: int = 0
     append: bool = (
         True  # when True, merge into existing parquet files; when False, treat existing file + overwrite=False as error
     )
@@ -52,8 +45,6 @@ class ProcessOptions:
     def __post_init__(self) -> None:
         self.runs_dir = Path(self.runs_dir)
         self.output_dir = Path(self.output_dir)
-        if self.winrate_output is not None:
-            self.winrate_output = Path(self.winrate_output)
         self.max_workers = max(1, int(self.max_workers))
         if not self.processed_at:
             self.processed_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -207,25 +198,6 @@ def run_process(
 
     writer.write_env_index(env_summaries, writer_config)
 
-    if options.compute_winrates:
-        if options.dry_run:
-            logger.info("Skipping win rate computation because --dry-run is enabled.")
-        else:
-            from . import winrate as _win
-
-            dataset_inputs = [(summary.env_id, summary.output_path) for summary in env_summaries]
-            cfg = _win.WinrateConfig(
-                missing_policy=options.missing_policy,
-                epsilon=options.epsilon,
-                min_common=options.min_common,
-                weight_policy=options.weight_policy,
-                weight_cap=options.weight_cap,
-            )
-            result = _win.compute_winrates(dataset_inputs, cfg)
-            winrate_path = options.winrate_output or _default_winrate_path(options)
-            _win.write_json(_win.to_json(result), winrate_path)
-            _print_winrate_summary_markdown(result)
-
     hf_summary: HFMergeSummary | None = None
     if options.hf_config:
         hf_summary = hf_sync.sync_to_hub(env_summaries, options.hf_config)
@@ -284,30 +256,6 @@ def _resolve_combine_rollouts(
     if env_export:
         return env_export.combine_rollouts
     return True
-
-
-def _default_winrate_path(options: ProcessOptions) -> Path:
-    timestamp = _format_timestamp_for_filename(options.processed_at)
-    root = _winrate_root(options)
-    return root / "winrate" / f"winrates-{timestamp}.json"
-
-
-def _format_timestamp_for_filename(processed_at: str | None) -> str:
-    if not processed_at:
-        return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    try:
-        ts = processed_at.replace("Z", "+00:00")
-        dt = datetime.fromisoformat(ts)
-    except ValueError:
-        return processed_at.replace(":", "-").replace(" ", "_")
-    return dt.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
-
-
-def _winrate_root(options: ProcessOptions) -> Path:
-    parent = options.output_dir.parent
-    if parent == options.output_dir:
-        return options.output_dir
-    return parent
 
 
 def _print_records_table(
@@ -395,84 +343,6 @@ def _print_records_table(
 
 
 __all__ = ["ProcessOptions", "ProcessResult", "run_process"]
-
-
-def _print_winrate_summary_markdown(result: Any) -> None:
-    """Print a compact markdown table of mean win rate per model."""
-    try:
-        models = result.models  # dict[str, dict]
-    except Exception:
-        return
-    scoreboard: list[tuple[str, float | None, float | None, int]] = []
-    for model, payload in models.items():
-        mean_wr = payload.get("mean_winrate", {}) if isinstance(payload, dict) else {}
-        simple = mean_wr.get("simple_mean")
-        weighted = mean_wr.get("weighted_mean")
-        n_ds = int(mean_wr.get("n_datasets", 0) or 0)
-        scoreboard.append((str(model), simple, weighted, n_ds))
-
-    # Sort by weighted desc, falling back to simple desc
-    def _key(item: tuple[str, float | None, float | None, int]) -> float:
-        _, sm, lw, _ = item
-        return float(lw if lw is not None else (sm if sm is not None else float("-inf")))
-
-    scoreboard.sort(key=_key, reverse=True)
-    # Prepare rows for table rendering
-    rows: list[dict[str, str]] = []
-    for model, sm, lw, n_ds in scoreboard:
-        sm_str = f"{sm:.4f}" if isinstance(sm, (int, float)) and sm is not None else "-"
-        lw_str = f"{lw:.4f}" if isinstance(lw, (int, float)) and lw is not None else "-"
-        rows.append({"Model": model, "SimpleAvg": sm_str, "LnWeighted": lw_str, "Datasets": str(n_ds)})
-
-    # Prefer tabulate for clean GitHub markdown if available
-    try:
-        from tabulate import tabulate  # type: ignore[import-not-found]
-
-        md_table = tabulate(rows, headers="keys", tablefmt="github")
-        _emit_markdown_table(md_table)
-        return
-    except Exception:
-        pass
-
-    # Fallback: try pandas via polars for to_markdown
-    try:
-        import polars as pl  # type: ignore[import-not-found]
-
-        # pandas may not be present; import inside try
-        import pandas as pd  # type: ignore[import-not-found]  # noqa: F401
-
-        df = pl.DataFrame(rows).to_pandas()
-        md_table = df.to_markdown(index=False)  # type: ignore[attr-defined]
-        _emit_markdown_table(md_table)
-        return
-    except Exception:
-        pass
-
-    # Final fallback: simple manual markdown
-    lines: list[str] = [
-        "",
-        "Mean win rate per model (HELM-style):",
-        "",
-        "| Model | SimpleAvg | LnWeighted | Datasets |",
-        "|-------|----------:|-----------:|---------:|",
-    ]
-    for row in rows:
-        lines.append(f"| {row['Model']} | {row['SimpleAvg']} | {row['LnWeighted']} | {row['Datasets']} |")
-    _emit_markdown_table("\n".join(lines))
-
-
-def _emit_markdown_table(md_text: str) -> None:
-    """Emit the markdown table to stdout using Rich Console if available, else print."""
-    header = "Mean win rate per model (HELM-style):"
-    try:
-        from rich.console import Console
-    except Exception:
-        print("\n" + header + "\n")
-        print(md_text)
-        return
-    console = Console()
-    console.print("\n" + header + "\n")
-    console.print(md_text)
 
 
 def _process_env_group(work_items: Sequence[_RecordWork]) -> tuple[list[AggregatedEnvRows], int]:

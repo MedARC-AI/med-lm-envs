@@ -216,6 +216,11 @@ def _load_remote_dataset(config: HFSyncConfig) -> Mapping[str, Dataset]:
     return {"default": dataset_dict}  # type: ignore[return-value]
 
 
+def load_remote_dataset(config: HFSyncConfig) -> Mapping[str, Dataset] | None:
+    """Public helper to load a HF dataset as split -> Dataset mapping."""
+    return _load_remote_dataset(config)
+
+
 def _push_dataset(dataset_dict: DatasetDict, config: HFSyncConfig, summary: HFMergeSummary) -> None:
     commit_message = (
         f"medarc process: {len(summary.splits)} envs, {summary.total_rows} rows, strategy={summary.strategy}"
@@ -232,6 +237,7 @@ def _push_dataset(dataset_dict: DatasetDict, config: HFSyncConfig, summary: HFMe
 __all__ = [
     "HFMergeSummary",
     "HFSyncConfig",
+    "load_remote_dataset",
     "SplitMergeStats",
     "sync_to_hub",
 ]

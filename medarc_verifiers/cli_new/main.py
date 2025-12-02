@@ -35,6 +35,8 @@ from medarc_verifiers.cli_new._manifest import (
 from medarc_verifiers.cli_new._single_run import run_single_mode
 from medarc_verifiers.cli_new.process import ProcessOptions, ProcessResult, run_process
 from medarc_verifiers.cli_new.process.hf_sync import HFSyncConfig
+from medarc_verifiers.cli_new.process.winrate import WinrateConfig
+from medarc_verifiers.cli_new.process.winrate_runner import print_winrate_summary_markdown, run_winrate
 from medarc_verifiers.cli_new.utils.overrides import build_cli_override
 from medarc_verifiers.cli_new.utils.shared import slugify
 from medarc_verifiers.utils.pathing import from_project_relative
@@ -51,6 +53,7 @@ DEFAULT_RUNS_RAW_DIR = Path("runs") / "raw"
 DEFAULT_PROCESSED_DIR = Path("runs") / "processed"
 BENCH_COMMAND = "bench"
 PROCESS_COMMAND = "process"
+WINRATE_COMMAND = "winrate"
 
 
 def build_batch_parser() -> argparse.ArgumentParser:
@@ -220,48 +223,6 @@ def build_process_parser() -> argparse.ArgumentParser:
         help="Append/merge into existing parquet files when present (default: true). Use --no-append to error unless --overwrite is set.",
     )
     parser.add_argument(
-        "--compute-winrates",
-        dest="compute_winrates",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Compute HELM-style win rate JSON after parquet export (use --no-compute-winrates to disable).",
-    )
-    parser.add_argument(
-        "--winrate-output",
-        type=Path,
-        help="Optional output path for winrates JSON (default: <output_dir>/winrates.json).",
-    )
-    parser.add_argument(
-        "--winrate-missing-policy",
-        choices=("zero", "neg-inf"),
-        default="neg-inf",
-        help="Missing reward policy when comparing models (default: %(default)s).",
-    )
-    parser.add_argument(
-        "--winrate-epsilon",
-        type=float,
-        default=1e-9,
-        help="Tie tolerance epsilon for pairwise comparisons (default: %(default)s).",
-    )
-    parser.add_argument(
-        "--winrate-min-common",
-        type=int,
-        default=0,
-        help="Minimum overlapping examples per dataset to retain a pairwise result.",
-    )
-    parser.add_argument(
-        "--winrate-weight-policy",
-        choices=("equal", "ln", "sqrt", "cap"),
-        default="ln",
-        help="Dataset weighting policy when aggregating win rates (default: %(default)s).",
-    )
-    parser.add_argument(
-        "--winrate-weight-cap",
-        type=int,
-        default=0,
-        help="Cap applied when using --winrate-weight-policy=cap (default: %(default)s).",
-    )
-    parser.add_argument(
         "--max-workers",
         type=int,
         default=4,
@@ -287,6 +248,62 @@ def build_process_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_winrate_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="medarc-new winrate",
+        description="Compute HELM-style win rates from processed environment parquet files.",
+    )
+    parser.add_argument(
+        "--processed-dir",
+        type=Path,
+        default=DEFAULT_PROCESSED_DIR,
+        help="Directory containing processed parquet outputs (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="Output path for winrates JSON (default: <processed_dir>/../winrate/winrates-<timestamp>.json).",
+    )
+    parser.add_argument(
+        "--processed-at",
+        help="Timestamp used for default output naming (ISO8601).",
+    )
+    parser.add_argument(
+        "--missing-policy",
+        choices=("zero", "neg-inf"),
+        default="neg-inf",
+        help="Missing reward policy when comparing models (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--epsilon",
+        type=float,
+        default=1e-9,
+        help="Tie tolerance epsilon for pairwise comparisons (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--min-common",
+        type=int,
+        default=0,
+        help="Minimum overlapping examples per dataset to retain a pairwise result.",
+    )
+    parser.add_argument(
+        "--weight-policy",
+        choices=("equal", "ln", "sqrt", "cap"),
+        default="ln",
+        help="Dataset weighting policy when aggregating win rates (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--weight-cap",
+        type=int,
+        default=0,
+        help="Cap applied when using --weight-policy=cap (default: %(default)s).",
+    )
+    parser.add_argument("--hf-repo", help="Hugging Face repo id for dataset download.")
+    parser.add_argument("--hf-branch", help="Target HF branch or revision for download.")
+    parser.add_argument("--hf-token", help="Auth token for HF operations.")
+    return parser
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Unified CLI entry point."""
     args_list = list(argv) if argv is not None else sys.argv[1:]
@@ -303,6 +320,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_batch_mode(args_list[1:])
     if args_list[0] == PROCESS_COMMAND:
         return _run_process_mode(args_list[1:])
+    if args_list[0] == WINRATE_COMMAND:
+        return _run_winrate_mode(args_list[1:])
 
     return run_single_mode(args_list)
 
@@ -380,13 +399,6 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         "append": args.append,
         "hf_repo": args.hf_repo,
         "hf_merge": args.hf_merge,
-        "compute_winrates": args.compute_winrates,
-        "winrate_output": str(args.winrate_output) if args.winrate_output else None,
-        "winrate_missing_policy": args.winrate_missing_policy,
-        "winrate_epsilon": args.winrate_epsilon,
-        "winrate_min_common": args.winrate_min_common,
-        "winrate_weight_policy": args.winrate_weight_policy,
-        "winrate_weight_cap": args.winrate_weight_cap,
         "max_workers": args.max_workers,
     }
 
@@ -407,13 +419,6 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         overwrite=args.overwrite,
         append=args.append,
         hf_config=hf_config,
-        compute_winrates=args.compute_winrates,
-        winrate_output=args.winrate_output,
-        missing_policy=args.winrate_missing_policy,
-        epsilon=args.winrate_epsilon,
-        min_common=args.winrate_min_common,
-        weight_policy=args.winrate_weight_policy,
-        weight_cap=args.winrate_weight_cap,
         max_workers=args.max_workers,
     )
 
@@ -424,6 +429,44 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         return 1
 
     _log_process_result(result)
+    return 0
+
+
+def _run_winrate_mode(argv: Sequence[str]) -> int:
+    parser = build_winrate_parser()
+    args = parser.parse_args(argv)
+
+    hf_config = HFSyncConfig(
+        repo_id=args.hf_repo,
+        merge_strategy="append",
+        branch=args.hf_branch,
+        private=False,
+        dry_run=False,
+        token=args.hf_token,
+    )
+
+    cfg = WinrateConfig(
+        missing_policy=args.missing_policy,
+        epsilon=args.epsilon,
+        min_common=args.min_common,
+        weight_policy=args.weight_policy,
+        weight_cap=args.weight_cap,
+    )
+
+    try:
+        winrate_result = run_winrate(
+            processed_dir=args.processed_dir,
+            output_path=args.output,
+            config=cfg,
+            processed_at=args.processed_at,
+            hf_config=hf_config,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Win rate computation failed: %s", exc)
+        return 1
+
+    logger.info("Computed win rates for %d dataset(s): %s", len(winrate_result.datasets), winrate_result.output_path)
+    print_winrate_summary_markdown(winrate_result.result)
     return 0
 
 
@@ -1016,6 +1059,8 @@ def _print_general_help() -> None:
         Usage:
           medarc-new <ENV> [options]                 # Single run (ENV must be first; use ENV --help for details)
           medarc-new bench --config CONFIG.yaml ...  # Batch run (see: medarc-new bench --help)
+          medarc-new process [options]               # Export raw runs to parquet (see: medarc-new process --help)
+          medarc-new winrate [options]               # Compute win rates from processed parquet outputs
 
         First argument must be the environment slug for single runs. Use 'medarc-new bench --help' for batch mode options."""
     )

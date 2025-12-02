@@ -29,6 +29,8 @@ def _make_record(
     manifest_info = RunManifestInfo(
         job_run_id="run-123",
         run_name="Example Run",
+        summary_completed=1,
+        summary_total=1,
         manifest_path=run_dir / "run_manifest.json",
         run_dir=run_dir,
         created_at="2024-01-01T00:00:00Z",

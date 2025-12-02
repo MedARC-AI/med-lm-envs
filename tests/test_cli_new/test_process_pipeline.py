@@ -7,6 +7,9 @@ import pytest
 
 from medarc_verifiers.cli_new._schemas import EnvironmentExportConfig
 from medarc_verifiers.cli_new.process import ProcessOptions, run_process
+from medarc_verifiers.cli_new.process.winrate import WinrateConfig
+from medarc_verifiers.cli_new.process.winrate_runner import run_winrate
+from medarc_verifiers.cli_new.process.hf_sync import HFSyncConfig
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -138,10 +141,10 @@ def test_run_process_respects_combine_rollouts_override(tmp_path: Path) -> None:
     assert group.base_env_id == "demo-env"
 
 
-def test_run_process_writes_winrates_json(tmp_path: Path) -> None:
+def test_run_winrate_from_processed_outputs(tmp_path: Path) -> None:
     runs_dir = _setup_run(tmp_path)
     output_dir = tmp_path / "processed"
-    options = ProcessOptions(
+    process_opts = ProcessOptions(
         runs_dir=runs_dir,
         output_dir=output_dir,
         exporter_version="0.1.0",
@@ -150,11 +153,18 @@ def test_run_process_writes_winrates_json(tmp_path: Path) -> None:
         max_workers=1,
     )
 
-    run_process(options)
+    run_process(process_opts)
 
-    winrate_path = output_dir.parent / "winrate" / "winrates-20240101T000000Z.json"
-    assert winrate_path.exists()
-    payload = json.loads(winrate_path.read_text(encoding="utf-8"))
+    cfg = WinrateConfig()
+    result = run_winrate(
+        processed_dir=output_dir,
+        output_path=None,
+        config=cfg,
+        processed_at="2024-01-01T00:00:00Z",
+    )
+
+    assert result.output_path.exists()
+    payload = json.loads(result.output_path.read_text(encoding="utf-8"))
     assert payload["models"]
     model_payload = payload["models"]["gpt-mini"]
     assert model_payload["vs"] == {}
@@ -166,22 +176,36 @@ def test_run_process_writes_winrates_json(tmp_path: Path) -> None:
     assert list(avg_rewards.values())[0] == pytest.approx(1.0)
 
 
-def test_run_process_can_skip_winrates(tmp_path: Path) -> None:
-    runs_dir = _setup_run(tmp_path)
-    output_dir = tmp_path / "processed"
-    options = ProcessOptions(
-        runs_dir=runs_dir,
-        output_dir=output_dir,
-        exporter_version="0.1.0",
-        dry_run=False,
-        compute_winrates=False,
-        max_workers=1,
+def test_run_winrate_from_hf(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Prepare a fake HF split on disk
+    hf_dir = tmp_path / "hf"
+    hf_dir.mkdir()
+    parquet_path = hf_dir / "demo-env.parquet"
+    payload = [
+        {"example_id": "ex-1", "model_id": "alpha", "reward": 0.8},
+        {"example_id": "ex-1", "model_id": "beta", "reward": 0.2},
+    ]
+    import pandas as pd  # type: ignore[import-not-found]
+
+    pd.DataFrame(payload).to_parquet(parquet_path, index=False)
+
+    def _fake_download_hf_repo(config: HFSyncConfig) -> Path:
+        return hf_dir
+
+    monkeypatch.setattr("medarc_verifiers.cli_new.process.winrate_runner._download_hf_repo", _fake_download_hf_repo)
+
+    cfg = WinrateConfig()
+    result = run_winrate(
+        processed_dir=tmp_path / "processed",
+        output_path=None,
+        config=cfg,
+        processed_at="2024-01-01T00:00:00Z",
+        hf_config=HFSyncConfig(repo_id="owner/ds", merge_strategy="append", branch=None, token=None, private=False),
     )
 
-    run_process(options)
-
-    winrate_dir = output_dir.parent / "winrate"
-    assert not winrate_dir.exists()
+    assert result.output_path.exists()
+    payload = json.loads(result.output_path.read_text(encoding="utf-8"))
+    assert sorted(payload["models"].keys()) == ["alpha", "beta"]
 
 
 def test_run_process_propagates_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
