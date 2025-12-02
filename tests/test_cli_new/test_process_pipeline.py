@@ -8,7 +8,7 @@ import pytest
 from medarc_verifiers.cli_new._schemas import EnvironmentExportConfig
 from medarc_verifiers.cli_new.process import ProcessOptions, run_process
 from medarc_verifiers.cli_new.process.winrate import WinrateConfig
-from medarc_verifiers.cli_new.process.winrate_runner import run_winrate
+from medarc_verifiers.cli_new.process.winrate_runner import discover_datasets, run_winrate
 from medarc_verifiers.cli_new.process.hf_sync import HFSyncConfig
 
 
@@ -206,6 +206,32 @@ def test_run_winrate_from_hf(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     assert result.output_path.exists()
     payload = json.loads(result.output_path.read_text(encoding="utf-8"))
     assert sorted(payload["models"].keys()) == ["alpha", "beta"]
+
+
+def test_discover_datasets_handles_project_relative_paths(tmp_path: Path) -> None:
+    processed_dir = tmp_path / "runs" / "processed"
+    processed_dir.mkdir(parents=True)
+    parquet_path = processed_dir / "demo.parquet"
+    parquet_path.write_text("", encoding="utf-8")
+    env_index = {
+        "processed_at": "2024-01-01T00:00:00Z",
+        "environments": [
+            {
+                "env_id": "demo",
+                "base_env_id": "demo",
+                "path": "runs/processed/demo.parquet",
+                "row_count": 0,
+                "job_run_ids": [],
+                "exporter_metadata": {},
+            }
+        ],
+    }
+    index_path = processed_dir / "env_index.json"
+    index_path.write_text(json.dumps(env_index), encoding="utf-8")
+
+    datasets = discover_datasets(processed_dir)
+
+    assert datasets == [("demo", parquet_path)]
 
 
 def test_run_process_propagates_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

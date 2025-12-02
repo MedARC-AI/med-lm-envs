@@ -298,6 +298,16 @@ def build_winrate_parser() -> argparse.ArgumentParser:
         default=0,
         help="Cap applied when using --weight-policy=cap (default: %(default)s).",
     )
+    parser.add_argument(
+        "--include-model",
+        action="append",
+        help="Only include these model ids in win rate calculation (repeatable).",
+    )
+    parser.add_argument(
+        "--exclude-model",
+        action="append",
+        help="Exclude these model ids from win rate calculation (repeatable).",
+    )
     parser.add_argument("--hf-repo", help="Hugging Face repo id for dataset download.")
     parser.add_argument("--hf-branch", help="Target HF branch or revision for download.")
     parser.add_argument("--hf-token", help="Auth token for HF operations.")
@@ -451,6 +461,8 @@ def _run_winrate_mode(argv: Sequence[str]) -> int:
         min_common=args.min_common,
         weight_policy=args.weight_policy,
         weight_cap=args.weight_cap,
+        include_models=tuple(args.include_model or ()),
+        exclude_models=tuple(args.exclude_model or ()),
     )
 
     try:

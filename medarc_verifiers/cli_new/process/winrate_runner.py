@@ -12,6 +12,7 @@ from typing import Iterable, Mapping, Sequence
 
 from medarc_verifiers.cli_new.process import winrate as _win
 from medarc_verifiers.cli_new.process.hf_sync import HFSyncConfig
+from medarc_verifiers.utils.pathing import from_project_relative
 
 logger = logging.getLogger(__name__)
 
@@ -55,37 +56,59 @@ def _resolve_dataset_path(path_str: str, processed_dir: Path) -> Path:
     candidate = Path(path_str)
     if candidate.is_absolute():
         return candidate
-    return (processed_dir / candidate).resolve()
+
+    # 1) If path exists relative to current working directory, honor it
+    if candidate.exists():
+        return candidate.resolve()
+
+    # 2) If the env_index recorded a project-relative path (e.g., runs/processed/foo.parquet), resolve via project root
+    try:
+        proj_resolved = from_project_relative(candidate)
+        if proj_resolved.exists():
+            return proj_resolved
+    except Exception:
+        pass
+
+    # 3) If the path is already rooted under the processed_dir name (e.g., runs/processed/foo.parquet),
+    # normalize to avoid duplicating the processed_dir segment.
+    processed_parts = processed_dir.parts
+    candidate_parts = candidate.parts
+    if len(candidate_parts) >= 2 and tuple(candidate_parts[:2]) == tuple(processed_parts[-2:]):
+        return (processed_dir.parent / Path(*candidate_parts[1:])).resolve()
+    if candidate_parts and candidate_parts[0] == processed_dir.name:
+        return (processed_dir / Path(*candidate_parts[1:])).resolve()
+
+    # 4) Default: relative to processed_dir
+    resolved = (processed_dir / candidate).resolve()
+    return resolved
 
 
 def run_winrate(
     *,
     processed_dir: Path,
     output_path: Path | None,
+    output_name: str | None = None,
     config: _win.WinrateConfig,
     processed_at: str | None = None,
     hf_config: HFSyncConfig | None = None,
 ) -> WinrateRunResult:
-    if hf_config and hf_config.repo_id:
-        local_dir = _download_hf_repo(hf_config)
-        datasets = discover_datasets(local_dir)
-        source_desc = f"HF repo {hf_config.repo_id}"
-    else:
-        datasets = discover_datasets(processed_dir)
-        source_desc = f"processed dir {processed_dir}"
+    local_dir, datasets, source_desc = _resolve_source(processed_dir, hf_config)
     if not datasets:
         raise ValueError(f"No datasets found from {source_desc}.")
 
-    resolved_output = output_path or _default_winrate_path(processed_dir, processed_at=processed_at)
+    resolved_output = output_path or _default_winrate_path(
+        processed_dir, processed_at=processed_at, base_name=output_name
+    )
     result = _win.compute_winrates(datasets, config)
     _win.write_json(_win.to_json(result), resolved_output)
     return WinrateRunResult(output_path=resolved_output, result=result, datasets=datasets)
 
 
-def _default_winrate_path(processed_dir: Path, *, processed_at: str | None) -> Path:
+def _default_winrate_path(processed_dir: Path, *, processed_at: str | None, base_name: str | None) -> Path:
     timestamp = _format_timestamp_for_filename(processed_at)
     root = _winrate_root(processed_dir)
-    return root / "winrate" / f"winrates-{timestamp}.json"
+    base = (base_name.strip() if base_name else "winrates") or "winrates"
+    return root / "winrate" / f"{base}-{timestamp}.json"
 
 
 def _format_timestamp_for_filename(processed_at: str | None) -> str:
@@ -106,6 +129,20 @@ def _winrate_root(processed_dir: Path) -> Path:
     return parent
 
 
+def _resolve_source(
+    processed_dir: Path,
+    hf_config: HFSyncConfig | None,
+) -> tuple[Path, list[tuple[str, Path]], str]:
+    if hf_config and hf_config.repo_id:
+        local_dir = _download_hf_repo(hf_config)
+        datasets = discover_datasets(local_dir)
+        source_desc = f"HF repo {hf_config.repo_id}"
+        return local_dir, datasets, source_desc
+    datasets = discover_datasets(processed_dir)
+    source_desc = f"processed dir {processed_dir}"
+    return processed_dir, datasets, source_desc
+
+
 def _download_hf_repo(config: HFSyncConfig) -> Path:
     """Download a HF dataset repo snapshot to a temp dir and return the path."""
     try:
@@ -124,6 +161,26 @@ def _download_hf_repo(config: HFSyncConfig) -> Path:
         local_dir_use_symlinks=False,
     )
     return temp_root
+
+
+def list_models(datasets: Sequence[tuple[str, Path]]) -> list[str]:
+    """List unique model_id values present across datasets."""
+    models: set[str] = set()
+    for _, path in datasets:
+        try:
+            lf = _win.read_dataset_lazy(path)
+            cols = lf.collect_schema().names()
+            if "model_id" not in cols:
+                continue
+            df = lf.select("model_id").collect()
+            for value in df.get_column("model_id").unique():
+                if value is None:
+                    continue
+                models.add(str(value))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Skipping dataset %s while listing models: %s", path, exc)
+            continue
+    return sorted(models)
 
 
 def print_winrate_summary_markdown(result: _win.ModelCentricResult) -> None:
@@ -200,6 +257,8 @@ def _emit_markdown_table(md_text: str) -> None:
 __all__ = [
     "WinrateRunResult",
     "discover_datasets",
+    "_resolve_source",
+    "list_models",
     "run_winrate",
     "print_winrate_summary_markdown",
 ]

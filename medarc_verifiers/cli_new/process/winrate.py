@@ -28,6 +28,8 @@ class WinrateConfig:
     min_common: int = 0
     weight_policy: str = "ln"  # "equal", "ln", "sqrt", or "cap"
     weight_cap: int = 0
+    include_models: tuple[str, ...] = ()
+    exclude_models: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -238,6 +240,7 @@ def build_model_centric_result(
     all_models: set[str] = set(avg_rewards_by_model.keys())
     for models in models_by_ds.values():
         all_models.update(models)
+    all_models = set(_filter_models(sorted(all_models), config.include_models, config.exclude_models))
     models_out: dict[str, dict[str, Any]] = {}
     for model in sorted(all_models):
         mean_entry = model_means.get(model)
@@ -368,7 +371,9 @@ def _safe_process_dataset(
         lf = read_dataset_lazy(parquet_path)
         df_avg, n_questions = average_rollouts(lf)
         df_wide, models = to_wide(df_avg)
-        models = sorted(dict.fromkeys(models))
+        models = _filter_models(sorted(dict.fromkeys(models)), config.include_models, config.exclude_models)
+        if models:
+            df_wide = df_wide.select([EXAMPLE_ID_COL, *models])
         pairwise: dict[tuple[str, str], tuple[float | None, int]] = {}
         for a, b in combinations(models, 2):
             wr, n_used = pairwise_win_rate(
@@ -380,7 +385,7 @@ def _safe_process_dataset(
                 min_common=config.min_common,
             )
             pairwise[(a, b)] = (wr, n_used)
-        avg_reward_per_model = _mean_reward_per_model(df_avg)
+        avg_reward_per_model = _mean_reward_per_model(df_avg, allowed=models)
         return DatasetStats(
             pairwise=pairwise,
             n_questions=n_questions,
@@ -392,10 +397,11 @@ def _safe_process_dataset(
         return None
 
 
-def _mean_reward_per_model(df_avg: pl.DataFrame) -> dict[str, float | None]:
+def _mean_reward_per_model(df_avg: pl.DataFrame, allowed: Sequence[str] | None = None) -> dict[str, float | None]:
     """Average reward_mean per model inside a dataset."""
     if df_avg.is_empty() or MODEL_COL not in df_avg.columns:
         return {}
+    allowed_set = {str(m) for m in allowed or []}
     grouped = (
         df_avg.group_by(MODEL_COL)  # type: ignore[arg-type]
         .agg(pl.col("reward_mean").mean().alias("avg_reward"))
@@ -403,8 +409,27 @@ def _mean_reward_per_model(df_avg: pl.DataFrame) -> dict[str, float | None]:
     )
     rewards: dict[str, float | None] = {}
     for model, avg_reward in grouped.iter_rows():
+        if allowed_set and str(model) not in allowed_set:
+            continue
         rewards[str(model)] = None if avg_reward is None else float(avg_reward)
     return rewards
+
+
+def _filter_models(
+    models: Sequence[str],
+    include: Sequence[str] | None,
+    exclude: Sequence[str] | None,
+) -> list[str]:
+    include_set = {str(m).strip() for m in include or [] if str(m).strip()}
+    exclude_set = {str(m).strip() for m in exclude or [] if str(m).strip()}
+    filtered: list[str] = []
+    for model in models:
+        if exclude_set and model in exclude_set:
+            continue
+        if include_set and model not in include_set:
+            continue
+        filtered.append(model)
+    return filtered
 
 
 def to_json(result: ModelCentricResult) -> dict[str, Any]:
