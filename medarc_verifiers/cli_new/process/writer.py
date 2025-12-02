@@ -252,7 +252,9 @@ def _build_arrow_table(group: AggregatedEnvRows) -> pa.Table:
         arrays = [pa.array([], type=pa.null()) for _ in columns]
         return pa.Table.from_arrays(arrays, names=columns)
 
-    df = pl.DataFrame(group.rows)
+    # Use full-length schema inference so late non-null values don't clash with
+    # early all-null samples (default inference length is limited).
+    df = pl.DataFrame(group.rows, infer_schema_length=None)
     for column in group.column_names:
         if column not in df.columns:
             df = df.with_columns(pl.lit(None).alias(column))

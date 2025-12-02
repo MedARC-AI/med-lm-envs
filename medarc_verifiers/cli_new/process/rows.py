@@ -75,6 +75,7 @@ def load_rows(
     seen_per_example: dict[Any, int] = {}
     for line_number, payload in decoded_rows:
         cleaned = _clean_row(payload, drop=drop, keep=keep)
+        _flatten_token_usage(cleaned)
         if multi_rollout:
             ex_id = payload.get("example_id")
             try:
@@ -169,6 +170,40 @@ def _attach_metadata(
         }
     )
     return row
+
+
+def _flatten_token_usage(row: MutableMapping[str, Any]) -> None:
+    """Flatten token_usage dict into explicit columns and drop the original field."""
+    usage = row.pop("token_usage", None)
+
+    def _extract(role: str, key: str) -> Any:
+        block = usage.get(role)
+        if not isinstance(block, Mapping):
+            return None
+        value = block.get(key)
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        try:
+            return float(value)
+        except Exception:
+            return None
+
+    for role in ("judge", "model"):
+        row[f"{role}_cost"] = None
+        row[f"{role}_token_completion"] = None
+        row[f"{role}_token_prompt"] = None
+        row[f"{role}_token_total"] = None
+
+    if not isinstance(usage, Mapping):
+        return
+
+    for role in ("judge", "model"):
+        row[f"{role}_cost"] = _extract(role, "cost")
+        row[f"{role}_token_completion"] = _extract(role, "completion")
+        row[f"{role}_token_prompt"] = _extract(role, "prompt")
+        row[f"{role}_token_total"] = _extract(role, "total")
 
 
 __all__ = ["load_rows"]

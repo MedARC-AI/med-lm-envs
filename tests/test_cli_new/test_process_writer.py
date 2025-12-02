@@ -3,16 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import polars as pl
 import pyarrow.parquet as pq
 import pytest
 
+from medarc_verifiers.cli_new.process import writer
 from medarc_verifiers.cli_new.process.aggregate import aggregate_rows_by_env
 from medarc_verifiers.cli_new.process.aggregate import AggregatedEnvRows
-from medarc_verifiers.cli_new.process.writer import (
-    EXPORTER_METADATA_KEY,
-    WriterConfig,
-    write_env_groups,
-)
+from medarc_verifiers.cli_new.process.writer import EXPORTER_METADATA_KEY, WriterConfig, write_env_groups
 
 
 def _group_for_env() -> AggregatedEnvRows:
@@ -190,3 +188,34 @@ def test_write_env_groups_overwrite_rebuilds_fresh(tmp_path: Path) -> None:
     # Fresh write path should mark append False and reflect only the new source run
     assert embedded.get("append") is False
     assert embedded["source_runs"] == ["run-99"]
+
+
+def test_build_arrow_table_infers_schema_beyond_default_window() -> None:
+    # Schema inference should consider all rows so late non-null values don't error.
+    rows = []
+    for idx in range(120):
+        rows.append(
+            {
+                "env_id": "demo-env",
+                "base_env_id": "demo-env",
+                "example_id": f"ex-{idx}",
+                "job_run_id": f"run-{idx}",
+                "judge_cost": None,
+            }
+        )
+    rows.append(
+        {
+            "env_id": "demo-env",
+            "base_env_id": "demo-env",
+            "example_id": "ex-final",
+            "job_run_id": "run-final",
+            "judge_cost": 0.0,
+        }
+    )
+    group = aggregate_rows_by_env(rows)[0]
+
+    table = writer._build_arrow_table(group)
+    df = pl.from_arrow(table)
+
+    assert df.schema["judge_cost"] == pl.Float64
+    assert df["judge_cost"].drop_nulls().to_list() == [0.0]

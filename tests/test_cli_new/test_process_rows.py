@@ -22,6 +22,8 @@ def _build_record(tmp_path: Path, *, status: str = "completed", reason: str | No
     manifest_info = RunManifestInfo(
         job_run_id="run-1",
         run_name="Example Run",
+        summary_completed=1,
+        summary_total=1,
         manifest_path=run_dir / "run_manifest.json",
         run_dir=run_dir,
         created_at="2024-05-01T00:00:00Z",
@@ -206,3 +208,56 @@ def test_load_rows_does_not_add_env_args(tmp_path: Path) -> None:
     row = rows[0]
     assert "split" not in row
     assert "extra_body" not in row
+
+
+def test_load_rows_flattens_token_usage(tmp_path: Path) -> None:
+    record = _build_record(tmp_path)
+    _write_json(record.metadata_path, {})
+    _write_results(
+        record.results_path,
+        [
+            {
+                "example_id": "ex-token",
+                "token_usage": {
+                    "model": {"prompt": 10, "completion": 5, "total": 15, "cost": 0.02},
+                    "judge": {"prompt": 3, "completion": 4, "total": 7, "cost": 0.01},
+                },
+            }
+        ],
+    )
+
+    metadata = load_normalized_metadata(record)
+    rows = load_rows(metadata)
+    row = rows[0]
+
+    assert "token_usage" not in row
+    assert row["model_cost"] == 0.02
+    assert row["model_token_prompt"] == 10
+    assert row["model_token_completion"] == 5
+    assert row["model_token_total"] == 15
+    assert row["judge_cost"] == 0.01
+    assert row["judge_token_prompt"] == 3
+    assert row["judge_token_completion"] == 4
+    assert row["judge_token_total"] == 7
+
+
+def test_load_rows_drops_non_mapping_token_usage(tmp_path: Path) -> None:
+    record = _build_record(tmp_path)
+    _write_json(record.metadata_path, {})
+    _write_results(
+        record.results_path,
+        [
+            {
+                "example_id": "ex-token",
+                "token_usage": "n/a",
+            }
+        ],
+    )
+
+    metadata = load_normalized_metadata(record)
+    rows = load_rows(metadata)
+    row = rows[0]
+
+    assert "token_usage" not in row
+    assert row["model_cost"] is None
+    assert row["judge_cost"] is None

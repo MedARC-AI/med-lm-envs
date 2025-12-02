@@ -67,6 +67,7 @@ def test_run_process_respects_env_export_defaults(tmp_path: Path) -> None:
         output_dir=tmp_path / "processed",
         exporter_version="0.1.0",
         dry_run=True,
+        max_workers=1,
     )
     env_export = {
         "demo-env": EnvironmentExportConfig(
@@ -98,6 +99,7 @@ def test_run_process_cli_overrides_env_export(tmp_path: Path) -> None:
         dry_run=True,
         include_prompt_completion=False,
         keep_columns=("reward",),
+        max_workers=1,
     )
     env_export = {
         "demo-env": EnvironmentExportConfig(
@@ -121,6 +123,7 @@ def test_run_process_respects_combine_rollouts_override(tmp_path: Path) -> None:
         output_dir=tmp_path / "processed",
         exporter_version="0.1.0",
         dry_run=True,
+        max_workers=1,
     )
     env_export = {
         "demo-env-rollout3": EnvironmentExportConfig(
@@ -144,6 +147,7 @@ def test_run_process_writes_winrates_json(tmp_path: Path) -> None:
         exporter_version="0.1.0",
         dry_run=False,
         processed_at="2024-01-01T00:00:00Z",
+        max_workers=1,
     )
 
     run_process(options)
@@ -171,9 +175,52 @@ def test_run_process_can_skip_winrates(tmp_path: Path) -> None:
         exporter_version="0.1.0",
         dry_run=False,
         compute_winrates=False,
+        max_workers=1,
     )
 
     run_process(options)
 
     winrate_dir = output_dir.parent / "winrate"
     assert not winrate_dir.exists()
+
+
+def test_run_process_propagates_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Ensure ctrl+c stops processing promptly."""
+    runs_dir = _setup_run(tmp_path)
+    options = ProcessOptions(
+        runs_dir=runs_dir,
+        output_dir=tmp_path / "processed",
+        exporter_version="0.1.0",
+        dry_run=False,
+        max_workers=1,
+    )
+
+    call_count = {"count": 0}
+
+    def _boom(*args: object, **kwargs: object) -> None:
+        call_count["count"] += 1
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("medarc_verifiers.cli_new.process.rows.load_rows", _boom)
+
+    with pytest.raises(KeyboardInterrupt):
+        run_process(options)
+
+    assert call_count["count"] == 1
+
+
+def test_run_process_parallel_workers(tmp_path: Path) -> None:
+    runs_dir = _setup_run(tmp_path)
+    options = ProcessOptions(
+        runs_dir=runs_dir,
+        output_dir=tmp_path / "processed",
+        exporter_version="0.1.0",
+        dry_run=True,
+        max_workers=2,
+    )
+
+    result = run_process(options)
+
+    assert result.records_processed == 1
+    assert result.rows_processed == 1
+    assert result.env_summaries[0].row_count == 1
