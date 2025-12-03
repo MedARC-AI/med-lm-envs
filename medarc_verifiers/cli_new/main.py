@@ -389,16 +389,14 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         logger.warning("Failed to load environment export configs: %s", exc)
         env_export_map = {}
 
-    hf_config = None
-    if args.hf_repo:
-        hf_config = HFSyncConfig(
-            repo_id=args.hf_repo,
-            merge_strategy=args.hf_merge,
-            branch=args.hf_branch,
-            private=bool(args.hf_private),
-            dry_run=args.dry_run,
-            token=args.hf_token,
-        )
+    hf_config = HFSyncConfig.from_cli(
+        repo=args.hf_repo,
+        merge_strategy=args.hf_merge,
+        branch=args.hf_branch,
+        token=args.hf_token,
+        private=args.hf_private,
+        dry_run=args.dry_run,
+    )
 
     processed_with_args = {
         "status": args.status or [],
@@ -450,13 +448,13 @@ def _run_winrate_mode(argv: Sequence[str]) -> int:
     parser = build_winrate_parser()
     args = parser.parse_args(argv)
 
-    hf_config = HFSyncConfig(
-        repo_id=args.hf_repo,
+    hf_config = HFSyncConfig.from_cli(
+        repo=args.hf_repo,
         merge_strategy="append",
         branch=args.hf_branch,
+        token=args.hf_token,
         private=False,
         dry_run=False,
-        token=args.hf_token,
     )
 
     source_dir, datasets, source_desc = _resolve_source(args.processed_dir, hf_config if args.hf_repo else None)
