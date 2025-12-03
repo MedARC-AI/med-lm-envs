@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable as _Iterable
 
 from verifiers import setup_logging
+from medarc_verifiers.utils import sanitize_sampling_args_for_openai
 
 from .endpoint_utils import resolve_model_endpoint
 from .env_args import (
@@ -117,6 +118,17 @@ def merge_sampling_args(
     if n is not None and "n" not in merged:
         merged["n"] = n
     return merged
+
+
+def merge_sampling_overrides(
+    base_sampling: Mapping[str, Any],
+    override_sampling: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Merge sampling args with CLI overrides and sanitize for OpenAI clients."""
+    merged: dict[str, Any] = dict(base_sampling or {})
+    if override_sampling:
+        merged.update(override_sampling)
+    return sanitize_sampling_args_for_openai(merged)
 
 
 def flatten_state_columns(values: Iterable[Sequence[str]] | None) -> list[str]:
@@ -254,6 +266,20 @@ def resolve_env_identifier_or(env_cfg: Any, fallback: str) -> str:
         return fallback
 
 
+def resolve_max_concurrent(
+    *,
+    cli_override: int | None,
+    model_max: int | None,
+    env_max: int | None,
+    default_max: int,
+) -> int:
+    """Resolve max_concurrent with a consistent precedence chain."""
+    for value in (cli_override, model_max, env_max):
+        if value is not None:
+            return int(value)
+    return int(default_max)
+
+
 __all__ = [
     "merge_dicts_with_precedence",
     "slugify",
@@ -270,10 +296,12 @@ __all__ = [
     "resolve_env_identifier_or",
     "coerce_json_mapping",
     "merge_sampling_args",
+    "merge_sampling_overrides",
     "flatten_state_columns",
     "resolve_endpoint_selection",
     "merge_env_args",
     "ensure_required_params",
     "ensure_root_logging",
     "asdict_sanitized",
+    "resolve_max_concurrent",
 ]

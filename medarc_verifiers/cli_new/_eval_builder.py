@@ -15,9 +15,14 @@ from medarc_verifiers.cli_new.utils.endpoint_utils import (
     load_env_metadata,
     resolve_model_endpoint,
 )
-from medarc_verifiers.cli_new.utils.env_args import validate_env_args_or_raise
-from medarc_verifiers.cli_new.utils.shared import DEFAULT_BATCH_MAX_CONCURRENT, normalize_headers, resolve_env_identifier
-from medarc_verifiers.utils import sanitize_sampling_args_for_openai
+from medarc_verifiers.cli_new.utils.env_args import merge_env_args_with_validation
+from medarc_verifiers.cli_new.utils.shared import (
+    DEFAULT_BATCH_MAX_CONCURRENT,
+    merge_sampling_overrides,
+    normalize_headers,
+    resolve_env_identifier,
+    resolve_max_concurrent,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,42 +94,32 @@ def build_eval_config(
     enforce_required_env_args: bool = True,
 ) -> EvalConfig:
     """Assemble EvalConfig with shared env/sampling override handling."""
-    merged_env_args = dict(env_args)
-    if cli_env_args:
-        if verbose:
-            overridden_keys = set(merged_env_args) & set(cli_env_args)
-            new_keys = set(cli_env_args) - set(merged_env_args)
-            if overridden_keys:
-                logger.debug(
-                    "CLI overriding env_args for %s: %s",
-                    job_label or env_cfg.id or "<env>",
-                    {k: f"{merged_env_args[k]} → {cli_env_args[k]}" for k in overridden_keys},
-                )
-            if new_keys:
-                logger.debug("CLI adding new env_args for %s: %s", job_label or env_cfg.id or "<env>", list(new_keys))
-        merged_env_args.update(cli_env_args)
-
     env_id = resolve_env_identifier(env_cfg)
     try:
         metadata = _call_env_metadata_loader(env_metadata_loader, env_id, env_metadata_cache)
     except ImportError as exc:
         logger.warning("Skipping env_args validation for '%s': %s", env_id, exc)
-    else:
-        if metadata:
-            validate_env_args_or_raise(
-                env_id,
-                merged_env_args,
-                metadata,
-                enforce_required=enforce_required_env_args,
-            )
+        metadata = None
+
+    merged_env_args = merge_env_args_with_validation(
+        env_id,
+        base_args=env_args,
+        override_args=cli_env_args,
+        metadata=metadata,
+        metadata_cache=env_metadata_cache,
+        allow_unknown=False,
+        enforce_required=enforce_required_env_args,
+        verbose=verbose,
+    )
 
     merged_sampling = dict(sampling_args)
-    if cli_sampling_args:
-        merged_sampling.update(cli_sampling_args)
-    merged_sampling = sanitize_sampling_args_for_openai(merged_sampling)
+    merged_sampling = merge_sampling_overrides(merged_sampling, cli_sampling_args)
 
-    max_concurrent = (
-        max_concurrent_override or model_cfg.max_concurrent or env_cfg.max_concurrent or default_max_concurrent
+    max_concurrent = resolve_max_concurrent(
+        cli_override=max_concurrent_override,
+        model_max=model_cfg.max_concurrent,
+        env_max=env_cfg.max_concurrent,
+        default_max=default_max_concurrent,
     )
     verbose_flag = env_cfg.verbose if env_cfg.verbose is not None else verbose
     save_every = env_cfg.save_every if env_cfg.save_every is not None else -1

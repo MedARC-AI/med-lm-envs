@@ -177,70 +177,28 @@ def _normalize_config_fields(
 
 
 def _normalize_models_field(value: Any, *, base_dir: Path) -> dict[str, Any]:
-    if value is None:
-        return {}
-
-    if isinstance(value, Mapping) and all(isinstance(v, Mapping) for v in value.values()):
-        normalized: dict[str, Any] = {}
-        for key, entry in value.items():
-            ingested = _ingest_model_entries(entry, base_dir=base_dir, context=f"models['{key}']", default_id=str(key))
-            _ensure_no_duplicates(normalized, ingested, entry_type="model")
-        return normalized
-
-    entries = _collect_model_entries(value, base_dir=base_dir, context="models")
-    normalized: dict[str, Any] = {}
-    for entry in entries:
-        if not isinstance(entry, Mapping):
-            raise ValueError("Model entries must be mappings.")
-        adapted = dict(entry)
-        model_id = adapted.get("id")
-        if not model_id:
-            raise ValueError("Legacy model entries must include an 'id'.")
-        if model_id in normalized:
-            raise ValueError(f"Duplicate model id '{model_id}' in configuration.")
-        normalized[str(model_id)] = adapted
-    return normalized
+    return _normalize_section(
+        value,
+        base_dir=base_dir,
+        context="models",
+        entry_description="models",
+        default_id_from_key=True,
+        allow_duplicate_ids=False,
+        env_default_root=None,
+    )
 
 
 def _normalize_envs_field(value: Any, *, base_dir: Path, env_default_root: Path | None) -> dict[str, Any]:
-    if value is None:
-        return {}
-
-    if isinstance(value, Mapping) and all(isinstance(v, Mapping) for v in value.values()):
-        normalized: dict[str, Any] = {}
-        for key, entry in value.items():
-            ingested = _ingest_env_entries(
-                entry,
-                base_dir=base_dir,
-                context=f"envs['{key}']",
-                default_id=str(key),
-                env_default_root=env_default_root,
-            )
-            _ensure_no_duplicates(normalized, ingested, entry_type="environment")
-        return normalized
-
-    entries = _collect_env_entries(value, base_dir=base_dir, context="envs", env_default_root=env_default_root)
-    normalized: dict[str, Any] = {}
-    duplicate_counts: dict[str, int] = {}
-    for entry in entries:
-        if not isinstance(entry, Mapping):
-            raise ValueError("Environment entries must be mappings.")
-        adapted = dict(entry)
-        env_id = adapted.get("id")
-        if not env_id:
-            raise ValueError("Legacy environment entries must include an 'id'.")
-        env_key = str(env_id)
-        if env_key in normalized:
-            # Legacy env files often include multiple blocks with the same base id that
-            # later expand into unique matrix variants (e.g., seeded shuffles). Preserve
-            # every occurrence by assigning deterministic synthetic keys while keeping
-            # the original id for downstream matrix expansion.
-            duplicate_counts[env_key] = duplicate_counts.get(env_key, 1) + 1
-            env_key = _make_duplicate_key(env_key, duplicate_counts[env_key], normalized)
-        else:
-            duplicate_counts[env_key] = 1
-        normalized[env_key] = adapted
-    return normalized
+    return _normalize_section(
+        value,
+        base_dir=base_dir,
+        context="envs",
+        entry_description="envs",
+        default_id_from_key=True,
+        allow_duplicate_ids=True,
+        duplicate_key_fn=_make_duplicate_key,
+        env_default_root=env_default_root,
+    )
 
 
 def _make_duplicate_key(base: str, count: int, existing: Mapping[str, Any]) -> str:
@@ -255,97 +213,6 @@ def _make_duplicate_key(base: str, count: int, existing: Mapping[str, Any]) -> s
 def _normalize_jobs_field(value: Any, *, base_dir: Path) -> list[dict[str, Any]]:
     entries = _collect_job_entries(value, base_dir=base_dir)
     return [_adapt_job_entry(entry) for entry in entries]
-
-
-def _ensure_no_duplicates(
-    target: dict[str, Any],
-    incoming: dict[str, Any],
-    *,
-    entry_type: str,
-) -> None:
-    for key, value in incoming.items():
-        if key in target:
-            raise ValueError(f"Duplicate {entry_type} id '{key}' in configuration.")
-        target[key] = value
-
-
-def _ingest_entries(
-    entry: Any,
-    *,
-    base_dir: Path,
-    context: str,
-    default_id: str | None,
-    collect_fn,
-    adapt_fn: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
-    entry_label: str,
-    **collect_kwargs: Any,
-) -> dict[str, Any]:
-    """Generic ingest helper to normalize singular or included entries into a keyed dict.
-
-    - When ``entry`` is a mapping: adapt and ensure an id (using ``default_id`` when missing).
-    - Otherwise: collect entries via ``collect_fn`` and adapt each one.
-    - ``entry_label`` is used for error messages (e.g., "models['foo']").
-    """
-    accumulated: dict[str, Any] = {}
-    adapter = adapt_fn or (lambda payload: payload)
-    if isinstance(entry, Mapping):
-        adapted = adapter(dict(entry))
-        if isinstance(adapted, dict) and default_id and not adapted.get("id"):
-            adapted["id"] = default_id
-        item_id = adapted.get("id")
-        if not item_id:
-            raise ValueError(f"{context} entries must include an 'id'.")
-        accumulated[str(item_id)] = adapted
-        return accumulated
-
-    sub_entries = collect_fn(entry, base_dir=base_dir, context=context, **collect_kwargs)
-    for sub_entry in sub_entries:
-        adapted = adapter(sub_entry)
-        if isinstance(adapted, dict) and default_id and not adapted.get("id"):
-            adapted["id"] = default_id
-        item_id = adapted.get("id")
-        if not item_id:
-            raise ValueError(f"{context} entries must include an 'id'.")
-        accumulated[str(item_id)] = adapted
-    return accumulated
-
-
-def _ingest_model_entries(
-    entry: Any,
-    *,
-    base_dir: Path,
-    context: str,
-    default_id: str | None = None,
-) -> dict[str, Any]:
-    return _ingest_entries(
-        entry,
-        base_dir=base_dir,
-        context=context,
-        default_id=default_id,
-        collect_fn=_collect_model_entries,
-        adapt_fn=dict,
-        entry_label="model",
-    )
-
-
-def _ingest_env_entries(
-    entry: Any,
-    *,
-    base_dir: Path,
-    context: str,
-    default_id: str | None = None,
-    env_default_root: Path | None = None,
-) -> dict[str, Any]:
-    return _ingest_entries(
-        entry,
-        base_dir=base_dir,
-        context=context,
-        default_id=default_id,
-        collect_fn=_collect_env_entries,
-        adapt_fn=dict,
-        entry_label="environment",
-        env_default_root=env_default_root,
-    )
 
 
 def _collect_model_entries(source: Any, *, base_dir: Path, context: str) -> list[dict[str, Any]]:
@@ -368,6 +235,66 @@ def _collect_env_entries(
 
 def _collect_job_entries(source: Any, *, base_dir: Path) -> list[dict[str, Any]]:
     return _collect_entries(source, base_dir=base_dir, context="jobs", entry_description="jobs", env_default_root=None)
+
+
+def _normalize_section(
+    value: Any,
+    *,
+    base_dir: Path,
+    context: str,
+    entry_description: str,
+    default_id_from_key: bool,
+    allow_duplicate_ids: bool,
+    duplicate_key_fn: Callable[[str, int, Mapping[str, Any]], str] | None = None,
+    env_default_root: Path | None,
+) -> dict[str, Any]:
+    """Normalize section entries (models/envs) with shared include handling."""
+    if value is None:
+        return {}
+
+    normalized: dict[str, Any] = {}
+
+    def _add_entry(entry: Mapping[str, Any], *, key_hint: str | None = None, count_map: dict[str, int] | None = None) -> None:
+        if not isinstance(entry, Mapping):
+            raise ValueError(f"{context} entries must be mappings.")
+        adapted = dict(entry)
+        item_id = adapted.get("id") or key_hint
+        if not item_id:
+            raise ValueError(f"{context} entries must include an 'id'.")
+        key = str(item_id)
+        if count_map is not None:
+            count_map.setdefault(key, 1)
+        if key in normalized:
+            if not allow_duplicate_ids:
+                raise ValueError(f"Duplicate {entry_description.rstrip('s')} id '{key}' in configuration.")
+            if duplicate_key_fn is None:
+                raise ValueError(f"Duplicate {entry_description.rstrip('s')} id '{key}' in configuration.")
+            counter = 2
+            if count_map is not None:
+                counter = count_map.get(key, 1) + 1
+                count_map[key] = counter
+            key = duplicate_key_fn(key, counter, normalized)
+        normalized[key] = adapted
+
+    if isinstance(value, Mapping) and all(isinstance(v, Mapping) for v in value.values()):
+        for key, entry in value.items():
+            adapted = dict(entry)
+            if default_id_from_key and "id" not in adapted:
+                adapted["id"] = str(key)
+            _add_entry(adapted)
+        return normalized
+
+    entries = _collect_entries(
+        value,
+        base_dir=base_dir,
+        context=context,
+        entry_description=entry_description,
+        env_default_root=env_default_root,
+    )
+    duplicate_counts: dict[str, int] = {}
+    for entry in entries:
+        _add_entry(entry, count_map=duplicate_counts)
+    return normalized
 
 
 def _collect_entries(

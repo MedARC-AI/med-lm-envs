@@ -18,7 +18,7 @@ from medarc_verifiers.cli_new.utils.env_args import (
     EnvParam,
     MissingEnvParamError,
     gather_env_cli_metadata,
-    validate_env_arg_values,
+    merge_env_args_with_validation,
 )
 from medarc_verifiers.cli_new.utils.endpoint_utils import load_endpoint_registry
 from medarc_verifiers.cli_new.utils.overrides import build_cli_override
@@ -26,11 +26,11 @@ from medarc_verifiers.cli_new.utils.shared import (
     HEADER_SEPARATOR,
     STATE_COLUMNS_SEPARATOR,
     DEFAULT_SINGLE_RUN_MAX_CONCURRENT,
-    ensure_required_params,
     ensure_root_logging,
     flatten_state_columns,
     merge_env_args,
     merge_sampling_args,
+    merge_sampling_overrides,
     normalize_headers,
 )
 
@@ -105,15 +105,17 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
     json_env_args: Mapping[str, Any] = env_override_mapping or {}
     explicit_cli_args = extract_env_cli_args(args, bindings)
 
-    try:
-        ensure_required_params(metadata, explicit_cli_args, json_env_args)
-    except MissingEnvParamError as exc:
-        parser.error(str(exc))
-
     merged_env_args = merge_env_args(explicit_cli_args, json_env_args)
     try:
-        validate_env_arg_values(env_id, merged_env_args, metadata)
-    except ValueError as exc:
+        merged_env_args = merge_env_args_with_validation(
+            env_id,
+            base_args=merged_env_args,
+            override_args=None,
+            metadata=metadata,
+            allow_unknown=True,
+            enforce_required=True,
+        )
+    except (MissingEnvParamError, ValueError) as exc:
         parser.error(str(exc))
 
     try:
@@ -125,13 +127,16 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         )
     except ValueError as exc:
         parser.error(str(exc))
-    merged_sampling_args = merge_sampling_args(
-        sampling_override_mapping or {},
-        max_tokens=args.max_tokens,
-        temperature=args.temperature,
-        top_p=args.top_p,
-        top_k=args.top_k,
-        n=args.n,
+    merged_sampling_args = merge_sampling_overrides(
+        merge_sampling_args(
+            sampling_override_mapping or {},
+            max_tokens=args.max_tokens,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            top_k=args.top_k,
+            n=args.n,
+        ),
+        None,
     )
 
     try:

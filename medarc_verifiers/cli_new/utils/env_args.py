@@ -182,6 +182,52 @@ def validate_env_args_or_raise(
     validate_env_arg_values(env_id, env_args, metadata)
 
 
+def merge_env_args_with_validation(
+    env_id: str,
+    *,
+    base_args: Mapping[str, Any],
+    override_args: Mapping[str, Any] | None,
+    metadata: Sequence[EnvParam] | None = None,
+    metadata_loader=None,
+    metadata_cache: Mapping[str, Sequence[EnvParam]] | None = None,
+    allow_unknown: bool = False,
+    enforce_required: bool = False,
+    verbose: bool = False,
+) -> dict[str, Any]:
+    """Merge env args with overrides and validate using metadata."""
+    merged = dict(base_args or {})
+    if override_args:
+        if verbose:
+            overridden = {k: f"{merged[k]} → {override_args[k]}" for k in merged.keys() & override_args.keys()}
+            new_keys = sorted(set(override_args) - set(merged))
+            if overridden:
+                logger.debug("CLI overriding env_args for %s: %s", env_id, overridden)
+            if new_keys:
+                logger.debug("CLI adding new env_args for %s: %s", env_id, new_keys)
+        merged.update(override_args)
+
+    if metadata is None and metadata_loader is not None:
+        try:
+            metadata = metadata_loader(env_id, cache=metadata_cache)
+        except TypeError:
+            metadata = metadata_loader(env_id)
+        except ImportError as exc:
+            logger.warning("Skipping env_args validation for '%s': %s", env_id, exc)
+            return merged
+
+    if metadata:
+        validate_env_args_or_raise(
+            env_id,
+            merged,
+            metadata,
+            metadata_cache=metadata_cache,
+            allow_unknown=allow_unknown,
+            enforce_required=enforce_required,
+        )
+
+    return merged
+
+
 def gather_env_cli_metadata(env_id: str) -> list[EnvParam]:
     """Collect parameter metadata for the given environment identifier."""
     load_fn = _resolve_load_environment(env_id)
@@ -513,4 +559,5 @@ __all__ = [
     "gather_env_cli_metadata",
     "validate_env_arg_values",
     "validate_env_args_or_raise",
+    "merge_env_args_with_validation",
 ]
