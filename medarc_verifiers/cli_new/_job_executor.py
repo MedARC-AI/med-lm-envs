@@ -11,10 +11,11 @@ from time import perf_counter
 from typing import Any, Literal, Sequence, Mapping
 from pydantic import BaseModel, field_validator
 
-from verifiers.types import ClientConfig, EvalConfig, GenerateOutputs
+from verifiers.types import GenerateOutputs
 from verifiers.utils.eval_utils import run_evaluation
 
 from medarc_verifiers.cli.utils.reporting import compute_average, compute_metric_averages
+from medarc_verifiers.cli_new._eval_builder import build_client_config, build_eval_config
 from medarc_verifiers.cli_new._job_builder import ResolvedJob
 from medarc_verifiers.cli_new._manifest import RunManifest
 from medarc_verifiers.cli_new._schemas import ModelConfigSchema
@@ -24,16 +25,8 @@ from medarc_verifiers.cli_new.utils.endpoint_utils import (
     EnvMetadataCache,
     load_endpoint_registry,
     load_env_metadata,
-    resolve_model_endpoint,
 )
-from medarc_verifiers.cli_new.utils.env_args import validate_env_args_or_raise
-from medarc_verifiers.cli_new.utils.shared import (
-    DEFAULT_BATCH_MAX_CONCURRENT,
-    ensure_root_logging,
-    normalize_headers,
-    resolve_env_identifier,
-)
-from medarc_verifiers.utils import sanitize_sampling_args_for_openai
+from medarc_verifiers.cli_new.utils.shared import DEFAULT_BATCH_MAX_CONCURRENT, ensure_root_logging, resolve_env_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -129,11 +122,37 @@ def execute_jobs(
             manifest.record_job_start(job.job_id)
 
         try:
-            eval_config = _build_eval_config(
-                job,
-                settings=settings,
-                endpoints_cache=endpoints_cache,
+            endpoints = _load_endpoints_for_model(job.model, settings, cache=endpoints_cache)
+            resolved_model, client_config = build_client_config(
+                job.model,
+                endpoints=endpoints,
+                default_api_key_var=settings.default_api_key_var,
+                default_api_base_url=settings.default_api_base_url,
+                timeout_override=settings.timeout,
+                headers=job.model.headers,
+            )
+            eval_config = build_eval_config(
+                job_label=job.job_id,
+                model_cfg=job.model,
+                env_cfg=job.env,
+                env_args=job.env_args,
+                sampling_args=job.sampling_args,
+                cli_env_args=settings.cli_env_args,
+                cli_sampling_args=settings.cli_sampling_args,
+                resolved_model=resolved_model,
+                client_config=client_config,
+                env_dir=settings.env_dir,
+                max_concurrent_override=settings.max_concurrent,
+                max_concurrent_generation=settings.max_concurrent_generation,
+                max_concurrent_scoring=settings.max_concurrent_scoring,
+                default_max_concurrent=DEFAULT_BATCH_MAX_CONCURRENT,
+                save_results=settings.save_results,
+                save_to_hf_hub=settings.save_to_hf_hub,
+                hf_hub_dataset_name=settings.hf_hub_dataset_name,
+                verbose=settings.verbose,
                 env_metadata_cache=env_metadata_cache,
+                env_metadata_loader=load_env_metadata,
+                enforce_required_env_args=True,
             )
         except KeyboardInterrupt:
             logger.warning("Interrupted while preparing job %s.", job_label)
@@ -248,130 +267,6 @@ def execute_jobs(
         logger.warning("Execution interrupted by user; %d job(s) left pending.", len(jobs) - len(results))
 
     return results
-
-
-def _build_eval_config(
-    job: ResolvedJob,
-    *,
-    settings: ExecutorSettings,
-    endpoints_cache: EndpointRegistryCache | None,
-    env_metadata_cache: EnvMetadataCache | None,
-) -> EvalConfig:
-    """Construct the EvalConfig for a given job."""
-    model_cfg = job.model
-    env_cfg = job.env
-
-    headers = normalize_headers(model_cfg.headers)
-    endpoints = _load_endpoints_for_model(model_cfg, settings, cache=endpoints_cache)
-    model_alias = model_cfg.model or model_cfg.id
-    if not model_alias:
-        raise ValueError("Model entries must define 'id' or 'model'.")
-
-    default_key_var = model_cfg.api_key_var or settings.default_api_key_var
-    default_base_url = model_cfg.api_base_url or settings.default_api_base_url
-    resolved_model, api_key_var, api_base_url = resolve_model_endpoint(
-        model_alias,
-        endpoints,
-        default_key_var=default_key_var,
-        default_base_url=default_base_url,
-    )
-
-    client_kwargs: dict[str, Any] = {
-        "api_key_var": api_key_var,
-        "api_base_url": api_base_url,
-        "extra_headers": headers or None,
-    }
-    timeout = settings.timeout if settings.timeout is not None else model_cfg.timeout
-    if timeout is not None:
-        client_kwargs["timeout"] = timeout
-    if model_cfg.max_connections is not None:
-        client_kwargs["max_connections"] = model_cfg.max_connections
-    if model_cfg.max_keepalive_connections is not None:
-        client_kwargs["max_keepalive_connections"] = model_cfg.max_keepalive_connections
-    if model_cfg.max_retries is not None:
-        client_kwargs["max_retries"] = model_cfg.max_retries
-    client_config = ClientConfig(**client_kwargs)
-
-    env_id = resolve_env_identifier(env_cfg)
-    env_args = dict(job.env_args)
-
-    # Apply CLI overrides (Layer 5: highest precedence)
-    # This is the final merge in the precedence chain:
-    # env.env_args → model.env_args → model.env_overrides → job.env_args → CLI
-    if settings.cli_env_args:
-        # Log what CLI is overriding for debugging
-        if settings.verbose:
-            overridden_keys = set(env_args) & set(settings.cli_env_args)
-            new_keys = set(settings.cli_env_args) - set(env_args)
-            if overridden_keys:
-                logger.debug(
-                    "CLI overriding env_args for job '%s': %s",
-                    job.job_id,
-                    {k: f"{env_args[k]} → {settings.cli_env_args[k]}" for k in overridden_keys},
-                )
-            if new_keys:
-                logger.debug("CLI adding new env_args for job '%s': %s", job.job_id, list(new_keys))
-        env_args.update(settings.cli_env_args)
-
-    # Phase 2 validation: Enforce required parameters now that CLI overrides are merged
-    # This is stricter than load-time validation (Phase 1 in _config_loader.py)
-    try:
-        metadata = load_env_metadata(env_id, cache=env_metadata_cache)
-    except ImportError as exc:
-        logger.warning("Skipping env_args validation for '%s': %s", env_id, exc)
-    else:
-        if metadata:
-            # Now enforce required parameters (unlike Phase 1 which was lenient)
-            validate_env_args_or_raise(
-                env_id,
-                env_args,
-                metadata,
-                enforce_required=True,  # Strict validation before execution
-            )
-
-    # Resolve max_concurrent with proper precedence:
-    # 1. CLI --max-concurrent (settings.max_concurrent)
-    # 2. Model config max_concurrent (model_cfg.max_concurrent)
-    # 3. Environment config max_concurrent (env_cfg.max_concurrent)
-    # 4. DEFAULT_BATCH_MAX_CONCURRENT constant
-    max_concurrent = (
-        settings.max_concurrent or model_cfg.max_concurrent or env_cfg.max_concurrent or DEFAULT_BATCH_MAX_CONCURRENT
-    )
-    if env_cfg.verbose is None:
-        verbose_flag = settings.verbose
-    else:
-        verbose_flag = env_cfg.verbose
-
-    save_every = env_cfg.save_every if env_cfg.save_every is not None else -1
-
-    sampling_args = dict(job.sampling_args)
-    if settings.cli_sampling_args:
-        sampling_args.update(settings.cli_sampling_args)
-    # Route non-OpenAI kwargs (e.g., top_k, min_p) into extra_body to avoid client errors
-    sampling_args = sanitize_sampling_args_for_openai(sampling_args)
-    state_columns = list(env_cfg.state_columns) if env_cfg.state_columns else None
-
-    return EvalConfig(
-        env_id=env_id,
-        env_args=env_args,
-        env_dir_path=str(settings.env_dir),
-        model=resolved_model,
-        client_config=client_config,
-        sampling_args=sampling_args,
-        num_examples=env_cfg.num_examples,
-        rollouts_per_example=env_cfg.rollouts_per_example,
-        max_concurrent=max_concurrent,
-        max_concurrent_generation=settings.max_concurrent_generation,
-        max_concurrent_scoring=settings.max_concurrent_scoring,
-        interleave_scoring=env_cfg.interleave_scoring,
-        print_results=env_cfg.print_results,
-        verbose=verbose_flag,
-        state_columns=state_columns,
-        save_results=settings.save_results,
-        save_every=save_every,
-        save_to_hf_hub=settings.save_to_hf_hub,
-        hf_hub_dataset_name=settings.hf_hub_dataset_name,
-    )
 
 
 def _load_endpoints_for_model(

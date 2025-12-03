@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
-from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from textwrap import dedent
 from typing import Any, Mapping, Sequence
@@ -25,21 +22,19 @@ from pydantic import ValidationError
 from medarc_verifiers.cli_new._config_loader import ConfigFormatError, load_run_config
 from medarc_verifiers.cli_new._job_builder import ResolvedJob, build_jobs
 from medarc_verifiers.cli_new._job_executor import ExecutorSettings, JobExecutionResult, execute_jobs
-from medarc_verifiers.cli_new._manifest import (
-    MANIFEST_FILENAME,
-    ManifestJobEntry,
-    RunManifest,
-    compute_job_checksum,
-    compute_snapshot_checksum,
-)
+from medarc_verifiers.cli_new._manifest import MANIFEST_FILENAME, ManifestJobEntry, RunManifest, compute_snapshot_checksum
+from medarc_verifiers.cli_new._manifest_planner import ManifestPlan, ManifestPlanner
 from medarc_verifiers.cli_new._single_run import run_single_mode
 from medarc_verifiers.cli_new.process import ProcessOptions, ProcessResult, run_process
 from medarc_verifiers.cli_new.process.hf_sync import HFSyncConfig
 from medarc_verifiers.cli_new.process.winrate import WinrateConfig
-from medarc_verifiers.cli_new.process.winrate_runner import print_winrate_summary_markdown, run_winrate
+from medarc_verifiers.cli_new.process.winrate_runner import (
+    _resolve_source,
+    list_models,
+    print_winrate_summary_markdown,
+    run_winrate,
+)
 from medarc_verifiers.cli_new.utils.overrides import build_cli_override
-from medarc_verifiers.cli_new.utils.shared import slugify
-from medarc_verifiers.utils.pathing import from_project_relative
 from medarc_verifiers.cli_new._schemas import EnvironmentConfigSchema, EnvironmentExportConfig
 
 logger = logging.getLogger(__name__)
@@ -265,6 +260,10 @@ def build_winrate_parser() -> argparse.ArgumentParser:
         help="Output path for winrates JSON (default: <processed_dir>/../winrate/winrates-<timestamp>.json).",
     )
     parser.add_argument(
+        "--output-name",
+        help="Base name for winrates JSON (timestamp appended automatically).",
+    )
+    parser.add_argument(
         "--processed-at",
         help="Timestamp used for default output naming (ISO8601).",
     )
@@ -311,6 +310,11 @@ def build_winrate_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hf-repo", help="Hugging Face repo id for dataset download.")
     parser.add_argument("--hf-branch", help="Target HF branch or revision for download.")
     parser.add_argument("--hf-token", help="Auth token for HF operations.")
+    parser.add_argument(
+        "--list-models",
+        action="store_true",
+        help="List available model ids in the source parquet files (local or HF) and exit.",
+    )
     return parser
 
 
@@ -455,6 +459,19 @@ def _run_winrate_mode(argv: Sequence[str]) -> int:
         token=args.hf_token,
     )
 
+    source_dir, datasets, source_desc = _resolve_source(args.processed_dir, hf_config if args.hf_repo else None)
+    if not datasets:
+        logger.error("No datasets found from %s.", source_desc)
+        return 1
+
+    if args.list_models:
+        models = list_models(datasets)
+        if models:
+            print("\n".join(models))
+        else:
+            logger.info("No models found in datasets from %s.", source_desc)
+        return 0
+
     cfg = WinrateConfig(
         missing_policy=args.missing_policy,
         epsilon=args.epsilon,
@@ -467,8 +484,9 @@ def _run_winrate_mode(argv: Sequence[str]) -> int:
 
     try:
         winrate_result = run_winrate(
-            processed_dir=args.processed_dir,
+            processed_dir=source_dir,
             output_path=args.output,
+            output_name=args.output_name,
             config=cfg,
             processed_at=args.processed_at,
             hf_config=hf_config,
@@ -511,22 +529,22 @@ def _execute_batch(args: argparse.Namespace) -> int:
     forced_envs = _parse_forced_envs(args.forced)
     forced_envs.update(_collect_rerun_envs(run_config.envs))
 
+    planner = ManifestPlanner(
+        output_dir=output_dir,
+        run_id=run_id,
+        run_name=run_name,
+        config_path=config_path,
+        config_checksum=config_checksum,
+        jobs=jobs,
+        env_args_map=env_args_map,
+        sampling_args_map=sampling_args_map,
+        restart_source=args.restart,
+        auto_resume=bool(args.auto_resume),
+        persist=not bool(args.dry_run),
+    )
+
     try:
-        manifest_plan = _prepare_manifest_plan(
-            output_dir=output_dir,
-            run_id=run_id,
-            run_name=run_name,
-            config_path=config_path,
-            config_checksum=config_checksum,
-            jobs=jobs,
-            env_args_map=env_args_map,
-            sampling_args_map=sampling_args_map,
-            restart_source=args.restart,
-            auto_resume=bool(args.auto_resume),
-            force_all=bool(args.force),
-            forced_envs=forced_envs,
-            dry_run=bool(args.dry_run),
-        )
+        manifest_plan = planner.plan(force_all=bool(args.force), forced_envs=forced_envs)
     except ValueError as exc:
         logger.error("%s", exc)
         return 1
@@ -680,306 +698,6 @@ def _collect_rerun_envs(envs: Mapping[str, EnvironmentConfigSchema]) -> set[str]
     return rerun
 
 
-@dataclass
-class ManifestPlan:
-    manifest: RunManifest
-    runnable_job_ids: set[str]
-    reused_job_ids: set[str]
-
-
-def _prepare_manifest_plan(
-    *,
-    output_dir: Path,
-    run_id: str | None,
-    run_name: str,
-    config_path: Path,
-    config_checksum: str,
-    jobs: Sequence[ResolvedJob],
-    env_args_map: Mapping[str, Mapping[str, Any]],
-    sampling_args_map: Mapping[str, Mapping[str, Any]],
-    restart_source: str | None,
-    auto_resume: bool,
-    force_all: bool,
-    forced_envs: set[str],
-    dry_run: bool,
-) -> ManifestPlan:
-    persist = not dry_run
-    checksum = config_checksum
-
-    # Helper to compute run_dir lazily
-    def _run_dir_for(rid: str) -> Path:
-        return output_dir / rid
-
-    if restart_source:
-        restart_path = Path(restart_source).expanduser()
-        seed_dir: Path | None = None
-        # Determine if restart_source refers to an existing run directory (path or id under output_dir)
-        if restart_path.exists() and restart_path.is_dir():
-            seed_dir = restart_path.resolve()
-        else:
-            candidate = (output_dir / restart_source).resolve()
-            if candidate.exists() and candidate.is_dir():
-                seed_dir = candidate
-        if seed_dir and (seed_dir / MANIFEST_FILENAME).exists():
-            seed_manifest = RunManifest.load(seed_dir / MANIFEST_FILENAME, persist=persist)
-            dest_run_id = seed_manifest.model.run_id
-            run_dir = seed_dir
-            logger.info(
-                "Restart in-place: extending existing run '%s' with any new jobs from current config.", dest_run_id
-            )
-            # Append any new jobs (or update checksums)
-            for job in jobs:
-                seed_manifest.ensure_job(
-                    job,
-                    env_args=env_args_map[job.job_id],
-                    sampling_args=sampling_args_map[job.job_id],
-                    results_dir=run_dir / job.job_id,
-                )
-            runnable, reused = _plan_regen_jobs(
-                manifest=seed_manifest,
-                seed_manifest=seed_manifest,
-                jobs=jobs,
-                force_all=force_all,
-                forced_envs=forced_envs,
-            )
-            return ManifestPlan(manifest=seed_manifest, runnable_job_ids=runnable, reused_job_ids=reused)
-        # Fall back to creating a new restarted run
-        if seed_dir is None:
-            raise ValueError(f"Run '{restart_source}' does not contain {MANIFEST_FILENAME}.")
-        seed_manifest = RunManifest.load(seed_dir / MANIFEST_FILENAME, persist=False)
-        dest_run_id = run_id or _generate_run_id(run_name)
-        run_dir = _run_dir_for(dest_run_id)
-        manifest_path = run_dir / MANIFEST_FILENAME
-        if run_dir.exists() and manifest_path.exists() and persist:
-            raise ValueError(f"Run directory '{run_dir}' already exists; choose a different --run-id.")
-        logger.info("Restarting run '%s' from prior run '%s'.", dest_run_id, restart_source)
-        manifest = RunManifest.create(
-            run_dir=run_dir,
-            run_id=dest_run_id,
-            run_name=run_name,
-            config_source=config_path,
-            config_checksum=checksum,
-            jobs=jobs,
-            env_args_map=env_args_map,
-            sampling_args_map=sampling_args_map,
-            persist=persist,
-            restart_source=restart_source,
-        )
-        runnable, reused = _plan_regen_jobs(
-            manifest=manifest,
-            seed_manifest=seed_manifest,
-            jobs=jobs,
-            force_all=force_all,
-            forced_envs=forced_envs,
-        )
-        if reused:
-            logger.info("Reused %d completed job(s) from '%s'.", len(reused), restart_source)
-        return ManifestPlan(manifest=manifest, runnable_job_ids=runnable, reused_job_ids=reused)
-
-    manifest: RunManifest | None = None
-    if auto_resume:
-        # If a specific run_id is provided, resume it; otherwise discover a candidate
-        if run_id:
-            run_dir = _run_dir_for(run_id)
-            manifest_path = run_dir / MANIFEST_FILENAME
-            if run_dir.exists() and manifest_path.exists():
-                manifest = RunManifest.load(manifest_path, persist=persist)
-                existing_checksum = manifest.model.config_checksum
-                if existing_checksum and existing_checksum != checksum:
-                    raise ValueError(
-                        f"Run '{run_id}' was created from a different configuration. Use --regen {run_id} to seed a new run."
-                    )
-            elif run_dir.exists():
-                raise ValueError(f"Run '{run_id}' is missing {MANIFEST_FILENAME}; cannot auto-resume.")
-            else:
-                logger.info(
-                    "Auto-resume requested for run '%s', but no prior run exists. Starting a fresh run with this id.",
-                    run_id,
-                )
-        else:
-            candidate = _find_auto_resume_candidate(output_dir, expected_checksum=checksum)
-            if candidate is None:
-                logger.info(
-                    "Auto-resume enabled but no matching run exists in %s; starting a fresh run. "
-                    "Use --no-auto-resume to always start new runs.",
-                    output_dir,
-                )
-            else:
-                run_dir = candidate
-                manifest_path = run_dir / MANIFEST_FILENAME
-                manifest = RunManifest.load(manifest_path, persist=persist)
-
-        if manifest is not None:
-            runnable = _plan_auto_resume_jobs(
-                manifest=manifest,
-                jobs=jobs,
-                env_args_map=env_args_map,
-                sampling_args_map=sampling_args_map,
-                force_all=force_all,
-                forced_envs=forced_envs,
-            )
-            return ManifestPlan(manifest=manifest, runnable_job_ids=runnable, reused_job_ids=set())
-
-    # Fresh run: generate a new run id if not provided
-    dest_run_id = run_id or _generate_run_id(run_name)
-    run_dir = _run_dir_for(dest_run_id)
-
-    manifest = RunManifest.create(
-        run_dir=run_dir,
-        run_id=dest_run_id,
-        run_name=run_name,
-        config_source=config_path,
-        config_checksum=checksum,
-        jobs=jobs,
-        env_args_map=env_args_map,
-        sampling_args_map=sampling_args_map,
-        persist=persist,
-        restart_source=None,
-    )
-    runnable = {job.job_id for job in jobs}
-    return ManifestPlan(manifest=manifest, runnable_job_ids=runnable, reused_job_ids=set())
-
-
-def _find_auto_resume_candidate(output_dir: Path, *, expected_checksum: str) -> Path | None:
-    """Pick the best prior run directory to auto-resume for the given checksum.
-
-    Preference order:
-    1) Matching config checksum and incomplete (completed < total)
-    2) Matching config checksum and most recent updated_at
-    Returns the run directory Path or None if no candidates.
-    """
-    candidates: list[tuple[bool, float, Path]] = []
-    for child in sorted(output_dir.iterdir() if output_dir.exists() else [], key=lambda p: p.name):
-        if not child.is_dir():
-            continue
-        manifest_path = child / MANIFEST_FILENAME
-        if not manifest_path.exists():
-            continue
-        try:
-            with manifest_path.open("r", encoding="utf-8") as fh:
-                payload = json.load(fh)
-        except Exception:  # noqa: BLE001
-            continue
-        if payload.get("config_checksum") != expected_checksum:
-            continue
-        summary = payload.get("summary") or {}
-        total = int(summary.get("total", 0))
-        completed = int(summary.get("completed", 0))
-        incomplete = completed < total if total > 0 else True
-        updated_at = payload.get("updated_at") or payload.get("created_at")
-        try:
-            ts = _parse_iso_ts(updated_at) if isinstance(updated_at, str) else (manifest_path.stat().st_mtime)
-        except Exception:  # noqa: BLE001
-            ts = manifest_path.stat().st_mtime
-        candidates.append((incomplete, float(ts), child))
-
-    if not candidates:
-        return None
-    candidates.sort(key=lambda t: (t[0], t[1]))
-    return candidates[-1][2]
-
-
-def _parse_iso_ts(value: str) -> float:
-    # Accept timestamps like '2025-11-07T01:23:45Z' or ISO with offset
-    try:
-        from datetime import datetime
-
-        normalized = value.replace("Z", "+00:00")
-        return datetime.fromisoformat(normalized).timestamp()
-    except Exception:  # noqa: BLE001
-        return 0.0
-
-
-def _plan_auto_resume_jobs(
-    *,
-    manifest: RunManifest,
-    jobs: Sequence[ResolvedJob],
-    env_args_map: Mapping[str, Mapping[str, Any]],
-    sampling_args_map: Mapping[str, Mapping[str, Any]],
-    force_all: bool,
-    forced_envs: set[str],
-) -> set[str]:
-    job_lookup = {job.job_id: job for job in jobs}
-    runnable: set[str] = set()
-    manifest_job_ids = {entry.job_id for entry in manifest.jobs if entry.job_id}
-    new_jobs = set(job_lookup) - manifest_job_ids
-    if new_jobs:
-        logger.info(
-            "Auto-resume ignoring %d new job(s) not present in the manifest: %s",
-            len(new_jobs),
-            ", ".join(sorted(new_jobs)),
-        )
-    for entry in manifest.jobs:
-        job_id = entry.job_id
-        if not job_id:
-            continue
-        job = job_lookup.get(job_id)
-        if job is None:
-            logger.debug("Manifest contains job '%s' that is absent from the current config; skipping.", job_id)
-            continue
-        expected_checksum = compute_job_checksum(
-            job,
-            env_args=env_args_map[job_id],
-            sampling_args=sampling_args_map[job_id],
-        )
-        if entry.checksum != expected_checksum:
-            raise ValueError(
-                f"Job '{job_id}' arguments changed since the manifest was recorded; use --regen to create a new run."
-            )
-        env_id = (entry.env_id or job.env.id or job.job_id).lower()
-        forced = force_all or env_id in forced_envs
-        if forced or entry.status != "completed":
-            runnable.add(job_id)
-    return runnable
-
-
-def _plan_regen_jobs(
-    *,
-    manifest: RunManifest,
-    seed_manifest: RunManifest,
-    jobs: Sequence[ResolvedJob],
-    force_all: bool,
-    forced_envs: set[str],
-) -> tuple[set[str], set[str]]:
-    runnable: set[str] = set()
-    reused: set[str] = set()
-    for job in jobs:
-        entry = manifest.job_entry(job.job_id)
-        if entry is None:
-            continue
-        seed_entry = seed_manifest.job_entry(job.job_id)
-        env_id = (entry.env_id or job.env.id or job.job_id).lower()
-        forced = force_all or env_id in forced_envs
-        if (
-            not forced
-            and seed_entry is not None
-            and seed_entry.status == "completed"
-            and seed_entry.checksum == entry.checksum
-        ):
-            seed_results_dir = seed_entry.results_dir
-            resolved_results_dir: Path | str | None = None
-            if isinstance(seed_results_dir, str):
-                seed_path = Path(seed_results_dir)
-                if seed_path.is_absolute():
-                    resolved_results_dir = seed_path
-                elif seed_path.parts and seed_path.parts[0] == "runs":
-                    resolved_results_dir = from_project_relative(seed_path)
-                else:
-                    resolved_results_dir = (seed_manifest.run_dir / seed_path).resolve()
-            elif isinstance(seed_results_dir, Path):
-                resolved_results_dir = seed_results_dir
-            manifest.record_job_skip(
-                job.job_id,
-                reason="up_to_date",
-                results_dir=resolved_results_dir or seed_results_dir,
-                source_entry=seed_entry,
-            )
-            reused.add(job.job_id)
-            continue
-        runnable.add(job.job_id)
-    return runnable, reused
-
-
 def _filter_jobs(jobs: Sequence[ResolvedJob], job_filters: Sequence[str] | None) -> list[ResolvedJob]:
     if not job_filters:
         return list(jobs)
@@ -989,12 +707,6 @@ def _filter_jobs(jobs: Sequence[ResolvedJob], job_filters: Sequence[str] | None)
     if missing:
         logger.warning("Unknown job ids requested: %s", ", ".join(sorted(missing)))
     return selected
-
-
-def _generate_run_id(name: str) -> str:
-    base = slugify(name or "run")
-    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    return f"{base}-{timestamp}"
 
 
 def _coerce_optional_str(value: str | None) -> str | None:

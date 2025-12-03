@@ -10,9 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from verifiers.types import ClientConfig, EvalConfig
 from verifiers.utils.eval_utils import run_evaluation
 
+from medarc_verifiers.cli_new._eval_builder import build_client_config, build_eval_config
+from medarc_verifiers.cli_new._schemas import ModelConfigSchema
 from medarc_verifiers.cli_new.utils.env_args import (
     EnvParam,
     MissingEnvParamError,
@@ -31,9 +32,7 @@ from medarc_verifiers.cli_new.utils.shared import (
     merge_env_args,
     merge_sampling_args,
     normalize_headers,
-    resolve_endpoint_selection,
 )
-from medarc_verifiers.utils import sanitize_sampling_args_for_openai
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +46,23 @@ class EnvOptionBinding:
     param: EnvParam
     dest: str
     default: Any
+
+
+@dataclass
+class _SingleRunEnvConfig:
+    """Lightweight env config to reuse the shared EvalConfig builder."""
+
+    id: str
+    module: str | None = None
+    matrix_base_id: str | None = None
+    num_examples: int = 5
+    rollouts_per_example: int = 1
+    max_concurrent: int | None = None
+    interleave_scoring: bool = True
+    state_columns: list[str] | None = None
+    save_every: int | None = None
+    print_results: bool = True
+    verbose: bool | None = False
 
 
 def run_single_mode(argv: Sequence[str] | None = None) -> int:
@@ -133,52 +149,49 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001
         parser.error(f"Failed to load endpoints registry: {exc}")
 
-    resolved_model, api_key_var, api_base_url = resolve_endpoint_selection(
-        args.model,
-        endpoints,
-        default_key_var=args.api_key_var,
-        default_base_url=args.api_base_url,
+    model_cfg = ModelConfigSchema(model=args.model)
+    resolved_model, client_config = build_client_config(
+        model_cfg,
+        endpoints=endpoints,
+        default_api_key_var=args.api_key_var,
+        default_api_base_url=args.api_base_url,
+        timeout_override=args.timeout,
+        headers=headers,
     )
 
-    client_kwargs: dict[str, Any] = {
-        "api_key_var": api_key_var,
-        "api_base_url": api_base_url,
-        "extra_headers": headers or None,
-    }
-    if args.timeout is not None:
-        client_kwargs["timeout"] = args.timeout
-    client_config = ClientConfig(**client_kwargs)
-    client_kwargs: dict[str, Any] = {
-        "api_key_var": api_key_var,
-        "api_base_url": api_base_url,
-        "extra_headers": headers or None,
-    }
-    if args.timeout is not None:
-        client_kwargs["timeout"] = args.timeout
-    client_config = ClientConfig(**client_kwargs)
-
-    sanitized_sampling_args = sanitize_sampling_args_for_openai(merged_sampling_args)
-
-    eval_config = EvalConfig(
-        env_id=args.env,
-        env_args=merged_env_args,
-        env_dir_path=str(Path(args.env_dir_path).expanduser()),
-        model=resolved_model,
-        client_config=client_config,
-        sampling_args=sanitized_sampling_args,
+    env_cfg = _SingleRunEnvConfig(
+        id=args.env,
         num_examples=args.num_examples,
         rollouts_per_example=args.rollouts_per_example,
         max_concurrent=args.max_concurrent,
-        max_concurrent_generation=args.max_concurrent_generation,
-        max_concurrent_scoring=args.max_concurrent_scoring,
         interleave_scoring=not args.no_interleave_scoring,
+        state_columns=state_columns or None,
+        save_every=args.save_every,
         print_results=True,
         verbose=args.verbose,
-        state_columns=state_columns or None,
+    )
+
+    eval_config = build_eval_config(
+        job_label=args.env,
+        model_cfg=model_cfg,
+        env_cfg=env_cfg,
+        env_args=merged_env_args,
+        sampling_args=merged_sampling_args,
+        cli_env_args=None,
+        cli_sampling_args=None,
+        resolved_model=resolved_model,
+        client_config=client_config,
+        env_dir=Path(args.env_dir_path).expanduser(),
+        max_concurrent_override=args.max_concurrent,
+        max_concurrent_generation=args.max_concurrent_generation,
+        max_concurrent_scoring=args.max_concurrent_scoring,
+        default_max_concurrent=DEFAULT_SINGLE_RUN_MAX_CONCURRENT,
         save_results=args.save_results,
-        save_every=args.save_every,
         save_to_hf_hub=args.save_to_hf_hub,
         hf_hub_dataset_name=args.hf_hub_dataset_name or None,
+        verbose=args.verbose,
+        env_metadata_cache=None,
+        enforce_required_env_args=True,
     )
 
     if args.dry_run:
