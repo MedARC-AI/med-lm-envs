@@ -189,10 +189,10 @@ def test_run_winrate_from_hf(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
 
     pd.DataFrame(payload).to_parquet(parquet_path, index=False)
 
-    def _fake_download_hf_repo(config: HFSyncConfig) -> Path:
+    def _fake_download_hf_repo(*_args, **_kwargs) -> Path:
         return hf_dir
 
-    monkeypatch.setattr("medarc_verifiers.cli_new.process.winrate_runner._download_hf_repo", _fake_download_hf_repo)
+    monkeypatch.setattr("medarc_verifiers.cli_new.process.winrate_runner.download_hf_repo", _fake_download_hf_repo)
 
     cfg = WinrateConfig()
     result = run_winrate(

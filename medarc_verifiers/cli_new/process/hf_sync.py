@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
 import polars as pl
@@ -26,6 +28,29 @@ class HFSyncConfig:
     private: bool = False
     dry_run: bool = False
     token: str | None = None
+
+    @classmethod
+    def from_cli(
+        cls,
+        *,
+        repo: str | None,
+        merge_strategy: str = "append",
+        branch: str | None = None,
+        token: str | None = None,
+        private: bool | None = None,
+        dry_run: bool | None = None,
+    ) -> "HFSyncConfig" | None:
+        """Build an HFSyncConfig from CLI args while tolerating absence of a repo."""
+        if not repo:
+            return None
+        return cls(
+            repo_id=repo,
+            merge_strategy=merge_strategy,
+            branch=branch,
+            token=token,
+            private=bool(private) if private is not None else False,
+            dry_run=bool(dry_run) if dry_run is not None else False,
+        )
 
 
 @dataclass(slots=True)
@@ -140,6 +165,41 @@ def _merge_splits(
             )
         )
     return merged, stats
+
+
+def download_hf_repo(
+    *,
+    repo_id: str,
+    branch: str | None,
+    token: str | None,
+    allow_patterns: str | Sequence[str] = "*.parquet",
+    local_dir: Path | None = None,
+    local_only: bool = False,
+) -> Path:
+    """Download a HF dataset repo snapshot to a temp dir and return the path."""
+    try:
+        from huggingface_hub import snapshot_download  # type: ignore[import-not-found]
+    except Exception as exc:  # noqa: BLE001
+        raise ImportError("huggingface_hub is required for HF-backed downloads.") from exc
+
+    if local_only and local_dir is not None:
+        temp_root = Path(local_dir)
+        if temp_root.is_dir() and any(temp_root.iterdir()):
+            return temp_root
+        raise FileNotFoundError(f"Local HF repo not found at {temp_root}")
+
+    temp_root = Path(tempfile.mkdtemp(prefix="hf-sync-")) if local_dir is None else Path(local_dir)
+
+    snapshot_download(
+        repo_id=repo_id,
+        repo_type="dataset",
+        revision=branch,
+        token=token,
+        allow_patterns=allow_patterns,
+        local_dir=temp_root,
+        local_dir_use_symlinks=False,
+    )
+    return temp_root
 
 
 def _merge_split(

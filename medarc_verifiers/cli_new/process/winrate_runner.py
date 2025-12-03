@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
-import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import Sequence
 
 from medarc_verifiers.cli_new.process import winrate as _win
-from medarc_verifiers.cli_new.process.hf_sync import HFSyncConfig
+from medarc_verifiers.cli_new.process.hf_sync import HFSyncConfig, download_hf_repo
 from medarc_verifiers.utils.pathing import from_project_relative
 
 logger = logging.getLogger(__name__)
@@ -134,33 +133,20 @@ def _resolve_source(
     hf_config: HFSyncConfig | None,
 ) -> tuple[Path, list[tuple[str, Path]], str]:
     if hf_config and hf_config.repo_id:
-        local_dir = _download_hf_repo(hf_config)
+        local_dir = download_hf_repo(
+            repo_id=hf_config.repo_id,
+            branch=hf_config.branch,
+            token=hf_config.token,
+            allow_patterns="*.parquet",
+            local_dir=None,
+            local_only=False,
+        )
         datasets = discover_datasets(local_dir)
         source_desc = f"HF repo {hf_config.repo_id}"
         return local_dir, datasets, source_desc
     datasets = discover_datasets(processed_dir)
     source_desc = f"processed dir {processed_dir}"
     return processed_dir, datasets, source_desc
-
-
-def _download_hf_repo(config: HFSyncConfig) -> Path:
-    """Download a HF dataset repo snapshot to a temp dir and return the path."""
-    try:
-        from huggingface_hub import snapshot_download  # type: ignore[import-not-found]
-    except Exception as exc:  # noqa: BLE001
-        raise ImportError("huggingface_hub is required for HF-backed winrate downloads.") from exc
-
-    temp_root = Path(tempfile.mkdtemp(prefix="winrate-hf-"))
-    snapshot_download(
-        repo_id=config.repo_id,
-        repo_type="dataset",
-        revision=config.branch,
-        token=config.token,
-        allow_patterns="*.parquet",
-        local_dir=temp_root,
-        local_dir_use_symlinks=False,
-    )
-    return temp_root
 
 
 def list_models(datasets: Sequence[tuple[str, Path]]) -> list[str]:
@@ -206,7 +192,7 @@ def print_winrate_summary_markdown(result: _win.ModelCentricResult) -> None:
     for model, sm, lw, n_ds in scoreboard:
         sm_str = f"{sm:.4f}" if isinstance(sm, (int, float)) and sm is not None else "-"
         lw_str = f"{lw:.4f}" if isinstance(lw, (int, float)) and lw is not None else "-"
-        rows.append({"Model": model, "SimpleAvg": sm_str, "LnWeighted": lw_str, "Datasets": str(n_ds)})
+        rows.append({"Model": model, "Average": sm_str, "Weighted Avg": lw_str, "Datasets": str(n_ds)})
 
     try:
         from tabulate import tabulate  # type: ignore[import-not-found]
@@ -218,12 +204,9 @@ def print_winrate_summary_markdown(result: _win.ModelCentricResult) -> None:
         pass
 
     try:
-        import polars as pl  # type: ignore[import-not-found]
-
         import pandas as pd  # type: ignore[import-not-found]  # noqa: F401
 
-        df = pl.DataFrame(rows).to_pandas()
-        md_table = df.to_markdown(index=False)  # type: ignore[attr-defined]
+        md_table = pd.DataFrame(rows).to_markdown(index=False)  # type: ignore[attr-defined]
         _emit_markdown_table(md_table)
         return
     except Exception:
@@ -233,11 +216,11 @@ def print_winrate_summary_markdown(result: _win.ModelCentricResult) -> None:
         "",
         "Mean win rate per model (HELM-style):",
         "",
-        "| Model | SimpleAvg | LnWeighted | Datasets |",
+        "| Model | Average | Weighted Avg | Datasets |",
         "|-------|----------:|-----------:|---------:|",
     ]
     for row in rows:
-        lines.append(f"| {row['Model']} | {row['SimpleAvg']} | {row['LnWeighted']} | {row['Datasets']} |")
+        lines.append(f"| {row['Model']} | {row['Average']} | {row['Weighted Avg']} | {row['Datasets']} |")
     _emit_markdown_table("\n".join(lines))
 
 
