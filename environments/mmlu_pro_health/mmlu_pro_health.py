@@ -109,7 +109,7 @@ def load_environment(
     **kwargs,
 ) -> vf.Environment:
     """
-    Single-turn MMLU-Pro-Health environment using HuggingFace `mkieffer/MMLU-Pro-Health` dataset
+    Single-turn MMLU-Pro-Health environment using HuggingFace `TIGER-Lab/MMLU-Pro` dataset
 
     Each example is normalized to the fields expected by `vf.SingleTurnEnv`:
         {
@@ -125,7 +125,21 @@ def load_environment(
 
     # -------- load dataset --------
     # the validation split is used for few-shot examples, following the MMLU-Pro eval script
-    test_raw, few_shot_examples = load_dataset("mkieffer/MMLU-Pro-Health", split=["test", "validation"])
+    test_raw, few_shot_examples = [
+        ds.filter(lambda row: row["category"] == "health")
+        for ds in load_dataset("TIGER-Lab/MMLU-Pro", split=["test", "validation"])
+    ]
+
+    # -------- convert options from list to dict --------
+    # MMLU-Pro options are stored as a list, convert to dict with letter keys
+    def _convert_options(row):
+        opts = row["options"]
+        if isinstance(opts, list):
+            row["options"] = {chr(ord("A") + i): v for i, v in enumerate(opts)}
+        return row
+
+    test_raw = test_raw.map(_convert_options)
+    few_shot_examples = few_shot_examples.map(_convert_options)
 
     # -------- limit number of examples if specified --------
     if num_few_shot != -1:

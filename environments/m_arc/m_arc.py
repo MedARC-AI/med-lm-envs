@@ -23,6 +23,8 @@ def _build_few_shot(few_shot_examples: Dataset, use_think: bool) -> str:
         question = row["question"]
         cot = row["cot_content"]
         opts = row["options"]
+        if isinstance(opts, list):
+            opts = {chr(ord("A") + i): v for i, v in enumerate(opts)}
         question_prompt = _build_question(question, opts)
         if use_think:
             few_shot_prompt += f"{question_prompt}\nAnswer:\n{cot}\n\n"
@@ -132,7 +134,10 @@ def load_environment(
     # the validation split from MMLU-Pro-Health is used for few-shot examples
     # https://github.com/dbernardo05/medARC-QA/blob/main/evaluate_from_api.py#L253
     test_raw = load_dataset("mkieffer/M-ARC", split="test")
-    few_shot_examples = load_dataset("mkieffer/MMLU-Pro-Health", split="validation")
+    few_shot_examples = load_dataset(
+        "TIGER-Lab/MMLU-Pro", 
+        split="validation"
+    ).filter(lambda row: row["category"] == "health")
 
     # -------- limit number of examples if specified --------
     if num_few_shot != -1:

@@ -7,7 +7,7 @@
 
 ### Datasets
 - **Primary dataset(s)**: `MMLU-Pro`
-- **Source links**: [Paper](https://arxiv.org/pdf/2406.01574), [Github](https://github.com/TIGER-AI-Lab/MMLU-Pro), [Full HF Dataset](https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro), [HF Dataset Used](https://huggingface.co/datasets/mkieffer/MMLU-Pro-Health)
+- **Source links**: [Paper](https://arxiv.org/pdf/2406.01574), [Github](https://github.com/TIGER-AI-Lab/MMLU-Pro), [HF Dataset](https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro)
 - **Split sizes**: 
 
     | Split       | Choices         | Count   |
