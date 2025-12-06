@@ -27,32 +27,6 @@ DEFAULT_BATCH_MAX_CONCURRENT = 128
 _LOGGING_INITIALIZED = False
 
 
-def merge_dicts_with_precedence(*dicts: dict[str, Any] | None) -> dict[str, Any]:
-    """Merge dictionaries left-to-right, with later dicts taking precedence.
-
-    This is a utility for implementing override chains where each successive
-    dictionary overrides values from previous ones.
-
-    Args:
-        *dicts: Variable number of dictionaries to merge (None values are skipped)
-
-    Returns:
-        Merged dictionary with later dicts overriding earlier ones
-
-    Example:
-        base = {"a": 1, "b": 2}
-        override1 = {"b": 3, "c": 4}
-        override2 = {"c": 5, "d": 6}
-        merge_dicts_with_precedence(base, override1, override2)
-        → {"a": 1, "b": 3, "c": 5, "d": 6}
-    """
-    result: dict[str, Any] = {}
-    for d in dicts:
-        if d:
-            result.update(d)
-    return result
-
-
 def slugify(value: str) -> str:
     """Create a filesystem/ID friendly slug from an arbitrary string.
 
@@ -281,7 +255,6 @@ def resolve_max_concurrent(
 
 
 __all__ = [
-    "merge_dicts_with_precedence",
     "slugify",
     "compute_checksum",
     "DEFAULT_SINGLE_RUN_MAX_CONCURRENT",

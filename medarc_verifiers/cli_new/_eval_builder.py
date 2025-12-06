@@ -92,6 +92,7 @@ def build_eval_config(
     env_metadata_cache: EnvMetadataCache | None = None,
     env_metadata_loader: Callable[..., Any] = load_env_metadata,
     enforce_required_env_args: bool = True,
+    allow_unknown_env_args: bool = False,
 ) -> EvalConfig:
     """Assemble EvalConfig with shared env/sampling override handling."""
     env_id = resolve_env_identifier(env_cfg)
@@ -107,7 +108,7 @@ def build_eval_config(
         override_args=cli_env_args,
         metadata=metadata,
         metadata_cache=env_metadata_cache,
-        allow_unknown=False,
+        allow_unknown=allow_unknown_env_args,
         enforce_required=enforce_required_env_args,
         verbose=verbose,
     )

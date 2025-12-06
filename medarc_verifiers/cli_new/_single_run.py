@@ -14,12 +14,8 @@ from verifiers.utils.eval_utils import run_evaluation
 
 from medarc_verifiers.cli_new._eval_builder import build_client_config, build_eval_config
 from medarc_verifiers.cli_new._schemas import ModelConfigSchema
-from medarc_verifiers.cli_new.utils.env_args import (
-    EnvParam,
-    MissingEnvParamError,
-    gather_env_cli_metadata,
-    merge_env_args_with_validation,
-)
+from medarc_verifiers.cli_new.utils.env_args import EnvParam, MissingEnvParamError, gather_env_cli_metadata
+from medarc_verifiers.cli_new.utils.env_resolver import merge_env_args, validate_env_args
 from medarc_verifiers.cli_new.utils.endpoint_utils import load_endpoint_registry
 from medarc_verifiers.cli_new.utils.overrides import build_cli_override
 from medarc_verifiers.cli_new.utils.shared import (
@@ -28,9 +24,7 @@ from medarc_verifiers.cli_new.utils.shared import (
     DEFAULT_SINGLE_RUN_MAX_CONCURRENT,
     ensure_root_logging,
     flatten_state_columns,
-    merge_env_args,
     merge_sampling_args,
-    merge_sampling_overrides,
     normalize_headers,
 )
 
@@ -105,13 +99,20 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
     json_env_args: Mapping[str, Any] = env_override_mapping or {}
     explicit_cli_args = extract_env_cli_args(args, bindings)
 
-    merged_env_args = merge_env_args(explicit_cli_args, json_env_args)
+    merged_env_args = merge_env_args(
+        env_defaults={},
+        model_defaults={},
+        model_env_override=None,
+        job_overrides=json_env_args,
+        cli_overrides=explicit_cli_args,
+        verbose=args.verbose,
+    )
     try:
-        merged_env_args = merge_env_args_with_validation(
-            env_id,
-            base_args=merged_env_args,
-            override_args=None,
-            metadata=metadata,
+        validate_env_args(
+            env_id=env_id,
+            env_args=merged_env_args,
+            metadata_loader=lambda _env_id, cache=None: metadata,
+            metadata_cache=None,
             allow_unknown=True,
             enforce_required=True,
         )
@@ -127,16 +128,13 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         )
     except ValueError as exc:
         parser.error(str(exc))
-    merged_sampling_args = merge_sampling_overrides(
-        merge_sampling_args(
-            sampling_override_mapping or {},
-            max_tokens=args.max_tokens,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            top_k=args.top_k,
-            n=args.n,
-        ),
-        None,
+    merged_sampling_args = merge_sampling_args(
+        sampling_override_mapping or {},
+        max_tokens=args.max_tokens,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        top_k=args.top_k,
+        n=args.n,
     )
 
     try:
