@@ -23,7 +23,7 @@ else:
 
 # Patch verifiers Environment.format_dataset to disable HF map caching
 try:
-    from medarc_verifiers.utils.verifiers_patches import (
+    from medarc_verifiers.utils.format_dataset import (
         patch_format_dataset_disable_cache,
     )
 
