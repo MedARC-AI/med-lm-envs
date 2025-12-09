@@ -4,6 +4,7 @@ from .randomize_multiple_choice import (
     randomize_multiple_choice_hf_map,
     randomize_multiple_choice_row,
 )
+from .format_dataset import patch_format_dataset_disable_cache
 
 __all__ = [
     "download_file",
@@ -11,4 +12,5 @@ __all__ = [
     "randomize_multiple_choice",
     "randomize_multiple_choice_hf_map",
     "randomize_multiple_choice_row",
+    "patch_format_dataset_disable_cache",
 ]
