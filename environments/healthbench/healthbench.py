@@ -142,6 +142,7 @@ def load_environment(
                 conversation=conversation,
                 judge_rubric=jr,
                 semaphore=semaphore,
+                state=state,
             )
             for idx, (criterion, points_possible) in enumerate(zip(criteria, points_list))
         ]
@@ -174,6 +175,7 @@ async def _judge_single_criterion(
     conversation: str,
     judge_rubric: JudgeRubric,
     semaphore: asyncio.Semaphore,
+    state: dict,
 ) -> dict[str, str | int | bool]:
     # Use the shared semaphore to bound concurrency across criteria for this rollout
     async with semaphore:
@@ -183,7 +185,7 @@ async def _judge_single_criterion(
             [{"role": "user", "content": full_prompt}],
             "",  # completion
             "",  # answer
-            {},  # state
+            state,  # pass real state for token tracking
         )
 
         dict_resp = _parse_json(str(raw_resp))

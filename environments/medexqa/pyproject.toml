@@ -1,0 +1,35 @@
+[project]
+name = "medexqa"
+version = "0.1.0"
+description = "MedExQA Evaluation - Medical QA with Multiple Explanations"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Nishant Mishra", email = "mnishant2@gmail.com" },
+]
+dependencies = [
+    "datasets>=4.0.0",
+    "verifiers>=0.1.2.post0",
+    "pandas>=2.0.0",
+    "evaluate>=0.4.0",
+    "rouge-score>=0.1.2",
+    "sacrebleu>=2.4.0",
+    "bert-score>=0.3.13",
+    "medarc_verifiers>=0.1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["medexqa.py"]
+
+[tool.uv.sources]
+medarc_verifiers = { git = "https://github.com/MedARC-AI/med-lm-envs" }
+
+[tool.prime.environment]
+# lets Prime/vf-eval know where the loader lives in a flat repo
+loader = "medexqa:load_environment"
+display_name = "MedExQA"
+visibility = "PUBLIC"
