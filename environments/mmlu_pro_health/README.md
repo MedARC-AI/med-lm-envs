@@ -7,7 +7,7 @@
 
 ### Datasets
 - **Primary dataset(s)**: `MMLU-Pro`
-- **Source links**: [Paper](https://arxiv.org/pdf/2406.01574), [Github](https://github.com/TIGER-AI-Lab/MMLU-Pro), [Full HF Dataset](https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro), [HF Dataset Used](https://huggingface.co/datasets/mkieffer/MMLU-Pro-Health)
+- **Source links**: [Paper](https://arxiv.org/pdf/2406.01574), [Github](https://github.com/TIGER-AI-Lab/MMLU-Pro), [HF Dataset](https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro)
 - **Split sizes**: 
 
     | Split       | Choices         | Count   |
@@ -26,13 +26,13 @@ Run an evaluation with default settings:
 uv run vf-eval mmlu-pro-health
 ```
 
-Configure model and sampling:
+Configure model and sampling (overriding some environment arguments):
 
 ```bash
 uv run vf-eval mmlu-pro-health \
     -m gpt-4.1-mini   \
     -n -1 -r 3 -t 1024 -T 0.7  \
-    -a '{"use_think": false, "num_few_shot": 1, "shuffle": true}'
+    -a '{"use_think": false, "num_few_shot": 3, "shuffle_answers": true, "shuffle_seed": 1618}'
 ```
 
 Notes:
@@ -43,17 +43,19 @@ Notes:
 
 ### Environment Arguments
 
-| Arg                  | Type | Default | Description                                                                                                                                                                          |
-| -------------------- | ---- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `num_few_shot`  | int  | `1`    | The number of few-shot examples to use (`-1` for all)                                                                                                                                |
-| `use_think`          | bool | `False` | Whether to check for `<think>...</think>` formatting with `ThinkParser`|
-| `shuffle`            | bool | `False` | Whether to shuffle answer choices |
+| Arg               | Type           | Default | Description                                                                                                      |
+| ----------------- | -------------- | ------- | ---------------------------------------------------------------------------------------------------------------- |
+| `num_few_shot`    | int            | `5`     | The number of few-shot examples to use (`-1` for all).                                                           |
+| `use_think`       | bool           | `False` | Use `<think>...</think>` formatting with `ThinkParser`.         |
+| `shuffle_answers` | bool           | `False` | Shuffle answers choices.                                                                               |
+| `shuffle_seed`    | int or `null`  | `1618`  | Deterministic seed for choice shuffling when `shuffle_answers` is `True` (`null` for non-deterministic).         |
+| `jitter_age`      | bool           | `False` | Add a small decimal jitter (~±2 weeks) to ages in the question text (M-ARC style). |
 
 
 ### Metrics
 
-| Metric | Meaning |
-| ------ | ------- |
-| `correct_answer_reward_func` | (weight 1.0): 1.0 if parsed letter is correct, else 0.0|
+| Metric    | Meaning                                                  |
+| --------- | -------------------------------------------------------- |
+| `accuracy` | (weight 1.0): 1.0 if parsed letter is correct, else 0.0 |
 
 

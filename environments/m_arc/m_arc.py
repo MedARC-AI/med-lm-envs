@@ -1,3 +1,4 @@
+import random
 import re
 from typing import Dict
 
@@ -16,6 +17,31 @@ def _build_question(question: str, options: Dict[str, str]) -> str:
     return f"Question: {question}\nOptions:\n{opts}"
 
 
+def _normalize_cot_answer(text: str) -> str:
+    """Normalize explicit answer phrasing to boxed format."""
+    if "boxed{" in text:
+        return text
+    return re.sub(r"The answer is \(([A-J])\)", r"The answer is \\boxed{\1}", text)
+
+
+def _process_age_strings(text: str, rng: random.Random) -> str:
+    """Add a small decimal jitter (~±2 weeks) to ages."""
+    age_pattern = re.compile(
+        r"\b(\d+)"  # numeric age
+        r"(?:\s*[-\s]?)"
+        r"(year-old|year old|yo)\b",
+        re.IGNORECASE,
+    )
+
+    def add_decimal(match: re.Match[str]) -> str:
+        age = int(match.group(1))
+        decimal = rng.uniform(0, 0.04)
+        new_age = age + decimal
+        return f"{new_age:.3f} year-old"
+
+    return age_pattern.sub(add_decimal, text)
+
+
 def _build_few_shot(few_shot_examples: Dataset, use_think: bool) -> str:
     # validation split used for few-shot examples, https://github.com/dbernardo05/medARC-QA/blob/main/evaluate_from_api.py#L284
     few_shot_prompt = ""
@@ -23,14 +49,17 @@ def _build_few_shot(few_shot_examples: Dataset, use_think: bool) -> str:
         question = row["question"]
         cot = row["cot_content"]
         opts = row["options"]
+        if isinstance(opts, list):
+            # this works because the only few shot example has N/A start from H-J
+            opts = {chr(ord("A") + i): v for i, v in enumerate(opts) if v.strip().upper() != "N/A"}
         question_prompt = _build_question(question, opts)
         if use_think:
-            few_shot_prompt += f"{question_prompt}\nAnswer:\n{cot}\n\n"
+            few_shot_prompt += f"{question_prompt}\nAnswer:\n{_normalize_cot_answer(cot)}\n\n"
         else:
             # strip <think> tags if not using them
             cot_no_think = re.sub(r"<think>\s*", "", cot)
             cot_no_think = re.sub(r"\s*</think>", "", cot_no_think)
-            few_shot_prompt += f"{question_prompt}\nAnswer:\n{cot_no_think}\n\n"
+            few_shot_prompt += f"{question_prompt}\nAnswer:\n{_normalize_cot_answer(cot_no_think)}\n\n"
     return few_shot_prompt
 
 
@@ -56,7 +85,7 @@ def _to_vf_format(
     """
     VALID = "ABCDEFGHIJ"
 
-    def _format_row(row: dict) -> dict:
+    def _format_row(row: dict, idx: int) -> dict:
         question = row.get("question", "") or ""  # question string
         opts = row.get("options", {}) or {}  # answer choices, map of letter to answer text
 
@@ -74,14 +103,17 @@ def _to_vf_format(
                 options=opts,
                 answer_choice=answer_letter,
                 seed=shuffle_seed,
-                row_id=question,
+                row_id=idx,
             )
             opts = shuffled_options
 
         # https://github.com/dbernardo05/medARC-QA/blob/main/evaluate_from_api.py#L339
         instruction = 'The following are multiple choice questions (with answers) about health. Think step by step and then finish your answer with "\\boxed{X}" where X is the correct letter choice.\n'
         few_shot_prompt = _build_few_shot(few_shot_examples, use_think)
-        question_prompt = _build_question(question, opts)
+        # Per-row RNG keeps age jitter deterministic and process-safe for num_proc>1
+        base_seed = shuffle_seed if shuffle_answers else 2718
+        age_rng = random.Random(base_seed + idx)
+        question_prompt = _build_question(_process_age_strings(question, age_rng), opts)
         prompt = instruction + few_shot_prompt + question_prompt + "\nAnswer:"
 
         # question and answer have been moved to top-level, so remove them here
@@ -100,10 +132,7 @@ def _to_vf_format(
             "info": info,
         }
 
-    # Disable the Datasets cache when shuffling answers
-    load_from_cache_file = False if shuffle_answers else True
-    mapped = ds.map(_format_row, remove_columns=ds.column_names, load_from_cache_file=load_from_cache_file)
-    return mapped.filter(lambda row: row is not None, load_from_cache_file=load_from_cache_file)
+    return ds.map(_format_row, remove_columns=ds.column_names, load_from_cache_file=False, with_indices=True)
 
 
 def load_environment(
@@ -132,7 +161,9 @@ def load_environment(
     # the validation split from MMLU-Pro-Health is used for few-shot examples
     # https://github.com/dbernardo05/medARC-QA/blob/main/evaluate_from_api.py#L253
     test_raw = load_dataset("mkieffer/M-ARC", split="test")
-    few_shot_examples = load_dataset("mkieffer/MMLU-Pro-Health", split="validation")
+    few_shot_examples = load_dataset("TIGER-Lab/MMLU-Pro", split="validation").filter(
+        lambda row: row["category"] == "health"
+    )
 
     # -------- limit number of examples if specified --------
     if num_few_shot != -1:
