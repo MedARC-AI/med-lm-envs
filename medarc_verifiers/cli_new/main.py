@@ -57,7 +57,7 @@ def build_batch_parser() -> argparse.ArgumentParser:
         prog="medarc-new",
         description="Run MedARC evaluations using unified configuration files.",
     )
-    parser.add_argument("--config", required=True, type=Path, help="Path to a run configuration YAML file.")
+    parser.add_argument("-c", "--config", required=True, type=Path, help="Path to a run configuration YAML file.")
     parser.add_argument("--run-id", help="Override the generated run identifier.")
     parser.add_argument("--name", help="Override the human-friendly run name (defaults to the config name).")
     parser.add_argument(
