@@ -53,7 +53,7 @@ Notes:
 
 | Arg                  | Type | Default | Description                                                                                                                                                                          |
 | -------------------- | ---- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `num_few_shot`  | int  | `1`    | The number of few-shot examples to use (`-1` for all)                                                                                                                                |
+| `num_few_shot`  | int  | `5`    | The number of few-shot examples to use (`-1` for all)                                                                                                                                |
 | `use_think`          | bool | `False` | Whether to check for `<think>...</think>` formatting with `ThinkParser`|
 | `shuffle`            | bool | `False` | Whether to shuffle answer choices |
 
