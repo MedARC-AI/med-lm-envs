@@ -50,6 +50,7 @@ def _settings(tmp_path: Path, **overrides: object) -> ExecutorSettings:
         # Provide a placeholder so tests can inject a CLI override via overrides (max_concurrent=VALUE).
         max_concurrent=None,
         timeout=None,
+        sleep=0.0,
         dry_run=False,
     )
     base_kwargs.update(overrides)
@@ -343,3 +344,47 @@ def test_execute_jobs_handles_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch
     assert result.status == "failed"
     assert result.error is not None
     assert "interrupted" in result.error.lower()
+
+
+def test_job_sleep_overrides_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    sleep_calls: list[float] = []
+
+    async def fake_run(config):  # noqa: ARG001
+        return _stub_results()
+
+    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", fake_run)
+    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_endpoint_registry", lambda path, cache=None: {})
+    monkeypatch.setattr(
+        "medarc_verifiers.cli_new._job_executor.load_env_metadata",
+        lambda env_id, cache=None: _stub_metadata(required=False),
+    )
+    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.sleep", lambda seconds: sleep_calls.append(seconds))
+
+    model_cfg = ModelConfigSchema(id="alias")
+    env_cfg = EnvironmentConfigSchema(id="medqa")
+
+    jobs = [
+        ResolvedJob(
+            job_id="alias-medqa-a",
+            name="alias-medqa-a",
+            model=model_cfg,
+            env=env_cfg,
+            env_args={},
+            sampling_args={},
+            sleep=1.5,
+        ),
+        ResolvedJob(
+            job_id="alias-medqa-b",
+            name="alias-medqa-b",
+            model=model_cfg,
+            env=env_cfg,
+            env_args={},
+            sampling_args={},
+            sleep=None,
+        ),
+    ]
+
+    results = execute_jobs(jobs, _settings(tmp_path, sleep=0.25))
+
+    assert all(result.status == "succeeded" for result in results)
+    assert sleep_calls == [pytest.approx(1.5)]

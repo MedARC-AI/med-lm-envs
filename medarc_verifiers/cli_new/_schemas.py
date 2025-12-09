@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 RESERVED_MATRIX_KEYS = {
     "id",
@@ -283,11 +283,14 @@ class EnvironmentConfigSchema(BaseModel):
 class JobConfigSchema(BaseModel):
     """Schema for job entries mapping models to environments."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     model: str | dict[str, Any] = Field(..., description="Reference to a defined model id or inline model definition.")
     env: str | list[str] = Field(..., description="Reference to an environment id or list of ids.")
     env_args: dict[str, Any] = Field(default_factory=dict)
     sampling_args: dict[str, Any] = Field(default_factory=dict)
     name: str | None = Field(default=None, description="Optional human-friendly job label.")
+    sleep: float | None = Field(default=None, ge=0, description="Optional delay (in seconds) after this job.")
 
 
 DEFAULT_RUN_OUTPUT_DIR = Path("runs") / "raw"

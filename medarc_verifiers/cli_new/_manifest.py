@@ -110,6 +110,7 @@ def _canonicalize_job_config(
     return {
         "job_id": job.job_id,
         "job_name": job.name,
+        "sleep": job.sleep,
         "model": model_payload,
         "env": env_payload,
     }

@@ -145,6 +145,14 @@ def build_batch_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override request timeout in seconds for all jobs (CLI > model > default).",
     )
+    parser.add_argument(
+        "--sleep",
+        "--sleep-seconds",
+        dest="sleep",
+        type=float,
+        default=0.0,
+        help="Sleep this many seconds after each job (overridden by per-job sleep).",
+    )
     return parser
 
 
@@ -626,6 +634,7 @@ def _execute_batch(args: argparse.Namespace) -> int:
         max_concurrent_scoring=args.max_concurrent_scoring,
         max_concurrent=args.max_concurrent,  # CLI override (None if not provided)
         timeout=args.timeout,
+        sleep=args.sleep,
         dry_run=args.dry_run,
         cli_env_args=getattr(args, "cli_env_args", None),
         cli_sampling_args=getattr(args, "cli_sampling_args", None),

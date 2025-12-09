@@ -7,8 +7,8 @@ import contextlib
 import logging
 import shutil
 from pathlib import Path
-from time import perf_counter
-from typing import Any, Literal, Sequence, Mapping
+from time import perf_counter, sleep
+from typing import Any, Literal, Mapping, Sequence
 from pydantic import BaseModel, field_validator
 
 from verifiers.types import GenerateOutputs
@@ -49,6 +49,7 @@ class ExecutorSettings(BaseModel):
     max_concurrent_scoring: int | None = None
     max_concurrent: int | None = None  # CLI override for max_concurrent
     timeout: float | None = None
+    sleep: float = 0.0
     dry_run: bool = False
     cli_env_args: dict[str, Any] | None = None
     cli_sampling_args: dict[str, Any] | None = None
@@ -97,6 +98,7 @@ def execute_jobs(
     interrupted = False
 
     for index, job in enumerate(jobs):
+        is_last_job = index == len(jobs) - 1
         env_identifier = resolve_env_identifier(job.env)
         model_identifier = job.model.id or job.model.model or job.job_id
         job_label = f"{job.job_id} (env={env_identifier}, model={model_identifier})"
@@ -186,6 +188,7 @@ def execute_jobs(
             )
             job_statuses[job.job_id] = "failed"
             _log_job_progress_window(jobs, index, job_statuses, event="failure", note="during preparation")
+            _maybe_sleep_between_jobs(job, settings, is_last=is_last_job)
             continue
 
         start = perf_counter()
@@ -227,6 +230,7 @@ def execute_jobs(
             )
             job_statuses[job.job_id] = "failed"
             _log_job_progress_window(jobs, index, job_statuses, event="failure")
+            _maybe_sleep_between_jobs(job, settings, is_last=is_last_job)
             continue
 
         duration = perf_counter() - start
@@ -262,6 +266,7 @@ def execute_jobs(
         )
         job_statuses[job.job_id] = "completed"
         _log_job_progress_window(jobs, index, job_statuses, event="completion")
+        _maybe_sleep_between_jobs(job, settings, is_last=is_last_job)
 
     if interrupted:
         logger.warning("Execution interrupted by user; %d job(s) left pending.", len(jobs) - len(results))
@@ -368,6 +373,17 @@ def _log_job_progress_window(
     if note:
         label = f"{label} ({note})"
     logger.info("%s:\n%s", label, "\n".join(lines))
+
+
+def _maybe_sleep_between_jobs(job: ResolvedJob, settings: ExecutorSettings, *, is_last: bool) -> None:
+    """Optionally pause between jobs to spread out environment runs."""
+    if settings.dry_run or is_last:
+        return
+    delay = job.sleep if job.sleep is not None else settings.sleep
+    if delay is None or delay <= 0:
+        return
+    logger.info("Sleeping %.2f second(s) before next job...", delay)
+    sleep(delay)
 
 
 __all__ = ["ExecutorSettings", "JobExecutionResult", "execute_jobs"]

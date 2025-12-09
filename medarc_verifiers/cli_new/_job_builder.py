@@ -20,6 +20,7 @@ class ResolvedJob:
     env: EnvironmentConfigSchema
     env_args: dict[str, Any]
     sampling_args: dict[str, Any]
+    sleep: float | None = None
 
 
 def build_jobs(config: RunConfigSchema) -> list[ResolvedJob]:
@@ -61,6 +62,7 @@ def build_jobs(config: RunConfigSchema) -> list[ResolvedJob]:
                         env=env,
                         env_args=env_args,
                         sampling_args=sampling_args,
+                        sleep=job_cfg.sleep,
                     )
                 )
 
