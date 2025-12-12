@@ -153,6 +153,12 @@ def build_batch_parser() -> argparse.ArgumentParser:
         default=0.0,
         help="Sleep this many seconds after each job (overridden by per-job sleep).",
     )
+    parser.add_argument(
+        "--enable-model-retry",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable per-call model retry wrapper (default: disabled).",
+    )
     return parser
 
 
@@ -351,6 +357,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _run_batch_mode(argv: Sequence[str]) -> int:
     parser = build_batch_parser()
     args = parser.parse_args(argv)
+
+    if args.enable_model_retry:
+        # Imported lazily to avoid side effects unless explicitly enabled
+        from medarc_verifiers.utils.retry import patch_verifiers_model_response_retry
+
+        patch_verifiers_model_response_retry()
 
     try:
         args.cli_env_args = build_cli_override(
