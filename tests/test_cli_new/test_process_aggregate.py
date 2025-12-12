@@ -27,8 +27,6 @@ def test_aggregate_rows_by_env_unions_columns() -> None:
 
 
 def test_aggregate_rows_by_env_groups_by_model() -> None:
-    # Test removed: partitioning feature simplified out per plan
-    # All rows for an env_id go into a single group regardless of model
     rows = [
         {"env_id": "env-a", "base_env_id": "env-a", "model_id": "m1", "job_run_id": "r1"},
         {"env_id": "env-a", "base_env_id": "env-a", "model_id": "m2", "job_run_id": "r2"},
@@ -36,9 +34,11 @@ def test_aggregate_rows_by_env_groups_by_model() -> None:
     ]
 
     grouped = aggregate_rows_by_env(rows)
-    assert len(grouped) == 1
-    assert len(grouped[0].rows) == 3
-    assert set(grouped[0].column_names) == {"env_id", "base_env_id", "model_id", "job_run_id"}
+    assert len(grouped) == 2
+    by_key = {(g.model_id, g.env_id): g for g in grouped}
+    assert set(by_key.keys()) == {("m1", "env-a"), ("m2", "env-a")}
+    assert by_key[("m1", "env-a")].job_run_ids == ("r1", "r3")
+    assert by_key[("m2", "env-a")].job_run_ids == ("r2",)
 
 
 def test_aggregate_rows_canonicalizes_env_id_realistic() -> None:

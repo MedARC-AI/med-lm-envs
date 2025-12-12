@@ -20,6 +20,7 @@ def _group_for_env() -> AggregatedEnvRows:
             "base_env_id": "demo-env",
             "example_id": "ex-1",
             "job_run_id": "run-1",
+            "model_id": "demo-model",
             "score": 1.0,
         },
         {
@@ -27,6 +28,7 @@ def _group_for_env() -> AggregatedEnvRows:
             "base_env_id": "demo-env",
             "example_id": "ex-2",
             "job_run_id": "run-2",
+            "model_id": "demo-model",
             "score": 0.5,
         },
     ]
@@ -47,6 +49,8 @@ def test_write_env_groups_creates_parquet_and_index(tmp_path: Path) -> None:
     summary = summaries[0]
     assert summary.output_path.exists()
     assert summary.env_id == "demo-env-variant"
+    assert summary.model_id == "demo-model"
+    assert summary.output_path.parent.name == "demo-model"
 
     table = pq.read_table(summary.output_path)
     metadata = table.schema.metadata or {}
@@ -61,6 +65,11 @@ def test_write_env_groups_creates_parquet_and_index(tmp_path: Path) -> None:
     assert env_entry["row_count"] == len(group.rows)
     assert env_entry["env_id"] == "demo-env-variant"
     assert env_entry["base_env_id"] == "demo-env"
+    assert env_entry["model_id"] == "demo-model"
+    assert payload["env_groups"][0]["paths"][0]["path"].endswith("demo-model/demo-env-variant.parquet")
+    ds_infos = json.loads((tmp_path / "dataset_infos.json").read_text(encoding="utf-8"))
+    assert "default" in ds_infos
+    assert "train" in ds_infos["default"]["data_files"]
 
 
 def test_write_env_groups_dry_run(tmp_path: Path) -> None:
@@ -116,6 +125,7 @@ def test_write_env_groups_appends_and_deduplicates(tmp_path: Path) -> None:
             "base_env_id": "demo-env",
             "example_id": "ex-3",
             "job_run_id": "run-2",
+            "model_id": "demo-model",
             "score": 0.7,
         },
         {
@@ -123,6 +133,7 @@ def test_write_env_groups_appends_and_deduplicates(tmp_path: Path) -> None:
             "base_env_id": "demo-env",
             "example_id": "ex-4",
             "job_run_id": "run-3",
+            "model_id": "demo-model",
             "score": 0.9,
         },
     ]
@@ -163,6 +174,7 @@ def test_write_env_groups_overwrite_rebuilds_fresh(tmp_path: Path) -> None:
             "base_env_id": "demo-env",
             "example_id": "ex-5",
             "job_run_id": "run-99",
+            "model_id": "demo-model",
             "score": 0.2,
         }
     ]

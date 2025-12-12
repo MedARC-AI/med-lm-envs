@@ -4,12 +4,15 @@ import json
 from pathlib import Path
 
 import pytest
+import pyarrow.parquet as pq
 
 from medarc_verifiers.cli_new._schemas import EnvironmentExportConfig
 from medarc_verifiers.cli_new.process import ProcessOptions, run_process
+from medarc_verifiers.cli_new.process.discovery import RunManifestInfo, RunRecord, deduplicate_records_by_latest
 from medarc_verifiers.cli_new.process.winrate import WinrateConfig
 from medarc_verifiers.cli_new.process.winrate_runner import discover_datasets, run_winrate
 from medarc_verifiers.cli_new.process.hf_sync import HFSyncConfig
+from medarc_verifiers.cli_new.process.writer import ALLOWED_COLUMNS
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -63,6 +66,50 @@ def _setup_run(tmp_path: Path) -> Path:
     return runs_dir
 
 
+def _build_record(tmp_path: Path, job_run_id: str, status: str, ended_at: str) -> RunRecord:
+    run_dir = tmp_path / job_run_id
+    manifest = RunManifestInfo(
+        job_run_id=job_run_id,
+        run_name="demo",
+        summary_completed=1,
+        summary_total=1,
+        manifest_path=run_dir / "run_manifest.json",
+        run_dir=run_dir,
+        created_at="2023-12-31T00:00:00Z",
+        updated_at="2023-12-31T00:00:00Z",
+        config_source=None,
+        config_checksum=None,
+        run_summary_path=run_dir / "run_summary.json",
+    )
+    return RunRecord(
+        manifest=manifest,
+        job_id="job-1",
+        job_name=None,
+        model_id="gpt-mini",
+        manifest_env_id="demo-env",
+        results_dir_name="job-1",
+        results_dir=run_dir / "job-1",
+        metadata_path=run_dir / "job-1" / "metadata.json",
+        results_path=run_dir / "job-1" / "results.jsonl",
+        summary_path=run_dir / "job-1" / "summary.json",
+        has_metadata=False,
+        has_results=False,
+        has_summary=False,
+        status=status,
+        duration_seconds=None,
+        reason=None,
+        started_at=None,
+        ended_at=ended_at,
+        num_examples=None,
+        rollouts_per_example=None,
+        seeds=None,
+        env_args={},
+        sampling_args={},
+        env_config={"id": "demo-env"},
+        model_config={},
+    )
+
+
 def test_run_process_respects_env_export_defaults(tmp_path: Path) -> None:
     runs_dir = _setup_run(tmp_path)
     options = ProcessOptions(
@@ -91,6 +138,7 @@ def test_run_process_respects_env_export_defaults(tmp_path: Path) -> None:
     # env_id now resolves to the base environment id; rollout info remains in base_env_id/derivation
     assert group.env_id == "demo-env"
     assert group.base_env_id == "demo-env"
+    assert group.model_id == "gpt-mini"
 
 
 def test_run_process_cli_overrides_env_export(tmp_path: Path) -> None:
@@ -119,6 +167,25 @@ def test_run_process_cli_overrides_env_export(tmp_path: Path) -> None:
     assert row["reward"] == 1.0
 
 
+def test_run_process_preserves_rollout_env_when_not_combining(tmp_path: Path) -> None:
+    runs_dir = _setup_run(tmp_path)
+    options = ProcessOptions(
+        runs_dir=runs_dir,
+        output_dir=tmp_path / "processed",
+        exporter_version="0.1.0",
+        dry_run=True,
+        combine_rollouts=False,
+        max_workers=1,
+    )
+
+    result = run_process(options)
+    group = result.env_groups[0]
+    row = group.rows[0]
+    assert group.env_id == "demo-env-rollout3"
+    assert group.base_env_id == "demo-env-rollout3"
+    assert row["rollout_index"] == 0
+
+
 def test_run_process_respects_combine_rollouts_override(tmp_path: Path) -> None:
     runs_dir = _setup_run(tmp_path)
     options = ProcessOptions(
@@ -139,6 +206,7 @@ def test_run_process_respects_combine_rollouts_override(tmp_path: Path) -> None:
     group = result.env_groups[0]
     assert group.env_id == "demo-env"
     assert group.base_env_id == "demo-env"
+    assert group.model_id == "gpt-mini"
 
 
 def test_run_winrate_from_processed_outputs(tmp_path: Path) -> None:
@@ -153,7 +221,19 @@ def test_run_winrate_from_processed_outputs(tmp_path: Path) -> None:
         max_workers=1,
     )
 
-    run_process(process_opts)
+    result_process = run_process(process_opts)
+    hf_config_path = output_dir / "dataset_infos.json"
+    assert hf_config_path.exists()
+    hf_payload = json.loads(hf_config_path.read_text(encoding="utf-8"))
+    assert "default" in hf_payload
+    assert "demo_env" in hf_payload["default"]["data_files"]
+    assert hf_payload["default"]["data_files"]["demo_env"]
+    # Parquet schema should be trimmed to the fixed allowed columns for HF loading
+    summary = result_process.env_summaries[0]
+    schema = pq.read_schema(summary.output_path)
+    assert schema.names == list(ALLOWED_COLUMNS)
+    table = pq.read_table(summary.output_path)
+    assert table.column("answer").to_pylist() == [None]
 
     cfg = WinrateConfig()
     result = run_winrate(
@@ -188,6 +268,19 @@ def test_run_winrate_from_hf(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     import pandas as pd  # type: ignore[import-not-found]
 
     pd.DataFrame(payload).to_parquet(parquet_path, index=False)
+    dataset_infos = {
+        "default": {
+            "builder_name": "parquet",
+            "config_name": "default",
+            "data_files": {"train": ["demo-env.parquet"], "demo_env": ["demo-env.parquet"]},
+            "splits": {
+                "train": {"name": "train", "num_examples": 2, "dataset_name": "default"},
+                "demo_env": {"name": "demo_env", "num_examples": 2, "dataset_name": "default"},
+            },
+            "extras": {"env_id_map": {"demo_env": "demo-env"}},
+        }
+    }
+    (hf_dir / "dataset_infos.json").write_text(json.dumps(dataset_infos), encoding="utf-8")
 
     def _fake_download_hf_repo(*_args, **_kwargs) -> Path:
         return hf_dir
@@ -209,29 +302,25 @@ def test_run_winrate_from_hf(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
 
 
 def test_discover_datasets_handles_project_relative_paths(tmp_path: Path) -> None:
+    runs_dir = _setup_run(tmp_path)
     processed_dir = tmp_path / "runs" / "processed"
-    processed_dir.mkdir(parents=True)
-    parquet_path = processed_dir / "demo.parquet"
-    parquet_path.write_text("", encoding="utf-8")
-    env_index = {
-        "processed_at": "2024-01-01T00:00:00Z",
-        "environments": [
-            {
-                "env_id": "demo",
-                "base_env_id": "demo",
-                "path": "runs/processed/demo.parquet",
-                "row_count": 0,
-                "job_run_ids": [],
-                "exporter_metadata": {},
-            }
-        ],
-    }
-    index_path = processed_dir / "env_index.json"
-    index_path.write_text(json.dumps(env_index), encoding="utf-8")
+    process_opts = ProcessOptions(
+        runs_dir=runs_dir,
+        output_dir=processed_dir,
+        exporter_version="0.1.0",
+        dry_run=False,
+        processed_at="2024-01-01T00:00:00Z",
+        max_workers=1,
+    )
+
+    run_process(process_opts)
 
     datasets = discover_datasets(processed_dir)
 
-    assert datasets == [("demo", parquet_path)]
+    assert len(datasets) == 1
+    env_id, splits = datasets[0]
+    assert env_id == "demo-env"
+    assert splits and hasattr(splits[0], "shape")
 
 
 def test_run_process_propagates_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -274,3 +363,23 @@ def test_run_process_parallel_workers(tmp_path: Path) -> None:
     assert result.records_processed == 1
     assert result.rows_processed == 1
     assert result.env_summaries[0].row_count == 1
+
+
+def test_deduplicate_prefers_completed_over_newer_failure(tmp_path: Path) -> None:
+    completed = _build_record(tmp_path, "run-completed", "completed", "2024-01-01T00:00:00Z")
+    failed_newer = _build_record(tmp_path, "run-failed", "failed", "2024-02-01T00:00:00Z")
+
+    result = deduplicate_records_by_latest([failed_newer, completed])
+
+    assert len(result) == 1
+    assert result[0].manifest.job_run_id == "run-completed"
+
+
+def test_deduplicate_treats_succeeded_as_completed(tmp_path: Path) -> None:
+    succeeded = _build_record(tmp_path, "run-succeeded", "succeeded", "2024-01-02T00:00:00Z")
+    failed_newer = _build_record(tmp_path, "run-failed", "failed", "2024-02-01T00:00:00Z")
+
+    result = deduplicate_records_by_latest([failed_newer, succeeded])
+
+    assert len(result) == 1
+    assert result[0].manifest.job_run_id == "run-succeeded"
