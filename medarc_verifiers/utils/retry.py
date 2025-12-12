@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any, Awaitable, TypeVar
 
 import httpx
@@ -42,23 +43,28 @@ def should_retry_exception(exc: BaseException) -> tuple[bool, str | None]:
     return False, None
 
 
-def _choices_length(response: Any) -> int | None:
+def _choices_length(response: Any) -> tuple[int | None, bool]:
+    """Return (len, is_none) to distinguish empty vs missing."""
     if hasattr(response, "choices"):
         try:
             choices = response.choices  # type: ignore[assignment]
-            return len(choices)  # type: ignore[arg-type]
+            if choices is None:
+                return None, True
+            return len(choices), False  # type: ignore[arg-type]
         except Exception:
-            return None
-    return None
+            return None, False
+    return None, False
 
 
 def should_retry_response(response: ModelResponse) -> tuple[bool, str | None]:
     """Identify retryable model responses (e.g., empty choices)."""
     if response is None:
-        return False, None
-    choices_len = _choices_length(response)
+        return True, "Response is None"
+    choices_len, is_none = _choices_length(response)
+    if is_none:
+        return True, "Response choices is None"
     if choices_len is None:
-        return False, None
+        return True, "Response choices missing length"
     if choices_len != 1:
         return True, f"Unexpected choices len={choices_len}"
     return False, None
@@ -115,12 +121,27 @@ def patch_verifiers_model_response_retry(
     *,
     attempts: int = 3,
     backoff_s: float = 1.0,
-    logger: logging.Logger | None = None,
+    log_path: str | Path = "medarc_model_retry.log",
 ) -> None:
-    """Monkeypatch Environment.get_model_response to add per-call retries."""
+    """Monkeypatch Environment.get_model_response to add per-call retries and log to a file."""
     if getattr(Environment, "_medarc_retry_patched", False):
         return
-    log = logger or logging.getLogger("medarc_verifiers.retry")
+
+    log_file = Path(log_path)
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    log = logging.getLogger("medarc_verifiers.retry")
+    log.setLevel(logging.INFO)
+    log.propagate = False
+    if not any(isinstance(h, logging.FileHandler) and Path(h.baseFilename) == log_file for h in log.handlers):  # type: ignore[attr-defined]
+        handler = logging.FileHandler(log_file)
+        handler.setLevel(logging.INFO)
+        formatter = logging.Formatter(
+            fmt="%(asctime)s [%(levelname)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+        handler.setFormatter(formatter)
+        log.addHandler(handler)
+
     original = Environment.get_model_response
 
     async def _patched_get_model_response(

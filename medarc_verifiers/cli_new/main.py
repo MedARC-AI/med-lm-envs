@@ -154,7 +154,7 @@ def build_batch_parser() -> argparse.ArgumentParser:
         help="Sleep this many seconds after each job (overridden by per-job sleep).",
     )
     parser.add_argument(
-        "--enable-model-retry",
+        "--enable-additional-retries",
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Enable per-call model retry wrapper (default: disabled).",
@@ -358,12 +358,6 @@ def _run_batch_mode(argv: Sequence[str]) -> int:
     parser = build_batch_parser()
     args = parser.parse_args(argv)
 
-    if args.enable_model_retry:
-        # Imported lazily to avoid side effects unless explicitly enabled
-        from medarc_verifiers.utils.retry import patch_verifiers_model_response_retry
-
-        patch_verifiers_model_response_retry()
-
     try:
         args.cli_env_args = build_cli_override(
             json_payload=args.env_args,
@@ -527,6 +521,14 @@ def _execute_batch(args: argparse.Namespace) -> int:
     output_dir = Path(args.output_dir).expanduser() if args.output_dir else Path(run_config.output_dir).expanduser()
     output_dir = output_dir.resolve()
     run_id = args.run_id  # May be None when using --auto-resume discovery
+
+    if args.enable_additional_retries:
+        from medarc_verifiers.utils.retry import patch_verifiers_model_response_retry
+        from datetime import datetime
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        retry_log_path = output_dir / "logs" / f"medarc_model_retry_{ts}.log"
+        patch_verifiers_model_response_retry(log_path=retry_log_path)
 
     jobs = build_jobs(run_config)
     if not jobs:
