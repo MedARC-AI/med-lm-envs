@@ -526,8 +526,9 @@ def _execute_batch(args: argparse.Namespace) -> int:
         from medarc_verifiers.utils.retry import patch_verifiers_model_response_retry
         from datetime import datetime
 
+        cwd = Path.cwd()
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        retry_log_path = output_dir / "logs" / f"medarc_model_retry_{ts}.log"
+        retry_log_path = cwd / "logs" / f"medarc_model_retry_{ts}.log"
         patch_verifiers_model_response_retry(log_path=retry_log_path)
 
     jobs = build_jobs(run_config)
