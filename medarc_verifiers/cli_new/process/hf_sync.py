@@ -125,6 +125,7 @@ def sync_to_hub(
 
 def _load_local_splits(env_summaries: Sequence[EnvWriteSummary]) -> dict[str, Dataset]:
     splits: dict[str, Dataset] = {}
+    grouped_paths: dict[str, list[Path]] = {}
     for summary in env_summaries:
         if summary.dry_run:
             continue
@@ -132,9 +133,22 @@ def _load_local_splits(env_summaries: Sequence[EnvWriteSummary]) -> dict[str, Da
         if not path.exists():
             logger.debug("Skipping HF split %s: parquet path %s missing.", summary.env_id, path)
             continue
-        table = pq.read_table(path)
-        dataset = Dataset.from_pandas(table.to_pandas(), preserve_index=False)
-        splits[summary.env_id] = dataset
+        grouped_paths.setdefault(summary.env_id, []).append(path)
+
+    for env_id, paths in grouped_paths.items():
+        str_paths = [str(p) for p in paths]
+        try:
+            dataset = Dataset.from_parquet(str_paths)  # type: ignore[arg-type]
+        except Exception:
+            # Fallback to pandas path-by-path if parquet helper is unavailable
+            frames = []
+            for path in paths:
+                table = pq.read_table(path)
+                frames.append(table.to_pandas())
+            import pandas as pd  # type: ignore[import-not-found]
+
+            dataset = Dataset.from_pandas(pd.concat(frames, ignore_index=True), preserve_index=False)
+        splits[env_id] = dataset
     return splits
 
 

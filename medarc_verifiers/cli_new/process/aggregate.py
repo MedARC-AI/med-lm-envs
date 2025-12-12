@@ -16,20 +16,26 @@ class AggregatedEnvRows:
 
     env_id: str
     base_env_id: str
+    model_id: str | None
     rows: list[Mapping[str, Any]]
     column_names: tuple[str, ...]
     job_run_ids: tuple[str, ...]
 
 
-def aggregate_rows_by_env(rows: Iterable[Mapping[str, Any]]) -> list[AggregatedEnvRows]:
-    """Group enriched rows by base_env_id, capturing unioned schemas."""
-    groups: dict[str, dict[str, Any]] = {}
+def aggregate_rows_by_env(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    combine_rollouts: bool = True,
+) -> list[AggregatedEnvRows]:
+    """Group enriched rows by (model_id, base_env_id), capturing unioned schemas."""
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
 
     for row in rows:
         base_env_id = str(row.get("base_env_id") or row.get("env_id") or "")
         env_id = str(row.get("env_id") or base_env_id)
-        group_key = base_env_id or env_id
-        if not group_key:
+        model_id = str(row.get("model_id") or "unknown")
+        group_key = (model_id, base_env_id or env_id)
+        if not group_key[1]:  # no env identifier
             logger.debug("Skipping row without env identifiers.")
             continue
 
@@ -37,6 +43,7 @@ def aggregate_rows_by_env(rows: Iterable[Mapping[str, Any]]) -> list[AggregatedE
             groups[group_key] = {
                 "env_id": env_id if env_id else base_env_id,
                 "base_env_id": base_env_id,
+                "model_id": model_id,
                 "rows": [],
                 "column_names": set(),
                 "job_run_ids": set(),
@@ -47,6 +54,8 @@ def aggregate_rows_by_env(rows: Iterable[Mapping[str, Any]]) -> list[AggregatedE
             group["env_id"] = env_id
         if not group["base_env_id"] and base_env_id:
             group["base_env_id"] = base_env_id
+        if not group["model_id"] and model_id:
+            group["model_id"] = model_id
         group["rows"].append(row)
         group["column_names"].update(row.keys())
         job_run_id = row.get("job_run_id")
@@ -60,13 +69,17 @@ def aggregate_rows_by_env(rows: Iterable[Mapping[str, Any]]) -> list[AggregatedE
         # Preserve rollout_index as assigned during row loading; aggregation just passes rows through.
         normalized_rows: list[Mapping[str, Any]] = list(group["rows"])  # shallow copy
         # Canonicalize env_id by stripping trailing rollout suffix if present (keep other variant parts like task)
-        candidate_env_id = group["env_id"] or group["base_env_id"] or key
-        m = rollout_re.match(candidate_env_id)
-        out_env_id = m.group(1) if m else candidate_env_id
+        candidate_env_id = group["env_id"] or group["base_env_id"] or ""
+        if combine_rollouts:
+            m = rollout_re.match(candidate_env_id)
+            out_env_id = m.group(1) if m else candidate_env_id
+        else:
+            out_env_id = candidate_env_id
         aggregated.append(
             AggregatedEnvRows(
                 env_id=out_env_id,
                 base_env_id=group["base_env_id"] or key,
+                model_id=group["model_id"],
                 rows=normalized_rows,
                 column_names=tuple(sorted(group["column_names"])),
                 job_run_ids=tuple(sorted(group["job_run_ids"])),

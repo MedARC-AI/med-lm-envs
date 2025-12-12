@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 import polars as pl
+from polars import DataFrame as PLDataFrame, LazyFrame as PLLazyFrame
 
 logger = logging.getLogger(__name__)
 
@@ -49,10 +50,29 @@ class ModelCentricResult:
     models: dict[str, dict[str, Any]]
 
 
-def read_dataset_lazy(parquet_path: Path | str) -> pl.LazyFrame:
+def read_dataset_lazy(
+    parquet_path: Path | str | Sequence[Path | str | PLDataFrame | PLLazyFrame] | PLDataFrame | PLLazyFrame,
+) -> pl.LazyFrame:
     """Read required columns lazily and normalize reward values."""
-    parquet_path = Path(parquet_path)
-    lf = pl.scan_parquet(str(parquet_path))
+    if isinstance(parquet_path, PLLazyFrame):
+        lf = parquet_path
+    elif isinstance(parquet_path, PLDataFrame):
+        lf = parquet_path.lazy()
+    else:
+        if isinstance(parquet_path, (list, tuple)):
+            if parquet_path and isinstance(parquet_path[0], (PLDataFrame, PLLazyFrame)):
+                frames: list[PLLazyFrame] = []
+                for item in parquet_path:
+                    if isinstance(item, PLLazyFrame):
+                        frames.append(item)
+                    elif isinstance(item, PLDataFrame):
+                        frames.append(item.lazy())
+                lf = pl.concat(frames, how="vertical") if len(frames) > 1 else frames[0]
+            else:
+                paths = [str(Path(p)) for p in parquet_path]
+                lf = pl.scan_parquet(paths)
+        else:
+            lf = pl.scan_parquet([str(Path(parquet_path))])
     cols = lf.collect_schema().names()
     col_set = set(cols)
     required = {EXAMPLE_ID_COL, REWARD_COL, MODEL_COL}
@@ -186,7 +206,7 @@ def dataset_model_mean_winrates(
 
 
 def compute_winrates(
-    datasets: Sequence[tuple[str, Path | str]],
+    datasets: Sequence[tuple[str, Path | str | Sequence[Path | str]]],
     config: WinrateConfig | None = None,
 ) -> ModelCentricResult:
     """Compute win rates for a list of datasets."""
@@ -363,7 +383,7 @@ def _aggregate_model_means(
 
 def _safe_process_dataset(
     dataset_name: str,
-    parquet_path: Path | str,
+    parquet_path: Path | str | Sequence[Path | str] | PLDataFrame | PLLazyFrame,
     config: WinrateConfig,
 ) -> DatasetStats | None:
     """Read and process a dataset, logging warnings on failure."""

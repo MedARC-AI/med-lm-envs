@@ -72,6 +72,7 @@ class _RecordWork:
     include_prompt: bool
     keep_columns: Sequence[str]
     drop_columns: Sequence[str]
+    combine_rollouts: bool
 
 
 def run_process(
@@ -94,7 +95,7 @@ def run_process(
 
     _print_records_table(records, options.only_complete_runs, options.runs_dir)
 
-    grouped: dict[str, list[_RecordWork]] = {}
+    grouped: dict[tuple[str, str], list[_RecordWork]] = {}
     record_iter: Iterable[Any] = records
     try:
         from rich.progress import track
@@ -112,12 +113,14 @@ def run_process(
 
         normalized = metadata.load_normalized_metadata(record, combine_rollouts=combine_rollouts)
         env_key = normalized.base_env_id or normalized.manifest_env_id or record.manifest_env_id or record.job_id
-        grouped.setdefault(env_key, []).append(
+        model_key = normalized.model_id or "unknown"
+        grouped.setdefault((model_key, env_key), []).append(
             _RecordWork(
                 normalized=normalized,
                 include_prompt=include_prompt,
                 keep_columns=keep_columns,
                 drop_columns=drop_columns,
+                combine_rollouts=combine_rollouts,
             )
         )
 
@@ -197,6 +200,7 @@ def run_process(
         raise
 
     writer.write_env_index(env_summaries, writer_config)
+    writer.write_hf_dataset_config(env_summaries, writer_config)
 
     hf_summary: HFMergeSummary | None = None
     if options.hf_config:
@@ -278,7 +282,7 @@ def _print_records_table(
     for rec in all_records:
         model_id = rec.model_id or "unknown"
         total_by_model[model_id] = total_by_model.get(model_id, 0) + 1
-        if (rec.status or "").lower() == "completed":
+        if discovery._is_completed_status(rec.status):  # type: ignore[attr-defined]
             completed_by_model[model_id] = completed_by_model.get(model_id, 0) + 1
 
     # Inclusion: completed == total (>0)
@@ -356,5 +360,6 @@ def _process_env_group(work_items: Sequence[_RecordWork]) -> tuple[list[Aggregat
             drop_columns=work.drop_columns,
         )
         row_buffer.extend(row_batch)
-    aggregated = aggregate.aggregate_rows_by_env(row_buffer)
+    combine_rollouts = all(item.combine_rollouts for item in work_items) if work_items else True
+    aggregated = aggregate.aggregate_rows_by_env(row_buffer, combine_rollouts=combine_rollouts)
     return aggregated, len(row_buffer)

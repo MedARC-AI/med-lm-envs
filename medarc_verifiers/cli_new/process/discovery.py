@@ -16,6 +16,7 @@ from medarc_verifiers.utils.pathing import from_project_relative
 logger = logging.getLogger(__name__)
 
 DEFAULT_STATUS = "unknown"
+_COMPLETED_STATUSES = {"completed", "succeeded", "success"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -324,26 +325,29 @@ def deduplicate_records_by_latest(records: Sequence[RunRecord]) -> list[RunRecor
             latest_records.append(group_records[0])
             continue
 
-        # Find latest by timestamp (ended_at > started_at > created_at)
-        latest = max(
-            group_records,
-            key=lambda r: (
+        def _recency_key(r: RunRecord) -> tuple[str, str, str]:
+            return (
                 r.ended_at or "",
                 r.started_at or "",
                 r.manifest.created_at or "",
-            ),
-        )
-        latest_records.append(latest)
+            )
+
+        completed = [r for r in group_records if _is_completed_status(r.status)]
+        if completed:
+            kept = max(completed, key=_recency_key)
+        else:
+            kept = max(group_records, key=_recency_key)
+        latest_records.append(kept)
 
         # Collect info about skipped runs (sorted by timestamp for clarity)
-        skipped_records = [r for r in group_records if r is not latest]
+        skipped_records = [r for r in group_records if r is not kept]
         skipped_records.sort(key=lambda r: (r.ended_at or "", r.started_at or "", r.manifest.created_at or ""))
 
         for record in skipped_records:
             skipped_timestamp = record.ended_at or record.started_at or "N/A"
-            kept_timestamp = latest.ended_at or latest.started_at or "N/A"
+            kept_timestamp = kept.ended_at or kept.started_at or "N/A"
             skipped_run_id = record.manifest.job_run_id
-            kept_run_id = latest.manifest.job_run_id
+            kept_run_id = kept.manifest.job_run_id
             skipped_info.append((model_id, env_id, skipped_run_id, skipped_timestamp, kept_run_id, kept_timestamp))
 
     # Display results
@@ -393,3 +397,7 @@ __all__ = [
     "iter_run_records",
     "deduplicate_records_by_latest",
 ]
+
+
+def _is_completed_status(status: str | None) -> bool:
+    return (status or "").lower() in _COMPLETED_STATUSES

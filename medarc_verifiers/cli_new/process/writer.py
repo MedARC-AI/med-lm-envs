@@ -19,6 +19,30 @@ logger = logging.getLogger(__name__)
 
 EXPORTER_METADATA_KEY = b"medarc_exporter"
 DEFAULT_SCHEMA_VERSION = 1
+ALLOWED_COLUMNS: tuple[str, ...] = (
+    "env_id",
+    "error",
+    "example_id",
+    "answer",
+    "generation_ms",
+    "job_run_id",
+    "judge_cost",
+    "judge_token_completion",
+    "judge_token_prompt",
+    "judge_token_total",
+    "model_cost",
+    "model_id",
+    "model_token_completion",
+    "model_token_prompt",
+    "model_token_total",
+    "reward",
+    "rollout_index",
+    "run_id",
+    "scoring_ms",
+    "status",
+    "task",
+    "total_ms",
+)
 
 
 @dataclass(slots=True)
@@ -41,6 +65,7 @@ class EnvWriteSummary:
 
     env_id: str
     base_env_id: str
+    model_id: str
     output_path: Path
     row_count: int
     job_run_ids: tuple[str, ...]
@@ -69,6 +94,7 @@ def write_env_groups(
 
     if write_index:
         _write_env_index(output_dir, summaries, config)
+        write_hf_dataset_config(summaries, config)
     return summaries
 
 
@@ -82,10 +108,76 @@ def write_env_index(
     _write_env_index(config.output_dir, summaries, config)
 
 
+def write_hf_dataset_config(
+    summaries: Sequence[EnvWriteSummary],
+    config: WriterConfig,
+) -> None:
+    """Emit Hugging Face datasets metadata (dataset_infos.json) for the Parquet files."""
+    if config.dry_run or not summaries:
+        return
+
+    data_files: dict[str, list[str]] = {"train": []}
+    split_name_map: dict[str, str] = {}
+    env_row_counts: dict[str, int] = {}
+    for summary in summaries:
+        rel_path = summary.output_path.relative_to(config.output_dir).as_posix()
+        data_files["train"].append(rel_path)
+        env_row_counts[summary.base_env_id] = env_row_counts.get(summary.base_env_id, 0) + int(summary.row_count)
+        split_name = _sanitize_split_name(summary.base_env_id)
+        split_name_map[split_name] = summary.base_env_id
+        data_files.setdefault(split_name, []).append(rel_path)
+
+    # Build minimal split info
+    splits: dict[str, dict[str, Any]] = {
+        "train": {
+            "name": "train",
+            "num_bytes": None,
+            "num_examples": sum(int(s.row_count) for s in summaries),
+            "dataset_name": "default",
+        }
+    }
+    for env_id, count in sorted(env_row_counts.items()):
+        splits[env_id] = {
+            "name": env_id,
+            "num_bytes": None,
+            "num_examples": count,
+            "dataset_name": "default",
+        }
+
+    dataset_info = {
+        "builder_name": "parquet",
+        "config_name": "default",
+        "config_description": "MedARC processed outputs grouped by model and environment.",
+        "dataset_size": None,
+        "download_checksums": None,
+        "download_size": None,
+        "features": None,
+        "homepage": None,
+        "license": None,
+        "splits": splits,
+        "data_files": data_files,
+        "version": "0.0.0",
+        "extras": {
+            "processed_at": config.processed_at,
+            "processed_with_args": dict(config.processed_with_args),
+            "env_id_map": split_name_map,
+        },
+    }
+
+    payload = {"default": dataset_info}
+
+    config_path = config.output_dir / "dataset_infos.json"
+    with config_path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+
 def _write_group(group: AggregatedEnvRows, config: WriterConfig) -> EnvWriteSummary:
     env_id = group.env_id or group.base_env_id
     base_env_id = group.base_env_id
-    output_path = config.output_dir / f"{_slugify(env_id)}.parquet"
+    model_id = group.model_id or "unknown"
+    model_dir = config.output_dir / _slugify(model_id)
+    if not config.dry_run:
+        model_dir.mkdir(parents=True, exist_ok=True)
+    output_path = model_dir / f"{_slugify(env_id)}.parquet"
     exporter_metadata = {
         "exporter_version": config.exporter_version,
         "processed_at": config.processed_at,
@@ -94,6 +186,7 @@ def _write_group(group: AggregatedEnvRows, config: WriterConfig) -> EnvWriteSumm
         "processed_with_args": dict(config.processed_with_args),
         "env_id": env_id,
         "base_env_id": base_env_id,
+        "model_id": model_id,
         "append": False,
     }
     row_count = len(group.rows)
@@ -102,6 +195,7 @@ def _write_group(group: AggregatedEnvRows, config: WriterConfig) -> EnvWriteSumm
         return EnvWriteSummary(
             env_id=env_id,
             base_env_id=base_env_id,
+            model_id=model_id,
             output_path=output_path,
             row_count=row_count,
             job_run_ids=group.job_run_ids,
@@ -123,9 +217,9 @@ def _write_group(group: AggregatedEnvRows, config: WriterConfig) -> EnvWriteSumm
                 f"Failed to read existing output file {output_path}: {exc}. To force regeneration, use --overwrite."
             ) from exc
 
-        # Convert both existing and new data to Polars for easy schema union and filtering
-        existing_df = pl.from_arrow(existing_table)
-        new_df = pl.from_arrow(_build_arrow_table(group))
+        # Convert both existing and new data to Polars and normalize schema to a fixed column set
+        existing_df = _normalize_columns(pl.from_arrow(existing_table))
+        new_df = _normalize_columns(pl.from_arrow(_build_arrow_table(group)))
 
         # Deduplicate by job_run_id when possible
         existing_job_ids: set[str] = set()
@@ -166,27 +260,19 @@ def _write_group(group: AggregatedEnvRows, config: WriterConfig) -> EnvWriteSumm
                     "processed_with_args": dict(config.processed_with_args),
                     "env_id": env_id,
                     "base_env_id": base_env_id,
+                    "model_id": model_id,
                 }
 
             return EnvWriteSummary(
                 env_id=env_id,
                 base_env_id=base_env_id,
+                model_id=model_id,
                 output_path=output_path,
                 row_count=existing_df.height,
                 job_run_ids=tuple(existing_export_meta.get("source_runs", [])),
                 exporter_metadata=existing_export_meta,
                 dry_run=False,
             )
-
-        # Union schemas: ensure both frames share the same columns
-        union_cols = list(sorted(set(existing_df.columns) | set(new_df.columns)))
-        for col in union_cols:
-            if col not in existing_df.columns:
-                existing_df = existing_df.with_columns(pl.lit(None).alias(col))
-            if col not in new_df.columns:
-                new_df = new_df.with_columns(pl.lit(None).alias(col))
-        existing_df = existing_df.select(union_cols)
-        new_df = new_df.select(union_cols)
 
         combined_df = pl.concat([existing_df, new_df], how="vertical_relaxed")
 
@@ -207,6 +293,7 @@ def _write_group(group: AggregatedEnvRows, config: WriterConfig) -> EnvWriteSumm
             "processed_with_args": dict(config.processed_with_args),
             "env_id": env_id,
             "base_env_id": base_env_id,
+            "model_id": model_id,
             "append": True,
         }
         meta_raw = {**meta_raw, EXPORTER_METADATA_KEY: json.dumps(merged_exporter_meta, sort_keys=True).encode("utf-8")}
@@ -216,6 +303,7 @@ def _write_group(group: AggregatedEnvRows, config: WriterConfig) -> EnvWriteSumm
         return EnvWriteSummary(
             env_id=env_id,
             base_env_id=base_env_id,
+            model_id=model_id,
             output_path=output_path,
             row_count=combined_df.height,
             job_run_ids=tuple(combined_job_ids),
@@ -237,6 +325,7 @@ def _write_group(group: AggregatedEnvRows, config: WriterConfig) -> EnvWriteSumm
     return EnvWriteSummary(
         env_id=env_id,
         base_env_id=base_env_id,
+        model_id=model_id,
         output_path=output_path,
         row_count=row_count,
         job_run_ids=group.job_run_ids,
@@ -248,18 +337,13 @@ def _write_group(group: AggregatedEnvRows, config: WriterConfig) -> EnvWriteSumm
 def _build_arrow_table(group: AggregatedEnvRows) -> pa.Table:
     if not group.rows:
         logger.debug("Group %s has no rows; writing empty table.", group.base_env_id)
-        columns = list(group.column_names) if group.column_names else []
-        arrays = [pa.array([], type=pa.null()) for _ in columns]
-        return pa.Table.from_arrays(arrays, names=columns)
+        arrays = [pa.array([], type=pa.null()) for _ in ALLOWED_COLUMNS]
+        return pa.Table.from_arrays(arrays, names=list(ALLOWED_COLUMNS))
 
     # Use full-length schema inference so late non-null values don't clash with
     # early all-null samples (default inference length is limited).
     df = pl.DataFrame(group.rows, infer_schema_length=None)
-    for column in group.column_names:
-        if column not in df.columns:
-            df = df.with_columns(pl.lit(None).alias(column))
-    ordered_columns = list(group.column_names) if group.column_names else df.columns
-    df = df.select(ordered_columns)
+    df = _normalize_columns(df)
     return df.to_arrow()
 
 
@@ -278,29 +362,83 @@ def _write_env_index(
         except Exception:  # pragma: no cover - tolerate bad index
             existing = {}
 
-    env_map: dict[str, Any] = {}
-    # Seed from existing
+    # Flattened list of environments (now per model) for backward compatibility.
+    existing_envs: dict[tuple[str, str], dict[str, Any]] = {}
     for item in existing.get("environments", []) or []:
         env_id = str(item.get("env_id") or item.get("base_env_id") or "")
-        if env_id:
-            env_map[env_id] = item
+        model_id = str(item.get("model_id") or "")
+        if env_id and model_id:
+            existing_envs[(env_id, model_id)] = dict(item)
 
-    # Apply/replace with new summaries
+    env_entries: dict[tuple[str, str], dict[str, Any]] = dict(existing_envs)
     for summary in summaries:
-        env_map[summary.env_id] = {
+        key = (summary.env_id, summary.model_id)
+        env_entries[key] = {
             "env_id": summary.env_id,
             "base_env_id": summary.base_env_id,
+            "model_id": summary.model_id,
             "path": summary.output_path.as_posix(),
             "row_count": summary.row_count,
             "job_run_ids": list(summary.job_run_ids),
             "exporter_metadata": summary.exporter_metadata,
         }
+    env_entries_list = [env_entries[k] for k in sorted(env_entries.keys())]
+
+    # Grouped view by environment to ease reconstruction for winrates / HF metadata
+    env_groups: dict[str, dict[str, Any]] = {}
+    for entry in env_entries_list:
+        env_id = entry["env_id"]
+        group = env_groups.setdefault(
+            env_id,
+            {
+                "env_id": env_id,
+                "base_env_id": entry["base_env_id"],
+                "paths": [],
+                "row_count": 0,
+            },
+        )
+        group["paths"].append(
+            {
+                "model_id": entry["model_id"],
+                "path": entry["path"],
+                "row_count": entry["row_count"],
+                "job_run_ids": entry["job_run_ids"],
+            }
+        )
+        try:
+            group["row_count"] += int(entry["row_count"])
+        except Exception:
+            pass
+
+    # Group by model for convenience (e.g., browsing output folders)
+    model_groups: dict[str, dict[str, Any]] = {}
+    for entry in env_entries_list:
+        model_id = entry["model_id"]
+        group = model_groups.setdefault(
+            model_id,
+            {
+                "model_id": model_id,
+                "path": _slugify(model_id),
+                "environments": [],
+            },
+        )
+        group["environments"].append(
+            {
+                "env_id": entry["env_id"],
+                "base_env_id": entry["base_env_id"],
+                "path": entry["path"],
+                "row_count": entry["row_count"],
+                "job_run_ids": entry["job_run_ids"],
+            }
+        )
 
     payload = {
         "processed_at": config.processed_at,
         "schema_version": config.schema_version,
         "exporter_version": config.exporter_version,
-        "environments": [env_map[k] for k in sorted(env_map.keys())],
+        "environments": env_entries_list,
+        "env_groups": [env_groups[k] for k in sorted(env_groups.keys())],
+        "models": [model_groups[k] for k in sorted(model_groups.keys())],
     }
 
     with index_path.open("w", encoding="utf-8") as handle:
@@ -315,4 +453,27 @@ def _slugify(value: str) -> str:
     return slug or "env"
 
 
+def _normalize_columns(df: pl.DataFrame) -> pl.DataFrame:
+    """Restrict output schema to a fixed set of columns for cross-env compatibility."""
+    out = df.clone()
+    for col in ALLOWED_COLUMNS:
+        if col not in out.columns:
+            out = out.with_columns(pl.lit(None).alias(col))
+    return out.select(list(ALLOWED_COLUMNS))
+
+
 __all__ = ["EnvWriteSummary", "WriterConfig", "write_env_groups", "write_env_index"]
+
+
+def _sanitize_split_name(name: str) -> str:
+    """Datasets split names must match ^\\w+(\\.\\w+)*$; replace disallowed chars."""
+    sanitized = []
+    for ch in name:
+        if ch.isalnum() or ch == "_":
+            sanitized.append(ch)
+        elif ch == ".":
+            sanitized.append(".")
+        else:
+            sanitized.append("_")
+    out = "".join(sanitized).strip("_")
+    return out or "env"

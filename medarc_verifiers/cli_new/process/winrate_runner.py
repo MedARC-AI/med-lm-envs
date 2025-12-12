@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Sequence
 
 from medarc_verifiers.cli_new.process import winrate as _win
 from medarc_verifiers.cli_new.process.hf_sync import HFSyncConfig, download_hf_repo
-from medarc_verifiers.utils.pathing import from_project_relative
 
 logger = logging.getLogger(__name__)
 
@@ -22,64 +21,17 @@ class WinrateRunResult:
 
     output_path: Path
     result: _win.ModelCentricResult
-    datasets: Sequence[tuple[str, Path]]
+    datasets: Sequence[tuple[str, Sequence[_win.PLDataFrame]]]
 
 
-def discover_datasets(processed_dir: Path) -> list[tuple[str, Path]]:
-    """Locate env parquet outputs under a processed directory."""
-    processed_dir = processed_dir.expanduser()
-    index_path = processed_dir / "env_index.json"
-    datasets: list[tuple[str, Path]] = []
-
-    if index_path.exists():
-        try:
-            payload = json.loads(index_path.read_text(encoding="utf-8"))
-            for item in payload.get("environments", []) or []:
-                env_id = str(item.get("env_id") or item.get("base_env_id") or "").strip()
-                path_str = item.get("path")
-                if not env_id or not path_str:
-                    continue
-                datasets.append((env_id, _resolve_dataset_path(path_str, processed_dir)))
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to read env_index.json at %s: %s; falling back to globbing.", index_path, exc)
-
+def discover_datasets(processed_dir: Path) -> list[tuple[str, list[_win.PLDataFrame]]]:
+    """Load env splits via datasets metadata; requires dataset_infos.json."""
+    datasets = _load_with_datasets(processed_dir)
     if not datasets:
-        for path in sorted(processed_dir.glob("*.parquet")):
-            env_id = path.stem
-            datasets.append((env_id, path))
-
+        raise ValueError(
+            f"No dataset_infos.json found under {processed_dir}. Regenerate with medarc-new process before winrate."
+        )
     return datasets
-
-
-def _resolve_dataset_path(path_str: str, processed_dir: Path) -> Path:
-    candidate = Path(path_str)
-    if candidate.is_absolute():
-        return candidate
-
-    # 1) If path exists relative to current working directory, honor it
-    if candidate.exists():
-        return candidate.resolve()
-
-    # 2) If the env_index recorded a project-relative path (e.g., runs/processed/foo.parquet), resolve via project root
-    try:
-        proj_resolved = from_project_relative(candidate)
-        if proj_resolved.exists():
-            return proj_resolved
-    except Exception:
-        pass
-
-    # 3) If the path is already rooted under the processed_dir name (e.g., runs/processed/foo.parquet),
-    # normalize to avoid duplicating the processed_dir segment.
-    processed_parts = processed_dir.parts
-    candidate_parts = candidate.parts
-    if len(candidate_parts) >= 2 and tuple(candidate_parts[:2]) == tuple(processed_parts[-2:]):
-        return (processed_dir.parent / Path(*candidate_parts[1:])).resolve()
-    if candidate_parts and candidate_parts[0] == processed_dir.name:
-        return (processed_dir / Path(*candidate_parts[1:])).resolve()
-
-    # 4) Default: relative to processed_dir
-    resolved = (processed_dir / candidate).resolve()
-    return resolved
 
 
 def run_winrate(
@@ -131,13 +83,12 @@ def _winrate_root(processed_dir: Path) -> Path:
 def _resolve_source(
     processed_dir: Path,
     hf_config: HFSyncConfig | None,
-) -> tuple[Path, list[tuple[str, Path]], str]:
+) -> tuple[Path, list[tuple[str, list[_win.PLDataFrame]]], str]:
     if hf_config and hf_config.repo_id:
         local_dir = download_hf_repo(
             repo_id=hf_config.repo_id,
             branch=hf_config.branch,
             token=hf_config.token,
-            allow_patterns="*.parquet",
             local_dir=None,
             local_only=False,
         )
@@ -149,22 +100,70 @@ def _resolve_source(
     return processed_dir, datasets, source_desc
 
 
-def list_models(datasets: Sequence[tuple[str, Path]]) -> list[str]:
+def _load_with_datasets(processed_dir: Path) -> list[tuple[str, list[_win.PLDataFrame]]]:
+    """Load all splits via Hugging Face datasets; requires dataset_infos.json."""
+    dataset_infos = processed_dir / "dataset_infos.json"
+    if not dataset_infos.exists():
+        raise ValueError(f"dataset_infos.json missing under {processed_dir}; run medarc-new process first.")
+    try:
+        from datasets import DatasetDict, load_dataset  # type: ignore[import-not-found]
+    except Exception:
+        raise
+
+    try:
+        cache_dir = processed_dir / "hf_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        payload = json.loads(dataset_infos.read_text(encoding="utf-8"))
+        config_key = next(iter(payload.keys()))
+        config_payload = payload.get(config_key) or {}
+        env_id_map = config_payload.get("extras", {}).get("env_id_map", {})
+        data_files_raw = config_payload.get("data_files") or {}
+        data_files: dict[str, list[str]] = {}
+        for split, paths in data_files_raw.items():
+            data_files[split] = [str(processed_dir / path) for path in paths]
+        ds_dict = load_dataset("parquet", data_files=data_files, split=None, cache_dir=str(cache_dir))
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"Failed to load datasets from {processed_dir} via dataset_infos: {exc}") from exc
+
+    if not isinstance(ds_dict, DatasetDict):
+        logger.debug("datasets.load_dataset returned non-DatasetDict; skipping HF path.")
+        return []
+
+    datasets: list[tuple[str, list[_win.PLDataFrame]]] = []
+    for split_name, split in ds_dict.items():
+        if split_name == "train":
+            continue
+        try:
+            # Convert to Polars DataFrame; fallback to pandas if unavailable.
+            if hasattr(split, "to_polars"):
+                df = split.to_polars()  # type: ignore[attr-defined]
+            else:
+                df = _win.pl.from_pandas(split.to_pandas())
+            env_id = env_id_map.get(split_name, split_name)
+            datasets.append((env_id, [df]))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to convert split %s to Polars: %s", split_name, exc)
+            continue
+    return datasets
+
+
+def list_models(datasets: Sequence[tuple[str, Sequence[_win.PLDataFrame]]]) -> list[str]:
     """List unique model_id values present across datasets."""
     models: set[str] = set()
-    for _, path in datasets:
+    for _, splits in datasets:
         try:
-            lf = _win.read_dataset_lazy(path)
-            cols = lf.collect_schema().names()
-            if "model_id" not in cols:
-                continue
-            df = lf.select("model_id").collect()
-            for value in df.get_column("model_id").unique():
-                if value is None:
+            for split in splits:
+                lf = _win.read_dataset_lazy(split)
+                cols = lf.collect_schema().names()
+                if "model_id" not in cols:
                     continue
-                models.add(str(value))
+                df = lf.select("model_id").collect()
+                for value in df.get_column("model_id").unique():
+                    if value is None:
+                        continue
+                    models.add(str(value))
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Skipping dataset %s while listing models: %s", path, exc)
+            logger.warning("Skipping dataset while listing models: %s", exc)
             continue
     return sorted(models)
 
