@@ -28,6 +28,11 @@ from medarc_verifiers.cli_new.utils.endpoint_utils import (
 )
 from medarc_verifiers.cli_new.utils.shared import DEFAULT_BATCH_MAX_CONCURRENT, ensure_root_logging, resolve_env_identifier
 
+try:
+    from rich import print as rich_print  # type: ignore
+except ImportError:  # pragma: no cover - rich is optional
+    rich_print = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -382,6 +387,8 @@ def _maybe_sleep_between_jobs(job: ResolvedJob, settings: ExecutorSettings, *, i
     delay = job.sleep if job.sleep is not None else settings.sleep
     if delay is None or delay <= 0:
         return
+    if rich_print:
+        rich_print(f"[cyan]Sleeping {delay:.2f} second(s) before next job...[/cyan]")
     logger.info("Sleeping %.2f second(s) before next job...", delay)
     sleep(delay)
 

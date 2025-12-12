@@ -6,7 +6,7 @@
     {
       "artifacts": [],
       "attempt": 0,
-      "checksum": "f7ab901e0b12e4d91d67e6594df0099152c1ffb8b42afd0aecc833e898e08a4a",
+      "checksum": "2aa659928336a5c47bf3de76bddade747a087c635f885678064dfc13342a7b44",
       "config": {
         "env": {
           "env_args": {
@@ -30,10 +30,10 @@
         },
         "job_id": "snapshot-model-snapshot-env",
         "job_name": "snapshot-eval",
-        "model": {
-          "env_args": {
-            "split": "dev"
-          },
+          "model": {
+            "env_args": {
+              "split": "dev"
+            },
           "env_overrides": {
             "snapshot-env": {
               "temperature": 0.2
@@ -49,7 +49,8 @@
             "max_tokens": 256,
             "temperature": 0.3
           }
-        }
+        },
+        "sleep": null
       },
       "env_id": "environments.snapshot_env",
       "job_id": "snapshot-model-snapshot-env",

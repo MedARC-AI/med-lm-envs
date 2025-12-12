@@ -22,8 +22,8 @@ from pydantic import ValidationError
 from medarc_verifiers.cli_new._config_loader import ConfigFormatError, load_run_config
 from medarc_verifiers.cli_new._job_builder import ResolvedJob, build_jobs
 from medarc_verifiers.cli_new._job_executor import ExecutorSettings, JobExecutionResult, execute_jobs
-from medarc_verifiers.cli_new._manifest import MANIFEST_FILENAME, ManifestJobEntry, RunManifest, compute_snapshot_checksum
-from medarc_verifiers.cli_new._manifest_planner import ManifestPlan, ManifestPlanner
+from medarc_verifiers.cli_new._manifest import ManifestJobEntry, RunManifest, compute_snapshot_checksum
+from medarc_verifiers.cli_new._manifest_planner import ManifestPlanner
 from medarc_verifiers.cli_new._single_run import run_single_mode
 from medarc_verifiers.cli_new.process import ProcessOptions, ProcessResult, run_process
 from medarc_verifiers.cli_new.process.hf_sync import HFSyncConfig

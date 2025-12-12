@@ -11,7 +11,6 @@ from typing import Any, Mapping, Sequence
 
 from medarc_verifiers.cli_new._job_builder import ResolvedJob
 from medarc_verifiers.cli_new._manifest import MANIFEST_FILENAME, RunManifest, compute_job_checksum
-from medarc_verifiers.cli_new._schemas import EnvironmentConfigSchema
 from medarc_verifiers.cli_new.utils.shared import slugify
 from medarc_verifiers.utils.pathing import from_project_relative
 
@@ -316,9 +315,7 @@ def _plan_auto_resume_jobs(
             sampling_args=sampling_args_map[job_id],
         )
         if entry.checksum != expected_checksum:
-            msg = (
-                f"Job '{job_id}' arguments changed since the manifest was recorded; use --regen to create a new run."
-            )
+            msg = f"Job '{job_id}' arguments changed since the manifest was recorded; use --regen to create a new run."
             raise ValueError(msg)
         env_id = (entry.env_id or job.env.id or job.job_id).lower()
         forced = force_all or env_id in forced_envs
