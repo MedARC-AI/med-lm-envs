@@ -6,14 +6,3 @@
   matrix:
     question_type: [reasoning_fct, reasoning_nota]
   matrix_id_format: "{base}-{question_type}"
-
-- id: med_halt
-  module: med_halt
-  num_examples: -1
-  verbose: false
-  env_args:
-    shuffle_answers: true
-    question_type: reasoning_nota
-  matrix:
-    shuffle_seed: [1618, 9331]
-  matrix_id_format: "{base}-reasoning_nota-rollout{shuffle_seed}"
