@@ -1,0 +1,4 @@
+- id: medagentbench
+  module: medagentbench
+  num_examples: -1
+  verbose: false
