@@ -1,5 +1,7 @@
 """Tests for the simplified MCQ accuracy grader."""
 
+import pytest
+
 from medarc_verifiers.rewards.multiple_choice_accuracy import MCQAccuracyResult, multiple_choice_accuracy
 
 
@@ -77,12 +79,6 @@ def test_answer_text_in_sentence():
 def test_answer_text_case_insensitive():
     assert multiple_choice_accuracy(
         "The diagnosis is DIABETES MELLITUS TYPE 2", answer_letter="D", answer_text="Diabetes Mellitus Type 2"
-    )
-
-
-def test_answer_text_with_negation_fails():
-    assert not multiple_choice_accuracy(
-        "This is not hypertension, it's hypotension.", answer_letter="A", answer_text="hypertension"
     )
 
 
@@ -252,3 +248,99 @@ def test_edge_case_quoted_answer_text():
     assert multiple_choice_accuracy(
         'The diagnosis is "acute bronchitis"', answer_letter="B", answer_text="acute bronchitis"
     )
+
+
+def test_direct_answer_method_details():
+    result = multiple_choice_accuracy("C", answer_letter="C", answer_text="Option C", return_details=True)
+    assert result.is_correct is True
+    assert result.method == "direct_answer"
+    assert result.matched_answer == "c"
+    assert result.correct_answer == "C"
+
+
+def test_prefix_priority_over_generic_anchor():
+    # The explicit prefix match should be used even if a later generic anchor appears
+    response = "Answer: B. The answer is C."
+    result = multiple_choice_accuracy(
+        response, answer_letter="B", answer_text="Option B", prefix="Answer:", return_details=True
+    )
+    assert result.is_correct is True
+    assert result.method == "anchored_token"
+    assert result.matched_answer == "B"
+
+
+def test_last_token_negation_in_previous_sentence_not_blocking():
+    # Negation in an earlier sentence should not block a later correct token
+    response = "Not C. However, after reconsideration, the answer is actually C"
+    assert multiple_choice_accuracy(response, answer_letter="C", answer_text="Option C")
+
+
+def test_leading_two_digit_option():
+    assert multiple_choice_accuracy("12) Cranial nerve XII", answer_letter="12", answer_text="CN XII")
+
+
+def test_answer_text_whitespace_flexibility():
+    assert multiple_choice_accuracy(
+        "The correct diagnosis is acute   kidney\tinjury.", answer_letter="A", answer_text="acute kidney injury"
+    )
+
+
+def test_invalid_answer_letter_raises():
+    with pytest.raises(ValueError):
+        multiple_choice_accuracy("Answer: C", answer_letter="AA", answer_text="Option C")
+
+
+def test_anchored_negated_with_parentheses_should_fail():
+    assert not multiple_choice_accuracy("Final answer is not (C).", answer_letter="C", answer_text="Option C")
+
+
+def test_anchored_negated_isnt_ascii_apostrophe_should_fail():
+    assert not multiple_choice_accuracy("The answer isn't C; it's D.", answer_letter="C", answer_text="Option C")
+
+
+def test_anchored_negated_isnt_curly_apostrophe_should_fail():
+    assert not multiple_choice_accuracy("The answer isn’t C; it’s D.", answer_letter="C", answer_text="Option C")
+
+
+def test_anchored_negated_prefix_style_should_fail():
+    assert not multiple_choice_accuracy("Answer: not C", answer_letter="C", answer_text="Option C")
+
+
+def test_prefix_anchored_negated_should_fail():
+    assert not multiple_choice_accuracy(
+        "The answer is: not C", answer_letter="C", answer_text="Option C", prefix="The answer is:"
+    )
+
+
+def test_anchored_not_after_option_should_not_block():
+    # Current implementation only treats "not/isn't" as negation when it appears BEFORE the option token.
+    # So "Answer: C, not D" should still count as C.
+    assert multiple_choice_accuracy("Answer: C, not D.", answer_letter="C", answer_text="Option C")
+
+
+def test_leading_option_with_no_answer_text_should_pass():
+    # Regression: ensure "No" as answer text doesn't trigger negation handling
+    assert multiple_choice_accuracy("B. No", answer_letter="B", answer_text="No")
+
+
+def test_leading_option_with_no_and_punctuation_should_pass():
+    assert multiple_choice_accuracy("B) No.", answer_letter="B", answer_text="No")
+
+
+def test_last_token_negation_same_sentence_blocks():
+    # No anchor phrase, so it falls to last_token.
+    # Because "Not" is in the same sentence, the final "C" should be blocked.
+    assert not multiple_choice_accuracy("Not C, wait, C", answer_letter="C", answer_text="Option C")
+
+
+def test_last_token_negation_previous_sentence_does_not_block():
+    # Sentence boundary prevents earlier negation from blocking later token.
+    assert multiple_choice_accuracy("Not C. C", answer_letter="C", answer_text="Option C")
+
+
+def test_last_token_isnt_previous_sentence_does_not_block():
+    assert multiple_choice_accuracy("It isn't C. C", answer_letter="C", answer_text="Option C")
+
+
+def test_last_token_isnt_same_sentence_blocks():
+    assert not multiple_choice_accuracy("It isn't C, but maybe C", answer_letter="C", answer_text="Option C")

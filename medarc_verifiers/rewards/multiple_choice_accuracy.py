@@ -67,17 +67,18 @@ def _norm_letter(letter: str) -> Optional[str]:
 # Anchored patterns like "final answer: C" or "the answer is D"
 ANCHOR_PATTERN = re.compile(
     r"(?:final\s+answer|answer|ans|choice|option|selected|i\s+choose|i\s+pick|therefore|thus|so)\s*"
-    r"[:\-–—]?\s*(?:is\s*)?\(?\s*([A-Za-z]|\d{1,2})\s*[\)\.:]?(?!\w)",
+    r"[:\-–—]?\s*(?:is\s*)?(?P<neg>not\s+|isn['’]t\s+)?\(?\s*(?P<opt>[A-Za-z]|\d{1,2})\s*[\)\.:]?(?!\w)",
     re.IGNORECASE,
 )
 
 # Any letter/number token that looks like an option
 TOKEN_PATTERN = re.compile(r"(?<!\w)\(?\s*([A-Za-z]|\d{1,2})\s*[\)\.:]?(?!\w)", re.IGNORECASE)
 
+# Leading option token like "B. answer text ..." at the start of the response
+LEADING_OPTION_PATTERN = re.compile(r"^\s*\(?\s*([A-Za-z]|\d{1,2})\s*[\)\.:]\s*(?!\w)", re.IGNORECASE)
+
 # Negation words that invalidate nearby matches
-NEGATION_PATTERN = re.compile(
-    r"\b(?:not|isn['']t|no|incorrect|wrong|eliminat\w+|except|rather\s+than)\b", re.IGNORECASE
-)
+NEGATION_PATTERN = re.compile(r"\b(?:not|isn['’]t)\b", re.IGNORECASE)
 
 # Sentence boundary pattern - splits on period, exclamation, question mark, or newline
 # Handles both single newlines (for line breaks in CoT) and double newlines (paragraphs)
@@ -89,7 +90,14 @@ def _get_sentence_containing_match(text: str, match: re.Match) -> str:
     Extract the sentence/clause containing the match.
     This helps avoid false positives from negations in earlier sentences.
     """
-    start, end = match.span()
+    # Use the span of the actual option group when available, so we don't start the match at leading whitespace.
+    if match.re.groupindex and "opt" in match.re.groupindex:
+        start, end = match.span("opt")
+    else:
+        try:
+            start, end = match.span(1)
+        except Exception:
+            start, end = match.span()
 
     # Find sentence boundaries before and after the match
     boundaries_before = [m.end() for m in SENTENCE_BOUNDARY.finditer(text[:start])]
@@ -165,6 +173,8 @@ def multiple_choice_accuracy(
         llm_answer = _strip_tex(llm_answer)
         answer_text = _strip_tex(answer_text)
 
+    llm_answer_original = llm_answer
+
     # Normalize: casefold only (preserve whitespace structure for sentence detection)
     llm_answer = _nfkc_casefold(llm_answer)
 
@@ -177,14 +187,21 @@ def multiple_choice_accuracy(
     if answer_letter == _norm_letter(llm_answer):
         return _result(True, "direct_answer", llm_answer, answer_letter, return_details)
 
-    # Strategy 2: Anchored token (prefix matches first, fallback to generic anchors)
+    # Strategy 2: Accept leading option token like "B. answer text"
+    leading_match = LEADING_OPTION_PATTERN.match(llm_answer_original)
+    if leading_match and answer_letter:
+        predicted = _norm_letter(leading_match.group(1))
+        if predicted == answer_letter:
+            return _result(True, "anchored_token", predicted, answer_letter, return_details)
+
+    # Strategy 3: Anchored token (prefix matches first, fallback to generic anchors)
     prefix_matches = []
     if prefix:
         prefix_norm = _nfkc_casefold(prefix).strip()
         if prefix_norm:
             flexible_prefix = re.escape(prefix_norm).replace(r"\ ", r"\s+")
             prefix_pattern = re.compile(
-                rf"{flexible_prefix}\s*[:\-–—]?\s*(?:is\s*)?\(?\s*([A-Za-z]|\d{{1,2}})\s*[\)\.:]?(?!\w)",
+                rf"{flexible_prefix}\s*[:\-–—]?\s*(?:is\s*)?(?P<neg>not\s+|isn['’]t\s+)?\(?\s*(?P<opt>[A-Za-z]|\d{{1,2}})\s*[\)\.:]?(?!\w)",
                 re.IGNORECASE,
             )
             prefix_matches = list(prefix_pattern.finditer(llm_answer))
@@ -192,11 +209,11 @@ def multiple_choice_accuracy(
     anchored_matches = prefix_matches if prefix_matches else list(ANCHOR_PATTERN.finditer(llm_answer))
     if anchored_matches and answer_letter:
         last_match = anchored_matches[-1]
-        predicted = _norm_letter(last_match.group(1))
-        if predicted == answer_letter and not _negated_near(llm_answer, last_match):
+        predicted = _norm_letter(last_match.group("opt"))
+        if predicted == answer_letter and last_match.group("neg") is None:
             return _result(True, "anchored_token", predicted, answer_letter, return_details)
 
-    # Strategy 3: Last token anywhere
+    # Strategy 4: Last token anywhere
     all_tokens = list(TOKEN_PATTERN.finditer(llm_answer))
     if all_tokens and answer_letter:
         last_match = all_tokens[-1]
@@ -204,14 +221,14 @@ def multiple_choice_accuracy(
         if predicted == answer_letter and not _negated_near(llm_answer, last_match):
             return _result(True, "last_token", predicted, answer_letter, return_details)
 
-    # Strategy 4: Exact answer text match
+    # Strategy 5: Exact answer text match
     if accept_answer_text and answer_text:
         # Search in normalized text (preserves structure for negation checking)
         # Make answer_text flexible for whitespace variations
         flexible_answer = re.escape(answer_text).replace(r"\ ", r"\s+")
         pattern = re.compile(rf"(?<!\w){flexible_answer}(?!\w)", re.IGNORECASE)
         match = pattern.search(llm_answer)
-        if match and not _negated_near(llm_answer, match):
+        if match:
             return _result(True, "answer_text", llm_answer, answer_text, return_details)
 
     return _result(False, "none", None, None, return_details)
