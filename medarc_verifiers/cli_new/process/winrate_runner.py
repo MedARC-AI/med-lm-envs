@@ -106,12 +106,21 @@ def _load_with_datasets(processed_dir: Path) -> list[tuple[str, list[_win.PLData
     if not dataset_infos.exists():
         raise ValueError(f"dataset_infos.json missing under {processed_dir}; run medarc-new process first.")
     try:
-        from datasets import DatasetDict, load_dataset  # type: ignore[import-not-found]
+        from datasets import DatasetDict, DownloadConfig, disable_progress_bar, load_dataset  # type: ignore[import-not-found]
+        from datasets.utils.logging import set_verbosity_error  # type: ignore[import-not-found]
     except Exception:
         raise
 
     try:
-        cache_dir = processed_dir / "hf_cache"
+        disable_progress_bar()
+        set_verbosity_error()
+        cache_root = processed_dir.parent if processed_dir.parent != processed_dir else processed_dir
+        # Prefer runs/.hf_cache when processed outputs live under runs/processed/<...>
+        if processed_dir.name == "processed" and cache_root.name == "runs":
+            cache_root = cache_root
+        elif processed_dir.parent.name == "processed" and processed_dir.parent.parent.name == "runs":
+            cache_root = processed_dir.parent.parent
+        cache_dir = cache_root / ".hf_cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
         payload = json.loads(dataset_infos.read_text(encoding="utf-8"))
         config_key = next(iter(payload.keys()))
@@ -121,7 +130,14 @@ def _load_with_datasets(processed_dir: Path) -> list[tuple[str, list[_win.PLData
         data_files: dict[str, list[str]] = {}
         for split, paths in data_files_raw.items():
             data_files[split] = [str(processed_dir / path) for path in paths]
-        ds_dict = load_dataset("parquet", data_files=data_files, split=None, cache_dir=str(cache_dir))
+        download_config = DownloadConfig(disable_progress_bar=True)
+        ds_dict = load_dataset(
+            "parquet",
+            data_files=data_files,
+            split=None,
+            cache_dir=str(cache_dir),
+            download_config=download_config,
+        )
     except Exception as exc:  # noqa: BLE001
         raise ValueError(f"Failed to load datasets from {processed_dir} via dataset_infos: {exc}") from exc
 

@@ -48,6 +48,7 @@ class ModelCentricResult:
     """Final JSON-ready payload organized by model."""
 
     models: dict[str, dict[str, Any]]
+    datasets: dict[str, dict[str, Any]]
 
 
 def read_dataset_lazy(
@@ -288,7 +289,22 @@ def build_model_centric_result(
             "vs": dict(sorted(vs_payload.items())),
             "avg_reward_per_dataset": dict(sorted(avg_rewards.items())),
         }
-    return ModelCentricResult(models=models_out)
+    dataset_payload = _build_dataset_rewards(avg_rewards_by_dataset, n_questions_by_ds)
+    return ModelCentricResult(models=models_out, datasets=dataset_payload)
+
+
+def _build_dataset_rewards(
+    avg_rewards_by_dataset: Mapping[str, Mapping[str, float | None]],
+    n_questions_by_ds: Mapping[str, int],
+) -> dict[str, dict[str, Any]]:
+    """Organize average rewards by dataset for easier downstream use."""
+    datasets: dict[str, dict[str, Any]] = {}
+    for dataset, rewards in sorted(avg_rewards_by_dataset.items()):
+        datasets[dataset] = {
+            "avg_reward_per_model": dict(sorted(rewards.items())),
+            "n_questions": int(n_questions_by_ds.get(dataset, 0)),
+        }
+    return datasets
 
 
 def compute_avg_rewards_per_model(
@@ -454,7 +470,7 @@ def _filter_models(
 
 def to_json(result: ModelCentricResult) -> dict[str, Any]:
     """Return a JSON-serializable dict."""
-    return {"models": result.models}
+    return {"models": result.models, "datasets": result.datasets}
 
 
 def write_json(payload: Mapping[str, Any], path: Path | str) -> None:
