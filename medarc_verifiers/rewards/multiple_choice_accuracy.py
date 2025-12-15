@@ -74,8 +74,12 @@ ANCHOR_PATTERN = re.compile(
 # Any letter/number token that looks like an option
 TOKEN_PATTERN = re.compile(r"(?<!\w)\(?\s*([A-Za-z]|\d{1,2})\s*[\)\.:]?(?!\w)", re.IGNORECASE)
 
-# Leading option token like "B. answer text ..." at the start of the response
-LEADING_OPTION_PATTERN = re.compile(r"^\s*\(?\s*([A-Za-z]|\d{1,2})\s*[\)\.:]\s*(?!\w)", re.IGNORECASE)
+# Leading option token like "B. Answer text" or "C) ..." at the start of the response
+LEADING_OPTION_PATTERN = re.compile(
+    r"^\s*(?:>\s*)?(?:(?:[-*+]\s+)|(?:\d{1,3}[.)]\s+))?\s*"  # blockquote / list prefixes
+    r"(?:[*_`~]+)?\s*\(?\s*([A-Za-z]|\d{1,2})\s*[\)\.:]\s*\)?\s*(?:[*_`~]+)?\s*(?!\w)",  # markdown wrappers
+    re.IGNORECASE,
+)
 
 # Negation words that invalidate nearby matches
 NEGATION_PATTERN = re.compile(r"\b(?:not|isn['’]t)\b", re.IGNORECASE)
@@ -91,7 +95,7 @@ def _get_sentence_containing_match(text: str, match: re.Match) -> str:
     This helps avoid false positives from negations in earlier sentences.
     """
     # Use the span of the actual option group when available, so we don't start the match at leading whitespace.
-    if match.re.groupindex and "opt" in match.re.groupindex:
+    if getattr(match.re, "groupindex", None) and "opt" in match.re.groupindex:
         start, end = match.span("opt")
     else:
         try:
@@ -183,13 +187,16 @@ def multiple_choice_accuracy(
     if answer_letter is None:
         raise ValueError(f"Invalid answer_letter '{answer_letter=}'. Must be a single letter or digit string.")
 
+    explicit_choice_found = False
+
     # Strategy 1: Only answer letter anywhere (without anchoring)
     if answer_letter == _norm_letter(llm_answer):
         return _result(True, "direct_answer", llm_answer, answer_letter, return_details)
 
-    # Strategy 2: Accept leading option token like "B. answer text"
+    # Strategy 2: Accept leading option token like "B. answer ..."
     leading_match = LEADING_OPTION_PATTERN.match(llm_answer_original)
     if leading_match and answer_letter:
+        explicit_choice_found = True
         predicted = _norm_letter(leading_match.group(1))
         if predicted == answer_letter:
             return _result(True, "anchored_token", predicted, answer_letter, return_details)
@@ -210,6 +217,8 @@ def multiple_choice_accuracy(
     if anchored_matches and answer_letter:
         last_match = anchored_matches[-1]
         predicted = _norm_letter(last_match.group("opt"))
+        if last_match.group("neg") is None:
+            explicit_choice_found = True
         if predicted == answer_letter and last_match.group("neg") is None:
             return _result(True, "anchored_token", predicted, answer_letter, return_details)
 
@@ -221,8 +230,8 @@ def multiple_choice_accuracy(
         if predicted == answer_letter and not _negated_near(llm_answer, last_match):
             return _result(True, "last_token", predicted, answer_letter, return_details)
 
-    # Strategy 5: Exact answer text match
-    if accept_answer_text and answer_text:
+    # Strategy 5: Exact answer text match if there's no explicit choice found
+    if accept_answer_text and answer_text and not explicit_choice_found:
         # Search in normalized text (preserves structure for negation checking)
         # Make answer_text flexible for whitespace variations
         flexible_answer = re.escape(answer_text).replace(r"\ ", r"\s+")

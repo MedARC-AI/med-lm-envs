@@ -344,3 +344,103 @@ def test_last_token_isnt_previous_sentence_does_not_block():
 
 def test_last_token_isnt_same_sentence_blocks():
     assert not multiple_choice_accuracy("It isn't C, but maybe C", answer_letter="C", answer_text="Option C")
+
+
+def test_answer_text_does_not_override_explicit_wrong_choice():
+    response = (
+        "The other options do not account for the renal findings as well:\n"
+        "- **D (Protein deposition):** Suggests amyloidosis...\n\n"
+        "Therefore, the most accurate explanation is ... → choice **B**"
+    )
+    assert not multiple_choice_accuracy(response, answer_letter="D", answer_text="Protein deposition")
+
+
+def test_explicit_choice_correct_even_with_other_option_texts_present():
+    response = "- **D (Protein deposition):** ...\nAnswer: B"
+    assert multiple_choice_accuracy(
+        response, answer_letter="B", answer_text="Immune response to streptococcal infection"
+    )
+
+
+def test_answer_text_used_when_no_explicit_choice_letter_present():
+    response = (
+        "The presentation is classic for poststreptococcal glomerulonephritis.\n"
+        "Therefore the diagnosis is poststreptocococcal glomerulonephritis."
+    )
+    assert multiple_choice_accuracy(response, answer_letter="B", answer_text="poststreptocococcal glomerulonephritis")
+
+
+def test_negated_anchor_does_not_block_answer_text_fallback():
+    response = "The answer is not C. The correct diagnosis is acute appendicitis."
+    assert multiple_choice_accuracy(response, answer_letter="D", answer_text="acute appendicitis")
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "**B.** No",
+        "*B.* No",
+        "__B.__ No",
+        "`B.` No",
+        "~~B.~~ No",
+        "- **B.** No",
+        "* **B.** No",
+        "+ **B.** No",
+        "1. **B.** No",
+        "12. **B.** No",
+        "> **B)** No",
+        "   >   -   **B.**   No",
+        "**(B).** No",
+        "__((B))).__ No",
+    ],
+)
+def test_leading_option_markdown_wrapped_letter(response):
+    assert multiple_choice_accuracy(response, answer_letter="B", answer_text="No")
+
+
+@pytest.mark.parametrize(
+    "response, letter, text",
+    [
+        ("**12)** Cranial nerve XII", "12", "Cranial nerve XII"),
+        ("> 12) Cranial nerve XII", "12", "Cranial nerve XII"),
+        ("- `2:` Second option", "2", "Second option"),
+    ],
+)
+def test_leading_option_markdown_wrapped_number(response, letter, text):
+    assert multiple_choice_accuracy(response, answer_letter=letter, answer_text=text)
+
+
+def test_leading_option_markdown_returns_anchored_token_method():
+    result = multiple_choice_accuracy("**B.** No", answer_letter="B", answer_text="No", return_details=True)
+    assert result.is_correct is True
+    assert result.method == "anchored_token"
+    assert result.matched_answer == "B"
+    assert result.correct_answer == "B"
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "**No.**",  # no leading option token
+        "*No*",  # no delimiter after a letter/number token
+        "- **No**",  # list prefix but no option token
+        "> - No",  # quote/list but no option token
+    ],
+)
+def test_leading_option_markdown_non_option_does_not_force_leading_match(response):
+    # We just assert it doesn't incorrectly grade B as correct purely from leading parsing.
+    assert not multiple_choice_accuracy(response, answer_letter="B", answer_text="No", accept_answer_text=False)
+
+
+def test_not_leading_markdown_answer_is_not_matched_by_leading_strategy():
+    response = "Answer: **B.** No"
+    result = multiple_choice_accuracy(
+        response,
+        answer_letter="B",
+        answer_text="No",
+        accept_answer_text=False,
+        return_details=True,
+    )
+    assert result.is_correct is True
+    assert result.method == "last_token"
+    assert result.matched_answer == "B"
