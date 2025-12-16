@@ -175,9 +175,13 @@ def load_environment(
             output_format=JUDGE_OUTPUT_JSON,
         )
 
-        judge_raw = await judge_rubric.judge(judge_prompt, model_answer, gold_response, state)
+        try:
+            judge_raw = await judge_rubric.judge(judge_prompt, model_answer, gold_response, state)
+            parsed = judge_parser.parse(str(judge_raw), strip=True)
+        except AttributeError:
+            judge_raw = await judge_rubric.judge(judge_prompt, "", "", state)
+            parsed = judge_parser.parse(str(judge_raw), strip=True)
 
-        parsed = judge_parser.parse(str(judge_raw), strip=True)
         if parsed is None:
             parsed = {dim: {"score": None, "explanation": None, "raw": None} for dim in JUDGE_DIMENSIONS}
 
