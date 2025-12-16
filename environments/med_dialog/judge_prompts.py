@@ -43,16 +43,16 @@ JUDGE_OUTPUT_JSON = """
 Output your evaluation as a single valid JSON object matching the following structure:
 {
     "accuracy": {
+        "explanation": "Brief explanation of why this score was given.",
         "score": 0,
-        "explanation": "Brief explanation of why this score was given."
     },
     "completeness": {
+        "explanation": "Brief explanation of why this score was given.",
         "score": 0,
-        "explanation": "Brief explanation of why this score was given."
     },
     "clarity": {
+        "explanation": "Brief explanation of why this score was given.",
         "score": 0,
-        "explanation": "Brief explanation of why this score was given."
     }
 }
 
@@ -67,16 +67,16 @@ JUDGE_OUTPUT_XML = """
 Output your evaluation as a single valid XML object matching the following structure:
 <evaluation>
   <accuracy>
-    <score>0</score>
     <explanation>Brief explanation of why this score was given.</explanation>
+    <score>0</score>
   </accuracy>
   <completeness>
-    <score>0</score>
     <explanation>Brief explanation of why this score was given.</explanation>
+    <score>0</score>
   </completeness>
   <clarity>
-    <score>0</score>
     <explanation>Brief explanation of why this score was given.</explanation>
+    <score>0</score>
   </clarity>
 </evaluation>
 

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from datasets import load_dataset
 from datasets.utils.logging import disable_progress_bar
+from medarc_verifiers.utils import default_judge_api_key, judge_sampling_args_and_headers
 from openai import AsyncOpenAI
 from verifiers import JudgeRubric
 from verifiers.envs.singleturn_env import SingleTurnEnv
@@ -98,13 +99,15 @@ def load_environment(
     except KeyError:
         raise ValueError(f"Invalid difficulty: {difficulty}")
 
-    api_key = judge_api_key if judge_api_key else os.getenv("JUDGE_API_KEY")
-    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key)  # Use AsyncOpenAI
+    api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
+    sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
+    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=default_headers)
 
     jr = JudgeRubric(
         judge_client=judge_client,
         judge_model=judge_model,
         judge_prompt="{question}",
+        judge_sampling_args=sampling_args,
     )
 
     async def reward_healthbench(prompt: Messages, completion: Messages, info: Info, state: State) -> float:
