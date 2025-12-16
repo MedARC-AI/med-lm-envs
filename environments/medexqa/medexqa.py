@@ -1,4 +1,3 @@
-import os
 from enum import Enum
 from pathlib import Path
 
@@ -8,7 +7,12 @@ import verifiers as vf
 from datasets import Dataset, concatenate_datasets
 from medarc_verifiers.parsers import XMLParser
 from medarc_verifiers.rewards.multiple_choice_accuracy import multiple_choice_accuracy
-from medarc_verifiers.utils import download_file, medarc_cache_dir
+from medarc_verifiers.utils import (
+    default_judge_api_key,
+    download_file,
+    judge_sampling_args_and_headers,
+    medarc_cache_dir,
+)
 from medarc_verifiers.utils.randomize_multiple_choice import randomize_multiple_choice
 from openai import AsyncOpenAI
 from verifiers.types import Info, State
@@ -315,12 +319,14 @@ def load_environment(
 
     # Optional: Use LLM-as-judge for explanation instead of lexical metrics
     if use_explanations and use_judge:
-        api_key = judge_api_key if judge_api_key else os.getenv("JUDGE_API_KEY") or os.getenv("OPENAI_API_KEY")
-        judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key) if api_key else None
+        api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
+        sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
+        judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key, headers=default_headers)
         judge_rubric = vf.JudgeRubric(
             judge_client=judge_client,
             judge_model=judge_model,
             judge_prompt="{question}",
+            sampling_args=sampling_args,
         )
         judge_parser = XMLParser(fields=["grade"], answer_field="grade")
 
