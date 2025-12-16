@@ -321,7 +321,7 @@ def load_environment(
     if use_explanations and use_judge:
         api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
         sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
-        judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key, headers=default_headers)
+        judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=default_headers)
         judge_rubric = vf.JudgeRubric(
             judge_client=judge_client,
             judge_model=judge_model,
