@@ -92,9 +92,9 @@ def load_environment(
     **kwargs,
 ) -> SingleTurnEnv:
     try:
-        dataset = load_dataset(HEALTHBENCH_DATASET_MAPPING[difficulty], split="test").map(
-            lambda example: {"info": _process_healthbench_dataset(example)}
-        )
+        dataset = load_dataset(
+            HEALTHBENCH_DATASET_MAPPING[difficulty], split="test" if difficulty == "all" else "train"
+        ).map(lambda example: {"info": _process_healthbench_dataset(example)})
     except KeyError:
         raise ValueError(f"Invalid difficulty: {difficulty}")
 
