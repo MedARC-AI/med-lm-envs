@@ -15,7 +15,7 @@ from medarc_verifiers.utils import (
 from openai import AsyncOpenAI
 from verifiers.types import Info, Messages, State
 
-from judge_prompts import JUDGE_OUTPUT_JSON, JUDGE_TEMPLATE
+from medicationqa.judge_prompts import JUDGE_OUTPUT_JSON, JUDGE_TEMPLATE
 
 disable_progress_bar()  # suppress datasets mapping progress bar
 

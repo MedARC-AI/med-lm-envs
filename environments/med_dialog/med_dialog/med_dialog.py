@@ -10,7 +10,7 @@ from medarc_verifiers.utils import default_judge_api_key, download_file, judge_s
 from openai import AsyncOpenAI
 from verifiers.types import Info, Messages, State
 
-from judge_prompts import JUDGE_OUTPUT_JSON, JUDGE_TEMPLATE
+from med_dialog.judge_prompts import JUDGE_OUTPUT_JSON, JUDGE_TEMPLATE
 
 disable_progress_bar()  # suppress datasets progress indicators
 
