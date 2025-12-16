@@ -79,6 +79,7 @@ def _token_kind_matches_answer_letter(predicted: Optional[str], answer_letter: s
 
 
 _THINK_OPEN_RE = re.compile(r"<think>", re.IGNORECASE)
+_THINK_CLOSE_RE = re.compile(r"</think>", re.IGNORECASE)
 _THINK_PAIR_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 
@@ -93,7 +94,12 @@ def _remove_think_tags(completion_text: str) -> str:
     text = completion_text or ""
 
     # Fast path: most outputs won't contain think tags.
+    # Some models emit an unpaired closing tag (</think>) and then the final answer.
+    # In that case, treat the closing tag as the end of reasoning and keep only the tail.
     if _THINK_OPEN_RE.search(text) is None:
+        closes = list(_THINK_CLOSE_RE.finditer(text))
+        if closes:
+            return text[closes[-1].end() :].strip()
         return text.strip()
 
     # Count properly closed pairs, but stop early once we know there are 2+.

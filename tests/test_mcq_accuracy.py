@@ -209,6 +209,18 @@ def test_cot_without_anchor_uses_last_token():
     assert multiple_choice_accuracy(cot_response, answer_letter="C", answer_text="Match")
 
 
+def test_unpaired_think_close_then_final_token_newline():
+    # Regression: some models emit </think> without a matching <think> and place the answer after it.
+    response = "Reasoning...\n</think>\n\nA"
+    assert multiple_choice_accuracy(response, answer_letter="A", answer_text="Option A")
+
+
+def test_unpaired_think_spurious_match():
+    # Regression: some models emit </think> without a matching <think> and place the answer after it.
+    response = "The answer is B. But on the other hand... I know\n</think>\n\nA"
+    assert multiple_choice_accuracy(response, answer_letter="A", answer_text="Option A")
+
+
 def test_cot_prevents_early_letter_matching():
     # Should not match A or B from the reasoning
     cot_response = """
