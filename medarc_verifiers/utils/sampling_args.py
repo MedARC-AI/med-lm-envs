@@ -24,8 +24,19 @@ def sanitize_sampling_args_for_openai(sampling_args: Mapping[str, Any] | None) -
             extras[key] = value
 
     if extras:
-        # OpenAI python client forwards unknown params via `extra_body`
-        filtered["extra_body"] = extras
+        # OpenAI python client forwards unknown params via `extra_body`.
+        # If the caller already supplied an `extra_body` (e.g., to request `usage.include`),
+        # merge rather than overwrite it.
+        existing = filtered.get("extra_body")
+        if existing is None:
+            filtered["extra_body"] = extras
+        elif isinstance(existing, Mapping):
+            merged = dict(existing)
+            for key, value in extras.items():
+                merged.setdefault(key, value)
+            filtered["extra_body"] = merged
+        else:
+            filtered["extra_body"] = {"_passthrough_extra_body": existing, **extras}
     return filtered
 
 

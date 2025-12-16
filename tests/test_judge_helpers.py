@@ -16,7 +16,7 @@ def test_judge_sampling_defaults_supports_fuzzy_match(monkeypatch: pytest.Monkey
         "temperature": 1.0,
         "top_p": 1.0,
         "reasoning_effort": "medium",
-        "extra_body": {"top_k": 0},
+        "extra_body": {"usage": {"include": True}, "top_k": 0},
     }
 
 
