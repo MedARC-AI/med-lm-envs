@@ -64,30 +64,52 @@ def _norm_letter(letter: str) -> Optional[str]:
     return None
 
 
+def _token_kind_matches_answer_letter(predicted: Optional[str], answer_letter: str) -> bool:
+    """Return True if predicted token type matches the task's option type.
+
+    This prevents cases like '<answer>20' in a letter-based task (answer_letter='C')
+    from being treated as an explicit option selection, which would incorrectly disable
+    answer_text fallback.
+    """
+    if predicted is None:
+        return False
+    if answer_letter.isdigit():
+        return predicted.isdigit()
+    return predicted.isalpha()
+
+
+_THINK_OPEN_RE = re.compile(r"<think>", re.IGNORECASE)
+_THINK_PAIR_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
 def _remove_think_tags(completion_text: str) -> str:
-    "Extract the answer section from completion text, handling think tags properly."
-    # Check for proper think tags
-    think_tag_pairs = re.findall(r"<think>.*?</think>", completion_text, re.DOTALL | re.IGNORECASE)
+    """Extract the answer section from completion text, handling think tags properly.
 
-    has_exactly_one_proper_think_tag = len(think_tag_pairs) == 1
+    Behavior is intentionally conservative:
+    - If there is exactly one well-formed <think>...</think> pair AND no unclosed <think> later,
+      return everything after that closing tag.
+    - Otherwise, return the full response.
+    """
+    text = completion_text or ""
 
-    # Check for malformed tags
-    has_malformed_tags = (
-        re.search(r"<think>(?:(?!</think>).)*$", completion_text, re.DOTALL | re.IGNORECASE) is not None
-    )
+    # Fast path: most outputs won't contain think tags.
+    if _THINK_OPEN_RE.search(text) is None:
+        return text.strip()
 
-    if has_exactly_one_proper_think_tag and not has_malformed_tags:
-        # Extract everything after the properly closed </think> tag
-        answer_section = re.sub(r".*?</think>", "", completion_text, flags=re.DOTALL | re.IGNORECASE).strip()
-        return answer_section.strip()
-    else:
-        # If no proper think tags, return full response
-        return completion_text.strip()
+    # Count properly closed pairs, but stop early once we know there are 2+.
+    it = _THINK_PAIR_RE.finditer(text)
+    first = next(it, None)
+    if first is None:
+        return text.strip()
+    if next(it, None) is not None:
+        return text.strip()
+
+    return text[first.end() :].strip()
 
 
 # Anchored patterns like "final answer: C" or "the answer is D"
 ANCHOR_PATTERN = re.compile(
-    r"(?:\bfinal\s+answer\b|\banswer\b|\bans\b|\bchoice\b|\boption\b|\bselected\b|\bi\s+choose\b|\bi\s+pick\b|\btherefore\b|\bthus\b|\bso\b)\s*"
+    r"(?:\bfinal\s+answer\b|\banswer\b|\bans\b|\bchoice\b|\boption\b|\bselected\b|\bi\s+choose\b|\bi\s+pick\b|\btherefore\b|\bthus\b|\bso\b|\bconclusion\b|\bin\s+conclusion\b|\bmost\s+likely\b|\bbest[-\s]+supported\s+answer\b|<answer>)\s*"
     r"[:\-–—]?\s*(?:is\s*)?(?P<neg>not\s+|isn['’]t\s+)?"
     r"(?:[*_`~]+\s*)*"  # allow markdown wrappers before the option
     r"\(?\s*(?P<opt>[A-Za-z]|\d{1,2})\s*\)?"  # option token, possibly parenthesized
@@ -96,6 +118,7 @@ ANCHOR_PATTERN = re.compile(
     r"(?![\w+\-/])",
     re.IGNORECASE,
 )
+
 
 # Any letter/number token that looks like an option
 TOKEN_PATTERN = re.compile(r"(?<![\w+\-/])\(?\s*([A-Za-z]|\d{1,2})\s*[\)\.:]?(?![\w+\-/])", re.IGNORECASE)
@@ -248,8 +271,9 @@ def multiple_choice_accuracy(
     # Strategy 2: Accept leading option token like "B. answer ..."
     leading_match = LEADING_OPTION_PATTERN.match(llm_answer_original)
     if leading_match and answer_letter:
-        explicit_choice_found = True
         predicted = _norm_letter(leading_match.group(1))
+        if _token_kind_matches_answer_letter(predicted, answer_letter):
+            explicit_choice_found = True
         if predicted == answer_letter:
             return _result(True, "anchored_token", predicted, answer_letter, return_details)
 
@@ -269,7 +293,7 @@ def multiple_choice_accuracy(
     if anchored_matches and answer_letter:
         last_match = anchored_matches[-1]
         predicted = _norm_letter(last_match.group("opt"))
-        if last_match.group("neg") is None:
+        if last_match.group("neg") is None and _token_kind_matches_answer_letter(predicted, answer_letter):
             explicit_choice_found = True
         if predicted == answer_letter and last_match.group("neg") is None:
             return _result(True, "anchored_token", predicted, answer_letter, return_details)
@@ -296,7 +320,7 @@ def multiple_choice_accuracy(
     if accept_answer_text and answer_text and not explicit_choice_found:
         # Calculate search regions based on token count
         answer_tokens = len(answer_text.split())
-        buffer_tokens = answer_tokens + 8  # Extra tokens for preamble like "The answer is:"
+        buffer_tokens = answer_tokens + 15  # Extra tokens for preamble like "The answer is:"
 
         llm_tokens = llm_answer.split()
 
