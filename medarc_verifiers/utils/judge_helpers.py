@@ -130,7 +130,7 @@ _JUDGE_DEFAULTS: Iterable[JudgeSamplingDefaults] = (
 
 
 def judge_sampling_args_and_headers(
-    judge_name: str, base_url: str | None = None
+    judge_name: str, base_url: str | None = None, timeout: int | None = 300
 ) -> Tuple[Dict[str, Union[float, int, str]], Optional[Dict[str, str]]]:
     """Return the sampling defaults for the provided judge name.
 
@@ -145,7 +145,7 @@ def judge_sampling_args_and_headers(
                 prime_team_id = {"X-Prime-Team-ID": os.environ.get("PRIME_TEAM_ID")}
             else:
                 prime_team_id = None
-            return sanitize_sampling_args_for_openai(judge_defaults.as_dict()), prime_team_id
+            return sanitize_sampling_args_for_openai({**judge_defaults.as_dict(), "timeout": timeout}), prime_team_id
 
     raise KeyError(f"No sampling defaults available for judge “{judge_name}”.")
 
