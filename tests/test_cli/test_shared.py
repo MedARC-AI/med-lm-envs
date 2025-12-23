@@ -12,7 +12,7 @@ from medarc_verifiers.cli.utils.shared import (
     coerce_json_mapping,
     ensure_required_params,
     flatten_state_columns,
-    merge_env_args,
+    merge_cli_override_args,
     merge_sampling_args,
     normalize_headers,
     resolve_endpoint_selection,
@@ -86,8 +86,8 @@ def test_resolve_endpoint_selection_falls_back_to_cli_defaults() -> None:
     assert resolved == ("unknown", "OPENAI_API_KEY", "https://api.openai.com/v1")
 
 
-def test_merge_env_args_cli_overrides_json() -> None:
-    merged = merge_env_args({"seed": 42}, {"seed": 1, "shuffle": True})
+def test_merge_cli_override_args_cli_overrides_json() -> None:
+    merged = merge_cli_override_args({"seed": 42}, {"seed": 1, "shuffle": True})
     assert merged == {"seed": 42, "shuffle": True}
 
 

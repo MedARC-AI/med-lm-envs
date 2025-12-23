@@ -131,15 +131,8 @@ def resolve_endpoint_selection(
     )
 
 
-def merge_env_args(explicit: Mapping[str, Any], json_args: Mapping[str, Any]) -> dict[str, Any]:
-    """Merge JSON-provided env args with CLI overrides (explicit wins).
-
-    Precedence: explicit CLI flags (--env-arg) override JSON (--env-args).
-    Example:
-        json_args = {"seed": 42, "workers": 4}  # from --env-args
-        explicit = {"seed": 123}  # from --env-arg seed=123
-        → Result: {"seed": 123, "workers": 4}  # explicit wins
-    """
+def merge_cli_override_args(explicit: Mapping[str, Any], json_args: Mapping[str, Any]) -> dict[str, Any]:
+    """Merge JSON-provided env args with CLI overrides (explicit wins)."""
     merged: dict[str, Any] = dict(json_args)
     for key, value in explicit.items():
         if key in merged and merged[key] != value:
@@ -272,7 +265,7 @@ __all__ = [
     "merge_sampling_overrides",
     "flatten_state_columns",
     "resolve_endpoint_selection",
-    "merge_env_args",
+    "merge_cli_override_args",
     "ensure_required_params",
     "ensure_root_logging",
     "asdict_sanitized",

@@ -541,11 +541,7 @@ def _execute_batch(args: argparse.Namespace) -> int:
         logger.error("No jobs matched the provided filters.")
         return 1
 
-    env_args_map, sampling_args_map = _build_effective_args(
-        jobs,
-        args.cli_env_args or {},
-        args.cli_sampling_args or {},
-    )
+    env_args_map, sampling_args_map = _build_effective_args(jobs)
     config_checksum = compute_snapshot_checksum(run_config.model_dump())
     forced_envs = _parse_forced_envs(args.forced)
     forced_envs.update(_collect_rerun_envs(run_config.envs))
@@ -681,18 +677,12 @@ def _execute_batch(args: argparse.Namespace) -> int:
 
 def _build_effective_args(
     jobs: Sequence[ResolvedJob],
-    cli_env_args: Mapping[str, Any],
-    cli_sampling_args: Mapping[str, Any],
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     env_map: dict[str, dict[str, Any]] = {}
     sampling_map: dict[str, dict[str, Any]] = {}
     for job in jobs:
-        env_args = dict(job.env_args)
-        env_args.update(cli_env_args)
-        env_map[job.job_id] = env_args
-        sampling_args = dict(job.sampling_args)
-        sampling_args.update(cli_sampling_args)
-        sampling_map[job.job_id] = sampling_args
+        env_map[job.job_id] = dict(job.env_args)
+        sampling_map[job.job_id] = dict(job.sampling_args)
     return env_map, sampling_map
 
 

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 from ._schemas import EnvironmentConfigSchema, ModelConfigSchema, RunConfigSchema
-from .utils.env_resolver import merge_env_args
+from .utils.env_args import merge_env_args
 from .utils.shared import compute_checksum, slugify
 
 
@@ -134,12 +134,13 @@ def _compose_env_args(
 ) -> dict[str, Any]:
     """Compose env_args up to job overrides (CLI is applied later)."""
     return merge_env_args(
-        env_defaults=env.env_args,
-        model_defaults=model.env_args,
-        model_env_override=_resolve_env_override(model, env),
-        job_overrides=job_env_args,
-        cli_overrides=None,
-        verbose=False,
+        None,
+        sources=[
+            env.env_args,
+            model.env_args,
+            _resolve_env_override(model, env) or {},
+            job_env_args,
+        ],
     )
 
 

@@ -15,7 +15,7 @@ from medarc_verifiers.cli.utils.endpoint_utils import (
     load_env_metadata,
     resolve_model_endpoint,
 )
-from medarc_verifiers.cli.utils.env_args import merge_env_args_with_validation
+from medarc_verifiers.cli.utils.env_args import merge_env_args
 from medarc_verifiers.cli.utils.shared import (
     DEFAULT_BATCH_MAX_CONCURRENT,
     merge_sampling_overrides,
@@ -102,10 +102,9 @@ def build_eval_config(
         logger.warning("Skipping env_args validation for '%s': %s", env_id, exc)
         metadata = None
 
-    merged_env_args = merge_env_args_with_validation(
+    merged_env_args = merge_env_args(
         env_id,
-        base_args=env_args,
-        override_args=cli_env_args,
+        sources=[env_args, cli_env_args or {}],
         metadata=metadata,
         metadata_cache=env_metadata_cache,
         allow_unknown=allow_unknown_env_args,

@@ -182,6 +182,57 @@ def validate_env_args_or_raise(
     validate_env_arg_values(env_id, env_args, metadata)
 
 
+def merge_env_args(
+    env_id: str | None,
+    *,
+    sources: Sequence[Mapping[str, Any]],
+    metadata: Sequence[EnvParam] | None = None,
+    metadata_loader=None,
+    metadata_cache: Mapping[str, Sequence[EnvParam]] | None = None,
+    allow_unknown: bool = False,
+    enforce_required: bool = False,
+    verbose: bool = False,
+) -> dict[str, Any]:
+    """Merge env args from multiple sources and optionally validate."""
+    merged: dict[str, Any] = {}
+    for source in sources:
+        if not source:
+            continue
+        if verbose and env_id is not None:
+            overridden = {k: f"{merged[k]} → {source[k]}" for k in merged.keys() & source.keys()}
+            new_keys = sorted(set(source) - set(merged))
+            if overridden:
+                logger.debug("Env args overriding for %s: %s", env_id, overridden)
+            if new_keys:
+                logger.debug("Env args adding for %s: %s", env_id, new_keys)
+        merged.update(source)
+
+    if metadata is None and metadata_loader is not None:
+        if env_id is None:
+            raise ValueError("env_id is required to validate env args with a loader.")
+        try:
+            metadata = metadata_loader(env_id, cache=metadata_cache)
+        except TypeError:
+            metadata = metadata_loader(env_id)
+        except ImportError as exc:
+            logger.warning("Skipping env_args validation for '%s': %s", env_id, exc)
+            return merged
+
+    if metadata:
+        if env_id is None:
+            raise ValueError("env_id is required to validate env args.")
+        validate_env_args_or_raise(
+            env_id,
+            merged,
+            metadata,
+            metadata_cache=metadata_cache,
+            allow_unknown=allow_unknown,
+            enforce_required=enforce_required,
+        )
+
+    return merged
+
+
 def merge_env_args_with_validation(
     env_id: str,
     *,
@@ -194,38 +245,17 @@ def merge_env_args_with_validation(
     enforce_required: bool = False,
     verbose: bool = False,
 ) -> dict[str, Any]:
-    """Merge env args with overrides and validate using metadata."""
-    merged = dict(base_args or {})
-    if override_args:
-        if verbose:
-            overridden = {k: f"{merged[k]} → {override_args[k]}" for k in merged.keys() & override_args.keys()}
-            new_keys = sorted(set(override_args) - set(merged))
-            if overridden:
-                logger.debug("CLI overriding env_args for %s: %s", env_id, overridden)
-            if new_keys:
-                logger.debug("CLI adding new env_args for %s: %s", env_id, new_keys)
-        merged.update(override_args)
-
-    if metadata is None and metadata_loader is not None:
-        try:
-            metadata = metadata_loader(env_id, cache=metadata_cache)
-        except TypeError:
-            metadata = metadata_loader(env_id)
-        except ImportError as exc:
-            logger.warning("Skipping env_args validation for '%s': %s", env_id, exc)
-            return merged
-
-    if metadata:
-        validate_env_args_or_raise(
-            env_id,
-            merged,
-            metadata,
-            metadata_cache=metadata_cache,
-            allow_unknown=allow_unknown,
-            enforce_required=enforce_required,
-        )
-
-    return merged
+    """Backward-compatible wrapper for merge_env_args."""
+    return merge_env_args(
+        env_id,
+        sources=[base_args, override_args or {}],
+        metadata=metadata,
+        metadata_loader=metadata_loader,
+        metadata_cache=metadata_cache,
+        allow_unknown=allow_unknown,
+        enforce_required=enforce_required,
+        verbose=verbose,
+    )
 
 
 def gather_env_cli_metadata(env_id: str) -> list[EnvParam]:
@@ -559,5 +589,6 @@ __all__ = [
     "gather_env_cli_metadata",
     "validate_env_arg_values",
     "validate_env_args_or_raise",
+    "merge_env_args",
     "merge_env_args_with_validation",
 ]

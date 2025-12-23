@@ -14,8 +14,7 @@ from verifiers.utils.eval_utils import run_evaluation
 
 from medarc_verifiers.cli._eval_builder import build_client_config, build_eval_config
 from medarc_verifiers.cli._schemas import ModelConfigSchema
-from medarc_verifiers.cli.utils.env_args import EnvParam, MissingEnvParamError, gather_env_cli_metadata
-from medarc_verifiers.cli.utils.env_resolver import merge_env_args, validate_env_args
+from medarc_verifiers.cli.utils.env_args import EnvParam, MissingEnvParamError, gather_env_cli_metadata, merge_env_args
 from medarc_verifiers.cli.utils.endpoint_utils import load_endpoint_registry
 from medarc_verifiers.cli.utils.overrides import build_cli_override
 from medarc_verifiers.cli.utils.shared import (
@@ -99,22 +98,14 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
     json_env_args: Mapping[str, Any] = env_override_mapping or {}
     explicit_cli_args = extract_env_cli_args(args, bindings)
 
-    merged_env_args = merge_env_args(
-        env_defaults={},
-        model_defaults={},
-        model_env_override=None,
-        job_overrides=json_env_args,
-        cli_overrides=explicit_cli_args,
-        verbose=args.verbose,
-    )
     try:
-        validate_env_args(
-            env_id=env_id,
-            env_args=merged_env_args,
-            metadata_loader=lambda _env_id, cache=None: metadata,
-            metadata_cache=None,
+        merged_env_args = merge_env_args(
+            env_id,
+            sources=[json_env_args, explicit_cli_args],
+            metadata=metadata,
             allow_unknown=True,
             enforce_required=True,
+            verbose=args.verbose,
         )
     except (MissingEnvParamError, ValueError) as exc:
         parser.error(str(exc))
