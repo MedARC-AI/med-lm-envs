@@ -20,10 +20,7 @@ dependencies = [
 ]
 
 [project.scripts]
-medarc-eval = "medarc_verifiers.cli.eval:main"
-medarc-bench = "medarc_verifiers.cli.benchmark:main"
-medarc-export = "medarc_verifiers.cli.export_parquet:main"
-medarc-new = "medarc_verifiers.cli_new.main:main"
+medarc-eval = "medarc_verifiers.cli.main:main"
 
 [dependency-groups]
 dev = [
