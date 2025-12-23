@@ -50,6 +50,7 @@ Document any supported environment arguments and their meaning. Example:
 | `judge_model` | str | `gpt-4o-mini` | Model name to use for judging
 | `judge_base_url` | str | `None` | Optional base URL for custom OpenAI-compatible API endpoint
 | `judge_api_key` | str | `None` | Optional API key for OpenAI-compatible API endpoint
+| `embeddings_model` | str | `Simonlee711/Clinical_ModernBERT` | SentenceTransformer model name for computing answer-completion similarity. Valid options: `['FremyCompany/BioLORD-2023', 'Simonlee711/Clinical_ModernBERT']`
 
 ### Metrics
 Summarize key metrics your rubric emits and how they’re interpreted.

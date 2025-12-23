@@ -1,4 +1,4 @@
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Tuple, NamedTuple
 
 import verifiers as vf
 from sentence_transformers import SentenceTransformer
@@ -14,6 +14,10 @@ from enum import Enum
 from functools import partial
 import os
 from openai import AsyncOpenAI
+import torch
+import tqdm
+from collections import namedtuple
+import numpy as np
 
 # Cosine similarity threshold for embedded precision
 TAU: float = 0.9 
@@ -25,6 +29,14 @@ TASK_TO_QUESTION_KEY: Dict[str,str] = {
     'biohopr_hop1_multi':'hop1_question_multi',
     'biohopr_hop2_multi':'hop2_question_multi'
 } 
+
+class model_config(NamedTuple):
+    judge_model: str
+    judge_api_key: Optional[str]
+    judge_base_url: Optional[str]
+    judge_client: Optional[AsyncOpenAI]
+    judge_answer_num: int
+    embeddings_model: SentenceTransformer
 
 # Judge prompt template for medical diagnosis evaluation
 JUDGE_TEMPLATE = """\
@@ -60,7 +72,39 @@ Is the predicted diagnosis medically equivalent to any of the ground truth diagn
 Respond with either "EQUIVALENT" or "NOT_EQUIVALENT".
 """.strip()
 
-async def llm_as_a_judge(
+def parse_answers_completions(parser:vf.Parser, completion: str, info: Dict) -> Tuple[Optional[str], List[str]]:
+    """
+    Parses the completion to extract the answer using the provided parser.
+    Args:
+        parser: Parser instance to extract the answer
+        answer: The ground truth answer string
+        completion: The model's completion text
+        info: Dictionary containing additional information, including ground truth answers
+    Returns:
+        Extracted answer string or None if parsing fails
+    """
+    parsed_completion = parser.parse_answer(completion)
+    answers = info.get("answer", [])
+    return (parsed_completion, answers)
+
+def answer_completion_similarity(model: SentenceTransformer, answers: List[str], completion: str) -> torch.Tensor:
+    """
+    Computes cosine similarity between the embeddings of the answer and completion.
+    Args:
+        answer: The ground truth answer string
+        completion: The model's completion text
+    Returns:
+        Cosine similarity score between answer and completion embeddings
+    """
+    completion = completion.strip().lower()
+    answer_embeds = torch.tensor(model.encode(answers))
+    completion_embed = torch.tensor(model.encode(completion))
+    similarities = (answer_embeds @ completion_embed) / ( 
+        torch.sqrt(torch.sum(answer_embeds**2,dim=1)) * torch.sqrt(torch.sum(completion_embed**2)))
+    return similarities.cpu()
+
+async def llm_as_a_judge_impl(
+    config: model_config,
     judge, 
     prompt: str,
     completion: str,
@@ -70,12 +114,17 @@ async def llm_as_a_judge(
     parser: vf.Parser,
     **kwargs
 ) -> float:
-    """
+    """SentenceTransformer
     Reward function that uses LLM judge to evaluate medical diagnosis equivalence.
     """
-    parsed_completion = parser.parse_answer(completion)
+    parsed_completion,answers = parse_answers_completions(parser, completion, info)
     if(parsed_completion is None): return 0.0
-    answers = info.get("answer", [])
+    similarities = answer_completion_similarity(config.embeddings_model, answers, parsed_completion)
+
+    # Select top-K most similar answers for judging
+    top_n_indices = torch.topk(similarities, k=min(config.judge_answer_num, len(answers))).indices.tolist()
+    answers = [answers[i] for i in top_n_indices]
+
     answer = ", ".join(answers)
     # Get judge response using the extracted answer
     judge_response = await judge(prompt, completion, answer, state, **kwargs)
@@ -88,19 +137,22 @@ async def llm_as_a_judge(
     else:
         return 0.0
 
-def _embedded_precision_f(model: SentenceTransformer):
+def embedded_precision_impl(config: model_config, parser: vf.Parser, completion: str, info: Dict, **kwargs) -> float:
+    """Calculates embedded precision based on cosine similarity between
+    completion and ground truth answers.
+    """
+    parsed_completion,answers = parse_answers_completions(parser, completion, info)
+    if(parsed_completion is None): return 0.0
+    similarities = answer_completion_similarity(config.embeddings_model, answers, parsed_completion)
+    return 1.0 if(similarities.max() > TAU) else 0.0
+
+def _rubric_f(config: model_config, use_judge=True):
     "Returns a function that calculates precision based on embedded cosine similarity."
     def embedded_precision(parser: vf.Parser, completion: str, info: Dict, **kwargs) -> float:
-        answers = info.get("answer", [])
-        parsed_completion = parser.parse_answer(completion)
-        if(parsed_completion is None): return 0.0
-        parsed_completion = parsed_completion.lower().strip()
-        answer_embeds = model.encode(answers)
-        completion_embed = model.encode(parsed_completion)
-        similarities = (answer_embeds @ completion_embed) / ( 
-            norm(answer_embeds,axis=1) * norm(completion_embed) )
-        return 1.0 if(similarities.max() > TAU) else 0.0
-    return embedded_precision
+        return embedded_precision_impl(config, parser, completion, info, **kwargs)
+    async def llm_as_a_judge(judge, prompt: str, completion: str, answer: str, info: Dict, state: Dict, parser: vf.Parser, **kwargs) -> float:
+        return await llm_as_a_judge_impl(config, judge, prompt, completion, answer, info, state, parser, **kwargs)
+    return llm_as_a_judge if(use_judge) else embedded_precision
 
 def question_to_prompt(question: str, task: str) -> str:
     """Wrap question into full prompt for BioHopR based on task.
@@ -162,14 +214,13 @@ def _prepare_parseing(answer_format,system_prompt,use_think=False):
         raise ValueError(f"Unsupported answer format: {answer_format=}")
     return answer_format,system_prompt,parser
 
-def _rubrics(eval_method:str,parser:vf.Parser,  judge_client, judge_model: str = "gpt-4o-mini"):
+def _rubrics(eval_method:str,parser:vf.Parser, config: model_config) -> List[vf.Rubric]:
     """
     Creates and configures a list of Rubrics for BioHopR evaluation based on eval_method.
     Args:
         eval_method: "judge" (default), "metrics", or "judge-only"
         parser: Parser to extract answers from completions
-        judge_client: AsyncOpenAI client instance for making judge API calls
-        judge_model: Model name to use for judging (default: "gpt-4o-mini")
+        config: model_config instance with judge and embedding model settings
     Returns:
         List of Rubric instances for evaluation
     """
@@ -178,13 +229,32 @@ def _rubrics(eval_method:str,parser:vf.Parser,  judge_client, judge_model: str =
     rubrics,weights = [],[]
     if(eval_method in ['judge','judge-only']):
         rubrics += [vf.JudgeRubric(
-            funcs=[llm_as_a_judge],judge_client=judge_client, judge_model=judge_model, judge_prompt=JUDGE_TEMPLATE, parser=parser, weights = [1.0],
+            funcs=[_rubric_f(config)],judge_client=config.judge_client, judge_model=config.judge_model, judge_prompt=JUDGE_TEMPLATE, parser=parser, weights = [1.0],
         )]
     if(eval_method in ['metrics', 'judge']):
-        model = SentenceTransformer('FremyCompany/BioLORD-2023')
         weight = 1.0 if eval_method=='metrics' else 0.0
-        rubrics += [vf.Rubric( funcs=[_embedded_precision_f(model)], weights=[weight], parser=parser)]
+        rubrics += [vf.Rubric( funcs=[_rubric_f(config,use_judge=False)], weights=[weight], parser=parser)]
     return rubrics
+
+def create_model(model_name: str) -> SentenceTransformer:
+    """
+    Creates a SentenceTransformer model instance based on the provided model name.
+    Args:
+        model_name: Name of the SentenceTransformer model to load
+    Returns:
+        Loaded SentenceTransformer model instance
+    """
+    if model_name=='FremyCompany/BioLORD-2023':
+        model= SentenceTransformer(model_name)
+    elif model_name=='Simonlee711/Clinical_ModernBERT':
+        model = SentenceTransformer(model_name)
+        f = lambda text: SentenceTransformer.encode(model,text, output_value='token_embeddings')
+        model.encode = lambda sentences,*args,**kwargs: torch.stack([ e[0] for e in f(sentences)]) if isinstance(sentences, list) else f(sentences)[0]
+    else:
+        raise ValueError(f"Unsupported model name: {model_name=}")
+    return model
+
+
 
 def load_environment(
     use_think: bool = False,
@@ -194,7 +264,9 @@ def load_environment(
     judge_model: str = "gpt-4o-mini",
     judge_base_url: str | None = None,
     judge_api_key: str | None = None,
-    eval_method: str = "judge",  # "judge" (default), "metrics, or "judge-only"
+    eval_method: str = "judge",  # "judge" (default), "metrics, or "judge-only",
+    judge_answer_num: int = 5,
+    embeddings_model: str = 'Simonlee711/Clinical_ModernBERT',
 ) -> vf.Environment:
     """
     BioHopR multiple-hop biomedical question answering evaluation
@@ -208,6 +280,8 @@ def load_environment(
     - judge_model: Model name to use for judging (default: "gpt-4o-mini")
     - judge_base_url: Optional base URL for custom OpenAI-compatible API endpoint
     - judge_api_key: Optional API key for OpenAI-compatible API endpoint
+    - judge_answer_num: Number of top similar ground truth answers to consider for judging
+    - embeddings_model: SentenceTransformer model name for computing answer-completion similarity. Valid options: ['FremyCompany/BioLORD-2023', 'Simonlee711/Clinical_ModernBERT']
     Returns:
         vf.Environment instance for BioHopR evaluation
     """
@@ -228,13 +302,20 @@ def load_environment(
     # Initialize OpenAI client for judge
     api_key = judge_api_key if judge_api_key else os.getenv("OPENAI_API_KEY")
     judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key) if api_key else None
-
-    rubrics = _rubrics(eval_method,parser, judge_client=judge_client, judge_model=judge_model)
-
+    model = create_model(embeddings_model)
+    model_c = model_config(
+        judge_model=judge_model,
+        judge_api_key=judge_api_key,
+        judge_base_url=judge_base_url,
+        judge_client=judge_client,
+        judge_answer_num=judge_answer_num,
+        embeddings_model=model
+    )
+    rubrics = _rubrics(eval_method,parser, model_c)
+    
     return vf.SingleTurnEnv(
         eval_dataset=ds,
         system_prompt=system_prompt,
         parser=parser,
         rubric=vf.RubricGroup(rubrics,parser=parser),
     )
-
