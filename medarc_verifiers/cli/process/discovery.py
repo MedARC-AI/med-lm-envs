@@ -10,7 +10,7 @@ from typing import Any, Dict, Iterator, Mapping, Sequence
 
 from pydantic import ValidationError
 
-from medarc_verifiers.cli_new._manifest import MANIFEST_FILENAME, ManifestJobEntry, RunManifestModel
+from medarc_verifiers.cli._manifest import MANIFEST_FILENAME, ManifestJobEntry, RunManifestModel
 from medarc_verifiers.utils.pathing import from_project_relative
 
 logger = logging.getLogger(__name__)

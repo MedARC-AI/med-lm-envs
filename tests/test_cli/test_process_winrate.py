@@ -5,7 +5,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from medarc_verifiers.cli_new.process import winrate
+from medarc_verifiers.cli.process import winrate
 
 
 def _write_dataset(path: Path, rows: list[dict[str, object]]) -> None:

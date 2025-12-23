@@ -5,10 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from medarc_verifiers.cli_new._job_builder import ResolvedJob
-from medarc_verifiers.cli_new._job_executor import ExecutorSettings, JobExecutionResult, execute_jobs
-from medarc_verifiers.cli_new._schemas import EnvironmentConfigSchema, ModelConfigSchema
-from medarc_verifiers.cli_new.utils.env_args import EnvParam
+from medarc_verifiers.cli._job_builder import ResolvedJob
+from medarc_verifiers.cli._job_executor import ExecutorSettings, JobExecutionResult, execute_jobs
+from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, ModelConfigSchema
+from medarc_verifiers.cli.utils.env_args import EnvParam
 
 
 def _stub_metadata(required: bool = False) -> list[EnvParam]:
@@ -75,15 +75,15 @@ def test_execute_jobs_invokes_run_evaluation(monkeypatch: pytest.MonkeyPatch, tm
         captured["config"] = config
         return _stub_results()
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", fake_run)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._job_executor.load_endpoint_registry",
+        "medarc_verifiers.cli._job_executor.load_endpoint_registry",
         lambda path, cache=None: {
             "alias": {"model": "resolved-model", "key": "MODEL_KEY", "url": "https://api.resolved"}
         },
     )
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._job_executor.load_env_metadata",
+        "medarc_verifiers.cli._job_executor.load_env_metadata",
         lambda env_id, cache=None: _stub_metadata(required=True),
     )
 
@@ -120,13 +120,13 @@ def test_execute_jobs_records_failures(monkeypatch: pytest.MonkeyPatch, tmp_path
     async def failing_run(config):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", failing_run)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", failing_run)
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._job_executor.load_endpoint_registry",
+        "medarc_verifiers.cli._job_executor.load_endpoint_registry",
         lambda path, cache=None: {},
     )
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._job_executor.load_env_metadata",
+        "medarc_verifiers.cli._job_executor.load_env_metadata",
         lambda env_id, cache=None: _stub_metadata(required=False),
     )
 
@@ -157,13 +157,13 @@ def test_execute_jobs_respects_dry_run(monkeypatch: pytest.MonkeyPatch, tmp_path
     async def raise_if_called(*args, **kwargs):
         raise AssertionError("run_evaluation should not be invoked during dry runs.")
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", raise_if_called)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", raise_if_called)
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._job_executor.load_endpoint_registry",
+        "medarc_verifiers.cli._job_executor.load_endpoint_registry",
         lambda path, cache=None: {},
     )
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._job_executor.load_env_metadata",
+        "medarc_verifiers.cli._job_executor.load_env_metadata",
         lambda env_id, cache=None: _stub_metadata(required=False),
     )
 
@@ -191,13 +191,13 @@ def test_executor_timeout_precedence(monkeypatch: pytest.MonkeyPatch, tmp_path: 
         captured["config"] = config
         return _stub_results()
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", fake_run)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._job_executor.load_endpoint_registry",
+        "medarc_verifiers.cli._job_executor.load_endpoint_registry",
         lambda path, cache=None: {},
     )
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._job_executor.load_env_metadata",
+        "medarc_verifiers.cli._job_executor.load_env_metadata",
         lambda env_id, cache=None: _stub_metadata(required=False),
     )
 
@@ -231,9 +231,9 @@ def test_cli_env_arg_overrides_yaml(monkeypatch: pytest.MonkeyPatch, tmp_path: P
         captured["config"] = config
         return _stub_results()
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", fake_run)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._job_executor.load_endpoint_registry",
+        "medarc_verifiers.cli._job_executor.load_endpoint_registry",
         lambda path, cache=None: {},
     )
     metadata = [
@@ -254,7 +254,7 @@ def test_cli_env_arg_overrides_yaml(monkeypatch: pytest.MonkeyPatch, tmp_path: P
         )
     ]
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._job_executor.load_env_metadata",
+        "medarc_verifiers.cli._job_executor.load_env_metadata",
         lambda env_id, cache=None: metadata,
     )
 
@@ -282,13 +282,13 @@ def test_cli_sampling_arg_overrides_yaml(monkeypatch: pytest.MonkeyPatch, tmp_pa
         captured["config"] = config
         return _stub_results()
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", fake_run)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._job_executor.load_endpoint_registry",
+        "medarc_verifiers.cli._job_executor.load_endpoint_registry",
         lambda path, cache=None: {},
     )
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._job_executor.load_env_metadata",
+        "medarc_verifiers.cli._job_executor.load_env_metadata",
         lambda env_id, cache=None: [],
     )
 
@@ -316,13 +316,13 @@ def test_execute_jobs_handles_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch
     async def interrupting_run(config):  # noqa: ARG001
         raise KeyboardInterrupt
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", interrupting_run)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", interrupting_run)
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._job_executor.load_endpoint_registry",
+        "medarc_verifiers.cli._job_executor.load_endpoint_registry",
         lambda path, cache=None: {},
     )
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._job_executor.load_env_metadata",
+        "medarc_verifiers.cli._job_executor.load_env_metadata",
         lambda env_id, cache=None: [],
     )
 
@@ -352,13 +352,13 @@ def test_job_sleep_overrides_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     async def fake_run(config):  # noqa: ARG001
         return _stub_results()
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", fake_run)
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_endpoint_registry", lambda path, cache=None: {})
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda path, cache=None: {})
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._job_executor.load_env_metadata",
+        "medarc_verifiers.cli._job_executor.load_env_metadata",
         lambda env_id, cache=None: _stub_metadata(required=False),
     )
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.sleep", lambda seconds: sleep_calls.append(seconds))
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.sleep", lambda seconds: sleep_calls.append(seconds))
 
     model_cfg = ModelConfigSchema(id="alias")
     env_cfg = EnvironmentConfigSchema(id="medqa")

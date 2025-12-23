@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from medarc_verifiers.cli_new.utils import endpoint_utils as utils
+from medarc_verifiers.cli.utils import endpoint_utils as utils
 
 
 def test_load_endpoint_registry_uses_cache(monkeypatch, tmp_path: Path) -> None:

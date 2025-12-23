@@ -12,7 +12,7 @@ import polars as pl
 import pyarrow.parquet as pq
 from datasets import Dataset, DatasetDict, concatenate_datasets, load_dataset
 
-from medarc_verifiers.cli_new.process.writer import EnvWriteSummary
+from medarc_verifiers.cli.process.writer import EnvWriteSummary
 
 logger = logging.getLogger(__name__)
 

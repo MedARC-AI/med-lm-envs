@@ -9,9 +9,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from medarc_verifiers.cli_new._job_builder import ResolvedJob
-from medarc_verifiers.cli_new._manifest import MANIFEST_FILENAME, RunManifest, compute_job_checksum
-from medarc_verifiers.cli_new.utils.shared import slugify
+from medarc_verifiers.cli._job_builder import ResolvedJob
+from medarc_verifiers.cli._manifest import MANIFEST_FILENAME, RunManifest, compute_job_checksum
+from medarc_verifiers.cli.utils.shared import slugify
 from medarc_verifiers.utils.pathing import from_project_relative
 
 logger = logging.getLogger(__name__)

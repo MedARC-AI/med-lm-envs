@@ -10,8 +10,8 @@ from typing import Any, Mapping, MutableMapping
 
 from pydantic import BaseModel, Field, ValidationError
 
-from medarc_verifiers.cli_new.process.discovery import RunRecord
-from medarc_verifiers.cli_new.process.rollout import derive_base_env_id, extract_rollout_index
+from medarc_verifiers.cli.process.discovery import RunRecord
+from medarc_verifiers.cli.process.rollout import derive_base_env_id, extract_rollout_index
 
 logger = logging.getLogger(__name__)
 

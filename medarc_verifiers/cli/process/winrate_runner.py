@@ -9,8 +9,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Sequence
 
-from medarc_verifiers.cli_new.process import winrate as _win
-from medarc_verifiers.cli_new.process.hf_sync import HFSyncConfig, download_hf_repo
+from medarc_verifiers.cli.process import winrate as _win
+from medarc_verifiers.cli.process.hf_sync import HFSyncConfig, download_hf_repo
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +130,7 @@ def _load_with_datasets(processed_dir: Path) -> list[tuple[str, list[_win.PLData
         data_files: dict[str, list[str]] = {}
         for split, paths in data_files_raw.items():
             data_files[split] = [str(processed_dir / path) for path in paths]
-        download_config = DownloadConfig(disable_progress_bar=True)
+        download_config = DownloadConfig(disable_tqdm=True)
         ds_dict = load_dataset(
             "parquet",
             data_files=data_files,

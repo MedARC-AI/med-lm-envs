@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from medarc_verifiers.cli_new._schemas import (
+from medarc_verifiers.cli._schemas import (
     EnvironmentConfigSchema,
     EnvironmentExportConfig,
     ModelConfigSchema,

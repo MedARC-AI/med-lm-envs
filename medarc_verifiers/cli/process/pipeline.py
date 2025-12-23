@@ -9,11 +9,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from medarc_verifiers.cli_new._schemas import EnvironmentExportConfig
-from medarc_verifiers.cli_new.process import aggregate, discovery, hf_sync, metadata, rows, rollout, writer
-from medarc_verifiers.cli_new.process.aggregate import AggregatedEnvRows
-from medarc_verifiers.cli_new.process.hf_sync import HFMergeSummary, HFSyncConfig
-from medarc_verifiers.cli_new.process.writer import EnvWriteSummary, WriterConfig
+from medarc_verifiers.cli._schemas import EnvironmentExportConfig
+from medarc_verifiers.cli.process import aggregate, discovery, hf_sync, metadata, rows, rollout, writer
+from medarc_verifiers.cli.process.aggregate import AggregatedEnvRows
+from medarc_verifiers.cli.process.hf_sync import HFMergeSummary, HFSyncConfig
+from medarc_verifiers.cli.process.writer import EnvWriteSummary, WriterConfig
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +170,9 @@ def run_process(
                 try:
                     from rich.progress import track
 
-                    future_iter = track(future_iter, total=len(futures), description="Processing datasets", transient=True)
+                    future_iter = track(
+                        future_iter, total=len(futures), description="Processing datasets", transient=True
+                    )
                 except Exception:
                     future_iter = as_completed(futures)
 

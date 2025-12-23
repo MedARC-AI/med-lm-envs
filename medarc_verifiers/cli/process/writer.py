@@ -13,7 +13,7 @@ import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from medarc_verifiers.cli_new.process.aggregate import AggregatedEnvRows
+from medarc_verifiers.cli.process.aggregate import AggregatedEnvRows
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +169,7 @@ def write_hf_dataset_config(
     config_path = config.output_dir / "dataset_infos.json"
     with config_path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
+
 
 def _write_group(group: AggregatedEnvRows, config: WriterConfig) -> EnvWriteSummary:
     env_id = group.env_id or group.base_env_id

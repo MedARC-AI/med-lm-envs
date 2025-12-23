@@ -6,9 +6,9 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from medarc_verifiers.cli_new._config_loader import ConfigFormatError, load_run_config
-from medarc_verifiers.cli_new._job_builder import build_jobs
-from medarc_verifiers.cli_new._job_executor import ExecutorSettings, execute_jobs
+from medarc_verifiers.cli._config_loader import ConfigFormatError, load_run_config
+from medarc_verifiers.cli._job_builder import build_jobs
+from medarc_verifiers.cli._job_executor import ExecutorSettings, execute_jobs
 
 
 @dataclass
@@ -31,7 +31,7 @@ def _write_yaml(path: Path, content: str) -> Path:
 
 def test_load_run_config_parses_basic_yaml(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        "medarc_verifiers.cli._config_loader.load_env_metadata",
         lambda _env_id, cache=None: [],
     )
     config_path = _write_yaml(
@@ -63,7 +63,7 @@ def test_load_run_config_parses_basic_yaml(monkeypatch, tmp_path: Path) -> None:
 
 def test_load_run_config_supports_mapped_format(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        "medarc_verifiers.cli._config_loader.load_env_metadata",
         lambda _env_id, cache=None: [],
     )
     config_path = _write_yaml(
@@ -103,7 +103,7 @@ def test_load_run_config_rejects_non_mapping_root(tmp_path: Path) -> None:
 
 def test_model_headers_validation(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        "medarc_verifiers.cli._config_loader.load_env_metadata",
         lambda _env_id, cache=None: [],
     )
     config_path = _write_yaml(
@@ -127,7 +127,7 @@ def test_model_headers_validation(monkeypatch, tmp_path: Path) -> None:
 
 def test_environment_num_examples_validation(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        "medarc_verifiers.cli._config_loader.load_env_metadata",
         lambda _env_id, cache=None: [],
     )
     config_path = _write_yaml(
@@ -153,7 +153,7 @@ def test_environment_env_args_unknown(monkeypatch, tmp_path: Path) -> None:
         return [_FakeParam("shuffle_seed"), _FakeParam("shuffle_answers")]
 
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        "medarc_verifiers.cli._config_loader.load_env_metadata",
         fake_metadata,
     )
 
@@ -181,7 +181,7 @@ def test_environment_env_args_known(monkeypatch, tmp_path: Path) -> None:
         return [_FakeParam("shuffle_answers"), _FakeParam("shuffle_seed")]
 
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        "medarc_verifiers.cli._config_loader.load_env_metadata",
         fake_metadata,
     )
 
@@ -207,7 +207,7 @@ def test_environment_env_args_known(monkeypatch, tmp_path: Path) -> None:
 
 def test_env_paths_resolve_with_cli_default_root(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        "medarc_verifiers.cli._config_loader.load_env_metadata",
         lambda _env_id, cache=None: [],
     )
     configs_dir = tmp_path / "configs"
@@ -240,7 +240,7 @@ def test_env_paths_resolve_with_cli_default_root(monkeypatch, tmp_path: Path) ->
 
 def test_env_paths_use_env_config_root(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        "medarc_verifiers.cli._config_loader.load_env_metadata",
         lambda _env_id, cache=None: [],
     )
     shared_envs = tmp_path / "shared_envs"
@@ -272,7 +272,7 @@ def test_env_paths_use_env_config_root(monkeypatch, tmp_path: Path) -> None:
 
 def test_envs_auto_discovered_from_env_config_root(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        "medarc_verifiers.cli._config_loader.load_env_metadata",
         lambda _env_id, cache=None: [],
     )
     env_root = tmp_path / "auto_envs"
@@ -305,22 +305,22 @@ def test_environment_env_args_missing_required(monkeypatch, tmp_path: Path) -> N
         return [_FakeParam("subset", required=True)]
 
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        "medarc_verifiers.cli._config_loader.load_env_metadata",
         fake_metadata,
     )
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._job_executor.load_env_metadata",
+        "medarc_verifiers.cli._job_executor.load_env_metadata",
         fake_metadata,
     )
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._job_executor.load_endpoint_registry",
+        "medarc_verifiers.cli._job_executor.load_endpoint_registry",
         lambda _path, cache=None: {},
     )
 
     async def fail_if_called(*_args, **_kwargs):  # pragma: no cover - sanity guard
         raise AssertionError("run_evaluation should not execute when env args are invalid.")
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", fail_if_called)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fail_if_called)
 
     config_path = _write_yaml(
         tmp_path / "missing_required.yaml",
@@ -363,7 +363,7 @@ def test_environment_env_args_type_validation(monkeypatch, tmp_path: Path) -> No
         return [_FakeParam("shuffle_seed", argparse_type=int)]
 
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        "medarc_verifiers.cli._config_loader.load_env_metadata",
         fake_metadata,
     )
 
@@ -394,7 +394,7 @@ def test_matrix_expansion_generates_variants(monkeypatch, tmp_path: Path) -> Non
         ]
 
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        "medarc_verifiers.cli._config_loader.load_env_metadata",
         fake_metadata,
     )
 
@@ -430,7 +430,7 @@ def test_matrix_expansion_generates_variants(monkeypatch, tmp_path: Path) -> Non
 
 def test_duplicate_env_ids_from_files_expand_variants(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        "medarc_verifiers.cli._config_loader.load_env_metadata",
         lambda _env_id, cache=None: [],
     )
 
@@ -476,7 +476,7 @@ def test_matrix_exclude_and_scalar_fields(monkeypatch, tmp_path: Path) -> None:
         return [_FakeParam("shuffle_seed", argparse_type=int)]
 
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        "medarc_verifiers.cli._config_loader.load_env_metadata",
         fake_metadata,
     )
 
@@ -512,12 +512,12 @@ def test_matrix_exclude_and_scalar_fields(monkeypatch, tmp_path: Path) -> None:
     assert num_examples["medqa-n20-r1618"] == 20
 
     assert all("shuffle_seed" in env.env_args for env in config.envs.values())
-    assert ("medqa-n20-r9331" not in env_ids)
+    assert "medqa-n20-r9331" not in env_ids
 
 
 def test_legacy_model_params_adapter(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        "medarc_verifiers.cli._config_loader.load_env_metadata",
         lambda _env_id, cache=None: [],
     )
 
@@ -551,7 +551,7 @@ def test_legacy_model_params_adapter(monkeypatch, tmp_path: Path) -> None:
 
 def test_envs_can_reference_yaml_file(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        "medarc_verifiers.cli._config_loader.load_env_metadata",
         lambda _env_id, cache=None: [],
     )
     env_file = tmp_path / "envs.yaml"
@@ -583,7 +583,7 @@ def test_envs_can_reference_yaml_file(monkeypatch, tmp_path: Path) -> None:
 
 def test_envs_can_reference_directory(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        "medarc_verifiers.cli._config_loader.load_env_metadata",
         lambda _env_id, cache=None: [],
     )
     env_dir = tmp_path / "envs"
@@ -622,7 +622,7 @@ def test_envs_can_reference_directory(monkeypatch, tmp_path: Path) -> None:
 
 def test_included_file_strict_shapes(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        "medarc_verifiers.cli._config_loader.load_env_metadata",
         lambda _env_id, cache=None: [],
     )
 
@@ -680,7 +680,7 @@ def test_included_file_strict_shapes(monkeypatch, tmp_path: Path) -> None:
 
 def test_models_can_reference_yaml_file(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        "medarc_verifiers.cli._config_loader.load_env_metadata",
         lambda _env_id, cache=None: [],
     )
     models_file = tmp_path / "models.yaml"
@@ -713,7 +713,7 @@ def test_models_can_reference_yaml_file(monkeypatch, tmp_path: Path) -> None:
 
 def test_jobs_can_reference_yaml_file(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        "medarc_verifiers.cli._config_loader.load_env_metadata",
         lambda _env_id, cache=None: [],
     )
     jobs_file = tmp_path / "jobs.yaml"

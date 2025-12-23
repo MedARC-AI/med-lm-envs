@@ -7,10 +7,10 @@ import polars as pl
 import pyarrow.parquet as pq
 import pytest
 
-from medarc_verifiers.cli_new.process import writer
-from medarc_verifiers.cli_new.process.aggregate import aggregate_rows_by_env
-from medarc_verifiers.cli_new.process.aggregate import AggregatedEnvRows
-from medarc_verifiers.cli_new.process.writer import EXPORTER_METADATA_KEY, WriterConfig, write_env_groups
+from medarc_verifiers.cli.process import writer
+from medarc_verifiers.cli.process.aggregate import aggregate_rows_by_env
+from medarc_verifiers.cli.process.aggregate import AggregatedEnvRows
+from medarc_verifiers.cli.process.writer import EXPORTER_METADATA_KEY, WriterConfig, write_env_groups
 
 
 def _group_for_env() -> AggregatedEnvRows:

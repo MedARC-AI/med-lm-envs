@@ -4,9 +4,9 @@ from pathlib import Path
 
 from datasets import Dataset
 
-from medarc_verifiers.cli_new.process import hf_sync
-from medarc_verifiers.cli_new.process.aggregate import aggregate_rows_by_env
-from medarc_verifiers.cli_new.process.writer import WriterConfig, write_env_groups
+from medarc_verifiers.cli.process import hf_sync
+from medarc_verifiers.cli.process.aggregate import aggregate_rows_by_env
+from medarc_verifiers.cli.process.writer import WriterConfig, write_env_groups
 
 
 def _build_dataset(job_run_id: str, reward: float, started_at: str) -> Dataset:

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from medarc_verifiers.cli_new.utils.shared import (
+from medarc_verifiers.cli.utils.shared import (
     MissingEnvParamError,
     asdict_sanitized,
     build_headers,

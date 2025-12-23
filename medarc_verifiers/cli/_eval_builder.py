@@ -8,15 +8,15 @@ from typing import Any, Callable, Mapping
 
 from verifiers.types import ClientConfig, EvalConfig
 
-from medarc_verifiers.cli_new._schemas import EnvironmentConfigSchema, ModelConfigSchema
-from medarc_verifiers.cli_new.utils.endpoint_utils import (
+from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, ModelConfigSchema
+from medarc_verifiers.cli.utils.endpoint_utils import (
     EndpointRegistry,
     EnvMetadataCache,
     load_env_metadata,
     resolve_model_endpoint,
 )
-from medarc_verifiers.cli_new.utils.env_args import merge_env_args_with_validation
-from medarc_verifiers.cli_new.utils.shared import (
+from medarc_verifiers.cli.utils.env_args import merge_env_args_with_validation
+from medarc_verifiers.cli.utils.shared import (
     DEFAULT_BATCH_MAX_CONCURRENT,
     merge_sampling_overrides,
     normalize_headers,

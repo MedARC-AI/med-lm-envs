@@ -12,13 +12,13 @@ from typing import Any, Mapping, Sequence
 
 from verifiers.utils.eval_utils import run_evaluation
 
-from medarc_verifiers.cli_new._eval_builder import build_client_config, build_eval_config
-from medarc_verifiers.cli_new._schemas import ModelConfigSchema
-from medarc_verifiers.cli_new.utils.env_args import EnvParam, MissingEnvParamError, gather_env_cli_metadata
-from medarc_verifiers.cli_new.utils.env_resolver import merge_env_args, validate_env_args
-from medarc_verifiers.cli_new.utils.endpoint_utils import load_endpoint_registry
-from medarc_verifiers.cli_new.utils.overrides import build_cli_override
-from medarc_verifiers.cli_new.utils.shared import (
+from medarc_verifiers.cli._eval_builder import build_client_config, build_eval_config
+from medarc_verifiers.cli._schemas import ModelConfigSchema
+from medarc_verifiers.cli.utils.env_args import EnvParam, MissingEnvParamError, gather_env_cli_metadata
+from medarc_verifiers.cli.utils.env_resolver import merge_env_args, validate_env_args
+from medarc_verifiers.cli.utils.endpoint_utils import load_endpoint_registry
+from medarc_verifiers.cli.utils.overrides import build_cli_override
+from medarc_verifiers.cli.utils.shared import (
     HEADER_SEPARATOR,
     STATE_COLUMNS_SEPARATOR,
     DEFAULT_SINGLE_RUN_MAX_CONCURRENT,

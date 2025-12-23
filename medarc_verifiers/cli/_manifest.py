@@ -11,9 +11,9 @@ from typing import Any, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from medarc_verifiers.cli_new._job_builder import ResolvedJob
-from medarc_verifiers.cli_new._schemas import ModelConfigSchema
-from medarc_verifiers.cli_new.utils.shared import compute_checksum, resolve_env_identifier_or
+from medarc_verifiers.cli._job_builder import ResolvedJob
+from medarc_verifiers.cli._schemas import ModelConfigSchema
+from medarc_verifiers.cli.utils.shared import compute_checksum, resolve_env_identifier_or
 from medarc_verifiers.utils.pathing import project_root, to_project_relative
 
 MANIFEST_FILENAME = "run_manifest.json"

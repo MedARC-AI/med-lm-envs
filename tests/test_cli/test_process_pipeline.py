@@ -6,13 +6,13 @@ from pathlib import Path
 import pytest
 import pyarrow.parquet as pq
 
-from medarc_verifiers.cli_new._schemas import EnvironmentExportConfig
-from medarc_verifiers.cli_new.process import ProcessOptions, run_process
-from medarc_verifiers.cli_new.process.discovery import RunManifestInfo, RunRecord, deduplicate_records_by_latest
-from medarc_verifiers.cli_new.process.winrate import WinrateConfig
-from medarc_verifiers.cli_new.process.winrate_runner import discover_datasets, run_winrate
-from medarc_verifiers.cli_new.process.hf_sync import HFSyncConfig
-from medarc_verifiers.cli_new.process.writer import ALLOWED_COLUMNS
+from medarc_verifiers.cli._schemas import EnvironmentExportConfig
+from medarc_verifiers.cli.process import ProcessOptions, run_process
+from medarc_verifiers.cli.process.discovery import RunManifestInfo, RunRecord, deduplicate_records_by_latest
+from medarc_verifiers.cli.process.winrate import WinrateConfig
+from medarc_verifiers.cli.process.winrate_runner import discover_datasets, run_winrate
+from medarc_verifiers.cli.process.hf_sync import HFSyncConfig
+from medarc_verifiers.cli.process.writer import ALLOWED_COLUMNS
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -285,7 +285,7 @@ def test_run_winrate_from_hf(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     def _fake_download_hf_repo(*_args, **_kwargs) -> Path:
         return hf_dir
 
-    monkeypatch.setattr("medarc_verifiers.cli_new.process.winrate_runner.download_hf_repo", _fake_download_hf_repo)
+    monkeypatch.setattr("medarc_verifiers.cli.process.winrate_runner.download_hf_repo", _fake_download_hf_repo)
 
     cfg = WinrateConfig()
     result = run_winrate(
@@ -340,7 +340,7 @@ def test_run_process_propagates_keyboard_interrupt(monkeypatch: pytest.MonkeyPat
         call_count["count"] += 1
         raise KeyboardInterrupt
 
-    monkeypatch.setattr("medarc_verifiers.cli_new.process.rows.load_rows", _boom)
+    monkeypatch.setattr("medarc_verifiers.cli.process.rows.load_rows", _boom)
 
     with pytest.raises(KeyboardInterrupt):
         run_process(options)

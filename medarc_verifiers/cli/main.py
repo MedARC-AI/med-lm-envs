@@ -19,23 +19,23 @@ except ImportError:  # pragma: no cover - rich is optional at runtime
 import yaml
 from pydantic import ValidationError
 
-from medarc_verifiers.cli_new._config_loader import ConfigFormatError, load_run_config
-from medarc_verifiers.cli_new._job_builder import ResolvedJob, build_jobs
-from medarc_verifiers.cli_new._job_executor import ExecutorSettings, JobExecutionResult, execute_jobs
-from medarc_verifiers.cli_new._manifest import ManifestJobEntry, RunManifest, compute_snapshot_checksum
-from medarc_verifiers.cli_new._manifest_planner import ManifestPlanner
-from medarc_verifiers.cli_new._single_run import run_single_mode
-from medarc_verifiers.cli_new.process import ProcessOptions, ProcessResult, run_process
-from medarc_verifiers.cli_new.process.hf_sync import HFSyncConfig
-from medarc_verifiers.cli_new.process.winrate import WinrateConfig
-from medarc_verifiers.cli_new.process.winrate_runner import (
+from medarc_verifiers.cli._config_loader import ConfigFormatError, load_run_config
+from medarc_verifiers.cli._job_builder import ResolvedJob, build_jobs
+from medarc_verifiers.cli._job_executor import ExecutorSettings, JobExecutionResult, execute_jobs
+from medarc_verifiers.cli._manifest import ManifestJobEntry, RunManifest, compute_snapshot_checksum
+from medarc_verifiers.cli._manifest_planner import ManifestPlanner
+from medarc_verifiers.cli._single_run import run_single_mode
+from medarc_verifiers.cli.process import ProcessOptions, ProcessResult, run_process
+from medarc_verifiers.cli.process.hf_sync import HFSyncConfig
+from medarc_verifiers.cli.process.winrate import WinrateConfig
+from medarc_verifiers.cli.process.winrate_runner import (
     _resolve_source,
     list_models,
     print_winrate_summary_markdown,
     run_winrate,
 )
-from medarc_verifiers.cli_new.utils.overrides import build_cli_override
-from medarc_verifiers.cli_new._schemas import EnvironmentConfigSchema, EnvironmentExportConfig
+from medarc_verifiers.cli.utils.overrides import build_cli_override
+from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, EnvironmentExportConfig
 
 logger = logging.getLogger(__name__)
 HELP_FLAGS = {"-h", "--help"}

@@ -7,13 +7,13 @@ from typing import Any
 
 import pytest
 
-from medarc_verifiers.cli_new._job_builder import ResolvedJob
-from medarc_verifiers.cli_new._manifest import (
+from medarc_verifiers.cli._job_builder import ResolvedJob
+from medarc_verifiers.cli._manifest import (
     MANIFEST_FILENAME,
     RunManifest,
     compute_snapshot_checksum,
 )
-from medarc_verifiers.cli_new._schemas import EnvironmentConfigSchema, ModelConfigSchema
+from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, ModelConfigSchema
 
 SNAPSHOT_ENV_VAR = "UPDATE_CLI_MANIFEST_SNAPSHOT"
 SNAPSHOT_PATH = Path(__file__).parent / "data" / "run_manifest_snapshot.json"
@@ -63,7 +63,7 @@ def _normalize_manifest(payload: Any, *, base_dir: Path) -> Any:
 
 def test_run_manifest_snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     job = _build_job()
-    monkeypatch.setattr("medarc_verifiers.cli_new._manifest.timestamp", lambda: "2024-03-01T00:00:00Z")
+    monkeypatch.setattr("medarc_verifiers.cli._manifest.timestamp", lambda: "2024-03-01T00:00:00Z")
 
     run_dir = tmp_path / "snapshot-run"
     snapshot_cfg = {
@@ -114,8 +114,8 @@ def test_manifest_serialization_prunes_nones_and_relativizes(monkeypatch: pytest
         base = fake_root if default_base is None else default_base
         return resolved.relative_to(base).as_posix()
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._manifest.PROJECT_ROOT", fake_root)
-    monkeypatch.setattr("medarc_verifiers.cli_new._manifest.to_project_relative", fake_to_project_relative)
+    monkeypatch.setattr("medarc_verifiers.cli._manifest.PROJECT_ROOT", fake_root)
+    monkeypatch.setattr("medarc_verifiers.cli._manifest.to_project_relative", fake_to_project_relative)
 
     snapshot_cfg = {
         "models": {"snapshot-model": {"model": "gpt-4o-mini"}},

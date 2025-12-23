@@ -8,7 +8,7 @@ from typing import Mapping, MutableMapping, Sequence
 
 from verifiers.utils.eval_utils import load_endpoints
 
-from medarc_verifiers.cli_new.utils.env_args import EnvParam, gather_env_cli_metadata
+from medarc_verifiers.cli.utils.env_args import EnvParam, gather_env_cli_metadata
 
 logger = logging.getLogger(__name__)
 

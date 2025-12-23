@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from medarc_verifiers.cli_new.process.aggregate import (
+from medarc_verifiers.cli.process.aggregate import (
     AggregatedEnvRows,
     aggregate_rows_by_env,
 )

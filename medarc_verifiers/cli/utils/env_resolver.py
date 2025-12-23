@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Mapping
 
-from medarc_verifiers.cli_new.utils.env_args import validate_env_args_or_raise
+from medarc_verifiers.cli.utils.env_args import validate_env_args_or_raise
 
 logger = logging.getLogger(__name__)
 

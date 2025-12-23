@@ -4,10 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from medarc_verifiers.cli_new._job_builder import ResolvedJob
-from medarc_verifiers.cli_new._manifest import RunManifest
-from medarc_verifiers.cli_new._manifest_planner import ManifestPlanner, _find_auto_resume_candidate
-from medarc_verifiers.cli_new._schemas import EnvironmentConfigSchema, ModelConfigSchema
+from medarc_verifiers.cli._job_builder import ResolvedJob
+from medarc_verifiers.cli._manifest import RunManifest
+from medarc_verifiers.cli._manifest_planner import ManifestPlanner, _find_auto_resume_candidate
+from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, ModelConfigSchema
 
 
 def _make_job(job_id: str = "job-a", env_id: str = "env-a", model_id: str = "model-a") -> ResolvedJob:

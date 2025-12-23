@@ -7,9 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from medarc_verifiers.cli_new import main
-from medarc_verifiers.cli_new.process import ProcessResult
-from medarc_verifiers.cli_new.utils.env_args import EnvParam
+from medarc_verifiers.cli import main
+from medarc_verifiers.cli.process import ProcessResult
+from medarc_verifiers.cli.utils.env_args import EnvParam
 
 
 def _write_config(path: Path, content: str) -> None:
@@ -18,11 +18,11 @@ def _write_config(path: Path, content: str) -> None:
 
 def _patch_single_run_env(monkeypatch: pytest.MonkeyPatch, metadata: list[EnvParam]) -> None:
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._single_run.gather_env_cli_metadata",
+        "medarc_verifiers.cli._single_run.gather_env_cli_metadata",
         lambda env_id: metadata,
     )
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._single_run.load_endpoint_registry",
+        "medarc_verifiers.cli._single_run.load_endpoint_registry",
         lambda *args, **kwargs: {},
     )
 
@@ -91,10 +91,10 @@ def test_cli_runs_configuration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
         captured.append(config)
         return _stub_cli_result()
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._config_loader.load_env_metadata", lambda *args, **kwargs: [])
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_env_metadata", lambda *args, **kwargs: [])
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", fake_run)
+    monkeypatch.setattr("medarc_verifiers.cli._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
 
     output_dir = tmp_path / "runs_out"
     env_dir = tmp_path / "envs"
@@ -154,10 +154,10 @@ def test_model_level_max_concurrent_applies(monkeypatch: pytest.MonkeyPatch, tmp
         captured.append(config)
         return _stub_cli_result()
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._config_loader.load_env_metadata", lambda *args, **kwargs: [])
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_env_metadata", lambda *args, **kwargs: [])
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", fake_run)
+    monkeypatch.setattr("medarc_verifiers.cli._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
 
     output_dir = tmp_path / "runs_out"
     env_dir = tmp_path / "envs"
@@ -205,10 +205,10 @@ def test_env_rerun_flag_forces_completed_jobs(monkeypatch: pytest.MonkeyPatch, t
         captured.append(config)
         return _stub_cli_result()
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._config_loader.load_env_metadata", lambda *args, **kwargs: [])
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_env_metadata", lambda *args, **kwargs: [])
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", fake_run)
+    monkeypatch.setattr("medarc_verifiers.cli._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
 
     output_dir = tmp_path / "runs_out"
     env_dir = tmp_path / "envs"
@@ -280,14 +280,14 @@ def test_cli_env_config_root_override(monkeypatch: pytest.MonkeyPatch, tmp_path:
         encoding="utf-8",
     )
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._config_loader.load_env_metadata", lambda *args, **kwargs: [])
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_env_metadata", lambda *args, **kwargs: [])
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+    monkeypatch.setattr("medarc_verifiers.cli._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
 
     async def fake_run(config):
         return _stub_cli_result()
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", fake_run)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
 
     output_dir = tmp_path / "runs_out"
     exit_code = main.main(
@@ -326,14 +326,14 @@ def test_regen_reuses_completed_jobs(monkeypatch: pytest.MonkeyPatch, tmp_path: 
         """,
     )
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._config_loader.load_env_metadata", lambda *args, **kwargs: [])
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_env_metadata", lambda *args, **kwargs: [])
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+    monkeypatch.setattr("medarc_verifiers.cli._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
 
     async def first_run(config):
         return _stub_cli_result()
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", first_run)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", first_run)
 
     output_dir = tmp_path / "runs_out"
     base_run = "base-run"
@@ -353,7 +353,7 @@ def test_regen_reuses_completed_jobs(monkeypatch: pytest.MonkeyPatch, tmp_path: 
         calls.append(1)
         return _stub_cli_result()
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", regen_run)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", regen_run)
 
     # Restart now uses the --restart flag and performs in-place extension of the seed run.
     exit_code = main.main(
@@ -394,14 +394,14 @@ def test_regen_accepts_path_to_run_dir(monkeypatch: pytest.MonkeyPatch, tmp_path
         """,
     )
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._config_loader.load_env_metadata", lambda *args, **kwargs: [])
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_env_metadata", lambda *args, **kwargs: [])
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+    monkeypatch.setattr("medarc_verifiers.cli._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
 
     async def fake_run(config):
         return _stub_cli_result()
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", fake_run)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
 
     output_dir = tmp_path / "runs_out"
     base_run = output_dir / "base-run"
@@ -413,7 +413,7 @@ def test_regen_accepts_path_to_run_dir(monkeypatch: pytest.MonkeyPatch, tmp_path
     # Now use --regen with an explicit path to the run directory
     # Use --restart with explicit path to existing run directory; should update in place.
     # Mock interactive prompt to avoid stdin capture when all jobs are already completed.
-    monkeypatch.setattr("medarc_verifiers.cli_new.main._prompt_completed_jobs_action", lambda: "continue")
+    monkeypatch.setattr("medarc_verifiers.cli.main._prompt_completed_jobs_action", lambda: "continue")
     exit_code = main.main(
         [
             "bench",
@@ -450,14 +450,14 @@ jobs:
     )
 
     # Avoid external dependencies
-    monkeypatch.setattr("medarc_verifiers.cli_new._config_loader.load_env_metadata", lambda *args, **kwargs: [])
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_env_metadata", lambda *args, **kwargs: [])
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+    monkeypatch.setattr("medarc_verifiers.cli._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
 
     async def first_run(config):
         return _stub_cli_result()
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", first_run)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", first_run)
 
     output_dir = tmp_path / "runs_out"
     run_id = "discover-me"
@@ -478,7 +478,7 @@ jobs:
         calls.append(1)
         return _stub_cli_result()
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", resume_run)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", resume_run)
 
     exit_code = main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir)])
     assert exit_code == 0
@@ -509,14 +509,14 @@ jobs:
         """,
     )
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._config_loader.load_env_metadata", lambda *args, **kwargs: [])
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_env_metadata", lambda *args, **kwargs: [])
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+    monkeypatch.setattr("medarc_verifiers.cli._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
 
     async def first_run(config):
         return _stub_cli_result()
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", first_run)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", first_run)
 
     output_dir = tmp_path / "runs_out"
     run_id = "baseline-run"
@@ -534,7 +534,7 @@ jobs:
         calls.append(1)
         return _stub_cli_result()
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._job_executor.run_evaluation", fresh_run)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fresh_run)
 
     preexisting = {child.name for child in output_dir.iterdir()}
     exit_code = main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir), "--no-auto-resume"])
@@ -587,7 +587,7 @@ def test_single_run_missing_required_param_errors(
     ]
     _patch_single_run_env(monkeypatch, metadata)
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._single_run.run_evaluation",
+        "medarc_verifiers.cli._single_run.run_evaluation",
         lambda *args, **kwargs: pytest.fail("Should not run when args invalid."),
     )
 
@@ -620,7 +620,7 @@ def test_single_run_boolean_negation_and_sampling_precedence(
         captured.append(config)
         return _stub_cli_result()
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._single_run.run_evaluation", fake_run)
+    monkeypatch.setattr("medarc_verifiers.cli._single_run.run_evaluation", fake_run)
 
     exit_code = main.main(
         [
@@ -678,7 +678,7 @@ def test_single_run_dry_run_outputs_config(
     async def fail_if_called(*args, **kwargs):
         raise AssertionError("run_evaluation should not execute during dry-run.")
 
-    monkeypatch.setattr("medarc_verifiers.cli_new._single_run.run_evaluation", fail_if_called)
+    monkeypatch.setattr("medarc_verifiers.cli._single_run.run_evaluation", fail_if_called)
 
     exit_code = main.main(["medqa", "--dry-run"])
 
@@ -757,7 +757,7 @@ def test_process_cli_builds_options(monkeypatch: pytest.MonkeyPatch, tmp_path: P
         captured["env_export_map"] = env_export_map
         return ProcessResult(records_processed=0, rows_processed=0, env_groups=[], env_summaries=[], hf_summary=None)
 
-    monkeypatch.setattr("medarc_verifiers.cli_new.main.run_process", fake_run)
+    monkeypatch.setattr("medarc_verifiers.cli.main.run_process", fake_run)
 
     exit_code = main.main(
         [

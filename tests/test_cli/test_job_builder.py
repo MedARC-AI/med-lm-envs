@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from medarc_verifiers.cli_new._config_loader import load_run_config
-from medarc_verifiers.cli_new._job_builder import ResolvedJob, build_jobs
+from medarc_verifiers.cli._config_loader import load_run_config
+from medarc_verifiers.cli._job_builder import ResolvedJob, build_jobs
 
 
 def _write_yaml(path: Path, content: str) -> Path:
@@ -15,7 +15,7 @@ def _write_yaml(path: Path, content: str) -> Path:
 
 def _stub_metadata(monkeypatch) -> None:
     monkeypatch.setattr(
-        "medarc_verifiers.cli_new._config_loader.load_env_metadata",
+        "medarc_verifiers.cli._config_loader.load_env_metadata",
         lambda _env_id, cache=None: [],
     )
 
@@ -180,4 +180,3 @@ def test_unknown_environment_raises(monkeypatch, tmp_path: Path) -> None:
     run_config = load_run_config(config_path)
     with pytest.raises(ValueError, match="unknown environment"):
         build_jobs(run_config)
-
