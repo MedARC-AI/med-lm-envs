@@ -87,3 +87,34 @@ env_mcq = vf.load_environment("careqa", mode="en", shuffle_answers=True)
 # Load open-ended environment
 env_open = vf.load_environment("careqa", mode="open", judge_model="gpt-4o-mini")
 ```
+
+### References
+
+```bibtex
+@inproceedings{arias-duart-etal-2025-automatic,
+    title = "Automatic Evaluation of Healthcare {LLM}s Beyond Question-Answering",
+    author = "Arias-Duart, Anna  and
+      Martin-Torres, Pablo Agustin  and
+      Hinjos, Daniel  and
+      Bernabeu-Perez, Pablo  and
+      Ganzabal, Lucia Urcelay  and
+      Mallo, Marta Gonzalez  and
+      Gururajan, Ashwin Kumar  and
+      Lopez-Cuena, Enrique  and
+      Alvarez-Napagao, Sergio  and
+      Garcia-Gasulla, Dario",
+    editor = "Chiruzzo, Luis  and
+      Ritter, Alan  and
+      Wang, Lu",
+    booktitle = "Proceedings of the 2025 Conference of the Nations of the Americas Chapter of the Association for Computational Linguistics: Human Language Technologies (Volume 2: Short Papers)",
+    month = apr,
+    year = "2025",
+    address = "Albuquerque, New Mexico",
+    publisher = "Association for Computational Linguistics",
+    url = "https://aclanthology.org/2025.naacl-short.10/",
+    pages = "108--130",
+    ISBN = "979-8-89176-190-2",
+}
+
+```
+

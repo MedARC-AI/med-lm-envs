@@ -100,3 +100,33 @@ uv run vf-eval medredqa \
 This environment has been put together by:
 
 Kunal Bagga - ([@bagga005](https://github.com/bagga005))
+
+
+
+### References
+
+```bibtex
+@inproceedings{nguyen-etal-2023-medredqa,
+    title = "{M}ed{R}ed{QA} for Medical Consumer Question Answering: Dataset, Tasks, and Neural Baselines",
+    author = "Nguyen, Vincent  and
+      Karimi, Sarvnaz  and
+      Rybinski, Maciej  and
+      Xing, Zhenchang",
+    editor = "Park, Jong C.  and
+      Arase, Yuki  and
+      Hu, Baotian  and
+      Lu, Wei  and
+      Wijaya, Derry  and
+      Purwarianti, Ayu  and
+      Krisnadhi, Adila Alfa",
+    booktitle = "Proceedings of the 13th International Joint Conference on Natural Language Processing and the 3rd Conference of the Asia-Pacific Chapter of the Association for Computational Linguistics (Volume 1: Long Papers)",
+    month = nov,
+    year = "2023",
+    address = "Nusa Dua, Bali",
+    publisher = "Association for Computational Linguistics",
+    url = "https://aclanthology.org/2023.ijcnlp-main.42/",
+    doi = "10.18653/v1/2023.ijcnlp-main.42",
+    pages = "629--648"
+}
+
+```

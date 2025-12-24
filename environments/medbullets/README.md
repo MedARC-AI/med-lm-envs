@@ -60,3 +60,27 @@ Summarize key metrics your rubric emits and how they’re interpreted.
 | ------ | ------- |
 | `correct_answer_reward_func` | (weight 1.0): 1.0 if parsed letter is correct, else 0.0|
 | `parser.get_format_reward_func()` | (weight 0.0): optional format adherence (not counted) |
+
+### References
+
+```bibtex
+@inproceedings{chen-etal-2025-benchmarking,
+    title = "Benchmarking Large Language Models on Answering and Explaining Challenging Medical Questions",
+    author = "Chen, Hanjie  and
+      Fang, Zhouxiang  and
+      Singla, Yash  and
+      Dredze, Mark",
+    editor = "Chiruzzo, Luis  and
+      Ritter, Alan  and
+      Wang, Lu",
+    booktitle = "Proceedings of the 2025 Conference of the Nations of the Americas Chapter of the Association for Computational Linguistics: Human Language Technologies (Volume 1: Long Papers)",
+    month = apr,
+    year = "2025",
+    address = "Albuquerque, New Mexico",
+    publisher = "Association for Computational Linguistics",
+    url = "https://aclanthology.org/2025.naacl-long.182/",
+    doi = "10.18653/v1/2025.naacl-long.182",
+    pages = "3563--3599",
+    ISBN = "979-8-89176-189-6",
+}
+```

@@ -116,3 +116,17 @@ The **primary reward score** is the weighted sum of the first three metrics.
 | `bertscore_reward`       | 0      | BERTScore F1 (for analysis only).                                           |
 | `bleurt_reward`          | 0      | BLEURT score (for analysis only).                                           |
 | `reward`                 | N/A    | Final weighted sum of non-zero weight metrics (0.0–1.0).                    |
+
+
+### References
+
+```bibtex
+  @article{medec,
+    author     = {Asma {Ben Abacha} and Wen-wai Yim and Yujuan Fu and Zhaoyi Sun and Meliha Yetisgen and Fei Xia and Thomas Lin},
+    title      = {MEDEC: A Benchmark for Medical Error Detection and Correction in Clinical Notes},
+    journal    = {CoRR}, 
+    eprinttype = {arXiv},
+    url        = {https://arxiv.org/pdf/2412.19260}, 
+    year       = {2024}
+    }
+```

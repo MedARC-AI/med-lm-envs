@@ -44,3 +44,20 @@ Summarize key metrics your rubric emits and how they’re interpreted.
 This environment has been put together by:
 
 Anish Mahishi - ([@macandro96](https://github.com/macandro96))
+
+
+
+
+### References
+
+```bibtex
+@misc{shoham2024medconceptsqaopensourcemedical,
+      title={MedConceptsQA: Open Source Medical Concepts QA Benchmark}, 
+      author={Ofir Ben Shoham and Nadav Rappoport},
+      year={2024},
+      eprint={2405.07348},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2405.07348}, 
+}
+```

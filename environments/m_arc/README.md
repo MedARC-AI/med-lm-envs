@@ -65,3 +65,17 @@ Notes:
 | `correct_answer_reward_func` | (weight 1.0): 1.0 if parsed letter is correct, else 0.0|
 
 
+
+### References
+
+```bibtex
+@misc{kim2025limitationslargelanguagemodels,
+      title={Limitations of Large Language Models in Clinical Problem-Solving Arising from Inflexible Reasoning}, 
+      author={Jonathan Kim and Anna Podlasek and Kie Shidara and Feng Liu and Ahmed Alaa and Danilo Bernardo},
+      year={2025},
+      eprint={2502.04381},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2502.04381}, 
+}
+```

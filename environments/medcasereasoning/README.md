@@ -28,3 +28,14 @@ Configure model and sampling:
 uv run vf-eval medcasereasoning   -m gpt-4.1-mini   -n 20 -r 3 -t 1024 -T 0.7
 ```
 
+### References
+
+```bibtex
+@inproceedings{wu2025medcase,
+  title     = {MedCaseReasoning: Evaluating and Learning Diagnostic Reasoning from Clinical Case Reports},
+  author    = {Wu, Kevin and Wu, Eric and Thapa, Rahul and others},
+  booktitle = {NeurIPS},
+  year      = {2025},
+  url       = {https://github.com/kevinwu23/MedCaseReasoning}
+}
+```

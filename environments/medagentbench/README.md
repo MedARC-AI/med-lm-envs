@@ -70,3 +70,17 @@ Notes:
 
 ### Note
 This environment is adapted from the original Prime Intellect [MedAgentBench implementation](https://app.primeintellect.ai/dashboard/environments/primeintellect/med-agent-bench). It has been modified to report the query success rate and action success rate as unweighted rewards to match the paper.
+
+
+### References
+
+```bibtex
+@article{jiang2025medagentbench,
+  title={MedAgentBench: A Virtual EHR Environment to Benchmark Medical LLM Agents},
+  author={Jiang, Yixing and Black, Kameron C and Geng, Gloria and Park, Danny and Zou, James and Ng, Andrew Y and Chen, Jonathan H},
+  journal={NEJM AI},
+  pages={AIdbp2500144},
+  year={2025},
+  publisher={Massachusetts Medical Society}
+}
+```

@@ -29,3 +29,23 @@ The evaluation environment is defined in `metamedqa.py` and uses the HuggingFace
 This environment has been put together by:
 
 Aymane Ouraq - ([@aymaneo](https://github.com/aymaneo))
+
+
+### References
+
+```bibtex
+@article{griot_large_2025,
+    title = {Large {Language} {Models} lack essential metacognition for reliable medical reasoning},
+    volume = {16},
+    issn = {2041-1723},
+    url = {https://doi.org/10.1038/s41467-024-55628-6},
+    doi = {10.1038/s41467-024-55628-6},
+    number = {1},
+    journal = {Nature Communications},
+    author = {Griot, Maxime and Hemptinne, Coralie and Vanderdonckt, Jean and Yuksel, Demet},
+    month = jan,
+    year = {2025},
+    pages = {642},
+}
+
+```

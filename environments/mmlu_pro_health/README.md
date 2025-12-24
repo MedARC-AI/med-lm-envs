@@ -59,3 +59,13 @@ Notes:
 | `accuracy` | (weight 1.0): 1.0 if parsed letter is correct, else 0.0 |
 
 
+### References
+
+```bibtex
+@article{wang2024mmlu,
+  title={Mmlu-pro: A more robust and challenging multi-task language understanding benchmark},
+  author={Wang, Yubo and Ma, Xueguang and Zhang, Ge and Ni, Yuansheng and Chandra, Abhranil and Guo, Shiguang and Ren, Weiming and Arulraj, Aaran and He, Xuan and Jiang, Ziyan and others},
+  journal={arXiv preprint arXiv:2406.01574},
+  year={2024}
+}
+```

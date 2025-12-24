@@ -100,3 +100,14 @@ results = await env.evaluate(client, "gpt-4.1-mini", num_examples=10)
 This environment has been put together by:
 
 Shamus Sim Zi Yang - ([@ss8319](https://github.com/ss8319))
+
+### References
+
+```bibtex
+@article{adams2024longhealth,
+  title={LongHealth: A Question Answering Benchmark with Long Clinical Documents},
+  author={Adams, Lisa and Busch, Felix and Han, Tianyu and Excoffier, Jean-Baptiste and Ortala, Matthieu and L{\"o}ser, Alexander and Aerts, Hugo JWL and Kather, Jakob Nikolas and Truhn, Daniel and Bressem, Keno},
+  journal={arXiv preprint arXiv:2401.14490},
+  year={2024}
+}
+```
