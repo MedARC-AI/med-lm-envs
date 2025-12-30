@@ -1,45 +1,92 @@
-import math
 import re
+import math
 from datetime import datetime
-from typing import Optional
 
 import numpy as np
-import verifiers as vf
+from datasets.utils.logging import disable_progress_bar
 from datasets import load_dataset
-from medarc_verifiers.parsers import XMLParser
+
+import verifiers as vf
+from medarc_verifiers.prompts import THINK_XML_SYSTEM_PROMPT, XML_SYSTEM_PROMPT, AnswerFormat
+from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
+from medarc_verifiers.parsers.xml_parser import XMLParser
+
+from prompts import code_execution_prompt, zero_shot_prompt, one_shot_prompt, code_execution_one_shot_prompt
+from pyrepl_env import PyREPLEnv
+
+disable_progress_bar()  # suppress datasets progress indicators
 
 
-def _build_prompt(patient_note, question) -> str:
-    return f"""You are a helpful assistant for calculating a score for a given patient note.
-Please think step-by-step to solve the question and then generate the required score.
-\n\nPatient Note: {patient_note}
-\n\nQuestion: {question}.
+def extract_boxed_answer_strict(text: str) -> str:
+    """Fail boxed parsing if box not found"""
+    if r"\boxed{" not in text:
+        return ""
+    return extract_boxed_answer(text)
 
 
-Please answer the question in the following format:
-<think>
-Your thought process here
-</think>
-<answer>
-Your answer here without any units, just give the number.
-</answer>
-"""
+def _one_shot_response(answer: str, reasoning: str, use_think: bool = False, answer_format: AnswerFormat = AnswerFormat.XML) -> str:
+    """Format a one-shot response as XML or Boxed"""
+    if use_think:
+        reasoning = f"<think>{reasoning}</think>\n"
+    if answer_format == AnswerFormat.XML:
+        return f"{reasoning}\n<answer>{answer}</answer>"
+    elif answer_format == AnswerFormat.BOXED:
+        return f"{reasoning}\n\n\\boxed{{{answer}}}"
+    else:
+        raise ValueError(f"Unsupported answer format: {answer_format=}")
 
 
-def extract_answer(response, calid, parser: XMLParser):
+def _build_prompt(
+    row: dict,
+    one_shot_examples: dict | None = None,
+    code_execution: bool = False,
+    one_shot: bool = False,
+    use_think: bool = False,
+    answer_format: AnswerFormat = AnswerFormat.XML,
+) -> str:
+    calc_id = int(row["Calculator ID"])
+    if code_execution and one_shot:
+        return code_execution_one_shot_prompt.format(
+            example_note=one_shot_examples[calc_id]["Patient Note"],
+            example_question=one_shot_examples[calc_id]["Question"],
+            example_response=_one_shot_response(
+                one_shot_examples[calc_id]["Ground Truth Answer"],
+                one_shot_examples[calc_id]["Ground Truth Explanation"],
+                use_think,
+                answer_format,
+            ),
+            patient_note=row["Patient Note"],
+            question=row["Question"],
+        )
+    elif code_execution:
+        return code_execution_prompt.format(
+            patient_note=row["Patient Note"],
+            question=row["Question"],
+        )
+    elif one_shot:
+        return one_shot_prompt.format(
+            example_note=one_shot_examples[calc_id]["Patient Note"],
+            example_question=one_shot_examples[calc_id]["Question"],
+            example_response=_one_shot_response(
+                one_shot_examples[calc_id]["Ground Truth Answer"],
+                one_shot_examples[calc_id]["Ground Truth Explanation"],
+                use_think,
+                answer_format,
+            ),
+            patient_note=row["Patient Note"],
+            question=row["Question"],
+        )
+    else:
+        return zero_shot_prompt.format(
+            patient_note=row["Patient Note"],
+            question=row["Question"],
+        )
+
+
+def extract_answer(response, calid, parser):
     calid = int(calid)
 
-    parsed = parser.parse(response, last=True)
-    extracted_explanation = getattr(parsed, "think", None)
-    extracted_explanation = extracted_explanation.strip() if extracted_explanation else "No Explanation"
-
-    answer = getattr(parsed, "answer", None)
-    answer = answer.strip() if isinstance(answer, str) else "Not Found"
-
-    if (not isinstance(answer, str)) or (len(answer.strip()) == 0):
-        extracted_answer = "Not Found"
-    else:
-        extracted_answer = answer.strip('"')
+    extracted_answer = parser.parse_answer(response) or ""
 
     if calid in [13, 68]:
         # Output Type: date
@@ -148,7 +195,7 @@ def extract_answer(response, calid, parser: XMLParser):
         if answer != "N/A":
             answer = str(answer)
 
-    return answer, extracted_explanation
+    return answer
 
 
 def check_correctness(parser, completion, info, **kwargs):
@@ -168,7 +215,7 @@ def check_correctness(parser, completion, info, **kwargs):
     else:
         raw = str(completion)
 
-    answer, _ = extract_answer(raw, calid, parser)
+    answer = extract_answer(raw, calid, parser)
 
     if calid in [13, 68]:
         # Output Type: date
@@ -222,44 +269,80 @@ def check_correctness(parser, completion, info, **kwargs):
 
 
 def load_environment(
+    one_shot: bool = False,
+    code_execution: bool = False,
+    max_turns: int = 20, # https://github.com/ncbi-nlp/MedCalc-Bench/blob/main/evaluation/generate_code_prompt.py#L145
+    answer_format: AnswerFormat | str = AnswerFormat.XML,
     use_think: bool = False,
-    system_prompt: Optional[str] = None,
+    system_prompt: str | None = None,
+    **kwargs,
 ) -> vf.Environment:
+
+    # -------- normalize answer_format --------
+    answer_format = AnswerFormat(answer_format) if isinstance(answer_format, str) else answer_format
+    
+    if answer_format == AnswerFormat.XML:
+        system_prompt = system_prompt or (THINK_XML_SYSTEM_PROMPT if use_think else XML_SYSTEM_PROMPT)
+        parser_fields = ["think", "answer"] if use_think else ["answer"]
+        parser = XMLParser(fields=parser_fields, answer_field="answer") # medarc_verifiers' XMLParser
+    elif answer_format == AnswerFormat.BOXED:
+        system_prompt = system_prompt or (THINK_BOXED_SYSTEM_PROMPT if use_think else BOXED_SYSTEM_PROMPT)
+        parser = vf.Parser(extract_fn=extract_boxed_answer_strict)
+    else:
+        raise ValueError(f"Unsupported answer format: {answer_format=}")
+
+    # -------- load dataset and convert to vf format --------
     ds = load_dataset("ncbi/MedCalc-Bench-v1.2")
+    one_shot_examples = None
+    if one_shot:
+        # create mapping from calc id to one-shot example
+        one_shot_ds = load_dataset("nsk7153/MedCalc-Bench-Verified", split="one_shot")
+        one_shot_examples = {
+            int(ex["Calculator ID"]): {
+                "Patient Note": ex.get("Patient Note"),
+                "Question": ex.get("Question"),
+                "Ground Truth Answer": ex.get("Ground Truth Answer"),
+                "Ground Truth Explanation": ex.get("Ground Truth Explanation"),
+            }
+            for ex in one_shot_ds
+        }
 
-    def _map(ex):
-        patient_note = ex["Patient Note"]
-        q_text = ex["Question"]
-        calc_id = ex["Calculator ID"]
-        ground_truth = ex["Ground Truth Answer"]
-        lower_bound = ex["Lower Limit"]
-        upper_bound = ex["Upper Limit"]
-
+    def _map(row: dict):
         return {
-            "question": _build_prompt(patient_note, q_text),
+            "question": _build_prompt(row, one_shot_examples, code_execution, one_shot, use_think, answer_format),
+            "answer": row["Ground Truth Answer"],
+            "task": "medcalc_bench",
             "info": {
-                "calc_id": calc_id,
-                "ground_truth": ground_truth,
-                "lower_bound": lower_bound,
-                "upper_bound": upper_bound,
+                "calc_id": row["Calculator ID"],
+                "ground_truth": row["Ground Truth Answer"],
+                "lower_bound": row["Lower Limit"],
+                "upper_bound": row["Upper Limit"],
             },
         }
 
     train_mapped = ds["train"].map(_map, remove_columns=ds["train"].column_names)
     test_mapped = ds["test"].map(_map, remove_columns=ds["test"].column_names)
 
-    # Use XMLParser to support <think> and <answer> formatting without strict enforcement
-    parser = XMLParser(["think", "answer"], answer_field="answer")
-
-    system_prompt = """You are a helpful assistant who will assist with calculating a score given a patient note and a question.
-Please think step-by-step to solve the question and then generate the required score."""
-
+    # -------- create rubric --------
     rubric = vf.Rubric(funcs=[check_correctness], weights=[1.0], parser=parser)
 
-    return vf.SingleTurnEnv(
-        dataset=train_mapped,
-        eval_dataset=test_mapped,
-        system_prompt=system_prompt,
-        parser=parser,
-        rubric=rubric,
-    )
+    # -------- create environment --------
+    if code_execution:
+        return PyREPLEnv(
+            dataset=train_mapped,
+            eval_dataset=test_mapped,
+            system_prompt=system_prompt,
+            parser=parser,
+            rubric=rubric,
+            max_turns=max_turns,
+            **kwargs,
+        )
+    else:
+        return vf.SingleTurnEnv(
+            dataset=train_mapped,
+            eval_dataset=test_mapped,
+            system_prompt=system_prompt,
+            parser=parser,
+            rubric=rubric,
+            **kwargs,
+        )
