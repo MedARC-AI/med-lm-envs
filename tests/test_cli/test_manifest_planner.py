@@ -171,3 +171,50 @@ def test_auto_resume_with_checksum_mismatch_raises(tmp_path: Path) -> None:
     planner = _planner(tmp_path=tmp_path, jobs=[job], run_id="existing", auto_resume=True, config_checksum="abc123")
     with pytest.raises(ValueError, match="Run 'existing' was created from a different configuration"):
         planner.plan(force_all=False, forced_envs=set())
+
+
+def test_auto_resume_allows_resume_tolerant_model_fields(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("config: test\n", encoding="utf-8")
+    env = EnvironmentConfigSchema(id="env-a", module="env-a")
+    model = ModelConfigSchema(id="model-a", model="gpt-4.1-mini", max_concurrent=16, timeout=30.0)
+    job = ResolvedJob(
+        job_id="job-a",
+        name="job-a",
+        model=model,
+        env=env,
+        env_args={},
+        sampling_args={},
+    )
+
+    env_args_map = {job.job_id: {}}
+    sampling_args_map = {job.job_id: {}}
+    run_dir = tmp_path / "runs" / "existing"
+    manifest = RunManifest.create(
+        run_dir=run_dir,
+        run_id="existing",
+        run_name="demo-run",
+        config_source=config_path,
+        config_checksum="abc123",
+        jobs=[job],
+        env_args_map=env_args_map,
+        sampling_args_map=sampling_args_map,
+        persist=True,
+        restart_source=None,
+    )
+    manifest.record_job_completion(
+        job.job_id,
+        duration_seconds=1.0,
+        results_dir=run_dir / job.job_id,
+        artifacts=[],
+        avg_reward=None,
+        metrics={},
+        num_examples=job.env.num_examples,
+        rollouts_per_example=job.env.rollouts_per_example,
+    )
+
+    planner = _planner(tmp_path=tmp_path, jobs=[job], run_id="existing", auto_resume=True, config_checksum="abc123")
+    plan = planner.plan(force_all=False, forced_envs=set())
+
+    assert plan.manifest.run_dir == run_dir
+    assert plan.runnable_job_ids == set()

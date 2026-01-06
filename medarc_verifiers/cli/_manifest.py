@@ -184,7 +184,7 @@ def build_job_entry(
 ) -> ManifestJobEntry:
     """Build the manifest entry recorded for a job."""
     config_payload = _canonicalize_job_config(job, env_args=env_args, sampling_args=sampling_args)
-    checksum = compute_checksum(config_payload)
+    checksum = compute_job_checksum(job, env_args=env_args, sampling_args=sampling_args)
     return ManifestJobEntry(
         job_id=job.job_id,
         job_name=job.name,
@@ -281,7 +281,7 @@ class RunManifest:
 
         config_payload = _canonicalize_job_config(job, env_args=env_args, sampling_args=sampling_args)
         entry.config = config_payload
-        entry.checksum = compute_checksum(config_payload)
+        entry.checksum = compute_job_checksum(job, env_args=env_args, sampling_args=sampling_args)
         entry.env_id = entry.env_id or _resolve_env_identifier(job)
         entry.model_id = entry.model_id or _resolve_model_identifier(job)
         entry.results_dir = entry.results_dir or normalized_results_dir
