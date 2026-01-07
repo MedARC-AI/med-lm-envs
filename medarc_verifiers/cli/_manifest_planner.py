@@ -140,7 +140,8 @@ class ManifestPlanner:
                 if existing_checksum and existing_checksum != self.config_checksum:
                     msg = (
                         f"Run '{self.run_id}' was created from a different configuration. "
-                        f"Use --regen {self.run_id} to seed a new run."
+                        f"To start fresh, pick a different --run-id or pass --no-auto-resume. "
+                        f"To reuse completed jobs from this run, pass --restart {self.run_id}."
                     )
                     raise ValueError(msg)
                 self._ensure_jobs(manifest, run_dir)
@@ -315,7 +316,11 @@ def _plan_auto_resume_jobs(
             sampling_args=sampling_args_map[job_id],
         )
         if entry.checksum != expected_checksum:
-            msg = f"Job '{job_id}' arguments changed since the manifest was recorded; use --regen to create a new run."
+            msg = (
+                f"Job '{job_id}' arguments changed since the manifest was recorded. "
+                "Start a fresh run by choosing a different --run-id or passing --no-auto-resume. "
+                "To reuse completed jobs from this run, pass --restart <run-id-or-path>."
+            )
             raise ValueError(msg)
         env_id = (entry.env_id or job.env.id or job.job_id).lower()
         forced = force_all or env_id in forced_envs

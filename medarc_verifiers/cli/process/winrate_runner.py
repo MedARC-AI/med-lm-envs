@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
-import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Sequence
 
+from medarc_verifiers.cli._constants import COMMAND, PROCESS_COMMAND
 from medarc_verifiers.cli.process import winrate as _win
 from medarc_verifiers.cli.process.hf_sync import HFSyncConfig, download_hf_repo
 
@@ -29,7 +30,7 @@ def discover_datasets(processed_dir: Path) -> list[tuple[str, list[_win.PLDataFr
     datasets = _load_with_datasets(processed_dir)
     if not datasets:
         raise ValueError(
-            f"No dataset_infos.json found under {processed_dir}. Regenerate with medarc-new process before winrate."
+            f"No dataset_infos.json found under {processed_dir}. Regenerate with {COMMAND} {PROCESS_COMMAND} before winrate."
         )
     return datasets
 
@@ -104,9 +105,14 @@ def _load_with_datasets(processed_dir: Path) -> list[tuple[str, list[_win.PLData
     """Load all splits via Hugging Face datasets; requires dataset_infos.json."""
     dataset_infos = processed_dir / "dataset_infos.json"
     if not dataset_infos.exists():
-        raise ValueError(f"dataset_infos.json missing under {processed_dir}; run medarc-new process first.")
+        raise ValueError(f"dataset_infos.json missing under {processed_dir}; run {COMMAND} {PROCESS_COMMAND} first.")
     try:
-        from datasets import DatasetDict, DownloadConfig, disable_progress_bar, load_dataset  # type: ignore[import-not-found]
+        from datasets import (  # type: ignore[import-not-found]
+            DatasetDict,
+            DownloadConfig,
+            disable_progress_bar,
+            load_dataset,
+        )
         from datasets.utils.logging import set_verbosity_error  # type: ignore[import-not-found]
     except Exception:
         raise

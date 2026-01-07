@@ -169,7 +169,13 @@ def test_auto_resume_with_checksum_mismatch_raises(tmp_path: Path) -> None:
     )
 
     planner = _planner(tmp_path=tmp_path, jobs=[job], run_id="existing", auto_resume=True, config_checksum="abc123")
-    with pytest.raises(ValueError, match="Run 'existing' was created from a different configuration"):
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"Run 'existing' was created from a different configuration\."
+            r".*--no-auto-resume.*--restart existing"
+        ),
+    ):
         planner.plan(force_all=False, forced_envs=set())
 
 

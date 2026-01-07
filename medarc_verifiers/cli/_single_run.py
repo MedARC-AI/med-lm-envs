@@ -12,6 +12,7 @@ from typing import Any, Mapping, Sequence
 
 from verifiers.utils.eval_utils import run_evaluation
 
+from medarc_verifiers.cli._constants import BENCH_COMMAND, COMMAND
 from medarc_verifiers.cli._eval_builder import build_client_config, build_eval_config
 from medarc_verifiers.cli._schemas import ModelConfigSchema
 from medarc_verifiers.cli.utils.env_args import EnvParam, MissingEnvParamError, gather_env_cli_metadata, merge_env_args
@@ -28,8 +29,6 @@ from medarc_verifiers.cli.utils.shared import (
 )
 
 logger = logging.getLogger(__name__)
-
-PROGRAM_NAME = "medarc-new"
 
 
 @dataclass(frozen=True)
@@ -209,18 +208,18 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
 
 def build_base_parser(*, require_env: bool, add_help: bool) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog=PROGRAM_NAME,
+        prog=COMMAND,
         add_help=add_help,
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         description=(
             "Run verifiers evaluations with dynamic environment parameters. "
-            "ENV must be provided first. Use 'medarc-new <env> --help' for env options "
-            "or 'medarc-new bench --help' for batch runs."
+            f"ENV must be provided first. Use '{COMMAND} <env> --help' for env options "
+            f"or '{COMMAND} {BENCH_COMMAND} --help' for batch runs."
         ),
     )
     for group in parser._action_groups:
         if group.title in {"optional arguments", "options"}:
-            group.title = "medarc-new options"
+            group.title = f"{COMMAND} options"
             break
 
     env_kwargs = {"metavar": "ENV", "help": "Environment slug or module path"}
@@ -410,6 +409,10 @@ def extract_env_cli_args(
             continue
 
         if param.action == "BooleanOptionalAction" or param.kind == "bool":
+            # BooleanOptionalAction defaults to None when the flag is not provided.
+            # Treat unset flags as absent (do not inject `param: None` overrides).
+            if value is None:
+                continue
             if param.required or default is None or value != default:
                 explicit[param.name] = value
             continue
@@ -429,7 +432,7 @@ def parse_state_columns_arg(value: str) -> list[str]:
 
 
 def _print_env_first_error() -> None:
-    message = "First argument must be ENV (e.g., medqa). For batch mode, run: medarc-new bench --help."
+    message = f"First argument must be ENV (e.g., medqa). For batch mode, run: {COMMAND} {BENCH_COMMAND} --help."
     print(message, file=sys.stderr)
 
 

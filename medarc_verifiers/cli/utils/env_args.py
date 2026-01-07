@@ -95,11 +95,47 @@ def ensure_required_params(
     json_args: Mapping[str, Any],
 ) -> None:
     """Ensure required parameters are provided by CLI overrides or merged args."""
-    missing = [
-        param.name
-        for param in metadata
-        if param.required and param.name not in explicit and param.name not in json_args
-    ]
+
+    def _allows_none(annotation: Any) -> bool:
+        """Return True if the type annotation allows None (Optional/Union[..., None])."""
+        if annotation is None:
+            return False
+        if annotation is Any:
+            return True
+        if annotation is Optional:
+            return True
+        origin = get_origin(annotation)
+        if origin is Annotated:
+            args = get_args(annotation)
+            return _allows_none(args[0] if args else None)
+        if annotation is _NONE_TYPE:
+            return True
+        if origin in {types.UnionType, Union}:
+            return any(arg is _NONE_TYPE for arg in get_args(annotation))
+        return False
+
+    missing: list[str] = []
+    for param in metadata:
+        if not param.required:
+            continue
+
+        allows_none = _allows_none(getattr(param, "annotation", None))
+        provided = False
+        for source in (explicit, json_args):
+            if param.name not in source:
+                continue
+            value = source[param.name]
+            if value is None and not allows_none:
+                # Treat explicit `null`/`None` as "not provided" for required params unless the
+                # annotation allows None. We don't error immediately because the other source
+                # (explicit vs json_args) may still provide a valid non-None value; we'll raise
+                # MissingEnvParamError after checking both sources if neither does.
+                continue
+            provided = True
+            break
+
+        if not provided:
+            missing.append(param.name)
     if missing:
         joined = ", ".join(sorted(missing))
         raise MissingEnvParamError(f"Missing required environment arguments: {joined}")

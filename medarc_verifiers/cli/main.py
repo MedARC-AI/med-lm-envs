@@ -9,12 +9,8 @@ from pathlib import Path
 from textwrap import dedent
 from typing import Any, Mapping, Sequence
 
-try:
-    from rich.console import Console
-    from rich.table import Table
-except ImportError:  # pragma: no cover - rich is optional at runtime
-    Console = None  # type: ignore[assignment]
-    Table = None  # type: ignore[assignment]
+from rich.console import Console
+from rich.table import Table
 
 import yaml
 from pydantic import ValidationError
@@ -36,25 +32,27 @@ from medarc_verifiers.cli.process.winrate_runner import (
 )
 from medarc_verifiers.cli.utils.overrides import build_cli_override
 from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, EnvironmentExportConfig
+from medarc_verifiers.cli._constants import (
+    BENCH_COMMAND,
+    COMMAND,
+    DEFAULT_API_BASE_URL,
+    DEFAULT_API_KEY_VAR,
+    DEFAULT_ENV_CONFIG_ROOT,
+    DEFAULT_ENV_DIR,
+    DEFAULT_PROCESSED_DIR,
+    DEFAULT_RUNS_RAW_DIR,
+    PROCESS_COMMAND,
+    WINRATE_COMMAND,
+)
 
 logger = logging.getLogger(__name__)
 HELP_FLAGS = {"-h", "--help"}
-
-DEFAULT_API_BASE_URL = "https://api.openai.com/v1"
-DEFAULT_API_KEY_VAR = "OPENAI_API_KEY"
-DEFAULT_ENV_DIR = Path("environments")
-DEFAULT_ENV_CONFIG_ROOT = Path("configs") / "envs"
-DEFAULT_RUNS_RAW_DIR = Path("runs") / "raw"
-DEFAULT_PROCESSED_DIR = Path("runs") / "processed"
-BENCH_COMMAND = "bench"
-PROCESS_COMMAND = "process"
-WINRATE_COMMAND = "winrate"
 
 
 def build_batch_parser() -> argparse.ArgumentParser:
     """Construct the unified CLI parser."""
     parser = argparse.ArgumentParser(
-        prog="medarc-new",
+        prog=COMMAND,
         description="Run MedARC evaluations using unified configuration files.",
     )
     parser.add_argument("-c", "--config", required=True, type=Path, help="Path to a run configuration YAML file.")
@@ -164,7 +162,7 @@ def build_batch_parser() -> argparse.ArgumentParser:
 
 def build_process_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="medarc-new process",
+        prog=f"{COMMAND} {PROCESS_COMMAND}",
         description="Process MedARC run outputs into Parquet datasets and optional HF uploads.",
     )
     parser.add_argument(
@@ -259,7 +257,7 @@ def build_process_parser() -> argparse.ArgumentParser:
 
 def build_winrate_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="medarc-new winrate",
+        prog=f"{COMMAND} {WINRATE_COMMAND}",
         description="Compute HELM-style win rates from processed environment parquet files.",
     )
     parser.add_argument(
@@ -376,8 +374,8 @@ def _run_batch_mode(argv: Sequence[str]) -> int:
 
     if args.restart:
         args.auto_resume = False
-    # Allow in-place regeneration when --run-id matches --regen
-    # (previously disallowed). If equality is intended, we'll update the seed run in place.
+    # Restarting is an explicit workflow; disable auto-resume selection when --restart is set.
+    # The planner may restart in-place when --restart points to an existing run directory.
 
     try:
         return _execute_batch(args)
@@ -733,7 +731,7 @@ def _prompt_completed_jobs_action() -> str:
     Returns:
         "new", "rerun", "continue", or "exit"
     """
-    console = Console() if Console is not None else None
+    console = Console()
 
     message = "\n[bold yellow]All jobs are already completed.[/bold yellow]\n"
     message += "What would you like to do?\n"
@@ -742,16 +740,7 @@ def _prompt_completed_jobs_action() -> str:
     message += "  [bold cyan]c[/bold cyan] - Continue without running (default)\n"
     message += "  [bold cyan]e[/bold cyan] - Exit\n"
 
-    if console:
-        console.print(message)
-    else:
-        # Fallback to plain print if rich is not available
-        print(
-            message.replace("[bold yellow]", "")
-            .replace("[/bold yellow]", "")
-            .replace("[bold cyan]", "")
-            .replace("[/bold cyan]", "")
-        )
+    console.print(message)
 
     try:
         response = input("Choose [n/r/c/e]: ").strip().lower()
@@ -791,14 +780,14 @@ def _log_summary(results: Sequence[JobExecutionResult], manifest: RunManifest | 
 
 def _print_general_help() -> None:
     message = dedent(
-        """\
+        f"""\
         Usage:
-          medarc-new <ENV> [options]                 # Single run (ENV must be first; use ENV --help for details)
-          medarc-new bench --config CONFIG.yaml ...  # Batch run (see: medarc-new bench --help)
-          medarc-new process [options]               # Export raw runs to parquet (see: medarc-new process --help)
-          medarc-new winrate [options]               # Compute win rates from processed parquet outputs
+          {COMMAND} <ENV> [options]                 # Single run (ENV must be first; use ENV --help for details)
+          {COMMAND} {BENCH_COMMAND} --config CONFIG.yaml ...  # Batch run (see: {COMMAND} {BENCH_COMMAND} --help)
+          {COMMAND} {PROCESS_COMMAND} [options]               # Export raw runs to parquet (see: {COMMAND} {PROCESS_COMMAND} --help)
+          {COMMAND} {WINRATE_COMMAND} [options]               # Compute win rates from processed parquet outputs
 
-        First argument must be the environment slug for single runs. Use 'medarc-new bench --help' for batch mode options."""
+        First argument must be the environment slug for single runs. Use '{COMMAND} {BENCH_COMMAND} --help' for batch mode options."""
     )
     print(message)
 
@@ -900,22 +889,6 @@ def _print_job_plan(
     entries = {}
     if manifest is not None:
         entries = {entry.job_id: entry for entry in manifest.jobs if entry.job_id}
-
-    if Console is None or Table is None:
-        lines = []
-        for index, job in enumerate(jobs, start=1):
-            entry = entries.get(job.job_id)
-            model_label = _format_label(job.model.id, job.model.model)
-            env_label = _format_label(job.env.id, job.env.module)
-            status = _resolve_status(job.job_id, entry)
-            text = (
-                f"{index:02d}. {job.job_id} | status={status} | name={job.name or '-'} | "
-                f"model={model_label} | env={env_label} | examples={job.env.num_examples} | "
-                f"rollouts={job.env.rollouts_per_example}"
-            )
-            lines.append(text)
-        logger.info("Planned jobs (%s):\n%s", caption, "\n".join(lines))
-        return
 
     console = Console()
     table = Table(title="Planned Jobs", caption=caption, expand=True)

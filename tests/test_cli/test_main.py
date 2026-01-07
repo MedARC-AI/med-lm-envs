@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
 from types import SimpleNamespace
@@ -379,7 +380,7 @@ def test_regen_reuses_completed_jobs(monkeypatch: pytest.MonkeyPatch, tmp_path: 
 
 
 def test_regen_accepts_path_to_run_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """--regen can be a direct path to a run directory, not only a run-id under output_dir."""
+    """--restart can be a direct path to a run directory, not only a run-id under output_dir."""
     config_path = tmp_path / "config.yaml"
     _write_config(
         config_path,
@@ -410,7 +411,7 @@ def test_regen_accepts_path_to_run_dir(monkeypatch: pytest.MonkeyPatch, tmp_path
         main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir), "--run-id", "base-run"]) == 0
     )
 
-    # Now use --regen with an explicit path to the run directory
+    # Now use --restart with an explicit path to the run directory
     # Use --restart with explicit path to existing run directory; should update in place.
     # Mock interactive prompt to avoid stdin capture when all jobs are already completed.
     monkeypatch.setattr("medarc_verifiers.cli.main._prompt_completed_jobs_action", lambda: "continue")
@@ -570,6 +571,19 @@ def test_single_run_help_lists_env_section_and_header_file(
     captured = capsys.readouterr().out
     assert "Environment options (ENV=medqa)" in captured
     assert "--header-file" in captured
+
+
+def test_general_help_uses_invoked_binary_name(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["medarc-eval"])
+
+    exit_code = main.main([])
+
+    assert exit_code == 0
+    captured = capsys.readouterr().out
+    assert "medarc-eval bench --help" in captured
 
 
 def test_single_run_missing_required_param_errors(

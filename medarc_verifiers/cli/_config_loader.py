@@ -189,6 +189,9 @@ def _normalize_models_field(value: Any, *, base_dir: Path) -> dict[str, Any]:
 
 
 def _normalize_envs_field(value: Any, *, base_dir: Path, env_default_root: Path | None) -> dict[str, Any]:
+    # Env configs intentionally allow duplicate "id" entries so multiple blocks can
+    # share a common base id (e.g., m_arc + rollout variants). We de-duplicate only
+    # the internal map key while preserving each entry's explicit "id".
     return _normalize_section(
         value,
         base_dir=base_dir,
@@ -269,6 +272,8 @@ def _normalize_section(
                 raise ValueError(f"Duplicate {entry_description.rstrip('s')} id '{key}' in configuration.")
             if duplicate_key_fn is None:
                 raise ValueError(f"Duplicate {entry_description.rstrip('s')} id '{key}' in configuration.")
+            # Env entries can intentionally repeat ids to group variants under a common
+            # base id; we only de-duplicate the internal map key, not the entry's id.
             counter = 2
             if count_map is not None:
                 counter = count_map.get(key, 1) + 1
