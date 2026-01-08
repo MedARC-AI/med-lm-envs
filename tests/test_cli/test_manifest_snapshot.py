@@ -135,12 +135,9 @@ def test_manifest_serialization_prunes_nones_and_relativizes(monkeypatch: pytest
 
     payload = json.loads(manifest.path.read_text(encoding="utf-8"))
     job_payload = payload["jobs"][0]
-    config_payload = job_payload["config"]
 
-    assert job_payload["results_dir"] == f"runs/phase5/{job.job_id}"
+    assert "results_dir" not in job_payload
     assert "reason" not in job_payload
     assert "avg_reward" not in job_payload
-    assert "env_args" not in config_payload
-    assert "sampling_args" not in config_payload
-    assert config_payload["env"]["env_args"]["job_seed"] == 7
-    assert config_payload["model"]["sampling_args"]["eval_seed"] == 17
+    assert job_payload["env_args"]["job_seed"] == 7
+    assert job_payload["sampling_args"]["eval_seed"] == 17

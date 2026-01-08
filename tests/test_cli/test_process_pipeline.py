@@ -25,6 +25,7 @@ def _setup_run(tmp_path: Path) -> Path:
     run_dir = runs_dir / "run-1"
     results_dir = run_dir / "demo-job"
     manifest = {
+        "version": 2,
         "run_id": "run-1",
         "name": "demo",
         "config_source": "configs/demo.yaml",
@@ -32,11 +33,16 @@ def _setup_run(tmp_path: Path) -> Path:
         "config_checksum": "abc123",
         "created_at": "2024-01-01T00:00:00Z",
         "updated_at": "2024-01-01T00:00:00Z",
+        "models": {"gpt-mini": {"sampling_args": {}}},
+        "env_templates": {"demo-env-template": {"module": "demo-env-rollout3"}},
         "jobs": [
             {
                 "job_id": "demo-job",
-                "env_id": "demo-env-rollout3",
                 "model_id": "gpt-mini",
+                "env_id": "demo-env-rollout3",
+                "env_template_id": "demo-env-template",
+                "env_variant_id": "demo-env-rollout3",
+                "env_args": {},
                 "results_dir": "demo-job",
                 "checksum": "deadbeef",
             }

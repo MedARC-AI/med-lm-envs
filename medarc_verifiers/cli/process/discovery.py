@@ -4,13 +4,19 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterator, Mapping, Sequence
 
 from pydantic import ValidationError
 
-from medarc_verifiers.cli._manifest import MANIFEST_FILENAME, ManifestJobEntry, RunManifestModel
+from medarc_verifiers.cli._manifest import (
+    MANIFEST_FILENAME,
+    ManifestJobEntry,
+    RunManifestModel,
+    _extract_seeds,
+    _require_manifest_v2,
+)
 from medarc_verifiers.utils.pathing import from_project_relative
 
 logger = logging.getLogger(__name__)
@@ -34,6 +40,8 @@ class RunManifestInfo:
     config_source: str | None
     config_checksum: str | None
     run_summary_path: Path
+    models: Mapping[str, Any] = field(default_factory=dict)
+    env_templates: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,11 +150,17 @@ def _build_run_record(
         status = job_entry.status.lower()
         reason = job_entry.reason
 
-    config_payload = job_entry.config or {}
-    env_config = _ensure_mapping(config_payload.get("env"))
-    model_config = _ensure_mapping(config_payload.get("model"))
-    env_args = _ensure_mapping(env_config.get("env_args"))
-    sampling_args = _ensure_mapping(model_config.get("sampling_args"))
+    model_config = _ensure_mapping(manifest.models.get(job_entry.model_id) if manifest.models else {})
+    env_template = _ensure_mapping(
+        manifest.env_templates.get(job_entry.env_template_id) if manifest.env_templates else {}
+    )
+    env_config = dict(env_template)
+    if "module" not in env_config and job_entry.env_id:
+        env_config["module"] = job_entry.env_id
+    env_config["id"] = job_entry.env_variant_id
+    env_config["env_args"] = job_entry.env_args
+    env_args = _ensure_mapping(job_entry.env_args)
+    sampling_args = _ensure_mapping(job_entry.sampling_args or model_config.get("sampling_args"))
 
     return RunRecord(
         manifest=manifest,
@@ -169,7 +183,7 @@ def _build_run_record(
         ended_at=job_entry.ended_at,
         num_examples=job_entry.num_examples,
         rollouts_per_example=job_entry.rollouts_per_example,
-        seeds=job_entry.seeds,
+        seeds=_extract_seeds(env_args, sampling_args),
         env_args=env_args,
         sampling_args=sampling_args,
         env_config=env_config,
@@ -210,6 +224,8 @@ def _load_manifest(run_dir: Path) -> tuple[RunManifestInfo | None, Sequence[Mani
         logger.warning("Failed to parse manifest %s: %s", manifest_path, exc)
         return None, ()
 
+    _require_manifest_v2(manifest_payload, path=manifest_path)
+
     try:
         manifest_model = RunManifestModel.model_validate(manifest_payload)
     except ValidationError as exc:
@@ -239,6 +255,8 @@ def _load_manifest(run_dir: Path) -> tuple[RunManifestInfo | None, Sequence[Mani
         config_source=manifest_model.config_source,
         config_checksum=manifest_model.config_checksum,
         run_summary_path=run_dir / "run_summary.json",
+        models=manifest_model.models or {},
+        env_templates=manifest_model.env_templates or {},
     )
 
     if not manifest_model.jobs:

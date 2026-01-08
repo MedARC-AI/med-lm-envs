@@ -11,9 +11,14 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _base_manifest(job_payloads: list[dict]) -> dict:
+def _base_manifest(
+    job_payloads: list[dict],
+    *,
+    models: dict | None = None,
+    env_templates: dict | None = None,
+) -> dict:
     return {
-        "version": 1,
+        "version": 2,
         "run_id": "job-run-123",
         "name": "example-run",
         "config_source": "configs/example.yaml",
@@ -21,6 +26,8 @@ def _base_manifest(job_payloads: list[dict]) -> dict:
         "config_checksum": "abc123",
         "created_at": "2024-01-01T00:00:00Z",
         "updated_at": "2024-01-01T00:05:00Z",
+        "models": models or {},
+        "env_templates": env_templates or {},
         "jobs": job_payloads,
         "summary": {"completed": 1},
     }
@@ -37,21 +44,21 @@ def test_discover_run_records_basic(tmp_path: Path) -> None:
                 "job_id": "model-env-job",
                 "job_name": "demo-job",
                 "model_id": "gpt-4",
-                "env_id": "demo-env",
+                "env_id": "demo-env-module",
+                "env_template_id": "demo-env-template",
+                "env_variant_id": "demo-env",
+                "env_args": {"fold": "dev"},
                 "results_dir": "model-env-job",
                 "status": "completed",
                 "started_at": "2024-01-01T00:00:30Z",
                 "ended_at": "2024-01-01T00:01:00Z",
                 "num_examples": 10,
                 "rollouts_per_example": 2,
-                "seeds": {"runner_seed": 7},
-                "config": {
-                    "env": {"env_args": {"fold": "dev"}},
-                    "model": {"sampling_args": {"temperature": 0.2}},
-                },
                 "checksum": "deadbeef",
             }
-        ]
+        ],
+        models={"gpt-4": {"sampling_args": {"temperature": 0.2}}},
+        env_templates={"demo-env-template": {"module": "demo-env-module"}},
     )
     _write_json(run_dir / "run_manifest.json", manifest_payload)
 
@@ -96,10 +103,15 @@ def test_discover_run_records_filters_status(tmp_path: Path) -> None:
             {
                 "job_id": "model-env-job",
                 "model_id": "gpt-4",
-                "config": {},
+                "env_id": "demo-env-module",
+                "env_template_id": "demo-env-template",
+                "env_variant_id": "demo-env",
+                "env_args": {},
                 "checksum": "deadbeef",
             }
-        ]
+        ],
+        models={"gpt-4": {"sampling_args": {}}},
+        env_templates={"demo-env-template": {"module": "demo-env-module"}},
     )
     _write_json(run_dir / "run_manifest.json", manifest_payload)
     _write_json(
@@ -128,10 +140,16 @@ def test_discover_run_records_missing_summary_uses_manifest_status(tmp_path: Pat
                 "job_id": "model-env-job",
                 "status": "completed",
                 "reason": "cached",
-                "config": {},
+                "model_id": "gpt-4",
+                "env_id": "demo-env-module",
+                "env_template_id": "demo-env-template",
+                "env_variant_id": "demo-env",
+                "env_args": {},
                 "checksum": "deadbeef",
             }
-        ]
+        ],
+        models={"gpt-4": {"sampling_args": {}}},
+        env_templates={"demo-env-template": {"module": "demo-env-module"}},
     )
     _write_json(run_dir / "run_manifest.json", manifest_payload)
 

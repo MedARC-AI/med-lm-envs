@@ -353,6 +353,8 @@ def _plan_regen_jobs(
             and seed_entry.checksum == entry.checksum
         ):
             seed_results_dir = seed_entry.results_dir
+            if seed_results_dir is None:
+                seed_results_dir = seed_manifest.run_dir / seed_entry.job_id
             resolved_results_dir: Path | str | None = None
             if isinstance(seed_results_dir, str):
                 seed_path = Path(seed_results_dir)
