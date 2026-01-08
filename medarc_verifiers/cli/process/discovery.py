@@ -14,7 +14,6 @@ from medarc_verifiers.cli._manifest import (
     MANIFEST_FILENAME,
     ManifestJobEntry,
     RunManifestModel,
-    _extract_seeds,
     _require_manifest_v2,
 )
 from medarc_verifiers.utils.pathing import from_project_relative
@@ -68,7 +67,6 @@ class RunRecord:
     ended_at: str | None
     num_examples: int | None
     rollouts_per_example: int | None
-    seeds: Mapping[str, Any] | None
     env_args: Mapping[str, Any]
     sampling_args: Mapping[str, Any]
     env_config: Mapping[str, Any] | None
@@ -183,7 +181,6 @@ def _build_run_record(
         ended_at=job_entry.ended_at,
         num_examples=job_entry.num_examples,
         rollouts_per_example=job_entry.rollouts_per_example,
-        seeds=_extract_seeds(env_args, sampling_args),
         env_args=env_args,
         sampling_args=sampling_args,
         env_config=env_config,

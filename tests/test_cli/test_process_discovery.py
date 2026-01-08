@@ -54,7 +54,6 @@ def test_discover_run_records_basic(tmp_path: Path) -> None:
                 "ended_at": "2024-01-01T00:01:00Z",
                 "num_examples": 10,
                 "rollouts_per_example": 2,
-                "checksum": "deadbeef",
             }
         ],
         models={"gpt-4": {"sampling_args": {"temperature": 0.2}}},
@@ -107,7 +106,6 @@ def test_discover_run_records_filters_status(tmp_path: Path) -> None:
                 "env_template_id": "demo-env-template",
                 "env_variant_id": "demo-env",
                 "env_args": {},
-                "checksum": "deadbeef",
             }
         ],
         models={"gpt-4": {"sampling_args": {}}},
@@ -145,7 +143,6 @@ def test_discover_run_records_missing_summary_uses_manifest_status(tmp_path: Pat
                 "env_template_id": "demo-env-template",
                 "env_variant_id": "demo-env",
                 "env_args": {},
-                "checksum": "deadbeef",
             }
         ],
         models={"gpt-4": {"sampling_args": {}}},

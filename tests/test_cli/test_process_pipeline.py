@@ -44,7 +44,6 @@ def _setup_run(tmp_path: Path) -> Path:
                 "env_variant_id": "demo-env-rollout3",
                 "env_args": {},
                 "results_dir": "demo-job",
-                "checksum": "deadbeef",
             }
         ],
     }
@@ -108,7 +107,6 @@ def _build_record(tmp_path: Path, job_run_id: str, status: str, ended_at: str) -
         ended_at=ended_at,
         num_examples=None,
         rollouts_per_example=None,
-        seeds=None,
         env_args={},
         sampling_args={},
         env_config={"id": "demo-env"},

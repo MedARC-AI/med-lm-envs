@@ -61,7 +61,6 @@ def _make_record(
         ended_at="2024-01-01T00:00:50Z",
         num_examples=num_examples,
         rollouts_per_example=rollouts_per_example,
-        seeds={"runner_seed": 1},
         env_args=env_args or {},
         sampling_args=sampling_args or {},
         env_config=env_config or {},

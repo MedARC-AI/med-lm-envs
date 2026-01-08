@@ -24,7 +24,7 @@ MANIFEST_VERSION = 2
 class ManifestJobEntry(BaseModel):
     """Pydantic model describing a single manifest job entry."""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="ignore")
 
     job_id: str
     job_name: str | None = None
@@ -46,7 +46,6 @@ class ManifestJobEntry(BaseModel):
     avg_reward: float | None = None
     num_examples: int | None = None
     rollouts_per_example: int | None = None
-    checksum: str
 
 
 class RunManifestModel(BaseModel):
@@ -97,37 +96,6 @@ def compute_snapshot_checksum(snapshot: Mapping[str, Any]) -> str:
     return compute_checksum(sanitized)
 
 
-def compute_job_checksum(
-    job: ResolvedJob,
-    *,
-    env_args: Mapping[str, Any],
-    sampling_args: Mapping[str, Any],
-) -> str:
-    """Expose job checksum calculations for resume/regeneration workflows."""
-    payload = _canonicalize_job_config(job, env_args=env_args, sampling_args=sampling_args)
-    return compute_checksum(_drop_resume_tolerant_fields(payload))
-
-
-def _canonicalize_job_config(
-    job: ResolvedJob,
-    *,
-    env_args: Mapping[str, Any],
-    sampling_args: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Produce a normalized payload describing how the job will run."""
-    model_payload = json.loads(job.model.model_dump_json(exclude_none=True))
-    env_payload = json.loads(job.env.model_dump_json(exclude_none=True))
-    env_payload["env_args"] = _to_jsonable(env_args)
-    model_payload["sampling_args"] = _to_jsonable(sampling_args)
-    return {
-        "job_id": job.job_id,
-        "job_name": job.name,
-        "sleep": job.sleep,
-        "model": model_payload,
-        "env": env_payload,
-    }
-
-
 def _drop_resume_tolerant_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
     cleaned = dict(payload)
     model_payload = cleaned.get("model")
@@ -165,6 +133,67 @@ def _normalize_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         return value
 
     return _drop(_to_jsonable(payload))
+
+
+def _require_manifest_v2(payload: Mapping[str, Any], *, path: Path | None = None) -> None:
+    version = payload.get("version")
+    if version != MANIFEST_VERSION:
+        location = f" '{path}'" if path else ""
+        msg = f"Manifest{location} uses version {version}; expected {MANIFEST_VERSION}."
+        raise ValueError(msg)
+
+
+def _sanitize_model_payload(model_payload: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in model_payload.items() if key not in ModelConfigSchema.resume_tolerant_fields}
+
+
+def _effective_sampling_args(entry: ManifestJobEntry, model_payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    if entry.sampling_args is not None:
+        return _normalize_payload(entry.sampling_args)
+    return _normalize_payload(model_payload.get("sampling_args") or {})
+
+
+def manifest_job_signature(manifest: RunManifestModel, entry: ManifestJobEntry) -> dict[str, Any]:
+    model_payload = _normalize_payload(manifest.models.get(entry.model_id or "", {}) or {})
+    env_template = _normalize_payload(manifest.env_templates.get(entry.env_template_id, {}) or {})
+    effective_env = dict(env_template)
+    effective_env["module"] = entry.env_id or env_template.get("module")
+    effective_env["id"] = entry.env_variant_id
+    effective_env["env_args"] = entry.env_args
+    signature = {
+        "model": _sanitize_model_payload(model_payload),
+        "env": effective_env,
+        "sampling_args": _effective_sampling_args(entry, model_payload),
+    }
+    return _normalize_payload(signature)
+
+
+def resolved_job_signature(
+    job: ResolvedJob,
+    *,
+    env_args: Mapping[str, Any],
+    sampling_args: Mapping[str, Any],
+) -> dict[str, Any]:
+    model_payload = _normalize_payload(json.loads(job.model.model_dump_json(exclude_none=True)))
+    env_payload = _normalize_payload(json.loads(job.env.model_dump_json(exclude_none=True)))
+    env_template_payload = _build_env_template_payload(env_payload)
+    env_id = env_template_payload.get("module") or _resolve_env_identifier(job)
+    if "module" not in env_template_payload:
+        env_template_payload["module"] = env_id
+    env_variant_id = env_payload.get("id") or job.job_id
+    sampling_override = _sampling_args_override(sampling_args=sampling_args, model_payload=model_payload)
+    effective_env = {
+        **env_template_payload,
+        "module": env_id,
+        "id": env_variant_id,
+        "env_args": _normalize_payload(env_args),
+    }
+    signature = {
+        "model": _sanitize_model_payload(model_payload),
+        "env": effective_env,
+        "sampling_args": sampling_override or model_payload.get("sampling_args") or {},
+    }
+    return _normalize_payload(signature)
 
 
 def _maybe_store_results_dir(value: str | Path | None, *, run_dir: Path, job_id: str) -> str | None:
@@ -243,7 +272,6 @@ def build_job_entry(
     allow_model_mismatch: bool = False,
 ) -> ManifestJobEntry:
     """Build the manifest entry recorded for a job."""
-    checksum = compute_job_checksum(job, env_args=env_args, sampling_args=sampling_args)
     model_payload = _normalize_payload(json.loads(job.model.model_dump_json(exclude_none=True)))
     env_payload = _normalize_payload(json.loads(job.env.model_dump_json(exclude_none=True)))
     env_template_payload = _build_env_template_payload(env_payload)
@@ -290,7 +318,6 @@ def build_job_entry(
         avg_reward=None,
         num_examples=None,
         rollouts_per_example=None,
-        checksum=checksum,
     )
 
 
@@ -375,7 +402,6 @@ class RunManifest:
             models=self.model.models,
             env_templates=self.model.env_templates,
         )
-        entry.checksum = updated.checksum
         entry.env_id = updated.env_id
         entry.model_id = updated.model_id
         entry.env_template_id = updated.env_template_id
@@ -552,7 +578,8 @@ __all__ = [
     "RunManifestModel",
     "ManifestJobEntry",
     "build_job_entry",
-    "compute_job_checksum",
     "compute_snapshot_checksum",
+    "manifest_job_signature",
+    "resolved_job_signature",
     "timestamp",
 ]

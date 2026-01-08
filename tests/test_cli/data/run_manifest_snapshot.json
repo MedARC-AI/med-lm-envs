@@ -20,7 +20,6 @@
   "jobs": [
     {
       "attempt": 0,
-      "checksum": "2aa659928336a5c47bf3de76bddade747a087c635f885678064dfc13342a7b44",
       "env_args": {
         "difficulty": "easy",
         "job_seed": 7,

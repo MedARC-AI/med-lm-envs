@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from medarc_verifiers.cli._job_builder import ResolvedJob
-from medarc_verifiers.cli._manifest import MANIFEST_FILENAME, RunManifest, compute_job_checksum
+from medarc_verifiers.cli._manifest import MANIFEST_FILENAME, RunManifest, manifest_job_signature, resolved_job_signature
 from medarc_verifiers.cli.utils.shared import slugify
 from medarc_verifiers.utils.pathing import from_project_relative
 
@@ -293,6 +293,8 @@ def _plan_auto_resume_jobs(
     forced_envs: set[str],
 ) -> set[str]:
     job_lookup = {job.job_id: job for job in jobs}
+    manifest_signatures: dict[str, dict[str, Any]] = {}
+    resolved_signatures: dict[str, dict[str, Any]] = {}
     runnable: set[str] = set()
     manifest_job_ids = {entry.job_id for entry in manifest.jobs if entry.job_id}
     new_jobs = set(job_lookup) - manifest_job_ids
@@ -310,12 +312,19 @@ def _plan_auto_resume_jobs(
         if job is None:
             logger.debug("Manifest contains job '%s' that is absent from the current config; skipping.", job_id)
             continue
-        expected_checksum = compute_job_checksum(
-            job,
-            env_args=env_args_map[job_id],
-            sampling_args=sampling_args_map[job_id],
-        )
-        if entry.checksum != expected_checksum:
+        manifest_signature = manifest_signatures.get(job_id)
+        if manifest_signature is None:
+            manifest_signature = manifest_job_signature(manifest.model, entry)
+            manifest_signatures[job_id] = manifest_signature
+        resolved_signature = resolved_signatures.get(job_id)
+        if resolved_signature is None:
+            resolved_signature = resolved_job_signature(
+                job,
+                env_args=env_args_map[job_id],
+                sampling_args=sampling_args_map[job_id],
+            )
+            resolved_signatures[job_id] = resolved_signature
+        if manifest_signature != resolved_signature:
             msg = (
                 f"Job '{job_id}' arguments changed since the manifest was recorded. "
                 "Start a fresh run by choosing a different --run-id or passing --no-auto-resume. "
@@ -339,6 +348,8 @@ def _plan_regen_jobs(
 ) -> tuple[set[str], set[str]]:
     runnable: set[str] = set()
     reused: set[str] = set()
+    manifest_signatures: dict[str, dict[str, Any]] = {}
+    seed_signatures: dict[str, dict[str, Any]] = {}
     for job in jobs:
         entry = manifest.job_entry(job.job_id)
         if entry is None:
@@ -350,7 +361,8 @@ def _plan_regen_jobs(
             not forced
             and seed_entry is not None
             and seed_entry.status == "completed"
-            and seed_entry.checksum == entry.checksum
+            and _manifest_job_signature_cached(seed_manifest, seed_entry, seed_signatures)
+            == _manifest_job_signature_cached(manifest, entry, manifest_signatures)
         ):
             seed_results_dir = seed_entry.results_dir
             if seed_results_dir is None:
@@ -376,6 +388,19 @@ def _plan_regen_jobs(
             continue
         runnable.add(job.job_id)
     return runnable, reused
+
+
+def _manifest_job_signature_cached(
+    manifest: RunManifest,
+    entry: Any,
+    cache: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    job_id = entry.job_id
+    signature = cache.get(job_id)
+    if signature is None:
+        signature = manifest_job_signature(manifest.model, entry)
+        cache[job_id] = signature
+    return signature
 
 
 def _generate_run_id(name: str) -> str:
