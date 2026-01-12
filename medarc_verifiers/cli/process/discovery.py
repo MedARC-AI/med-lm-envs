@@ -32,6 +32,7 @@ class RunManifestInfo:
     run_name: str | None
     summary_completed: int
     summary_total: int
+    summary_total_known: bool
     manifest_path: Path
     run_dir: Path
     created_at: str | None
@@ -107,7 +108,11 @@ def iter_run_records(
         manifest_info, job_entries = _load_manifest(run_dir)
         if manifest_info is None:
             continue
-        if only_complete_runs and manifest_info.summary_completed != manifest_info.summary_total:
+        if (
+            only_complete_runs
+            and manifest_info.summary_total_known
+            and manifest_info.summary_completed != manifest_info.summary_total
+        ):
             # Skip entire run if not fully completed
             continue
         summary_map = _load_run_summary(run_dir)
@@ -235,16 +240,25 @@ def _load_manifest(run_dir: Path) -> tuple[RunManifestInfo | None, Sequence[Mani
         completed_count = int(summary_payload.get("completed", 0))
     except Exception:
         completed_count = 0
-    try:
-        total_count = int(summary_payload.get("total", 0))
-    except Exception:
+    total_known = False
+    if "total" in summary_payload:
+        try:
+            total_count = int(summary_payload.get("total", 0))
+        except Exception:
+            total_count = 0
+        total_known = total_count > 0 or not manifest_model.jobs
+    else:
         total_count = 0
+    if total_count == 0 and manifest_model.jobs:
+        total_count = len(manifest_model.jobs)
+        total_known = True
 
     manifest_info = RunManifestInfo(
         job_run_id=job_run_id,
         run_name=manifest_model.name,
         summary_completed=completed_count,
         summary_total=total_count,
+        summary_total_known=total_known,
         manifest_path=manifest_path,
         run_dir=run_dir,
         created_at=manifest_model.created_at,
@@ -297,122 +311,9 @@ def _normalize_status_filter(statuses: Sequence[str] | None) -> tuple[str, ...]:
     return tuple(normalized)
 
 
-def deduplicate_records_by_latest(records: Sequence[RunRecord]) -> list[RunRecord]:
-    """Keep only the latest record per (model_id, env_id) combination.
-
-    When multiple runs contain the same model+env pair, keeps only the most recent
-    based on timestamp comparison. Displays a Rich table for any skipped older runs.
-
-    Uses config.env.id as the environment identifier, falling back to manifest_env_id.
-    This ensures proper separation of environment variants (e.g., longhealth-task1 vs task2).
-
-    Args:
-        records: All discovered run records
-
-    Returns:
-        Filtered list containing only the latest record per (model, env) pair
-    """
-    from collections import defaultdict
-
-    try:
-        from rich.console import Console
-        from rich.table import Table
-    except ImportError:
-        Console = None  # type: ignore[assignment]
-        Table = None  # type: ignore[assignment]
-
-    # Group by (model_id, env_id from config)
-    groups: Dict[tuple[str, str], list[RunRecord]] = defaultdict(list)
-
-    for record in records:
-        model_id = record.model_id or "unknown"
-        # Prefer config.env.id over manifest_env_id for accurate environment identification
-        env_id = (record.env_config.get("id") if record.env_config else record.manifest_env_id) or "unknown"
-        key = (model_id, env_id)
-        groups[key].append(record)
-
-    # Keep latest from each group and collect skip info
-    latest_records: list[RunRecord] = []
-    skipped_info: list[tuple[str, str, str, str, str, str]] = []
-
-    for (model_id, env_id), group_records in groups.items():
-        if len(group_records) == 1:
-            latest_records.append(group_records[0])
-            continue
-
-        def _recency_key(r: RunRecord) -> tuple[str, str, str]:
-            return (
-                r.ended_at or "",
-                r.started_at or "",
-                r.manifest.created_at or "",
-            )
-
-        completed = [r for r in group_records if _is_completed_status(r.status)]
-        if completed:
-            kept = max(completed, key=_recency_key)
-        else:
-            kept = max(group_records, key=_recency_key)
-        latest_records.append(kept)
-
-        # Collect info about skipped runs (sorted by timestamp for clarity)
-        skipped_records = [r for r in group_records if r is not kept]
-        skipped_records.sort(key=lambda r: (r.ended_at or "", r.started_at or "", r.manifest.created_at or ""))
-
-        for record in skipped_records:
-            skipped_timestamp = record.ended_at or record.started_at or "N/A"
-            kept_timestamp = kept.ended_at or kept.started_at or "N/A"
-            skipped_run_id = record.manifest.job_run_id
-            kept_run_id = kept.manifest.job_run_id
-            skipped_info.append((model_id, env_id, skipped_run_id, skipped_timestamp, kept_run_id, kept_timestamp))
-
-    # Display results
-    if skipped_info:
-        if Console is not None and Table is not None:
-            console = Console()
-            table = Table(
-                title=f"Deduplication: Skipped {len(skipped_info)} older run(s)",
-                caption="Only the latest run per model+env will be processed",
-                show_header=True,
-                header_style="bold cyan",
-            )
-            table.add_column("Model", style="magenta")
-            table.add_column("Environment", style="green")
-            table.add_column("Skipped Run", style="dim", overflow="fold")
-            table.add_column("Time", style="dim")
-            table.add_column("Kept Run", style="yellow", overflow="fold")
-            table.add_column("Time", style="bold green")
-
-            for model_id, env_id, skipped_run_id, skipped_ts, kept_run_id, kept_ts in skipped_info:
-                table.add_row(model_id, env_id, skipped_run_id, skipped_ts, kept_run_id, kept_ts)
-
-            console.print(table)
-        else:
-            # Fallback to simple logging if Rich is not available
-            for model_id, env_id, skipped_run_id, skipped_ts, kept_run_id, kept_ts in skipped_info:
-                logger.warning(
-                    "Skipping older run: model=%s env=%s run=%s ended_at=%s (keeping: %s ended_at=%s)",
-                    model_id,
-                    env_id,
-                    skipped_run_id,
-                    skipped_ts,
-                    kept_run_id,
-                    kept_ts,
-                )
-            logger.warning(
-                "Deduplicated %d older run(s). Only processing latest runs per model+env.", len(skipped_info)
-            )
-
-    return latest_records
-
-
 __all__ = [
     "RunManifestInfo",
     "RunRecord",
     "discover_run_records",
     "iter_run_records",
-    "deduplicate_records_by_latest",
 ]
-
-
-def _is_completed_status(status: str | None) -> bool:
-    return (status or "").lower() in _COMPLETED_STATUSES

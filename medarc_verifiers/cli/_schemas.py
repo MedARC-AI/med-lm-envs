@@ -116,12 +116,14 @@ class ModelConfigSchema(BaseModel):
 class EnvironmentExportConfig(BaseModel):
     """Optional export customization embedded in environment configs."""
 
-    keep_columns: list[str] = Field(default_factory=list)
-    drop_columns: list[str] = Field(default_factory=list)
-    include_prompt_completion: bool | None = None
-    combine_rollouts: bool = True
+    model_config = ConfigDict(populate_by_name=True)
 
-    @field_validator("keep_columns", "drop_columns", mode="before")
+    extra_columns: list[str] = Field(default_factory=list, alias="keep_columns")
+    drop_columns: list[str] = Field(default_factory=list)
+    combine_rollouts: bool = True
+    answer_column: str | None = None
+
+    @field_validator("extra_columns", "drop_columns", mode="before")
     @classmethod
     def validate_columns(cls, value: Any) -> list[str]:
         if value is None:
@@ -139,6 +141,18 @@ class EnvironmentExportConfig(BaseModel):
                 raise ValueError("Export columns must be non-empty strings.")
             normalized.append(trimmed)
         return normalized
+
+    @field_validator("answer_column", mode="before")
+    @classmethod
+    def validate_answer_column(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("answer_column must be a string.")
+        trimmed = value.strip()
+        if not trimmed:
+            raise ValueError("answer_column must be a non-empty string.")
+        return trimmed
 
 
 class EnvironmentConfigSchema(BaseModel):

@@ -11,7 +11,7 @@ from medarc_verifiers.cli.process.metadata import NormalizedMetadata
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DROP_COLUMNS = {"info", "sampling_args"}
+DEFAULT_DROP_COLUMNS = {"info", "sampling_args", "extras"}
 PROMPT_COMPLETION_COLUMNS = {"prompt", "completion"}
 # Top-level JSON fields we explicitly allow through even though they are not primitives.
 # These may be absent in older results and will appear as nulls in existing parquet files.
@@ -21,9 +21,9 @@ ALLOWED_JSON_COLUMNS = {"token_usage"}
 def load_rows(
     metadata: NormalizedMetadata,
     *,
-    include_prompt_completion: bool = False,
-    keep_columns: Sequence[str] | None = None,
+    extra_columns: Sequence[str] | None = None,
     drop_columns: Sequence[str] | None = None,
+    answer_column: str | None = None,
 ) -> list[dict[str, Any]]:
     """Load results.jsonl rows and attach manifest metadata."""
     record = metadata.record
@@ -32,13 +32,10 @@ def load_rows(
         return []
 
     results_path = record.results_path
-    keep = {column for column in keep_columns or () if column}
+    extras_keys = {column for column in extra_columns or () if column}
     drop = {column for column in drop_columns or () if column}
     drop.update(DEFAULT_DROP_COLUMNS)
-    if include_prompt_completion:
-        drop.difference_update(PROMPT_COMPLETION_COLUMNS)
-    else:
-        drop.update(PROMPT_COMPLETION_COLUMNS)
+    drop.update(PROMPT_COMPLETION_COLUMNS)
 
     # First pass: decode and clean rows, and count example_id occurrences to
     # detect multiple rollouts within a single JSONL (example_id repetition).
@@ -74,7 +71,9 @@ def load_rows(
     rows: list[dict[str, Any]] = []
     seen_per_example: dict[Any, int] = {}
     for line_number, payload in decoded_rows:
-        cleaned = _clean_row(payload, drop=drop, keep=keep)
+        extras = _extract_extras(payload, extras_keys=extras_keys)
+        cleaned = _clean_row(payload, drop=drop, extras_keys=extras_keys)
+        _map_answer_column(cleaned, payload, answer_column=answer_column)
         _flatten_token_usage(cleaned)
         if multi_rollout:
             ex_id = payload.get("example_id")
@@ -87,10 +86,32 @@ def load_rows(
                 rollout_index = metadata.rollout_index
         else:
             rollout_index = metadata.rollout_index
+        if extras_keys and extras:
+            cleaned["extras"] = json.dumps(extras, sort_keys=True)
+        else:
+            cleaned["extras"] = None
         enriched = _attach_metadata(cleaned, metadata, line_number=line_number, rollout_index=rollout_index)
         rows.append(enriched)
 
     return rows
+
+
+def _map_answer_column(
+    cleaned: MutableMapping[str, Any],
+    payload: Mapping[str, Any],
+    *,
+    answer_column: str | None,
+) -> None:
+    if not answer_column or answer_column == "answer":
+        return
+    if "answer" in cleaned:
+        return
+    if answer_column not in payload:
+        return
+    value = payload.get(answer_column)
+    if not _is_primitive(value):
+        return
+    cleaned["answer"] = value
 
 
 def _decode_line(line: str, path: Path, line_number: int) -> Mapping[str, Any]:
@@ -111,30 +132,41 @@ def _clean_row(
     row: Mapping[str, Any],
     *,
     drop: set[str],
-    keep: set[str],
+    extras_keys: set[str],
 ) -> MutableMapping[str, Any]:
     cleaned: MutableMapping[str, Any] = {}
 
     # First pass: process top-level keys
     for key, value in row.items():
-        if key in drop and key not in keep:
+        if key in extras_keys:
+            continue
+        if key in drop:
             continue
         is_allowed_json = key in ALLOWED_JSON_COLUMNS and isinstance(value, Mapping)
-        if key not in keep and not _is_primitive(value) and not is_allowed_json:
+        if not _is_primitive(value) and not is_allowed_json:
             continue
         cleaned[key] = value
 
-    # Second pass: extract keep_columns from info dict if present
-    info = row.get("info")
-    if keep and isinstance(info, Mapping):
-        for keep_key in keep:
-            if keep_key not in cleaned and keep_key in info:
-                value = info[keep_key]
-                is_allowed_json = keep_key in ALLOWED_JSON_COLUMNS and isinstance(value, Mapping)
-                if _is_primitive(value) or is_allowed_json:
-                    cleaned[keep_key] = value
-
     return cleaned
+
+
+def _extract_extras(row: Mapping[str, Any], *, extras_keys: set[str]) -> Mapping[str, Any]:
+    """Extract env-specific keys into an extras mapping (excluded from top-level columns)."""
+    if not extras_keys:
+        return {}
+    extras: dict[str, Any] = {}
+    info = row.get("info") if isinstance(row.get("info"), Mapping) else {}
+
+    for key in sorted(extras_keys):
+        if key in row:
+            extras[key] = row.get(key)
+            continue
+        if info and key in info:
+            extras[key] = info.get(key)
+    # Drop null-only payloads to keep extras=None for rows without values.
+    if all(value is None for value in extras.values()):
+        return {}
+    return extras
 
 
 def _is_primitive(value: Any) -> bool:
@@ -190,14 +222,14 @@ def _flatten_token_usage(row: MutableMapping[str, Any]) -> None:
         except Exception:
             return None
 
+    if not isinstance(usage, Mapping):
+        return
+
     for role in ("judge", "model"):
         row[f"{role}_cost"] = None
         row[f"{role}_token_completion"] = None
         row[f"{role}_token_prompt"] = None
         row[f"{role}_token_total"] = None
-
-    if not isinstance(usage, Mapping):
-        return
 
     for role in ("judge", "model"):
         row[f"{role}_cost"] = _extract(role, "cost")

@@ -5,4 +5,5 @@
   num_examples: -1
 
   export:
-    keep_columns: [extracted_answer, ground_truth, lower_bound, upper_bound]
+    extra_columns: [lower_bound, upper_bound]
+    answer_column: ground_truth

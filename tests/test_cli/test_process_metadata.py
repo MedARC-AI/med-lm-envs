@@ -31,6 +31,7 @@ def _make_record(
         run_name="Example Run",
         summary_completed=1,
         summary_total=1,
+        summary_total_known=True,
         manifest_path=run_dir / "run_manifest.json",
         run_dir=run_dir,
         created_at="2024-01-01T00:00:00Z",

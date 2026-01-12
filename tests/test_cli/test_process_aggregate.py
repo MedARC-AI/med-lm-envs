@@ -41,27 +41,16 @@ def test_aggregate_rows_by_env_groups_by_model() -> None:
     assert by_key[("m2", "env-a")].job_run_ids == ("r2",)
 
 
-def test_aggregate_rows_canonicalizes_env_id_realistic() -> None:
-    # longhealth variants with rollout suffix and task in id
+def test_aggregate_rows_keeps_env_id() -> None:
     rows = [
-        {"env_id": "longhealth-task1-rollout1618", "base_env_id": "longhealth", "reward": 0.4},
-        {"env_id": "longhealth-task1-rollout9331", "base_env_id": "longhealth", "reward": 0.5},
+        {"env_id": "longhealth-task1", "base_env_id": "longhealth-task1", "reward": 0.4},
+        {"env_id": "longhealth-task1", "base_env_id": "longhealth-task1", "reward": 0.5},
     ]
 
     grouped = aggregate_rows_by_env(rows)
     assert len(grouped) == 1
-    # rollout suffix stripped, task preserved
     assert grouped[0].env_id == "longhealth-task1"
-    assert grouped[0].base_env_id == "longhealth"
-
-    # m_arc should not have rollout in id for base, preserve env_id == base_env_id
-    rows2 = [
-        {"env_id": "m_arc", "base_env_id": "m_arc", "reward": 0.2},
-    ]
-    grouped2 = aggregate_rows_by_env(rows2)
-    assert len(grouped2) == 1
-    assert grouped2[0].env_id == "m_arc"
-    assert grouped2[0].base_env_id == "m_arc"
+    assert grouped[0].base_env_id == "longhealth-task1"
 
 
 def test_aggregate_rows_ignores_missing_env_id() -> None:
@@ -75,6 +64,17 @@ def test_aggregate_rows_ignores_missing_env_id() -> None:
     assert grouped[0].base_env_id == "env-a"
 
 
+def test_aggregate_rows_fallback_base_env_id_is_string() -> None:
+    rows = [
+        {"env_id": "env-a", "reward": 0.6},
+    ]
+
+    grouped = aggregate_rows_by_env(rows)
+    assert len(grouped) == 1
+    assert grouped[0].base_env_id == "env-a"
+    assert isinstance(grouped[0].base_env_id, str)
+
+
 def test_aggregate_rows_tracks_job_runs() -> None:
     rows = [
         {"env_id": "env-a", "base_env_id": "env-a", "job_run_id": "r2"},
@@ -83,3 +83,14 @@ def test_aggregate_rows_tracks_job_runs() -> None:
     ]
     grouped = aggregate_rows_by_env(rows)
     assert grouped[0].job_run_ids == ("r1", "r2")
+
+
+def test_aggregate_rows_normalizes_rollout_index() -> None:
+    rows = [
+        {"env_id": "env-a", "base_env_id": "env-a", "rollout_index": 7},
+        {"env_id": "env-a", "base_env_id": "env-a", "rollout_index": 3},
+        {"env_id": "env-a", "base_env_id": "env-a", "rollout_index": 7},
+    ]
+    grouped = aggregate_rows_by_env(rows)
+    assert grouped[0].rows[0]["rollout_index"] in {0, 1}
+    assert sorted({row["rollout_index"] for row in grouped[0].rows}) == [0, 1]

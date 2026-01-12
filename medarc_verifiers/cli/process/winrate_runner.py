@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -11,6 +10,7 @@ from typing import Sequence
 
 from medarc_verifiers.cli._constants import COMMAND, PROCESS_COMMAND
 from medarc_verifiers.cli.process import winrate as _win
+from medarc_verifiers.cli.process.env_index import read_env_index_inventory
 from medarc_verifiers.cli.process.hf_sync import HFSyncConfig, download_hf_repo
 
 logger = logging.getLogger(__name__)
@@ -22,16 +22,19 @@ class WinrateRunResult:
 
     output_path: Path
     result: _win.ModelCentricResult
-    datasets: Sequence[tuple[str, Sequence[_win.PLDataFrame]]]
+    datasets: Sequence[tuple[str, Sequence[Path]]]
 
 
-def discover_datasets(processed_dir: Path) -> list[tuple[str, list[_win.PLDataFrame]]]:
-    """Load env splits via datasets metadata; requires dataset_infos.json."""
-    datasets = _load_with_datasets(processed_dir)
-    if not datasets:
+def discover_datasets(processed_dir: Path) -> list[tuple[str, list[Path]]]:
+    """Load env datasets via env_index.json."""
+    inventory = read_env_index_inventory(processed_dir)
+    if not inventory.env_paths:
         raise ValueError(
-            f"No dataset_infos.json found under {processed_dir}. Regenerate with {COMMAND} {PROCESS_COMMAND} before winrate."
+            f"No env_index.json found under {processed_dir}. Regenerate with {COMMAND} {PROCESS_COMMAND} before winrate."
         )
+    datasets = []
+    for env_id in sorted(inventory.env_paths.keys()):
+        datasets.append((env_id, sorted(inventory.env_paths[env_id])))
     return datasets
 
 
@@ -84,7 +87,7 @@ def _winrate_root(processed_dir: Path) -> Path:
 def _resolve_source(
     processed_dir: Path,
     hf_config: HFSyncConfig | None,
-) -> tuple[Path, list[tuple[str, list[_win.PLDataFrame]]], str]:
+) -> tuple[Path, list[tuple[str, list[Path]]], str]:
     if hf_config and hf_config.repo_id:
         local_dir = download_hf_repo(
             repo_id=hf_config.repo_id,
@@ -101,75 +104,7 @@ def _resolve_source(
     return processed_dir, datasets, source_desc
 
 
-def _load_with_datasets(processed_dir: Path) -> list[tuple[str, list[_win.PLDataFrame]]]:
-    """Load all splits via Hugging Face datasets; requires dataset_infos.json."""
-    dataset_infos = processed_dir / "dataset_infos.json"
-    if not dataset_infos.exists():
-        raise ValueError(f"dataset_infos.json missing under {processed_dir}; run {COMMAND} {PROCESS_COMMAND} first.")
-    try:
-        from datasets import (  # type: ignore[import-not-found]
-            DatasetDict,
-            DownloadConfig,
-            disable_progress_bar,
-            load_dataset,
-        )
-        from datasets.utils.logging import set_verbosity_error  # type: ignore[import-not-found]
-    except Exception:
-        raise
-
-    try:
-        disable_progress_bar()
-        set_verbosity_error()
-        cache_root = processed_dir.parent if processed_dir.parent != processed_dir else processed_dir
-        # Prefer runs/.hf_cache when processed outputs live under runs/processed/<...>
-        if processed_dir.name == "processed" and cache_root.name == "runs":
-            cache_root = cache_root
-        elif processed_dir.parent.name == "processed" and processed_dir.parent.parent.name == "runs":
-            cache_root = processed_dir.parent.parent
-        cache_dir = cache_root / ".hf_cache"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        payload = json.loads(dataset_infos.read_text(encoding="utf-8"))
-        config_key = next(iter(payload.keys()))
-        config_payload = payload.get(config_key) or {}
-        env_id_map = config_payload.get("extras", {}).get("env_id_map", {})
-        data_files_raw = config_payload.get("data_files") or {}
-        data_files: dict[str, list[str]] = {}
-        for split, paths in data_files_raw.items():
-            data_files[split] = [str(processed_dir / path) for path in paths]
-        download_config = DownloadConfig(disable_tqdm=True)
-        ds_dict = load_dataset(
-            "parquet",
-            data_files=data_files,
-            split=None,
-            cache_dir=str(cache_dir),
-            download_config=download_config,
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise ValueError(f"Failed to load datasets from {processed_dir} via dataset_infos: {exc}") from exc
-
-    if not isinstance(ds_dict, DatasetDict):
-        logger.debug("datasets.load_dataset returned non-DatasetDict; skipping HF path.")
-        return []
-
-    datasets: list[tuple[str, list[_win.PLDataFrame]]] = []
-    for split_name, split in ds_dict.items():
-        if split_name == "train":
-            continue
-        try:
-            # Convert to Polars DataFrame; fallback to pandas if unavailable.
-            if hasattr(split, "to_polars"):
-                df = split.to_polars()  # type: ignore[attr-defined]
-            else:
-                df = _win.pl.from_pandas(split.to_pandas())
-            env_id = env_id_map.get(split_name, split_name)
-            datasets.append((env_id, [df]))
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to convert split %s to Polars: %s", split_name, exc)
-            continue
-    return datasets
-
-
-def list_models(datasets: Sequence[tuple[str, Sequence[_win.PLDataFrame]]]) -> list[str]:
+def list_models(datasets: Sequence[tuple[str, Sequence[Path]]]) -> list[str]:
     """List unique model_id values present across datasets."""
     models: set[str] = set()
     for _, splits in datasets:

@@ -42,19 +42,19 @@ def test_environment_export_config_validates_columns() -> None:
         id="medqa",
         module="environments.medqa",
         export={
-            "keep_columns": ["answer", " score "],
+            "extra_columns": ["answer", " score "],
             "drop_columns": ["raw_state"],
-            "include_prompt_completion": True,
             "combine_rollouts": False,
+            "answer_column": "ground_truth",
         },
     )
     assert env.export is not None
-    assert env.export.keep_columns == ["answer", "score"]
+    assert env.export.extra_columns == ["answer", "score"]
     assert env.export.drop_columns == ["raw_state"]
-    assert env.export.include_prompt_completion is True
     assert env.export.combine_rollouts is False
+    assert env.export.answer_column == "ground_truth"
 
 
 def test_environment_export_config_invalid_column_type_raises() -> None:
     with pytest.raises(ValueError, match="Export columns must be provided as a list of strings."):
-        EnvironmentExportConfig(keep_columns=123)
+        EnvironmentExportConfig(extra_columns=123)

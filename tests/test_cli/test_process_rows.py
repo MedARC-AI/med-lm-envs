@@ -24,6 +24,7 @@ def _build_record(tmp_path: Path, *, status: str = "completed", reason: str | No
         run_name="Example Run",
         summary_completed=1,
         summary_total=1,
+        summary_total_known=True,
         manifest_path=run_dir / "run_manifest.json",
         run_dir=run_dir,
         created_at="2024-05-01T00:00:00Z",
@@ -116,7 +117,7 @@ def test_load_rows_basic_enrichment(tmp_path: Path) -> None:
     assert "extra_body" not in row
 
 
-def test_load_rows_include_prompt(tmp_path: Path) -> None:
+def test_load_rows_drops_prompt_completion(tmp_path: Path) -> None:
     record = _build_record(tmp_path)
     _write_json(record.metadata_path, {})
     _write_results(
@@ -130,10 +131,10 @@ def test_load_rows_include_prompt(tmp_path: Path) -> None:
         ],
     )
     metadata = load_normalized_metadata(record)
-    rows = load_rows(metadata, include_prompt_completion=True)
+    rows = load_rows(metadata)
 
-    assert rows[0]["prompt"] == "Q?"
-    assert rows[0]["completion"] == "A"
+    assert "prompt" not in rows[0]
+    assert "completion" not in rows[0]
 
 
 def test_load_rows_missing_example_id_raises(tmp_path: Path) -> None:
@@ -154,7 +155,7 @@ def test_load_rows_missing_example_id_raises(tmp_path: Path) -> None:
     assert "example_id" in str(excinfo.value)
 
 
-def test_load_rows_keep_columns_retains_info(tmp_path: Path) -> None:
+def test_load_rows_extra_columns_populates_extras(tmp_path: Path) -> None:
     record = _build_record(tmp_path)
     _write_json(record.metadata_path, {})
     _write_results(
@@ -167,8 +168,10 @@ def test_load_rows_keep_columns_retains_info(tmp_path: Path) -> None:
         ],
     )
     metadata = load_normalized_metadata(record)
-    rows = load_rows(metadata, keep_columns=("info",))
-    assert rows[0]["info"] == {"debug": True}
+    rows = load_rows(metadata, extra_columns=("debug",))
+    row = rows[0]
+    assert "info" not in row
+    assert row["extras"] == "{\"debug\": true}"
 
 
 def test_load_rows_failed_job_preserves_error(tmp_path: Path) -> None:
@@ -260,3 +263,21 @@ def test_load_rows_drops_non_mapping_token_usage(tmp_path: Path) -> None:
     assert "token_usage" not in row
     assert row["model_cost"] is None
     assert row["judge_cost"] is None
+
+
+def test_load_rows_maps_answer_column(tmp_path: Path) -> None:
+    record = _build_record(tmp_path)
+    _write_json(record.metadata_path, {})
+    _write_results(
+        record.results_path,
+        [
+            {
+                "example_id": "ex-1",
+                "ground_truth": "42",
+            }
+        ],
+    )
+    metadata = load_normalized_metadata(record)
+    rows = load_rows(metadata, answer_column="ground_truth")
+
+    assert rows[0]["answer"] == "42"

@@ -166,89 +166,76 @@ def build_process_parser() -> argparse.ArgumentParser:
         description="Process MedARC run outputs into Parquet datasets and optional HF uploads.",
     )
     parser.add_argument(
+        "-c",
+        "--config",
+        type=Path,
+        help="Path to a YAML/JSON config file providing defaults for process options (CLI flags override).",
+    )
+    parser.add_argument(
         "--runs-dir",
         type=Path,
-        default=DEFAULT_RUNS_RAW_DIR,
-        help="Directory containing raw run outputs (default: %(default)s).",
+        default=None,
+        help=f"Directory containing raw run outputs (default: {DEFAULT_RUNS_RAW_DIR}).",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=DEFAULT_PROCESSED_DIR,
-        help="Directory to store processed parquet files (default: %(default)s).",
+        default=None,
+        help=f"Directory to store processed parquet files (default: {DEFAULT_PROCESSED_DIR}).",
     )
     parser.add_argument(
         "--env-config-root",
         type=Path,
-        default=DEFAULT_ENV_CONFIG_ROOT,
-        help="Directory containing environment YAMLs for export settings (default: %(default)s).",
+        default=None,
+        help=f"Directory containing environment YAMLs for export settings (default: {DEFAULT_ENV_CONFIG_ROOT}).",
     )
     parser.add_argument(
         "--status",
         action="append",
+        default=None,
         help="Filter runs by manifest status (repeatable).",
     )
     parser.add_argument(
-        "--include-prompt-completion",
-        dest="include_prompt_completion",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Include prompt/completion columns (default: env config or false).",
-    )
-    parser.add_argument("--keep-column", action="append", help="Extra column to keep (repeatable).")
-    parser.add_argument("--drop-column", action="append", help="Column to drop (repeatable).")
-    parser.add_argument(
-        "--combine-rollouts",
-        dest="combine_rollouts",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Combine rollout suffixes when deriving base env ids (default: env config or true).",
-    )
-    parser.add_argument(
-        "--no-deduplicate",
-        dest="no_deduplicate",
+        "--clean",
         action="store_true",
-        default=False,
-        help="Include all runs (don't deduplicate by latest per model+env).",
+        default=None,
+        help="Delete processed outputs in --output-dir and rebuild from --runs-dir.",
     )
-    parser.add_argument("--exporter-version", default="dev", help="Exporter version tag to embed in outputs.")
-    parser.add_argument("--processed-at", help="Override processed_at timestamp (ISO8601).")
-    parser.add_argument("--dry-run", action="store_true", help="Plan processing without writing outputs.")
-    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing parquet files.")
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        default=None,
+        help="Skip confirmation prompts (use with --clean).",
+    )
+    parser.add_argument("--processed-at", default=None, help="Override processed_at timestamp (ISO8601).")
+    parser.add_argument("--dry-run", action="store_true", default=None, help="Plan processing without writing outputs.")
     parser.add_argument(
         "--process-incomplete",
         dest="process_incomplete",
         action="store_true",
-        default=False,
+        default=None,
         help="Include runs where run_manifest.json summary has completed < total.",
-    )
-    parser.add_argument(
-        "--append",
-        dest="append",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Append/merge into existing parquet files when present (default: true). Use --no-append to error unless --overwrite is set.",
     )
     parser.add_argument(
         "--max-workers",
         type=int,
-        default=4,
-        help="Number of parallel workers for processing datasets (default: %(default)s). Use 1 to disable multiprocessing.",
+        default=None,
+        help="Number of parallel workers for processing datasets (default: 4). Use 1 to disable multiprocessing.",
     )
 
-    parser.add_argument("--hf-repo", help="Hugging Face repo id for dataset sync.")
+    parser.add_argument("--hf-repo", default=None, help="Hugging Face repo id for dataset sync.")
     parser.add_argument(
-        "--hf-merge",
-        choices=("append", "update", "replace"),
-        default="append",
-        help="Merge strategy when syncing to HF (default: %(default)s).",
+        "--hf-pull-policy",
+        choices=("prompt", "pull", "clean"),
+        default=None,
+        help="Baseline policy when output dir is non-empty in HF mode.",
     )
-    parser.add_argument("--hf-branch", help="Target HF branch.")
-    parser.add_argument("--hf-token", help="Auth token for HF operations.")
+    parser.add_argument("--hf-branch", default=None, help="Target HF branch.")
+    parser.add_argument("--hf-token", default=None, help="Auth token for HF operations.")
     parser.add_argument(
         "--hf-private",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=None,
         help="Push dataset as private (default: false).",
     )
 
@@ -395,6 +382,10 @@ def _run_process_mode(argv: Sequence[str]) -> int:
     parser = build_process_parser()
     args = parser.parse_args(argv)
 
+    if args.config:
+        _apply_process_config(args, args.config)
+    _finalize_process_args(args)
+
     try:
         env_export_map = _load_env_export_map(args.env_config_root)
     except Exception as exc:  # noqa: BLE001
@@ -403,7 +394,6 @@ def _run_process_mode(argv: Sequence[str]) -> int:
 
     hf_config = HFSyncConfig.from_cli(
         repo=args.hf_repo,
-        merge_strategy=args.hf_merge,
         branch=args.hf_branch,
         token=args.hf_token,
         private=args.hf_private,
@@ -412,37 +402,26 @@ def _run_process_mode(argv: Sequence[str]) -> int:
 
     processed_with_args = {
         "status": args.status or [],
-        "include_prompt_completion": args.include_prompt_completion,
-        "keep_columns": args.keep_column or [],
-        "drop_columns": args.drop_column or [],
-        "combine_rollouts": args.combine_rollouts,
-        "deduplicate_latest": not args.no_deduplicate,
-        "dry_run": args.dry_run,
-        "overwrite": args.overwrite,
+        "dry_run": bool(args.dry_run),
+        "clean": bool(args.clean),
         "only_complete_runs": not bool(args.process_incomplete),
-        "append": args.append,
         "hf_repo": args.hf_repo,
-        "hf_merge": args.hf_merge,
+        "hf_pull_policy": args.hf_pull_policy,
         "max_workers": args.max_workers,
     }
 
     options = ProcessOptions(
         runs_dir=args.runs_dir,
         output_dir=args.output_dir,
-        exporter_version=args.exporter_version,
         processed_at=args.processed_at,
         processed_with_args=processed_with_args,
         status_filter=args.status or (),
-        include_prompt_completion=args.include_prompt_completion,
         only_complete_runs=not bool(args.process_incomplete),
-        keep_columns=args.keep_column or (),
-        drop_columns=args.drop_column or (),
-        combine_rollouts=args.combine_rollouts,
-        deduplicate_latest=not args.no_deduplicate,
-        dry_run=args.dry_run,
-        overwrite=args.overwrite,
-        append=args.append,
+        dry_run=bool(args.dry_run),
+        clean=bool(args.clean),
+        assume_yes=bool(args.yes),
         hf_config=hf_config,
+        hf_pull_policy=args.hf_pull_policy,
         max_workers=args.max_workers,
     )
 
@@ -456,13 +435,110 @@ def _run_process_mode(argv: Sequence[str]) -> int:
     return 0
 
 
+def _load_process_config(path: Path) -> Mapping[str, Any]:
+    path = Path(path).expanduser()
+    if not path.exists():
+        raise FileNotFoundError(f"Process config not found: {path}")
+    raw = path.read_text(encoding="utf-8")
+    suffix = path.suffix.lower()
+    if suffix in {".yaml", ".yml"}:
+        payload = yaml.safe_load(raw)
+    elif suffix == ".json":
+        payload = yaml.safe_load(raw)
+    else:
+        raise ValueError(f"Unsupported process config format: {path} (expected .yaml/.yml/.json)")
+    if payload is None:
+        return {}
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"Process config must be a mapping at top level: {path}")
+    return payload
+
+
+def _apply_process_config(args: argparse.Namespace, path: Path) -> None:
+    """Apply config file defaults to process args (CLI flags win)."""
+    payload = dict(_load_process_config(path))
+
+    hf_payload = payload.get("hf")
+    if isinstance(hf_payload, Mapping):
+        for key, value in hf_payload.items():
+            payload.setdefault(f"hf_{key}", value)
+
+    def _set_if_unset(attr: str, value: Any) -> None:
+        if not hasattr(args, attr):
+            return
+        if getattr(args, attr) is None:
+            setattr(args, attr, value)
+
+    # Paths / simple defaults
+    if "runs_dir" in payload:
+        _set_if_unset("runs_dir", Path(str(payload["runs_dir"])))
+    if "output_dir" in payload:
+        _set_if_unset("output_dir", Path(str(payload["output_dir"])))
+    if "env_config_root" in payload:
+        _set_if_unset("env_config_root", Path(str(payload["env_config_root"])))
+    if "max_workers" in payload:
+        try:
+            _set_if_unset("max_workers", int(payload["max_workers"]))
+        except Exception:
+            pass
+    if "processed_at" in payload:
+        _set_if_unset("processed_at", str(payload["processed_at"]))
+    if "dry_run" in payload:
+        _set_if_unset("dry_run", bool(payload["dry_run"]))
+    if "clean" in payload:
+        _set_if_unset("clean", bool(payload["clean"]))
+    if "yes" in payload:
+        _set_if_unset("yes", bool(payload["yes"]))
+    if "process_incomplete" in payload:
+        _set_if_unset("process_incomplete", bool(payload["process_incomplete"]))
+    if "status" in payload and getattr(args, "status", None) is None:
+        status_value = payload["status"]
+        if isinstance(status_value, str) and status_value.strip():
+            args.status = [status_value.strip()]
+        elif isinstance(status_value, Sequence):
+            args.status = [str(item).strip() for item in status_value if str(item).strip()]
+
+    # HF settings (only apply when unset on CLI)
+    if "hf_repo" in payload:
+        _set_if_unset("hf_repo", str(payload["hf_repo"]))
+    if "hf_branch" in payload:
+        _set_if_unset("hf_branch", str(payload["hf_branch"]))
+    if "hf_token" in payload:
+        _set_if_unset("hf_token", str(payload["hf_token"]))
+    if "hf_private" in payload:
+        _set_if_unset("hf_private", bool(payload["hf_private"]))
+    if "hf_pull_policy" in payload:
+        _set_if_unset("hf_pull_policy", str(payload["hf_pull_policy"]))
+
+
+def _finalize_process_args(args: argparse.Namespace) -> None:
+    """Fill any unset process args with their defaults (config overrides defaults)."""
+    if getattr(args, "runs_dir", None) is None:
+        args.runs_dir = DEFAULT_RUNS_RAW_DIR
+    if getattr(args, "output_dir", None) is None:
+        args.output_dir = DEFAULT_PROCESSED_DIR
+    if getattr(args, "env_config_root", None) is None:
+        args.env_config_root = DEFAULT_ENV_CONFIG_ROOT
+    if getattr(args, "max_workers", None) is None:
+        args.max_workers = 4
+    if getattr(args, "hf_private", None) is None:
+        args.hf_private = False
+    if getattr(args, "dry_run", None) is None:
+        args.dry_run = False
+    if getattr(args, "clean", None) is None:
+        args.clean = False
+    if getattr(args, "yes", None) is None:
+        args.yes = False
+    if getattr(args, "process_incomplete", None) is None:
+        args.process_incomplete = False
+
+
 def _run_winrate_mode(argv: Sequence[str]) -> int:
     parser = build_winrate_parser()
     args = parser.parse_args(argv)
 
     hf_config = HFSyncConfig.from_cli(
         repo=args.hf_repo,
-        merge_strategy="append",
         branch=args.hf_branch,
         token=args.hf_token,
         private=False,
@@ -801,13 +877,27 @@ def _log_process_result(result: ProcessResult) -> None:
     )
     for summary in result.env_summaries:
         path_display = summary.output_path if not summary.dry_run else f"(planned) {summary.output_path}"
-        logger.info("  %s -> %d rows @ %s", summary.env_id or summary.base_env_id, summary.row_count, path_display)
+        logger.info(
+            "  %s -> %d rows @ %s (%s)",
+            summary.env_id or summary.base_env_id,
+            summary.row_count,
+            path_display,
+            summary.action,
+        )
+        if summary.job_run_ids_added or summary.job_run_ids_replaced:
+            added = ", ".join(summary.job_run_ids_added)
+            replaced = ", ".join(summary.job_run_ids_replaced)
+            if added:
+                logger.info("    added: %s", added)
+            if replaced:
+                logger.info("    replaced: %s", replaced)
     if result.hf_summary:
         logger.info(
-            "HF sync: repo=%s strategy=%s rows=%d",
+            "HF sync: repo=%s strategy=%s rows=%d files=%d",
             result.hf_summary.repo_id,
             result.hf_summary.strategy,
             result.hf_summary.total_rows,
+            result.hf_summary.total_files,
         )
 
 

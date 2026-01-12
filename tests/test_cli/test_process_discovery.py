@@ -127,6 +127,33 @@ def test_discover_run_records_filters_status(tmp_path: Path) -> None:
     assert filtered_none == []
 
 
+def test_discover_run_records_only_complete_runs_missing_total(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "job-run-123"
+    results_dir = run_dir / "model-env-job"
+
+    manifest_payload = _base_manifest(
+        [
+            {
+                "job_id": "model-env-job",
+                "model_id": "gpt-4",
+                "env_id": "demo-env-module",
+                "env_template_id": "demo-env-template",
+                "env_variant_id": "demo-env",
+                "env_args": {},
+            }
+        ],
+        models={"gpt-4": {"sampling_args": {}}},
+        env_templates={"demo-env-template": {"module": "demo-env-module"}},
+    )
+    _write_json(run_dir / "run_manifest.json", manifest_payload)
+    results_dir.mkdir(parents=True, exist_ok=True)
+    (results_dir / "results.jsonl").write_text("{}", encoding="utf-8")
+
+    records = discover_run_records(runs_dir, only_complete_runs=True)
+    assert len(records) == 1
+
+
 def test_discover_run_records_missing_summary_uses_manifest_status(tmp_path: Path) -> None:
     runs_dir = tmp_path / "runs"
     run_dir = runs_dir / "job-run-123"

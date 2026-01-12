@@ -6,35 +6,26 @@ import logging
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
-
-import polars as pl
-import pyarrow.parquet as pq
-from datasets import Dataset, DatasetDict, concatenate_datasets, load_dataset
+from typing import Sequence
 
 from medarc_verifiers.cli.process.writer import EnvWriteSummary
 
 logger = logging.getLogger(__name__)
 
-ROW_KEY = ("job_run_id", "example_id", "rollout_index")
-ENTITY_KEY = ("base_env_id", "example_id", "rollout_index")
-
-
 @dataclass(slots=True)
 class HFSyncConfig:
     repo_id: str | None
-    merge_strategy: str = "append"  # append|update|replace
     branch: str | None = None
     private: bool = False
     dry_run: bool = False
     token: str | None = None
+    merge_strategy: str = "file"
 
     @classmethod
     def from_cli(
         cls,
         *,
         repo: str | None,
-        merge_strategy: str = "append",
         branch: str | None = None,
         token: str | None = None,
         private: bool | None = None,
@@ -45,7 +36,6 @@ class HFSyncConfig:
             return None
         return cls(
             repo_id=repo,
-            merge_strategy=merge_strategy,
             branch=branch,
             token=token,
             private=bool(private) if private is not None else False,
@@ -54,28 +44,22 @@ class HFSyncConfig:
 
 
 @dataclass(slots=True)
-class SplitMergeStats:
-    env_id: str
-    base_env_id: str
-    new_rows: int
-    existing_rows: int
-    merged_rows: int
-    action: str
-
-
-@dataclass(slots=True)
-class HFMergeSummary:
+class HFSyncSummary:
     repo_id: str
     strategy: str
     total_rows: int
-    splits: Sequence[SplitMergeStats]
+    total_files: int
+    files: Sequence[str]
 
 
 def sync_to_hub(
     env_summaries: Sequence[EnvWriteSummary],
     config: HFSyncConfig,
-) -> HFMergeSummary | None:
-    """Merge local parquet exports into a HF dataset according to the given strategy."""
+    *,
+    output_dir: Path,
+    metadata_paths: Sequence[Path] | None = None,
+) -> HFSyncSummary | None:
+    """Upload changed artifacts to a HF dataset repo."""
     if not config.repo_id:
         logger.debug("HF sync skipped: no repo_id provided.")
         return None
@@ -86,99 +70,72 @@ def sync_to_hub(
         logger.debug("HF sync skipped: only dry-run summaries available.")
         return None
 
-    new_splits = _load_local_splits(env_summaries)
-    if not new_splits:
-        logger.debug("HF sync skipped: no local splits to sync.")
+    changed = [summary for summary in env_summaries if summary.changed]
+    if not changed:
+        logger.debug("HF sync skipped: no changed outputs.")
         return None
-    base_lookup = {
-        summary.env_id: summary.base_env_id for summary in env_summaries if not summary.dry_run and summary.env_id
-    }
 
-    try:
-        remote_splits = _load_remote_dataset(config) or {}
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to load remote dataset %s: %s", config.repo_id, exc)
-        remote_splits = {}
+    output_dir = Path(output_dir)
+    changed_paths = {summary.output_path for summary in changed}
+    if metadata_paths:
+        for path in metadata_paths:
+            candidate = Path(path)
+            if not candidate.is_absolute():
+                output_parts = output_dir.parts
+                if output_parts and candidate.parts[: len(output_parts)] != output_parts:
+                    candidate = output_dir / candidate
+            changed_paths.add(candidate)
 
-    merged_splits, split_stats = _merge_splits(
-        new_splits,
-        remote_splits,
-        strategy=config.merge_strategy,
-        base_lookup=base_lookup,
-    )
-
-    summary = HFMergeSummary(
+    files = []
+    for path in changed_paths:
+        try:
+            rel_path = path.relative_to(output_dir)
+        except ValueError:
+            continue
+        files.append(rel_path.as_posix())
+    files = sorted(set(files))
+    summary = HFSyncSummary(
         repo_id=config.repo_id,
-        strategy=config.merge_strategy,
-        total_rows=sum(stat.merged_rows for stat in split_stats),
-        splits=split_stats,
+        strategy="file",
+        total_rows=sum(summary.row_count for summary in changed),
+        total_files=len(files),
+        files=files,
     )
 
     if config.dry_run:
         logger.debug("HF sync dry-run; skipping push.")
         return summary
 
-    dataset_dict = DatasetDict(merged_splits)
-    _push_dataset(dataset_dict, config, summary)
-    return summary
+    try:
+        from huggingface_hub import CommitOperationAdd, HfApi  # type: ignore[import-not-found]
+    except Exception as exc:  # noqa: BLE001
+        raise ImportError("huggingface_hub is required for HF uploads.") from exc
 
-
-def _load_local_splits(env_summaries: Sequence[EnvWriteSummary]) -> dict[str, Dataset]:
-    splits: dict[str, Dataset] = {}
-    grouped_paths: dict[str, list[Path]] = {}
-    for summary in env_summaries:
-        if summary.dry_run:
-            continue
-        path = summary.output_path
-        if not path.exists():
-            logger.debug("Skipping HF split %s: parquet path %s missing.", summary.env_id, path)
-            continue
-        grouped_paths.setdefault(summary.env_id, []).append(path)
-
-    for env_id, paths in grouped_paths.items():
-        str_paths = [str(p) for p in paths]
-        try:
-            dataset = Dataset.from_parquet(str_paths)  # type: ignore[arg-type]
-        except Exception:
-            # Fallback to pandas path-by-path if parquet helper is unavailable
-            frames = []
-            for path in paths:
-                table = pq.read_table(path)
-                frames.append(table.to_pandas())
-            import pandas as pd  # type: ignore[import-not-found]
-
-            dataset = Dataset.from_pandas(pd.concat(frames, ignore_index=True), preserve_index=False)
-        splits[env_id] = dataset
-    return splits
-
-
-def _merge_splits(
-    new_splits: Mapping[str, Dataset],
-    existing_splits: Mapping[str, Dataset],
-    *,
-    strategy: str,
-    base_lookup: Mapping[str, str] | None = None,
-) -> tuple[dict[str, Dataset], list[SplitMergeStats]]:
-    merged: dict[str, Dataset] = {}
-    stats: list[SplitMergeStats] = []
-    all_keys = set(existing_splits) | set(new_splits)
-
-    for key in sorted(all_keys):
-        new_ds = new_splits.get(key)
-        old_ds = existing_splits.get(key)
-        merged_ds = _merge_split(new_ds, old_ds, strategy=strategy)
-        merged[key] = merged_ds
-        stats.append(
-            SplitMergeStats(
-                env_id=key,
-                base_env_id=(base_lookup.get(key) if base_lookup else None) or key,
-                new_rows=len(new_ds) if new_ds is not None else 0,
-                existing_rows=len(old_ds) if old_ds is not None else 0,
-                merged_rows=len(merged_ds),
-                action=strategy if new_ds is not None else "carry",
+    api = HfApi(token=config.token)
+    if config.private:
+        api.create_repo(
+            repo_id=config.repo_id,
+            repo_type="dataset",
+            private=True,
+            exist_ok=True,
+        )
+    operations = []
+    for rel_path in files:
+        operations.append(
+            CommitOperationAdd(
+                path_in_repo=rel_path,
+                path_or_fileobj=str(output_dir / rel_path),
             )
         )
-    return merged, stats
+    message = f"Update {summary.total_files} file(s) from medarc-eval process"
+    api.create_commit(
+        repo_id=config.repo_id,
+        repo_type="dataset",
+        operations=operations,
+        commit_message=message,
+        revision=config.branch,
+    )
+    return summary
 
 
 def download_hf_repo(
@@ -204,114 +161,28 @@ def download_hf_repo(
 
     temp_root = Path(tempfile.mkdtemp(prefix="hf-sync-")) if local_dir is None else Path(local_dir)
 
-    snapshot_download(
-        repo_id=repo_id,
-        repo_type="dataset",
-        revision=branch,
-        token=token,
-        allow_patterns=allow_patterns,
-        local_dir=temp_root,
-        local_dir_use_symlinks=False,
-    )
+    try:
+        snapshot_download(
+            repo_id=repo_id,
+            repo_type="dataset",
+            revision=branch,
+            token=token,
+            allow_patterns=allow_patterns,
+            local_dir=temp_root,
+        )
+    except Exception as exc:  # noqa: BLE001
+        message = str(exc)
+        status = getattr(exc, "response", None)
+        status_code = getattr(status, "status_code", None)
+        if status_code == 404 or "Repository Not Found" in message:
+            logger.warning("HF repo %s not found; continuing without baseline.", repo_id)
+            return temp_root
+        raise
     return temp_root
 
 
-def _merge_split(
-    new_ds: Dataset | None,
-    old_ds: Dataset | None,
-    *,
-    strategy: str,
-) -> Dataset:
-    normalized_strategy = strategy.lower()
-    if old_ds is None:
-        if new_ds is None:
-            raise ValueError("At least one dataset must be provided for merge.")
-        return new_ds
-    if new_ds is None:
-        return old_ds
-    if normalized_strategy == "replace":
-        return new_ds
-
-    combined = concatenate_datasets([old_ds, new_ds])
-    pl_df = pl.from_pandas(combined.to_pandas())
-
-    if normalized_strategy == "append":
-        deduped = _dedupe_rows(pl_df, ROW_KEY)
-        return Dataset.from_pandas(deduped.to_pandas(), preserve_index=False)
-    if normalized_strategy == "update":
-        deduped = _dedupe_rows(
-            pl_df,
-            ENTITY_KEY,
-            sort_order=[
-                ("started_at", True),
-                ("job_run_id", True),
-            ],
-        )
-        return Dataset.from_pandas(deduped.to_pandas(), preserve_index=False)
-
-    raise ValueError(f"Unsupported merge strategy '{strategy}'.")
-
-
-def _dedupe_rows(
-    df: pl.DataFrame,
-    keys: Iterable[str],
-    sort_order: Sequence[tuple[str, bool]] | None = None,
-) -> pl.DataFrame:
-    key_list = [key for key in keys if key in df.columns]
-    if not key_list:
-        logger.debug("Dedupe skipped: required keys missing.")
-        return df
-
-    if sort_order:
-        columns: list[str] = []
-        descending: list[bool] = []
-        for column, desc in sort_order:
-            if column in df.columns:
-                columns.append(column)
-                descending.append(desc)
-        if columns:
-            df = df.sort(columns, descending=descending)
-    df = df.unique(subset=key_list, keep="first")
-    return df
-
-
-def _load_remote_dataset(config: HFSyncConfig) -> Mapping[str, Dataset]:
-    try:
-        dataset_dict = load_dataset(
-            config.repo_id,
-            revision=config.branch,
-            token=config.token,
-        )
-    except FileNotFoundError:
-        return {}
-    if isinstance(dataset_dict, DatasetDict):
-        return dict(dataset_dict.items())
-    # Single split scenario
-    return {"default": dataset_dict}  # type: ignore[return-value]
-
-
-def load_remote_dataset(config: HFSyncConfig) -> Mapping[str, Dataset] | None:
-    """Public helper to load a HF dataset as split -> Dataset mapping."""
-    return _load_remote_dataset(config)
-
-
-def _push_dataset(dataset_dict: DatasetDict, config: HFSyncConfig, summary: HFMergeSummary) -> None:
-    commit_message = (
-        f"medarc process: {len(summary.splits)} envs, {summary.total_rows} rows, strategy={summary.strategy}"
-    )
-    dataset_dict.push_to_hub(
-        config.repo_id,
-        private=config.private,
-        branch=config.branch,
-        token=config.token,
-        commit_message=commit_message,
-    )
-
-
 __all__ = [
-    "HFMergeSummary",
+    "HFSyncSummary",
     "HFSyncConfig",
-    "load_remote_dataset",
-    "SplitMergeStats",
     "sync_to_hub",
 ]

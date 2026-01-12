@@ -758,8 +758,7 @@ def test_process_cli_builds_options(monkeypatch: pytest.MonkeyPatch, tmp_path: P
         """
         - id: demo-env
           export:
-            keep_columns: [info]
-            include_prompt_completion: true
+            extra_columns: [debug]
         """,
         encoding="utf-8",
     )
@@ -784,9 +783,6 @@ def test_process_cli_builds_options(monkeypatch: pytest.MonkeyPatch, tmp_path: P
             str(env_root),
             "--status",
             "completed",
-            "--include-prompt-completion",
-            "--keep-column",
-            "reward",
             "--hf-repo",
             "medarc/demo",
             "--dry-run",
@@ -795,9 +791,79 @@ def test_process_cli_builds_options(monkeypatch: pytest.MonkeyPatch, tmp_path: P
 
     assert exit_code == 0
     options = captured["options"]
-    assert options.include_prompt_completion is True
-    assert options.keep_columns == ("reward",)
     assert options.status_filter == ("completed",)
     assert options.hf_config is not None
     env_map = captured["env_export_map"]
     assert "demo-env" in env_map
+
+
+def test_process_cli_applies_config_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    env_root = tmp_path / "envs"
+    env_root.mkdir()
+    (env_root / "demo.yaml").write_text(
+        """
+        - id: demo-env
+          export:
+            extra_columns: [debug]
+        """,
+        encoding="utf-8",
+    )
+    cfg_path = tmp_path / "process.yaml"
+    cfg_path.write_text(
+        f"""
+        runs_dir: runs-from-config
+        output_dir: processed-from-config
+        env_config_root: {env_root}
+        max_workers: 2
+        hf:
+          repo: medarc/demo
+          branch: main
+          token: secret-token
+          private: true
+          pull_policy: pull
+        """,
+        encoding="utf-8",
+    )
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(options, env_export_map):
+        captured["options"] = options
+        captured["env_export_map"] = env_export_map
+        return ProcessResult(records_processed=0, rows_processed=0, env_groups=[], env_summaries=[], hf_summary=None)
+
+    monkeypatch.setattr("medarc_verifiers.cli.main.run_process", fake_run)
+
+    exit_code = main.main(["process", "--config", str(cfg_path), "--dry-run"])
+    assert exit_code == 0
+
+    options = captured["options"]
+    assert options.runs_dir == Path("runs-from-config")
+    assert options.output_dir == Path("processed-from-config")
+    assert options.max_workers == 2
+    assert options.hf_pull_policy == "pull"
+    assert options.hf_config is not None
+    assert options.hf_config.repo_id == "medarc/demo"
+    assert options.hf_config.branch == "main"
+    assert options.hf_config.token == "secret-token"
+    assert options.hf_config.private is True
+
+    exit_code = main.main(["process", "--config", str(cfg_path), "--hf-token", "override", "--dry-run"])
+    assert exit_code == 0
+    options = captured["options"]
+    assert options.hf_config is not None
+    assert options.hf_config.token == "override"
+
+
+def test_process_cli_rejects_include_prompt_completion(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit):
+        main.main(
+            [
+                "process",
+                "--runs-dir",
+                str(tmp_path / "runs"),
+                "--output-dir",
+                str(tmp_path / "processed"),
+                "--include-prompt-completion",
+            ]
+        )
