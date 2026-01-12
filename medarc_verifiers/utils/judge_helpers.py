@@ -145,7 +145,10 @@ def judge_sampling_args_and_headers(
                 prime_team_id = {"X-Prime-Team-ID": os.environ.get("PRIME_TEAM_ID")}
             else:
                 prime_team_id = None
-            return sanitize_sampling_args_for_openai({**judge_defaults.as_dict(), "timeout": timeout}), prime_team_id
+            payload = judge_defaults.as_dict()
+            if timeout is not None:
+                payload["timeout"] = timeout
+            return sanitize_sampling_args_for_openai(payload), prime_team_id
 
     raise KeyError(f"No sampling defaults available for judge “{judge_name}”.")
 
@@ -154,7 +157,7 @@ def default_judge_api_key(base_url: str | None = None) -> str | None:
     if base_url == "https://api.pinference.ai/api/v1" and os.environ.get("PRIME_API_KEY") is not None:
         return os.environ.get("PRIME_API_KEY")
     elif os.environ.get("OPENAI_API_KEY") is not None:
-        os.environ.get("OPENAI_API_KEY")
+        return os.environ.get("OPENAI_API_KEY")
     elif os.environ.get("JUDGE_API_KEY") is not None:
         return os.environ.get("JUDGE_API_KEY")
     else:

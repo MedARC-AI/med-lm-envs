@@ -9,7 +9,7 @@ def test_judge_sampling_defaults_supports_fuzzy_match(monkeypatch: pytest.Monkey
     monkeypatch.delenv("PRIME_TEAM_ID", raising=False)
 
     result, _ = judge_sampling_args_and_headers("Claude-Sonnet-4.5")
-    assert result == {"temperature": 0.5, "extra_body": {"usage": {"include": True}}}
+    assert result == {"temperature": 0.5, "extra_body": {"usage": {"include": True}}, "timeout": 300}
 
     result, _ = judge_sampling_args_and_headers("openai/gpt-oss-120b")
     assert result == {
@@ -17,6 +17,7 @@ def test_judge_sampling_defaults_supports_fuzzy_match(monkeypatch: pytest.Monkey
         "top_p": 1.0,
         "reasoning_effort": "medium",
         "extra_body": {"usage": {"include": True}, "top_k": 0},
+        "timeout": 300,
     }
 
 

@@ -180,18 +180,19 @@ async def call_with_retries(
                 continue
             raise
 
-        retry, reason = should_retry_response(result)  # type: ignore[arg-type]
-        if retry:
-            if attempt < attempts:
-                log.warning(
-                    "Retryable bad response on model call (attempt %d/%d): %s",
-                    attempt,
-                    attempts,
-                    reason,
-                )
-                await asyncio.sleep(backoff_s)
-                continue
-            raise RuntimeError(f"Retryable bad response persisted after {attempts} attempt(s): {reason}")
+        if result is None or hasattr(result, "choices"):
+            retry, reason = should_retry_response(result)  # type: ignore[arg-type]
+            if retry:
+                if attempt < attempts:
+                    log.warning(
+                        "Retryable bad response on model call (attempt %d/%d): %s",
+                        attempt,
+                        attempts,
+                        reason,
+                    )
+                    await asyncio.sleep(backoff_s)
+                    continue
+                raise RuntimeError(f"Retryable bad response persisted after {attempts} attempt(s): {reason}")
         return result
     if last_exc:
         raise last_exc
@@ -227,6 +228,7 @@ def patch_verifiers_model_response_retry(
     # our retry wrapper will log the retry instead.
     suppress_logger = logging.getLogger("verifiers.envs.SingleTurnEnv")
     if not any(getattr(f, "_medarc_429_filter", False) for f in suppress_logger.filters):
+
         class _429Filter(logging.Filter):
             _medarc_429_filter = True
 
