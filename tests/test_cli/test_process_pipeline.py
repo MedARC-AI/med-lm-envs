@@ -34,6 +34,14 @@ def _setup_run(tmp_path: Path) -> Path:
         "updated_at": "2024-01-01T00:00:00Z",
         "models": {"gpt-mini": {"sampling_args": {}}},
         "env_templates": {"demo-env-template": {"module": "demo-env-rollout3"}},
+        "summary": {
+            "total": 1,
+            "completed": 1,
+            "pending": 0,
+            "running": 0,
+            "failed": 0,
+            "skipped": 0,
+        },
         "jobs": [
             {
                 "job_id": "demo-job",
@@ -189,6 +197,7 @@ def test_run_winrate_from_processed_outputs(tmp_path: Path) -> None:
     cfg = WinrateConfig()
     result = run_winrate(
         processed_dir=output_dir,
+        output_dir=tmp_path / "winrate",
         output_path=None,
         config=cfg,
         processed_at="2024-01-01T00:00:00Z",
@@ -205,6 +214,13 @@ def test_run_winrate_from_processed_outputs(tmp_path: Path) -> None:
     avg_rewards = model_payload["avg_reward_per_dataset"]
     assert len(avg_rewards) == 1
     assert list(avg_rewards.values())[0] == pytest.approx(1.0)
+    latest_csv = (tmp_path / "winrate" / "latest.csv").read_text(encoding="utf-8").splitlines()
+    assert latest_csv
+    header = latest_csv[0].split(",")
+    assert header[0] == "model"
+    assert header[1] == "weighted_winrate"
+    assert header[2] == "simple_winrate"
+    assert header[-1] == "num_datasets"
 
 
 def test_run_winrate_from_hf(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -235,19 +251,32 @@ def test_run_winrate_from_hf(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     }
     (hf_dir / "env_index.json").write_text(json.dumps(env_index), encoding="utf-8")
 
+    captured: dict[str, object] = {}
+
     def _fake_download_hf_repo(*_args, **_kwargs) -> Path:
+        captured["kwargs"] = dict(_kwargs)
         return hf_dir
 
-    monkeypatch.setattr("medarc_verifiers.cli.process.winrate_runner.download_hf_repo", _fake_download_hf_repo)
+    monkeypatch.setattr("medarc_verifiers.cli.process.workspace.download_hf_repo", _fake_download_hf_repo)
 
     cfg = WinrateConfig()
     result = run_winrate(
         processed_dir=tmp_path / "processed",
+        output_dir=tmp_path / "winrate",
         output_path=None,
         config=cfg,
         processed_at="2024-01-01T00:00:00Z",
         hf_config=HFSyncConfig(repo_id="owner/ds", branch=None, token=None, private=False),
     )
+
+    kwargs = captured.get("kwargs")
+    assert isinstance(kwargs, dict)
+    assert "allow_patterns" in kwargs
+    patterns = kwargs["allow_patterns"]
+    if isinstance(patterns, str):
+        patterns = [patterns]
+    assert "env_index.json" in patterns
+    assert any("parquet" in str(item) for item in patterns)
 
     assert result.output_path.exists()
     payload = json.loads(result.output_path.read_text(encoding="utf-8"))

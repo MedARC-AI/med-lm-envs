@@ -22,7 +22,7 @@ from medarc_verifiers.cli._manifest import ManifestJobEntry, RunManifest, comput
 from medarc_verifiers.cli._manifest_planner import ManifestPlanner
 from medarc_verifiers.cli._single_run import run_single_mode
 from medarc_verifiers.cli.process import ProcessOptions, ProcessResult, run_process
-from medarc_verifiers.cli.process.hf_sync import HFSyncConfig
+from medarc_verifiers.cli.process.hf_sync import HFSyncConfig, sync_files_to_hub
 from medarc_verifiers.cli.process.winrate import WinrateConfig
 from medarc_verifiers.cli.process.winrate_runner import (
     _resolve_source,
@@ -41,6 +41,7 @@ from medarc_verifiers.cli._constants import (
     DEFAULT_ENV_DIR,
     DEFAULT_PROCESSED_DIR,
     DEFAULT_RUNS_RAW_DIR,
+    DEFAULT_WINRATE_DIR,
     PROCESS_COMMAND,
     WINRATE_COMMAND,
 )
@@ -217,6 +218,12 @@ def build_process_parser() -> argparse.ArgumentParser:
         help="Include runs where run_manifest.json summary has completed < total.",
     )
     parser.add_argument(
+        "--winrate",
+        type=Path,
+        default=None,
+        help="Run winrate after processing using the provided winrate config file.",
+    )
+    parser.add_argument(
         "--max-workers",
         type=int,
         default=None,
@@ -248,15 +255,27 @@ def build_winrate_parser() -> argparse.ArgumentParser:
         description="Compute HELM-style win rates from processed environment parquet files.",
     )
     parser.add_argument(
+        "-c",
+        "--config",
+        type=Path,
+        help="Path to a YAML/JSON config file providing defaults for winrate options (CLI flags override).",
+    )
+    parser.add_argument(
         "--processed-dir",
         type=Path,
-        default=DEFAULT_PROCESSED_DIR,
-        help="Directory containing processed parquet outputs (default: %(default)s).",
+        default=None,
+        help=f"Directory containing processed parquet outputs (default: {DEFAULT_PROCESSED_DIR}).",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help=f"Directory to store winrate outputs (default: {DEFAULT_WINRATE_DIR}).",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        help="Output path for winrates JSON (default: <processed_dir>/../winrate/winrates-<timestamp>.json).",
+        help="Output path for winrates JSON (skips writing latest.json).",
     )
     parser.add_argument(
         "--output-name",
@@ -269,46 +288,61 @@ def build_winrate_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--missing-policy",
         choices=("zero", "neg-inf"),
-        default="neg-inf",
+        default=None,
         help="Missing reward policy when comparing models (default: %(default)s).",
     )
     parser.add_argument(
         "--epsilon",
         type=float,
-        default=1e-9,
+        default=None,
         help="Tie tolerance epsilon for pairwise comparisons (default: %(default)s).",
     )
     parser.add_argument(
         "--min-common",
         type=int,
-        default=0,
+        default=None,
         help="Minimum overlapping examples per dataset to retain a pairwise result.",
     )
     parser.add_argument(
         "--weight-policy",
         choices=("equal", "ln", "sqrt", "cap"),
-        default="ln",
+        default=None,
         help="Dataset weighting policy when aggregating win rates (default: %(default)s).",
     )
     parser.add_argument(
         "--weight-cap",
         type=int,
-        default=0,
+        default=None,
         help="Cap applied when using --weight-policy=cap (default: %(default)s).",
     )
     parser.add_argument(
         "--include-model",
         action="append",
+        default=None,
         help="Only include these model ids in win rate calculation (repeatable).",
     )
     parser.add_argument(
         "--exclude-model",
         action="append",
+        default=None,
         help="Exclude these model ids from win rate calculation (repeatable).",
     )
-    parser.add_argument("--hf-repo", help="Hugging Face repo id for dataset download.")
-    parser.add_argument("--hf-branch", help="Target HF branch or revision for download.")
+    parser.add_argument("--hf-processed-repo", help="Hugging Face repo id for processed dataset download.")
+    parser.add_argument(
+        "--hf-processed-pull",
+        action="store_true",
+        default=None,
+        help="Pull missing processed files from HF even when --processed-dir is non-empty.",
+    )
+    parser.add_argument("--hf-branch", help="Target HF branch or revision for processed download.")
     parser.add_argument("--hf-token", help="Auth token for HF operations.")
+    parser.add_argument("--hf-winrate-repo", help="Hugging Face repo id for winrate artifact upload.")
+    parser.add_argument(
+        "--hf-private",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Push winrate outputs as private when uploading (default: false).",
+    )
     parser.add_argument(
         "--list-models",
         action="store_true",
@@ -385,6 +419,11 @@ def _run_process_mode(argv: Sequence[str]) -> int:
     if args.config:
         _apply_process_config(args, args.config)
     _finalize_process_args(args)
+    if args.winrate:
+        winrate_path = Path(args.winrate).expanduser()
+        if not winrate_path.exists():
+            parser.error(f"Winrate config not found: {winrate_path}")
+        args.winrate = winrate_path
 
     try:
         env_export_map = _load_env_export_map(args.env_config_root)
@@ -432,6 +471,51 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         return 1
 
     _log_process_result(result)
+
+    if args.winrate:
+        if options.dry_run:
+            logger.info("Skipping winrate post-step for dry-run process.")
+            return 0
+        winrate_args = _build_winrate_args_from_config(Path(args.winrate))
+        winrate_args.processed_dir = options.output_dir
+        winrate_args.hf_processed_repo = None
+        winrate_args.hf_processed_pull = False
+        winrate_cfg = WinrateConfig(
+            missing_policy=winrate_args.missing_policy,
+            epsilon=winrate_args.epsilon,
+            min_common=winrate_args.min_common,
+            weight_policy=winrate_args.weight_policy,
+            weight_cap=winrate_args.weight_cap,
+            include_models=tuple(winrate_args.include_model or ()),
+            exclude_models=tuple(winrate_args.exclude_model or ()),
+        )
+        try:
+            winrate_result = run_winrate(
+                processed_dir=options.output_dir,
+                output_dir=winrate_args.output_dir,
+                output_path=winrate_args.output,
+                output_name=winrate_args.output_name,
+                config=winrate_cfg,
+                processed_at=winrate_args.processed_at,
+                hf_config=None,
+                hf_processed_pull=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Win rate computation failed: %s", exc)
+            return 1
+        logger.info(
+            "Computed win rates for %d dataset(s): %s", len(winrate_result.datasets), winrate_result.output_path
+        )
+        print_winrate_summary_markdown(winrate_result.result)
+        if winrate_args.hf_winrate_repo:
+            _upload_winrate_outputs(
+                output_dir=winrate_args.output_dir,
+                output_paths=winrate_result.output_paths,
+                repo_id=winrate_args.hf_winrate_repo,
+                token=winrate_args.hf_token,
+                private=bool(winrate_args.hf_private),
+            )
+
     return 0
 
 
@@ -481,6 +565,8 @@ def _apply_process_config(args: argparse.Namespace, path: Path) -> None:
             _set_if_unset("max_workers", int(payload["max_workers"]))
         except Exception:
             pass
+    if "winrate" in payload:
+        _set_if_unset("winrate", Path(str(payload["winrate"])))
     if "processed_at" in payload:
         _set_if_unset("processed_at", str(payload["processed_at"]))
     if "dry_run" in payload:
@@ -511,6 +597,133 @@ def _apply_process_config(args: argparse.Namespace, path: Path) -> None:
         _set_if_unset("hf_pull_policy", str(payload["hf_pull_policy"]))
 
 
+def _load_winrate_config(path: Path) -> Mapping[str, Any]:
+    path = Path(path).expanduser()
+    if not path.exists():
+        raise FileNotFoundError(f"Winrate config not found: {path}")
+    raw = path.read_text(encoding="utf-8")
+    suffix = path.suffix.lower()
+    if suffix in {".yaml", ".yml"}:
+        payload = yaml.safe_load(raw)
+    elif suffix == ".json":
+        payload = yaml.safe_load(raw)
+    else:
+        raise ValueError(f"Unsupported winrate config format: {path} (expected .yaml/.yml/.json)")
+    if payload is None:
+        return {}
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"Winrate config must be a mapping at top level: {path}")
+    return payload
+
+
+def _apply_winrate_config(args: argparse.Namespace, path: Path) -> None:
+    """Apply config file defaults to winrate args (CLI flags win)."""
+    payload = dict(_load_winrate_config(path))
+
+    hf_payload = payload.get("hf")
+    if isinstance(hf_payload, Mapping):
+        for key, value in hf_payload.items():
+            if key == "repo":
+                payload.setdefault("hf_processed_repo", value)
+            elif key == "branch":
+                payload.setdefault("hf_branch", value)
+            elif key == "token":
+                payload.setdefault("hf_token", value)
+            elif key == "private":
+                payload.setdefault("hf_private", value)
+            else:
+                payload.setdefault(f"hf_{key}", value)
+
+    if "exclude_models" not in payload and "exclude_model" in payload:
+        payload["exclude_models"] = payload["exclude_model"]
+
+    def _set_if_unset(attr: str, value: Any) -> None:
+        if not hasattr(args, attr):
+            return
+        if getattr(args, attr) is None:
+            setattr(args, attr, value)
+
+    if "processed_dir" in payload:
+        _set_if_unset("processed_dir", Path(str(payload["processed_dir"])))
+    if "output_dir" in payload:
+        _set_if_unset("output_dir", Path(str(payload["output_dir"])))
+    if "output" in payload:
+        _set_if_unset("output", Path(str(payload["output"])))
+    if "output_name" in payload:
+        _set_if_unset("output_name", str(payload["output_name"]))
+    if "processed_at" in payload:
+        _set_if_unset("processed_at", str(payload["processed_at"]))
+    if "missing_policy" in payload:
+        _set_if_unset("missing_policy", str(payload["missing_policy"]))
+    if "epsilon" in payload:
+        try:
+            _set_if_unset("epsilon", float(payload["epsilon"]))
+        except Exception:
+            pass
+    if "min_common" in payload:
+        try:
+            _set_if_unset("min_common", int(payload["min_common"]))
+        except Exception:
+            pass
+    if "weight_policy" in payload:
+        _set_if_unset("weight_policy", str(payload["weight_policy"]))
+    if "weight_cap" in payload:
+        try:
+            _set_if_unset("weight_cap", int(payload["weight_cap"]))
+        except Exception:
+            pass
+    if "include_models" in payload:
+        include_value = payload["include_models"]
+        if isinstance(include_value, str):
+            _set_if_unset("include_model", [include_value])
+        elif isinstance(include_value, Sequence):
+            _set_if_unset("include_model", [str(item) for item in include_value if str(item).strip()])
+    if "exclude_models" in payload:
+        exclude_value = payload["exclude_models"]
+        if isinstance(exclude_value, str):
+            _set_if_unset("exclude_model", [exclude_value])
+        elif isinstance(exclude_value, Sequence):
+            _set_if_unset("exclude_model", [str(item) for item in exclude_value if str(item).strip()])
+    if "hf_processed_repo" in payload:
+        _set_if_unset("hf_processed_repo", str(payload["hf_processed_repo"]))
+    if "hf_processed_pull" in payload:
+        _set_if_unset("hf_processed_pull", bool(payload["hf_processed_pull"]))
+    if "hf_winrate_repo" in payload:
+        _set_if_unset("hf_winrate_repo", str(payload["hf_winrate_repo"]))
+    if "hf_branch" in payload:
+        _set_if_unset("hf_branch", str(payload["hf_branch"]))
+    if "hf_token" in payload:
+        _set_if_unset("hf_token", str(payload["hf_token"]))
+    if "hf_private" in payload:
+        _set_if_unset("hf_private", bool(payload["hf_private"]))
+
+
+def _build_winrate_args_from_config(path: Path) -> argparse.Namespace:
+    args = argparse.Namespace(
+        processed_dir=None,
+        output_dir=None,
+        output=None,
+        output_name=None,
+        processed_at=None,
+        missing_policy=None,
+        epsilon=None,
+        min_common=None,
+        weight_policy=None,
+        weight_cap=None,
+        include_model=None,
+        exclude_model=None,
+        hf_processed_repo=None,
+        hf_processed_pull=None,
+        hf_winrate_repo=None,
+        hf_branch=None,
+        hf_token=None,
+        hf_private=None,
+    )
+    _apply_winrate_config(args, path)
+    _finalize_winrate_args(args)
+    return args
+
+
 def _finalize_process_args(args: argparse.Namespace) -> None:
     """Fill any unset process args with their defaults (config overrides defaults)."""
     if getattr(args, "runs_dir", None) is None:
@@ -533,24 +746,91 @@ def _finalize_process_args(args: argparse.Namespace) -> None:
         args.process_incomplete = False
 
 
+def _finalize_winrate_args(args: argparse.Namespace) -> None:
+    """Fill any unset winrate args with their defaults (config overrides defaults)."""
+    if getattr(args, "processed_dir", None) is None:
+        args.processed_dir = DEFAULT_PROCESSED_DIR
+    if getattr(args, "output_dir", None) is None:
+        args.output_dir = DEFAULT_WINRATE_DIR
+    if getattr(args, "missing_policy", None) is None:
+        args.missing_policy = "neg-inf"
+    if getattr(args, "epsilon", None) is None:
+        args.epsilon = 1e-9
+    if getattr(args, "min_common", None) is None:
+        args.min_common = 0
+    if getattr(args, "weight_policy", None) is None:
+        args.weight_policy = "ln"
+    if getattr(args, "weight_cap", None) is None:
+        args.weight_cap = 0
+    if getattr(args, "include_model", None) is None:
+        args.include_model = []
+    if getattr(args, "exclude_model", None) is None:
+        args.exclude_model = []
+    if getattr(args, "hf_processed_pull", None) is None:
+        args.hf_processed_pull = False
+    if getattr(args, "hf_private", None) is None:
+        args.hf_private = False
+
+
+def _upload_winrate_outputs(
+    *,
+    output_dir: Path,
+    output_paths: Sequence[Path],
+    repo_id: str,
+    token: str | None,
+    private: bool,
+) -> None:
+    if not output_paths:
+        return
+    output_dir = Path(output_dir)
+    files: list[str] = []
+    for path in output_paths:
+        try:
+            rel_path = path.relative_to(output_dir).as_posix()
+        except ValueError:
+            if len(output_paths) == 1:
+                output_dir = path.parent
+                files = [path.name]
+                break
+            logger.warning("Winrate output %s is outside output_dir %s; skipping upload.", path, output_dir)
+            return
+        files.append(rel_path)
+    message = f"Update {len(files)} winrate file(s) from medarc-eval winrate"
+    sync_files_to_hub(
+        repo_id=repo_id,
+        output_dir=output_dir,
+        files=files,
+        token=token,
+        private=private,
+        message=message,
+    )
+
+
 def _run_winrate_mode(argv: Sequence[str]) -> int:
     parser = build_winrate_parser()
     args = parser.parse_args(argv)
 
+    if args.config:
+        _apply_winrate_config(args, args.config)
+    _finalize_winrate_args(args)
+
     hf_config = HFSyncConfig.from_cli(
-        repo=args.hf_repo,
+        repo=args.hf_processed_repo,
         branch=args.hf_branch,
         token=args.hf_token,
         private=False,
         dry_run=False,
     )
 
-    source_dir, datasets, source_desc = _resolve_source(args.processed_dir, hf_config if args.hf_repo else None)
-    if not datasets:
-        logger.error("No datasets found from %s.", source_desc)
-        return 1
-
     if args.list_models:
+        source_dir, datasets, source_desc = _resolve_source(
+            args.processed_dir,
+            hf_config=hf_config if args.hf_processed_repo else None,
+            hf_processed_pull=bool(args.hf_processed_pull),
+        )
+        if not datasets:
+            logger.error("No datasets found from %s.", source_desc)
+            return 1
         models = list_models(datasets)
         if models:
             print("\n".join(models))
@@ -570,12 +850,14 @@ def _run_winrate_mode(argv: Sequence[str]) -> int:
 
     try:
         winrate_result = run_winrate(
-            processed_dir=source_dir,
+            processed_dir=args.processed_dir,
+            output_dir=args.output_dir,
             output_path=args.output,
             output_name=args.output_name,
             config=cfg,
             processed_at=args.processed_at,
             hf_config=hf_config,
+            hf_processed_pull=bool(args.hf_processed_pull),
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("Win rate computation failed: %s", exc)
@@ -583,6 +865,14 @@ def _run_winrate_mode(argv: Sequence[str]) -> int:
 
     logger.info("Computed win rates for %d dataset(s): %s", len(winrate_result.datasets), winrate_result.output_path)
     print_winrate_summary_markdown(winrate_result.result)
+    if args.hf_winrate_repo:
+        _upload_winrate_outputs(
+            output_dir=args.output_dir,
+            output_paths=winrate_result.output_paths,
+            repo_id=args.hf_winrate_repo,
+            token=args.hf_token,
+            private=bool(args.hf_private),
+        )
     return 0
 
 

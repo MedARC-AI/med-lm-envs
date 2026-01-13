@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -11,7 +12,8 @@ from typing import Sequence
 from medarc_verifiers.cli._constants import COMMAND, PROCESS_COMMAND
 from medarc_verifiers.cli.process import winrate as _win
 from medarc_verifiers.cli.process.env_index import read_env_index_inventory
-from medarc_verifiers.cli.process.hf_sync import HFSyncConfig, download_hf_repo
+from medarc_verifiers.cli.process.hf_sync import HFSyncConfig
+from medarc_verifiers.cli.process import workspace
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +25,7 @@ class WinrateRunResult:
     output_path: Path
     result: _win.ModelCentricResult
     datasets: Sequence[tuple[str, Sequence[Path]]]
+    output_paths: Sequence[Path] = ()
 
 
 def discover_datasets(processed_dir: Path) -> list[tuple[str, list[Path]]]:
@@ -41,29 +44,48 @@ def discover_datasets(processed_dir: Path) -> list[tuple[str, list[Path]]]:
 def run_winrate(
     *,
     processed_dir: Path,
+    output_dir: Path,
     output_path: Path | None,
     output_name: str | None = None,
     config: _win.WinrateConfig,
     processed_at: str | None = None,
     hf_config: HFSyncConfig | None = None,
+    hf_processed_pull: bool = False,
 ) -> WinrateRunResult:
-    local_dir, datasets, source_desc = _resolve_source(processed_dir, hf_config)
+    local_dir, datasets, source_desc = _resolve_source(
+        processed_dir,
+        hf_config=hf_config,
+        hf_processed_pull=hf_processed_pull,
+    )
     if not datasets:
         raise ValueError(f"No datasets found from {source_desc}.")
 
-    resolved_output = output_path or _default_winrate_path(
-        processed_dir, processed_at=processed_at, base_name=output_name
+    resolved_output, output_paths, csv_paths = _resolve_output_paths(
+        output_dir=output_dir,
+        output_path=output_path,
+        output_name=output_name,
+        processed_at=processed_at,
     )
     result = _win.compute_winrates(datasets, config)
     _win.write_json(_win.to_json(result), resolved_output)
-    return WinrateRunResult(output_path=resolved_output, result=result, datasets=datasets)
+    for extra_path in output_paths:
+        if extra_path == resolved_output:
+            continue
+        _win.write_json(_win.to_json(result), extra_path)
+    for csv_path in csv_paths:
+        _write_model_csv(result, csv_path)
+    return WinrateRunResult(
+        output_path=resolved_output,
+        result=result,
+        datasets=datasets,
+        output_paths=tuple(output_paths) + tuple(csv_paths) or (resolved_output,),
+    )
 
 
-def _default_winrate_path(processed_dir: Path, *, processed_at: str | None, base_name: str | None) -> Path:
+def _default_winrate_path(output_dir: Path, *, processed_at: str | None, base_name: str | None) -> Path:
     timestamp = _format_timestamp_for_filename(processed_at)
-    root = _winrate_root(processed_dir)
     base = (base_name.strip() if base_name else "winrates") or "winrates"
-    return root / "winrate" / f"{base}-{timestamp}.json"
+    return output_dir / f"{base}-{timestamp}.json"
 
 
 def _format_timestamp_for_filename(processed_at: str | None) -> str:
@@ -77,31 +99,80 @@ def _format_timestamp_for_filename(processed_at: str | None) -> str:
     return dt.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
-def _winrate_root(processed_dir: Path) -> Path:
-    parent = processed_dir.parent
-    if parent == processed_dir:
-        return processed_dir
-    return parent
+def _resolve_output_paths(
+    *,
+    output_dir: Path,
+    output_path: Path | None,
+    output_name: str | None,
+    processed_at: str | None,
+) -> tuple[Path, Sequence[Path], Sequence[Path]]:
+    if output_path is not None:
+        return output_path, (output_path,), ()
+    resolved = _default_winrate_path(output_dir, processed_at=processed_at, base_name=output_name)
+    latest = output_dir / "latest.json"
+    latest_csv = output_dir / "latest.csv"
+    timestamp_csv = resolved.with_suffix(".csv")
+    return resolved, (resolved, latest), (timestamp_csv, latest_csv)
 
 
 def _resolve_source(
     processed_dir: Path,
+    *,
     hf_config: HFSyncConfig | None,
+    hf_processed_pull: bool,
 ) -> tuple[Path, list[tuple[str, list[Path]]], str]:
     if hf_config and hf_config.repo_id:
-        local_dir = download_hf_repo(
-            repo_id=hf_config.repo_id,
-            branch=hf_config.branch,
-            token=hf_config.token,
-            local_dir=None,
-            local_only=False,
-        )
+        local_dir = processed_dir
+        should_pull = hf_processed_pull or not workspace.is_nonempty_dir(local_dir)
+        if should_pull:
+            workspace.prepare_hf_baseline(
+                output_dir=local_dir,
+                hf_config=hf_config,
+                pull_policy="pull",
+                is_tty=False,
+                prompt_func=None,
+            )
         datasets = discover_datasets(local_dir)
         source_desc = f"HF repo {hf_config.repo_id}"
         return local_dir, datasets, source_desc
     datasets = discover_datasets(processed_dir)
     source_desc = f"processed dir {processed_dir}"
     return processed_dir, datasets, source_desc
+
+
+def _write_model_csv(result: _win.ModelCentricResult, path: Path) -> None:
+    models = result.models or {}
+    dataset_names: set[str] = set()
+    for payload in models.values():
+        if not isinstance(payload, dict):
+            continue
+        avg_rewards = payload.get("avg_reward_per_dataset")
+        if isinstance(avg_rewards, dict):
+            dataset_names.update(str(name) for name in avg_rewards.keys())
+    ordered_datasets = sorted(dataset_names)
+    headers = ["model", "weighted_winrate", "simple_winrate", *ordered_datasets, "num_datasets"]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(headers)
+        for model, payload in sorted(models.items(), key=lambda item: str(item[0])):
+            if not isinstance(payload, dict):
+                continue
+            mean_payload = payload.get("mean_winrate", {}) if isinstance(payload, dict) else {}
+            simple_mean = mean_payload.get("simple_mean")
+            weighted_mean = mean_payload.get("weighted_mean")
+            n_datasets = mean_payload.get("n_datasets", 0)
+            avg_rewards = payload.get("avg_reward_per_dataset", {})
+            row = [
+                str(model),
+                weighted_mean,
+                simple_mean,
+            ]
+            for dataset in ordered_datasets:
+                value = avg_rewards.get(dataset) if isinstance(avg_rewards, dict) else None
+                row.append(value)
+            row.append(n_datasets)
+            writer.writerow(row)
 
 
 def list_models(datasets: Sequence[tuple[str, Sequence[Path]]]) -> list[str]:

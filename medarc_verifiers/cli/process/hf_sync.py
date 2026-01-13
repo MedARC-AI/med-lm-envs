@@ -52,6 +52,64 @@ class HFSyncSummary:
     files: Sequence[str]
 
 
+def sync_files_to_hub(
+    *,
+    repo_id: str,
+    output_dir: Path,
+    files: Sequence[str | Path],
+    token: str | None,
+    private: bool,
+    message: str,
+    branch: str | None = None,
+    dry_run: bool = False,
+) -> None:
+    """Upload explicit file paths from output_dir to a HF dataset repo."""
+    if not repo_id:
+        logger.debug("HF sync skipped: no repo_id provided.")
+        return
+    file_list = []
+    for path in files:
+        rel_path = Path(path).as_posix() if not isinstance(path, str) else Path(path).as_posix()
+        if rel_path:
+            file_list.append(rel_path)
+    if not file_list:
+        logger.debug("HF sync skipped: no files provided.")
+        return
+    if dry_run:
+        logger.debug("HF sync dry-run; skipping push.")
+        return
+
+    try:
+        from huggingface_hub import CommitOperationAdd, HfApi  # type: ignore[import-not-found]
+    except Exception as exc:  # noqa: BLE001
+        raise ImportError("huggingface_hub is required for HF uploads.") from exc
+
+    api = HfApi(token=token)
+    if private:
+        api.create_repo(
+            repo_id=repo_id,
+            repo_type="dataset",
+            private=True,
+            exist_ok=True,
+        )
+    operations = []
+    output_dir = Path(output_dir)
+    for rel_path in file_list:
+        operations.append(
+            CommitOperationAdd(
+                path_in_repo=rel_path,
+                path_or_fileobj=str(output_dir / rel_path),
+            )
+        )
+    api.create_commit(
+        repo_id=repo_id,
+        repo_type="dataset",
+        operations=operations,
+        commit_message=message,
+        revision=branch,
+    )
+
+
 def sync_to_hub(
     env_summaries: Sequence[EnvWriteSummary],
     config: HFSyncConfig,
@@ -102,38 +160,16 @@ def sync_to_hub(
         files=files,
     )
 
-    if config.dry_run:
-        logger.debug("HF sync dry-run; skipping push.")
-        return summary
-
-    try:
-        from huggingface_hub import CommitOperationAdd, HfApi  # type: ignore[import-not-found]
-    except Exception as exc:  # noqa: BLE001
-        raise ImportError("huggingface_hub is required for HF uploads.") from exc
-
-    api = HfApi(token=config.token)
-    if config.private:
-        api.create_repo(
-            repo_id=config.repo_id,
-            repo_type="dataset",
-            private=True,
-            exist_ok=True,
-        )
-    operations = []
-    for rel_path in files:
-        operations.append(
-            CommitOperationAdd(
-                path_in_repo=rel_path,
-                path_or_fileobj=str(output_dir / rel_path),
-            )
-        )
     message = f"Update {summary.total_files} file(s) from medarc-eval process"
-    api.create_commit(
+    sync_files_to_hub(
         repo_id=config.repo_id,
-        repo_type="dataset",
-        operations=operations,
-        commit_message=message,
-        revision=config.branch,
+        output_dir=output_dir,
+        files=files,
+        token=config.token,
+        private=config.private,
+        message=message,
+        branch=config.branch,
+        dry_run=config.dry_run,
     )
     return summary
 
@@ -184,5 +220,6 @@ def download_hf_repo(
 __all__ = [
     "HFSyncSummary",
     "HFSyncConfig",
+    "sync_files_to_hub",
     "sync_to_hub",
 ]
