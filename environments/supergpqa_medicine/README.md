@@ -19,7 +19,7 @@
 
 ### Task
 - **Type**: single-turn
-- **Parser**: `Parser` or `ThinkParser`, with `extract_fn=extract_boxed_answer` for strict letter-in-\boxed{}-format parsing
+- **Parser**: `Parser` with `extract_fn=extract_boxed_answer` for strict letter-in-\boxed{}-format parsing
 - **Rubric overview**: Binary scoring based on correctly boxed letter choice and optional think tag formatting
 
 ### Quickstart
@@ -50,8 +50,7 @@ Notes:
 | ---------- | ------------------------------------------------------------------------- | ------- | ----------- |
 | `field`    | `"all"` or one of `basic_medicine`, `clinical_medicine`, `pharmacy`, `public_health_and_preventive_medicine`, `stomatology`, `traditional_chinese_medicine` | `all` | Filter by medical field. |
 | `difficulty` | `"all"`, `"easy"`, `"middle"`, `"hard"`                                 | `all` | Filter by question difficulty. |
-| `num_few_shot` | `0` or `5`                                                            | `0` | Include fixed five-shot prefix when set to 5. |
-| `use_think` | bool                                                                    | `False` | Use `<think>...</think>` formatting and ThinkParser. |
+| `few_shot` | bool                                                                    | `False` | Include fixed five-shot examples in prompts when `True`. |
 | `shuffle_answers` | bool                                                              | `False` | Shuffle answer choices per row. |
 | `shuffle_seed` | int or `null`                                                        | `1618` | Seed for deterministic shuffling when enabled. |
 | `jitter_age` | bool                                                                   | `False` | Add small decimal jitter (~±2 weeks) to age mentions. |
