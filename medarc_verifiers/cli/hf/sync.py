@@ -6,9 +6,10 @@ import logging
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
-from medarc_verifiers.cli.process.writer import EnvWriteSummary
+if TYPE_CHECKING:
+    from medarc_verifiers.cli.process.writer import EnvWriteSummary
 
 logger = logging.getLogger(__name__)
 

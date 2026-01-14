@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
-from medarc_verifiers.cli.process.hf_sync import HFSyncConfig, download_hf_repo
+from medarc_verifiers.cli.hf import HFSyncConfig, download_hf_repo
 
 
 @dataclass(slots=True)

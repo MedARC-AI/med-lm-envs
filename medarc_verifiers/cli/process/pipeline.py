@@ -11,11 +11,11 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from medarc_verifiers.cli._schemas import EnvironmentExportConfig
+from medarc_verifiers.cli import hf as hf_sync
 from medarc_verifiers.cli.process import (
     aggregate,
     discovery,
     env_index,
-    hf_sync,
     metadata,
     rows,
     rollout,
@@ -23,7 +23,7 @@ from medarc_verifiers.cli.process import (
     workspace,
 )
 from medarc_verifiers.cli.process.aggregate import AggregatedEnvRows
-from medarc_verifiers.cli.process.hf_sync import HFSyncConfig, HFSyncSummary
+from medarc_verifiers.cli.hf import HFSyncConfig, HFSyncSummary
 from medarc_verifiers.cli.process.writer import EnvWriteSummary, WriterConfig
 
 logger = logging.getLogger(__name__)

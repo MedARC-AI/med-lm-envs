@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from medarc_verifiers.cli.process.hf_sync import HFSyncConfig
+from medarc_verifiers.cli.hf import HFSyncConfig
 from medarc_verifiers.cli.process import workspace
 
 

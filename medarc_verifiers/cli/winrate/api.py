@@ -6,6 +6,7 @@ import json
 import logging
 import math
 from dataclasses import dataclass
+from functools import lru_cache
 from itertools import combinations
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -31,6 +32,7 @@ class WinrateConfig:
     weight_cap: int = 0
     include_models: tuple[str, ...] = ()
     exclude_models: tuple[str, ...] = ()
+    partial_datasets: str = "strict"  # "strict" or "include"
 
 
 @dataclass(slots=True)
@@ -121,6 +123,43 @@ def to_wide(df_avg: pl.DataFrame) -> tuple[pl.DataFrame, list[str]]:
     return df_wide, model_cols
 
 
+def _pairwise_win_rate_series(
+    a: pl.Series,
+    b: pl.Series,
+    *,
+    missing_policy: str = "neg-inf",
+    epsilon: float = 1e-9,
+    min_common: int = 0,
+) -> tuple[float | None, int]:
+    """Calculate win rate for two reward series."""
+    a = a.cast(pl.Float64)
+    b = b.cast(pl.Float64)
+    a_is_null = a.is_null()
+    b_is_null = b.is_null()
+    a_not_null = ~a_is_null
+    b_not_null = ~b_is_null
+    used = ~(a_is_null & b_is_null)
+    n_used = int(used.sum() or 0)
+    if n_used == 0 or n_used < min_common:
+        return None, 0
+
+    fill_val = float("-inf") if missing_policy == "neg-inf" else 0.0
+    a2 = a.set(a_is_null & b_not_null, fill_val)
+    b2 = b.set(b_is_null & a_not_null, fill_val)
+
+    a_used = a2.filter(used)
+    b_used = b2.filter(used)
+    diff = a_used - b_used
+    greater = diff > epsilon
+    less = diff < -epsilon
+    tie = ~(greater | less)
+    comp = greater.cast(pl.Float64) + tie.cast(pl.Float64) * 0.5
+    win_rate = comp.mean()
+    if win_rate is None:
+        return None, 0
+    return float(win_rate), n_used
+
+
 def pairwise_win_rate(
     df_wide: pl.DataFrame,
     model_a: str,
@@ -133,40 +172,15 @@ def pairwise_win_rate(
     """Calculate win rate of model_a vs model_b for a dataset."""
     if model_a not in df_wide.columns or model_b not in df_wide.columns:
         return None, 0
-
-    a = pl.col(model_a)
-    b = pl.col(model_b)
-    fill_val = float("-inf") if missing_policy == "neg-inf" else 0.0
-
-    out = (
-        df_wide.with_columns(
-            [
-                pl.when(a.is_null() & b.is_not_null()).then(pl.lit(fill_val)).otherwise(a).alias("a2"),
-                pl.when(b.is_null() & a.is_not_null()).then(pl.lit(fill_val)).otherwise(b).alias("b2"),
-            ]
-        )
-        .with_columns(
-            [
-                (pl.col("a2").is_not_null() | pl.col("b2").is_not_null()).alias("used"),
-                (
-                    pl.when((pl.col("a2") - pl.col("b2")) > epsilon)
-                    .then(1.0)
-                    .when((pl.col("b2") - pl.col("a2")) > epsilon)
-                    .then(0.0)
-                    .otherwise(0.5)
-                    .alias("comp")
-                ),
-            ]
-        )
-        .filter(pl.col("used"))
-        .select("comp")
+    a = df_wide.get_column(model_a)
+    b = df_wide.get_column(model_b)
+    return _pairwise_win_rate_series(
+        a,
+        b,
+        missing_policy=missing_policy,
+        epsilon=epsilon,
+        min_common=min_common,
     )
-
-    n_used = out.height
-    if n_used == 0 or n_used < min_common:
-        return None, 0
-    win_rate = out.select(pl.col("comp").mean()).item()
-    return float(win_rate), n_used
 
 
 def weight_of(nq: int, policy: str, cap: int) -> float:
@@ -209,14 +223,36 @@ def dataset_model_mean_winrates(
 def compute_winrates(
     datasets: Sequence[tuple[str, Path | str | Sequence[Path | str]]],
     config: WinrateConfig | None = None,
+    *,
+    known_models: Sequence[str] | None = None,
 ) -> ModelCentricResult:
     """Compute win rates for a list of datasets."""
     cfg = config or WinrateConfig()
+    include_set = _normalize_model_ids(cfg.include_models)
+    exclude_set = _normalize_model_ids(cfg.exclude_models)
+    target_models = sorted(include_set - exclude_set) if include_set else []
+    partial_datasets = str(cfg.partial_datasets or "strict").lower()
+    known_model_set = _normalize_model_ids(known_models)
+
+    if include_set and not target_models:
+        _raise_user_error("No models remain after applying include/exclude filters.")
+    if partial_datasets not in {"strict", "include"}:
+        _raise_user_error(f"Unsupported partial_datasets policy: {cfg.partial_datasets}")
+
+    if known_model_set:
+        unknown_includes = include_set - known_model_set
+        if unknown_includes:
+            _raise_user_error(f"Unknown include model ids: {sorted(unknown_includes)}")
+        unknown_excludes = exclude_set - known_model_set
+        if unknown_excludes:
+            _warn_user(f"Unknown exclude model ids ignored: {sorted(unknown_excludes)}")
+
     per_dataset_pairwise: dict[str, dict[tuple[str, str], tuple[float | None, int]]] = {}
     per_dataset_model_means: dict[str, dict[str, float]] = {}
     avg_rewards_by_dataset: dict[str, dict[str, float | None]] = {}
     n_questions_by_ds: dict[str, int] = {}
     models_by_ds: dict[str, list[str]] = {}
+    seen_models: set[str] = set()
 
     dataset_iter: Iterable[tuple[str, Path | str]] = datasets
     try:
@@ -227,7 +263,16 @@ def compute_winrates(
         dataset_iter = datasets
 
     for dataset_name, parquet_path in dataset_iter:
-        stats = _safe_process_dataset(dataset_name, parquet_path, cfg)
+        stats, models_present = _process_dataset(
+            dataset_name,
+            parquet_path,
+            cfg,
+            include_set=include_set,
+            exclude_set=exclude_set,
+            target_models=target_models,
+            partial_datasets=partial_datasets,
+        )
+        seen_models.update(models_present)
         if not stats:
             continue
         per_dataset_pairwise[dataset_name] = stats.pairwise
@@ -235,6 +280,16 @@ def compute_winrates(
         avg_rewards_by_dataset[dataset_name] = stats.avg_reward_per_model
         n_questions_by_ds[dataset_name] = stats.n_questions
         models_by_ds[dataset_name] = stats.models
+
+    if not known_model_set:
+        if include_set:
+            unknown_includes = include_set - seen_models
+            if unknown_includes:
+                _raise_user_error(f"Unknown include model ids: {sorted(unknown_includes)}")
+        if exclude_set:
+            unknown_excludes = exclude_set - seen_models
+            if unknown_excludes:
+                _warn_user(f"Unknown exclude model ids ignored: {sorted(unknown_excludes)}")
 
     return build_model_centric_result(
         per_dataset_pairwise=per_dataset_pairwise,
@@ -397,40 +452,76 @@ def _aggregate_model_means(
     return out
 
 
-def _safe_process_dataset(
+def _process_dataset(
     dataset_name: str,
     parquet_path: Path | str | Sequence[Path | str] | PLDataFrame | PLLazyFrame,
     config: WinrateConfig,
-) -> DatasetStats | None:
-    """Read and process a dataset, logging warnings on failure."""
+    *,
+    include_set: set[str],
+    exclude_set: set[str],
+    target_models: Sequence[str],
+    partial_datasets: str,
+) -> tuple[DatasetStats | None, list[str]]:
+    """Read and process a dataset, raising on failure and honoring selection policies."""
     try:
         lf = read_dataset_lazy(parquet_path)
         df_avg, n_questions = average_rollouts(lf)
-        df_wide, models = to_wide(df_avg)
-        models = _filter_models(sorted(dict.fromkeys(models)), config.include_models, config.exclude_models)
-        if models:
+        models_present = _models_present(df_avg)
+
+        if include_set:
+            missing_required = sorted(set(target_models) - set(models_present))
+            if missing_required and partial_datasets == "strict":
+                _emit_note(
+                    f"Dropping dataset {dataset_name} (missing include models: {missing_required})."
+                )
+                return None, models_present
+
+        if include_set:
+            models_filtered = [m for m in target_models if m in models_present]
+        else:
+            models_filtered = [m for m in models_present if m not in exclude_set]
+        if models_filtered:
+            df_filtered = df_avg.filter(pl.col(MODEL_COL).is_in(models_filtered))
+        else:
+            df_filtered = df_avg.head(0)
+
+        df_wide, _ = to_wide(df_filtered)
+        if include_set:
+            missing_cols = [m for m in target_models if m not in df_wide.columns]
+            if missing_cols:
+                df_wide = df_wide.with_columns([pl.lit(None).alias(m) for m in missing_cols])
+            models = list(target_models)
+        else:
+            models = list(models_filtered)
+        if models and EXAMPLE_ID_COL in df_wide.columns:
             df_wide = df_wide.select([EXAMPLE_ID_COL, *models])
+
         pairwise: dict[tuple[str, str], tuple[float | None, int]] = {}
+        model_series = {m: df_wide.get_column(m) for m in models}
         for a, b in combinations(models, 2):
-            wr, n_used = pairwise_win_rate(
-                df_wide,
-                a,
-                b,
+            wr, n_used = _pairwise_win_rate_series(
+                model_series[a],
+                model_series[b],
                 missing_policy=config.missing_policy,
                 epsilon=config.epsilon,
                 min_common=config.min_common,
             )
             pairwise[(a, b)] = (wr, n_used)
         avg_reward_per_model = _mean_reward_per_model(df_avg, allowed=models)
-        return DatasetStats(
-            pairwise=pairwise,
-            n_questions=n_questions,
-            models=models,
-            avg_reward_per_model=avg_reward_per_model,
+        return (
+            DatasetStats(
+                pairwise=pairwise,
+                n_questions=n_questions,
+                models=models,
+                avg_reward_per_model=avg_reward_per_model,
+            ),
+            models_present,
         )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Skipping dataset %s at %s: %s", dataset_name, parquet_path, exc)
-        return None
+        message = (
+            f"Failed to process dataset {dataset_name} at {_format_parquet_source(parquet_path)}: {exc}"
+        )
+        _raise_user_error(message, exc)
 
 
 def _mean_reward_per_model(df_avg: pl.DataFrame, allowed: Sequence[str] | None = None) -> dict[str, float | None]:
@@ -451,13 +542,24 @@ def _mean_reward_per_model(df_avg: pl.DataFrame, allowed: Sequence[str] | None =
     return rewards
 
 
+def _models_present(df_avg: pl.DataFrame) -> list[str]:
+    if df_avg.is_empty() or MODEL_COL not in df_avg.columns:
+        return []
+    values = df_avg.get_column(MODEL_COL).unique()
+    return sorted(str(value) for value in values if value is not None)
+
+
+def _normalize_model_ids(values: Sequence[str] | None) -> set[str]:
+    return {str(value).strip() for value in values or [] if str(value).strip()}
+
+
 def _filter_models(
     models: Sequence[str],
     include: Sequence[str] | None,
     exclude: Sequence[str] | None,
 ) -> list[str]:
-    include_set = {str(m).strip() for m in include or [] if str(m).strip()}
-    exclude_set = {str(m).strip() for m in exclude or [] if str(m).strip()}
+    include_set = _normalize_model_ids(include)
+    exclude_set = _normalize_model_ids(exclude)
     filtered: list[str] = []
     for model in models:
         if exclude_set and model in exclude_set:
@@ -466,6 +568,62 @@ def _filter_models(
             continue
         filtered.append(model)
     return filtered
+
+
+def _format_parquet_source(
+    parquet_path: Path | str | Sequence[Path | str] | PLDataFrame | PLLazyFrame,
+) -> str:
+    if isinstance(parquet_path, (PLDataFrame, PLLazyFrame)):
+        return "<in-memory frame>"
+    if isinstance(parquet_path, (list, tuple)):
+        parts: list[str] = []
+        for item in parquet_path:
+            if isinstance(item, (PLDataFrame, PLLazyFrame)):
+                parts.append("<in-memory frame>")
+            else:
+                parts.append(str(Path(item)))
+        return ", ".join(parts)
+    return str(Path(parquet_path))
+
+
+def _emit_note(message: str) -> None:
+    console = _get_console()
+    if console:
+        console.print(f"[yellow]Note:[/] {message}")
+    else:
+        print(f"Note: {message}")
+
+
+def _warn_user(message: str) -> None:
+    console = _get_console()
+    if console:
+        console.print(f"[yellow]Warning:[/] {message}")
+    else:
+        print(f"Warning: {message}")
+
+
+def _raise_user_error(message: str, exc: Exception | None = None) -> None:
+    console = _get_console()
+    if console:
+        console.print(f"[red]Error:[/] {message}")
+    else:
+        print(f"Error: {message}")
+    if exc is not None:
+        raise ValueError(message) from exc
+    raise ValueError(message)
+
+
+def _get_console():  # type: ignore[no-untyped-def]
+    return _cached_console()
+
+
+@lru_cache(maxsize=1)
+def _cached_console():  # type: ignore[no-untyped-def]
+    try:
+        from rich.console import Console
+    except Exception:
+        return None
+    return Console()
 
 
 def to_json(result: ModelCentricResult) -> dict[str, Any]:

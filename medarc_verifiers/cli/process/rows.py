@@ -206,6 +206,8 @@ def _attach_metadata(
 
 def _flatten_token_usage(row: MutableMapping[str, Any]) -> None:
     """Flatten token_usage dict into explicit columns and drop the original field."""
+    if "token_usage" not in row:
+        return
     usage = row.pop("token_usage", None)
 
     def _extract(role: str, key: str) -> Any:
@@ -222,14 +224,14 @@ def _flatten_token_usage(row: MutableMapping[str, Any]) -> None:
         except Exception:
             return None
 
-    if not isinstance(usage, Mapping):
-        return
-
     for role in ("judge", "model"):
         row[f"{role}_cost"] = None
         row[f"{role}_token_completion"] = None
         row[f"{role}_token_prompt"] = None
         row[f"{role}_token_total"] = None
+
+    if not isinstance(usage, Mapping):
+        return
 
     for role in ("judge", "model"):
         row[f"{role}_cost"] = _extract(role, "cost")

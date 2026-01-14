@@ -84,4 +84,28 @@ def read_env_index_files(processed_dir: Path) -> dict[str, Mapping[str, Any]]:
     return {str(k): v for k, v in files.items() if isinstance(v, Mapping)}
 
 
-__all__ = ["EnvIndexInventory", "read_env_index_inventory", "read_env_index_runs", "read_env_index_files"]
+def read_env_index_models(processed_dir: Path) -> set[str]:
+    """Return model ids listed in env_index.json (v2 only)."""
+    payload = load_env_index(processed_dir / "env_index.json")
+    if not isinstance(payload, Mapping) or int(payload.get("version") or 1) != 2:
+        return set()
+    files = payload.get("files")
+    if not isinstance(files, Mapping):
+        return set()
+    models: set[str] = set()
+    for entry in files.values():
+        if not isinstance(entry, Mapping):
+            continue
+        model_id = entry.get("model_id")
+        if model_id:
+            models.add(str(model_id))
+    return models
+
+
+__all__ = [
+    "EnvIndexInventory",
+    "read_env_index_inventory",
+    "read_env_index_runs",
+    "read_env_index_files",
+    "read_env_index_models",
+]

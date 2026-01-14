@@ -22,9 +22,9 @@ from medarc_verifiers.cli._manifest import ManifestJobEntry, RunManifest, comput
 from medarc_verifiers.cli._manifest_planner import ManifestPlanner
 from medarc_verifiers.cli._single_run import run_single_mode
 from medarc_verifiers.cli.process import ProcessOptions, ProcessResult, run_process
-from medarc_verifiers.cli.process.hf_sync import HFSyncConfig, sync_files_to_hub
-from medarc_verifiers.cli.process.winrate import WinrateConfig
-from medarc_verifiers.cli.process.winrate_runner import (
+from medarc_verifiers.cli.hf import HFSyncConfig, sync_files_to_hub
+from medarc_verifiers.cli.winrate import WinrateConfig
+from medarc_verifiers.cli.winrate import (
     _resolve_source,
     list_models,
     print_winrate_summary_markdown,
@@ -327,6 +327,16 @@ def build_winrate_parser() -> argparse.ArgumentParser:
         default=None,
         help="Exclude these model ids from win rate calculation (repeatable).",
     )
+    parser.add_argument(
+        "--partial-datasets",
+        choices=("strict", "include"),
+        default=None,
+        help=(
+            "Dataset selection policy when --include-model is set: "
+            "strict drops datasets missing any included models, "
+            "include keeps them with missing models treated as all-missing."
+        ),
+    )
     parser.add_argument("--hf-processed-repo", help="Hugging Face repo id for processed dataset download.")
     parser.add_argument(
         "--hf-processed-pull",
@@ -488,6 +498,7 @@ def _run_process_mode(argv: Sequence[str]) -> int:
             weight_cap=winrate_args.weight_cap,
             include_models=tuple(winrate_args.include_model or ()),
             exclude_models=tuple(winrate_args.exclude_model or ()),
+            partial_datasets=winrate_args.partial_datasets,
         )
         try:
             winrate_result = run_winrate(
@@ -672,6 +683,8 @@ def _apply_winrate_config(args: argparse.Namespace, path: Path) -> None:
             _set_if_unset("weight_cap", int(payload["weight_cap"]))
         except Exception:
             pass
+    if "partial_datasets" in payload:
+        _set_if_unset("partial_datasets", str(payload["partial_datasets"]))
     if "include_models" in payload:
         include_value = payload["include_models"]
         if isinstance(include_value, str):
@@ -712,6 +725,7 @@ def _build_winrate_args_from_config(path: Path) -> argparse.Namespace:
         weight_cap=None,
         include_model=None,
         exclude_model=None,
+        partial_datasets=None,
         hf_processed_repo=None,
         hf_processed_pull=None,
         hf_winrate_repo=None,
@@ -766,6 +780,8 @@ def _finalize_winrate_args(args: argparse.Namespace) -> None:
         args.include_model = []
     if getattr(args, "exclude_model", None) is None:
         args.exclude_model = []
+    if getattr(args, "partial_datasets", None) is None:
+        args.partial_datasets = "strict"
     if getattr(args, "hf_processed_pull", None) is None:
         args.hf_processed_pull = False
     if getattr(args, "hf_private", None) is None:
@@ -846,6 +862,7 @@ def _run_winrate_mode(argv: Sequence[str]) -> int:
         weight_cap=args.weight_cap,
         include_models=tuple(args.include_model or ()),
         exclude_models=tuple(args.exclude_model or ()),
+        partial_datasets=args.partial_datasets,
     )
 
     try:

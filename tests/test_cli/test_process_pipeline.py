@@ -8,9 +8,9 @@ import pyarrow.parquet as pq
 
 from medarc_verifiers.cli._schemas import EnvironmentExportConfig
 from medarc_verifiers.cli.process import ProcessOptions, run_process
-from medarc_verifiers.cli.process.winrate import WinrateConfig
-from medarc_verifiers.cli.process.winrate_runner import discover_datasets, run_winrate
-from medarc_verifiers.cli.process.hf_sync import HFSyncConfig
+from medarc_verifiers.cli.winrate import WinrateConfig
+from medarc_verifiers.cli.winrate import discover_datasets, run_winrate
+from medarc_verifiers.cli.hf import HFSyncConfig
 from medarc_verifiers.cli.process.writer import ALLOWED_COLUMNS
 
 
@@ -101,6 +101,14 @@ def _write_run(
         "updated_at": updated_at,
         "models": {model_id: {"sampling_args": {}}},
         "env_templates": {"demo-env-template": {"module": env_id}},
+        "summary": {
+            "total": 1,
+            "completed": 1,
+            "pending": 0,
+            "running": 0,
+            "failed": 0,
+            "skipped": 0,
+        },
         "jobs": [
             {
                 "job_id": "demo-job",

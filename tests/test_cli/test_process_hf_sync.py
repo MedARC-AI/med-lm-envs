@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from medarc_verifiers.cli.process import hf_sync
+from medarc_verifiers.cli import hf as hf_sync
 from medarc_verifiers.cli.process.aggregate import aggregate_rows_by_env
 from medarc_verifiers.cli.process.writer import WriterConfig, write_env_groups
 

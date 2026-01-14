@@ -10,10 +10,10 @@ from pathlib import Path
 from typing import Sequence
 
 from medarc_verifiers.cli._constants import COMMAND, PROCESS_COMMAND
-from medarc_verifiers.cli.process import winrate as _win
-from medarc_verifiers.cli.process.env_index import read_env_index_inventory
-from medarc_verifiers.cli.process.hf_sync import HFSyncConfig
 from medarc_verifiers.cli.process import workspace
+from medarc_verifiers.cli.process.env_index import read_env_index_inventory, read_env_index_models
+from medarc_verifiers.cli.winrate import api as _win
+from medarc_verifiers.cli.hf import HFSyncConfig
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,8 @@ def run_winrate(
         output_name=output_name,
         processed_at=processed_at,
     )
-    result = _win.compute_winrates(datasets, config)
+    known_models = read_env_index_models(local_dir)
+    result = _win.compute_winrates(datasets, config, known_models=known_models or None)
     _win.write_json(_win.to_json(result), resolved_output)
     for extra_path in output_paths:
         if extra_path == resolved_output:
