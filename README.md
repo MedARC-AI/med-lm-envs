@@ -100,206 +100,107 @@ Once your tooling is set up you can install MedARC-maintained environments direc
   results = env.evaluate(model_client, "gpt-4.1-mini", num_examples=5)
   ```
 
-## medarc-eval CLI command
+## medarc-eval CLI
 
-`medarc-eval` wraps the upstream `vf-eval` flow and adds environment-specific flags generated from each environment's `load_environment` signature to the CLI instead of requiring a json blob via `--env-args`.
+`medarc-eval` wraps the upstream `vf-eval` flow, adding environment-specific flags and batch orchestration. See [full documentation](docs/medarc-eval.md).
 
-### Quick start
+| Command | Description |
+|---------|-------------|
+| [`medarc-eval <ENV>`](docs/medarc-eval-single-run.md) | Run a single benchmark with auto-discovered environment flags |
+| [`medarc-eval bench`](docs/medarc-eval-bench.md) | Run multiple benchmarks from a YAML config with resume support |
+| [`medarc-eval process`](docs/medarc-eval-process.md) | Convert raw outputs to parquet for analysis |
+| [`medarc-eval winrate`](docs/medarc-eval-winrate.md) | Compute HELM-style win rates across models |
 
-```bash
-uv run medarc-eval medqa -m gpt-4.1-mini -n 5
-```
-
-### Discover environment flags
-
-```bash
-uv run medarc-eval medbullets --help
-```
-
-### Mix explicit flags with JSON
+### Quick Start
 
 ```bash
-uv run medarc-eval medbullets --num-options 4 --env-args '{"shuffle": true}'
+# Run a single benchmark
+uv run medarc-eval medqa -m gpt-4.1-mini -n 25
+
+# Run batch evaluations from config
+uv run medarc-eval bench --config configs/job-gpt-oss-20b.yaml
+
+# Process results and compute win rates
+uv run medarc-eval process
+uv run medarc-eval winrate
 ```
 
-Explicit flags always override JSON input. For list parameters, repeat the flag to replace the default entirely:
+### Environment-Specific Flags
+
+Each environment's `load_environment()` parameters become CLI flags automatically:
 
 ```bash
-uv run medarc-eval longhealth --section cardio --section neuro
+# Discover available flags
+uv run medarc-eval longhealth --help
+
+# Use environment-specific options
+uv run medarc-eval longhealth --task task1 --shuffle-answers -m gpt-4.1-mini -n 10
 ```
 
-Use `--env-args` for complex structures (dicts, nested generics) that cannot be mapped to simple flags:
+For complex arguments (dicts, nested structures), use `--env-args`:
 
 ```bash
-uv run medarc-eval medagentbench --env-args '{"config": {"mode": "fast"}}'
+uv run medarc-eval careqa --env-args '{"split": "open", "judge_model": "gpt-4o"}'
 ```
 
-Print the detected environment schema:
+## Batch Evaluations
 
-```bash
-uv run medarc-eval mmlu_pro_health --print-env-schema
-```
-
-## Benchmark CLI
-
-Use the `benchmark` command to run a series of model/environment evaluations sequentially. Invoke it with `--jobs <path>`; the referenced YAML must define models inline (either in a top-level `models` list or directly on each job entry) and can reference environments inline or via a sibling `envs/` directory. By default, run artifacts are written to `<jobs_dir>/../runs`. A single-file example looks like this:
+Use `medarc-eval bench` to run multiple model × environment evaluations from a config file. See [full batch mode documentation](docs/medarc-eval-bench.md).
 
 ```yaml
-name: medarc-baseline
-output_dir: runs
-envs:
-  - id: medqa
-    module: medqa
-    num_examples: 25
-    rollouts_per_example: 1
-jobs:
-  - model: gpt-4.1-mini
-    temperature: 0.1
-    env_args:
-      judge_name: gpt-4.1-mini
-    env: medqa
-```
+name: gpt-oss-20b-med
 
-Inline models accept the same parameters that previously lived under `params` (`api_base_url`, `api_key_var`, `headers`, `sampling_args`, `env_overrides`, connection limits, etc.). If you prefer to reuse a model across several jobs, add it once under a top-level `models` list:
-
-```yaml
 models:
-  - id: gpt-4.1-mini
-    model: gpt-4.1-mini
-    api_base_url: https://api.openai.com/v1
-    timeout: 120
+  gpt-oss-20b:
+    model: openai/gpt-oss-20b
+    api_base_url: http://localhost:8000/v1
+    sampling_args:
+      temperature: 1.0
+      reasoning_effort: medium
 
 jobs:
-  - model: gpt-4.1-mini
-    envs: [medqa, medbullets]
+  - model: gpt-oss-20b
+    env: [m_arc, medcalc_bench, medxpertqa]
 ```
-
-A job without an explicit `name` defaults to the `model` string (or `model_id` when provided). The legacy `configs/models/*.yaml` files and `models_dir` option are no longer supported; migrate any remaining entries by copying their contents into either a top-level `models` list or directly into each job definition as shown above.
-
-If `jobs` is omitted the CLI evaluates every model × environment pair defined in the config. Run a dry run to inspect the expanded matrix:
 
 ```bash
-uv run benchmark dry-run --jobs configs/jobs.yaml
+# Run the batch
+uv run medarc-eval bench --config configs/job-gpt-oss-20b.yaml
+
+# Preview without executing
+uv run medarc-eval bench --config configs/job-gpt-oss-20b.yaml --dry-run
 ```
 
-Execute the plan:
+Batch mode supports automatic resume, job manifests, and matrix sweeps for parameter grids. See the [batch mode documentation](docs/medarc-eval-bench.md) for config file format, resume/restart options, and advanced features.
 
-```bash
-uv run benchmark run --jobs configs/jobs.yaml
-```
+### Matrix Sweeps
 
-By default the CLI installs each referenced environment before execution using the same logic as `vf-install`. This respects the resolved `env_dir_path`, ensuring local edits are available to the evaluator. Disable this behavior with `--no-install-envs` if you have already installed the packages or want to manage environments manually.
-
-Each run reuses the `vf-eval` pipeline and writes artifacts into `<output_dir>/<run_id>/<job_id>/`. Job identifiers are deterministic (`<model>-<env>[-<name>]`) so reruns reuse the same directory layout. The CLI persists run metadata in `<output_dir>/<run_id>/run_manifest.json`, allowing interrupted runs to resume without recomputing completed jobs.
-
-Resume an existing run (skipping finished jobs):
-
-```bash
-uv run benchmark run --jobs configs/jobs.yaml --resume medarc-baseline-20240101-120000
-```
-
-Force all jobs to re-run, even when artifacts already exist:
-
-```bash
-uv run benchmark run --jobs configs/jobs.yaml --resume medarc-baseline-20240101-120000 --force
-```
-
-The manifest merges updated configurations on resume, so adding a new model or environment entry will schedule only the new combinations while retaining prior results in `run_summary.json`.
-
-### Matrix expansion
-
-Environment entries can fan out into multiple variants by adding a `matrix` mapping. Each key lists the values to vary, and the CLI takes the cartesian product to build derived configs. Values matching `EnvironmentConfig` fields (for example `num_examples`, `rollouts_per_example`, `max_concurrent`) are applied at the top level; all other keys land in `env_args`. Use `null` in a value list to keep the parent value for that combo.
+Environment configs support matrix expansion for parameter grid runs:
 
 ```yaml
-envs:
-  - id: medconceptsqa-base
-    module: medconceptsqa
-    num_examples: -1
-    env_args:
-      shuffle_answers: true
-    matrix:
-      difficulty: [easy, medium, hard]
-      shuffle_seed: [1618, 9331]
-    matrix_id_format: "{base}-{difficulty}-s{shuffle_seed}"
+- id: medconceptsqa
+  module: medconceptsqa
+  num_examples: -1
+  env_args:
+    shuffle_answers: true
+  matrix:
+    difficulty: [easy, medium, hard]
+    shuffle_seed: [1618, 9331]
+  matrix_id_format: "{base}-{difficulty}-s{shuffle_seed}"
 ```
 
-The example above expands into six variants (`medconceptsqa-base-easy-s1618`, …, `medconceptsqa-base-hard-s9331`) that inherit the shared settings. Optional helpers:
+This expands into six variants (`medconceptsqa-base-easy-s1618`, …). See [batch mode docs](docs/medarc-eval-bench.md) for full details on matrix expansion, exclusions, and split config files.
 
-- `matrix_exclude`: list of partial assignments to drop (e.g., `[{difficulty: easy, shuffle_seed: 9331}]`).
-- `matrix_id_format`: custom template; `{base}` plus each matrix key is available. Without it, IDs default to `base-key-value`.
+## Processing and Win Rates
 
-Entries without `matrix` continue to work unchanged. The loader validates duplicate IDs and unknown exclusions so mistakes surface early.
-
-### Split configuration files
-
-For larger suites you can still keep environment definitions in dedicated YAML files while keeping models inline. A common layout is:
-
-```
-configs/
-├── envs/
-│   ├── medqa.yaml
-│   └── medcasereasoning.yaml
-└── jobs.yaml
-```
-
-`envs/medqa.yaml`
-```yaml
-id: medqa
-module: medqa
-num_examples: 25
-rollouts_per_example: 1
-```
-
-`jobs.yaml`
-```yaml
-name: medarc-suite
-envs: ./envs
-jobs:
-  - model: gpt-4.1-mini
-    api_base_url: https://api.openai.com/v1
-    envs:
-      - medqa
-      - medcasereasoning
-  - model: medarc/oss-judge
-    model_id: oss-judge
-    headers:
-      X-Trace-Id: judge-run
-    env: medqa
-```
-
-Run everything with:
+After running benchmarks, convert results to parquet and compute model comparisons:
 
 ```bash
-uv run benchmark run --jobs configs/jobs.yaml
+# Process raw outputs to parquet
+uv run medarc-eval process
+
+# Compute HELM-style win rates
+uv run medarc-eval winrate
 ```
 
-## Export evaluation runs to Parquet
-
-The exporter CLI assembles completed run artifacts into environment-level Parquet datasets suitable for analytics or Hugging Face uploads.
-
-```bash
-uv run medarc-export \
-  --runs-dir runs \
-  --output-dir exports \
-  --filter-status succeeded \
-  --partition-by model \
-  --dry-run
-```
-
-- `--filter-status` restricts discovery to manifest statuses of interest (defaults to all entries).
-- `--dry-run` gathers schema details without writing files; combine with `--schema-only` to skip Parquet output entirely.
-- `--partition-by` splits each environment dataset into Parquet files keyed by the provided columns (e.g., `model`, `job_run_id`).
-- Prompt and completion payloads are excluded by default to keep files compact; pass `--include-io` to retain them.
-- `--validate` enables sanity checks on row counts compared to metadata; add `--strict` to treat warnings as errors.
-- `--overwrite` replaces existing environment export directories inside `--output-dir`.
-
-When not in `--dry-run` or `--schema-only` mode, the CLI writes one directory per `env_id`, each containing either a single `data.parquet` file or partitioned files (e.g., `model-gpt-4_1-mini.parquet`). An `env_index.json` manifest summarises row counts, partition columns, and dataset paths for downstream tooling.
-
-The loader expands each referenced file (environment mappings or the shared jobs list) before scheduling the run. Paths are resolved relative to the jobs file.
-
-- When `envs` points to a directory, every `*.yaml` / `*.yml` file inside is loaded in sorted order. Paths are resolved relative to the jobs file first, then relative to the repository root.
-- Inline models must be declared either at the job level or under a top-level `models` list within the same YAML document.
-- When a job mapping supplies `envs`, the CLI fans out one evaluation per environment; omit `envs` (and `env`) to target every environment defined in the run.
-- Optional `env_args`, `sampling_args`, and `seed` entries on the job apply to each generated evaluation. If an environment expects a `seed` argument, include it inside `env_args` explicitly.
-- Override defaults with CLI flags such as `--envs`, `--env-dir-path`, and `--endpoints-path` when you want to load definitions from a different location.
-- Job folders are named after the job's `name`; when omitted, the CLI generates `<model>-<random>-<env>` automatically.
+See [processing documentation](docs/medarc-eval-process.md) and [win rate documentation](docs/medarc-eval-winrate.md) for configuration options, HuggingFace integration, and output formats.
