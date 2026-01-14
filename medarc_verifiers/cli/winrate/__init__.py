@@ -1,0 +1,51 @@
+"""Winrate helpers for CLI process pipeline."""
+
+from .api import (  # noqa: F401
+    DatasetStats,
+    ModelCentricResult,
+    WinrateConfig,
+    average_rollouts,
+    build_model_centric_result,
+    compute_avg_rewards_per_model,
+    compute_per_opponent_stats,
+    compute_winrates,
+    dataset_model_mean_winrates,
+    pairwise_win_rate,
+    read_dataset_lazy,
+    to_json,
+    to_wide,
+    weight_of,
+    write_json,
+)
+from .runner import (  # noqa: F401
+    WinrateRunResult,
+    discover_datasets,
+    list_models,
+    print_winrate_summary_markdown,
+    run_winrate,
+    _resolve_source,
+)
+
+__all__ = [
+    "WinrateConfig",
+    "DatasetStats",
+    "ModelCentricResult",
+    "read_dataset_lazy",
+    "average_rollouts",
+    "to_wide",
+    "pairwise_win_rate",
+    "weight_of",
+    "dataset_model_mean_winrates",
+    "compute_winrates",
+    "build_model_centric_result",
+    "compute_avg_rewards_per_model",
+    "compute_per_opponent_stats",
+    "to_json",
+    "write_json",
+    "WinrateRunResult",
+    "discover_datasets",
+    "list_models",
+    "run_winrate",
+    "print_winrate_summary_markdown",
+    "_resolve_source",
+]

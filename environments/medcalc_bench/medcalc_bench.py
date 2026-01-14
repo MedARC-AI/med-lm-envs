@@ -6,7 +6,10 @@ from typing import Optional
 import numpy as np
 import verifiers as vf
 from datasets import load_dataset
+from datasets.utils.logging import disable_progress_bar
 from medarc_verifiers.parsers import XMLParser
+
+disable_progress_bar()  # suppress datasets progress indicators
 
 
 def _build_prompt(patient_note, question) -> str:

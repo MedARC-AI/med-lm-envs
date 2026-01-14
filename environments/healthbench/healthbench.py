@@ -1,12 +1,13 @@
+import asyncio
 import hashlib
 import json
-import os
 import re
 from collections import defaultdict
 from pathlib import Path
-import asyncio
 
 from datasets import load_dataset
+from datasets.utils.logging import disable_progress_bar
+from medarc_verifiers.utils import default_judge_api_key, judge_sampling_args_and_headers
 from openai import AsyncOpenAI
 from verifiers import JudgeRubric
 from verifiers.envs.singleturn_env import SingleTurnEnv
@@ -25,6 +26,8 @@ HEALTHBENCH_DATASET_MAPPING = {
 
 with open(Path(__file__).resolve().parent / "hb_consensus_criteria.json", "r") as fp:
     HEALTHBENCH_CONSENSUS_CRITERIA_LOOKUP = json.load(fp)
+
+disable_progress_bar()  # suppress datasets progress indicators
 
 
 HEALTHBENCH_JUDGE_TEMPLATE = """
@@ -89,19 +92,21 @@ def load_environment(
     **kwargs,
 ) -> SingleTurnEnv:
     try:
-        dataset = load_dataset(HEALTHBENCH_DATASET_MAPPING[difficulty], split="test").map(
-            lambda example: {"info": _process_healthbench_dataset(example)}
-        )
+        dataset = load_dataset(
+            HEALTHBENCH_DATASET_MAPPING[difficulty], split="test" if difficulty == "all" else "train"
+        ).map(lambda example: {"info": _process_healthbench_dataset(example)})
     except KeyError:
         raise ValueError(f"Invalid difficulty: {difficulty}")
 
-    api_key = judge_api_key if judge_api_key else os.getenv("JUDGE_API_KEY")
-    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key)  # Use AsyncOpenAI
+    api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
+    sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
+    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=default_headers)
 
     jr = JudgeRubric(
         judge_client=judge_client,
         judge_model=judge_model,
         judge_prompt="{question}",
+        judge_sampling_args=sampling_args,
     )
 
     async def reward_healthbench(prompt: Messages, completion: Messages, info: Info, state: State) -> float:

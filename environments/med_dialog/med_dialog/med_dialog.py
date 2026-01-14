@@ -4,12 +4,15 @@ from typing import Any, Sequence
 
 import verifiers as vf
 from datasets import Dataset, concatenate_datasets, load_dataset
+from datasets.utils.logging import disable_progress_bar
 from medarc_verifiers.parsers import JSONParser
-from medarc_verifiers.utils import download_file
+from medarc_verifiers.utils import default_judge_api_key, download_file, judge_sampling_args_and_headers
 from openai import AsyncOpenAI
 from verifiers.types import Info, Messages, State
 
-from judge_prompts import JUDGE_OUTPUT_JSON, JUDGE_TEMPLATE
+from med_dialog.judge_prompts import JUDGE_OUTPUT_JSON, JUDGE_TEMPLATE
+
+disable_progress_bar()  # suppress datasets progress indicators
 
 BASE_URL = "https://worksheets.codalab.org/rest/bundles/0x82f0c47f6d3e4462ae9ef8ea39eebe64/contents/blob"
 SPLITS: Sequence[str] = ("train", "test")
@@ -91,14 +94,17 @@ def load_environment(
     train_dataset = _load_split_dataset(subsets=SUBSETS, split="train", cache_path=cache_path)
     eval_dataset = _load_split_dataset(subsets=SUBSETS, split="test", cache_path=cache_path)
 
-    api_key = judge_api_key if judge_api_key is not None else os.getenv("JUDGE_API_KEY")
+    api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
+    sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
     judge_parser = JSONParser(fields=["accuracy", "completeness", "clarity"])
+
     judge_rubric = vf.JudgeRubric(
         parser=vf.ThinkParser(extract_fn=lambda x: x) if use_think else None,
         parallelize_scoring=True,
-        judge_client=AsyncOpenAI(base_url=judge_base_url, api_key=api_key),
+        judge_client=AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=default_headers),
         judge_model=judge_model,
         judge_prompt="{question}",
+        judge_sampling_args=sampling_args,
     )
 
     async def reward_meddialog(
@@ -118,17 +124,19 @@ def load_environment(
             output_format=JUDGE_OUTPUT_JSON,
         )
 
-        judge_raw = await judge_rubric.judge(
-            [{"role": "user", "content": judge_prompt}], completion_text, gold_response, state
-        )
+        try:
+            judge_raw = await judge_rubric.judge(judge_prompt, completion_text, gold_response, state)
+            parsed = judge_parser.parse(str(judge_raw), strip=True)
+        except AttributeError:
+            judge_raw = await judge_rubric.judge(judge_prompt, "", "", state)
+            parsed = judge_parser.parse(str(judge_raw), strip=True)
 
-        parsed = judge_parser.parse(str(judge_raw), strip=True)
         if parsed is None:
             parsed = {dimension: {"score": None, "explanation": None, "raw": None} for dimension in JUDGE_DIMENSIONS}
 
         normalized = _compute_normalized_reward(parsed)
 
-        state.setdefault("judge_feedback", []).append(
+        info.setdefault("judge_feedback", []).append(
             {
                 "scores": parsed,
                 "raw_judge": str(judge_raw),

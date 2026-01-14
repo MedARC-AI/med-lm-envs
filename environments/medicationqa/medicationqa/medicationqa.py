@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 from typing import Any
 
@@ -7,11 +6,16 @@ import verifiers as vf
 from datasets import Dataset, load_from_disk
 from datasets.utils.logging import disable_progress_bar
 from medarc_verifiers.parsers import JSONParser
-from medarc_verifiers.utils import download_file, medarc_cache_dir
+from medarc_verifiers.utils import (
+    default_judge_api_key,
+    download_file,
+    judge_sampling_args_and_headers,
+    medarc_cache_dir,
+)
 from openai import AsyncOpenAI
 from verifiers.types import Info, Messages, State
 
-from .judge_prompts import JUDGE_OUTPUT_JSON, JUDGE_TEMPLATE
+from medicationqa.judge_prompts import JUDGE_OUTPUT_JSON, JUDGE_TEMPLATE
 
 disable_progress_bar()  # suppress datasets mapping progress bar
 
@@ -132,7 +136,8 @@ def load_environment(
             (i.e., `~/.cache/medarc/medicationqa`).
         judge_model: Model identifier to use for the judge (e.g. "gpt-4o").
         judge_base_url: Optional base URL for a non-OpenAI-compatible endpoint (e.g. Ollama).
-        judge_api_key: API key for the judge model. Falls back to the `JUDGE_API_KEY` env var.
+        judge_api_key: API key for the judge model. Defaults to `default_judge_api_key`, which
+            checks common env vars (e.g., OpenAI/Prime `OPENAI_API_KEY`, `JUDGE_API_KEY`).
         **kwargs: Additional arguments forwarded to `vf.SingleTurnEnv`.
 
     Returns:
@@ -140,8 +145,9 @@ def load_environment(
     """
     eval_dataset = _load_dataset(cache_dir)
 
-    api_key = judge_api_key or os.getenv("JUDGE_API_KEY")
-    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key)
+    api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
+    sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
+    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=default_headers)
     judge_parser = JSONParser(fields=list(JUDGE_DIMENSIONS))
 
     judge_rubric = vf.JudgeRubric(
@@ -149,6 +155,7 @@ def load_environment(
         judge_client=judge_client,
         judge_model=judge_model,
         judge_prompt="{question}",
+        judge_sampling_args=sampling_args,
     )
 
     async def reward_medicationqa(
@@ -168,9 +175,13 @@ def load_environment(
             output_format=JUDGE_OUTPUT_JSON,
         )
 
-        judge_raw = await judge_rubric.judge(judge_prompt, model_answer, gold_response, state)
+        try:
+            judge_raw = await judge_rubric.judge(judge_prompt, model_answer, gold_response, state)
+            parsed = judge_parser.parse(str(judge_raw), strip=True)
+        except AttributeError:
+            judge_raw = await judge_rubric.judge(judge_prompt, "", "", state)
+            parsed = judge_parser.parse(str(judge_raw), strip=True)
 
-        parsed = judge_parser.parse(str(judge_raw), strip=True)
         if parsed is None:
             parsed = {dim: {"score": None, "explanation": None, "raw": None} for dim in JUDGE_DIMENSIONS}
 
@@ -189,7 +200,7 @@ def load_environment(
     return vf.SingleTurnEnv(
         dataset=eval_dataset,
         eval_dataset=eval_dataset,
-        system_prompt="You are a helpful, safety-conscious medical assistant.",
+        system_prompt="You are a helpful, safety-conscious medical assistant. Give a brief but accurate response to the following question.",
         rubric=judge_rubric,
         name="medicationqa",
         **kwargs,

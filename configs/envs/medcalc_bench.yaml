@@ -1,0 +1,9 @@
+- id: medcalc_bench
+  module: medcalc_bench
+  rollouts_per_example: 1
+  verbose: false
+  num_examples: -1
+
+  export:
+    extra_columns: [lower_bound, upper_bound]
+    answer_column: ground_truth

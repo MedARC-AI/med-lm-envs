@@ -1,0 +1,23 @@
+- id: medconceptsqa_sample
+  module: medconceptsqa
+  rollouts_per_example: 1
+  num_examples: -1
+  verbose: false
+  env_args:
+    vocab: icd10cm_sample
+  matrix:
+    difficulty: [easy, medium, hard]
+  matrix_id_format: "{base}-{difficulty}"
+
+- id: medconceptsqa_sample
+  module: medconceptsqa
+  rollouts_per_example: 1
+  num_examples: -1
+  verbose: false
+  env_args:
+    vocab: icd10cm_sample
+    shuffle_answers: true
+  matrix:
+    difficulty: [easy, medium, hard]
+    shuffle_seed: [1618, 9331]
+  matrix_id_format: "{base}-{difficulty}-rollout{shuffle_seed}"

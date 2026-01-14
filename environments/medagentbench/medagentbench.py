@@ -9,10 +9,16 @@ from typing import Any, Dict, Optional, Tuple
 import requests
 import verifiers as vf
 from datasets import Dataset
+from datasets.utils.logging import disable_progress_bar
 from verifiers.envs.multiturn_env import MultiTurnEnv
 from verifiers.parsers.parser import Parser
 from verifiers.rubrics.rubric import Rubric
 from verifiers.types import Messages, State
+
+disable_progress_bar()  # suppress datasets progress indicators
+
+# Global verbosity toggle. Set via `load_environment(verbose=True)`.
+verbose = False
 
 
 def verify_fhir_server(fhir_api_base):
@@ -103,7 +109,8 @@ def task2(case_data, results, fhir_api_base):
     dob_str = get_res["entry"][0]["resource"]["birthDate"]
     parsed_date = datetime.strptime(dob_str, "%Y-%m-%d")
     ref_sol = [calculate_age(parsed_date)]
-    print(case_data["id"], ref_sol, results.result, flush=True)
+    if verbose:
+        print(case_data["id"], ref_sol, results.result, flush=True)
     try:
         if ref_sol == json.loads(results.result):
             return True
@@ -115,11 +122,13 @@ def task2(case_data, results, fhir_api_base):
 def task3(case_data, results, fhir_api_base):
     posts = extract_posts(results)
     if len(posts) != 1:  # Should be only one accepted POST request
-        print("More than 1 POST")
+        if verbose:
+            print("More than 1 POST")
         return False
     url, payload = posts[0]
     if url != f"{fhir_api_base}Observation":
-        print("incorrect url")
+        if verbose:
+            print("incorrect url")
         return False
     try:
         assert payload["resourceType"] == "Observation"
@@ -157,7 +166,8 @@ def task4(case_data, results, fhir_api_base):
                 last_value = value
     ref_sol = [last_value if last_value is not None else -1]
 
-    print(case_data["id"], ref_sol, results.result, flush=True)
+    if verbose:
+        print(case_data["id"], ref_sol, results.result, flush=True)
     try:
         if ref_sol == json.loads(results.result):
             return True
@@ -216,7 +226,8 @@ def task5(case_data, results, fhir_api_base):
             return False
 
     ref_sol = [last_value if last_value is not None else -1]
-    print(case_data["id"], ref_sol, results.result, flush=True)
+    if verbose:
+        print(case_data["id"], ref_sol, results.result, flush=True)
     try:
         if (ref_sol == json.loads(results.result)) or (
             [] == json.loads(results.result)
@@ -243,7 +254,8 @@ def task6(case_data, results, fhir_api_base):
 
     ref_sol = [glu_sum / glu_count if glu_count != 0 else -1]
 
-    print(case_data["id"], ref_sol, results.result, flush=True)
+    if verbose:
+        print(case_data["id"], ref_sol, results.result, flush=True)
     try:
         json_results = json.loads(results.result)
         if (len(json_results) == 1) and abs(json_results[0] - ref_sol[0]) < 0.1:
@@ -267,7 +279,8 @@ def task7(case_data, results, fhir_api_base):
             last_value = value
     ref_sol = [last_value if last_value is not None else -1]
 
-    print(case_data["id"], ref_sol, results.result, flush=True)
+    if verbose:
+        print(case_data["id"], ref_sol, results.result, flush=True)
     try:
         if ref_sol == json.loads(results.result):
             return True
@@ -357,7 +370,8 @@ def task9(case_data, results, fhir_api_base):
             return False
 
     ref_sol = [last_value if last_value is not None else -1]
-    print(case_data["id"], ref_sol, results.result, flush=True)
+    if verbose:
+        print(case_data["id"], ref_sol, results.result, flush=True)
     try:
         if (ref_sol == json.loads(results.result)) or (
             [] == json.loads(results.result)
@@ -411,7 +425,8 @@ def task10(case_data, results, fhir_api_base):
         if check_has_post(results) is True:
             return False
 
-    print(case_data["id"], ref_sol, results.result, flush=True)
+    if verbose:
+        print(case_data["id"], ref_sol, results.result, flush=True)
     try:
         if (ref_sol == json.loads(results.result)) or (
             [] == json.loads(results.result)
@@ -766,7 +781,8 @@ class MedAgentBenchEnv(MultiTurnEnv):
             content = content.replace("```tool_code", "").replace("```", "").strip()
 
             content = self.parser.parse(content)
-            print("parsed content -", content)
+            if verbose:
+                print("parsed content -", content)
 
             if content.startswith("FINISH("):
                 # Successful completion - extract and store the answer
@@ -851,6 +867,7 @@ def load_environment(
     max_turns: int = 8,
     tasks: Optional[list] = None,
     use_think: bool = False,
+    verbose: bool = False,
     **kwargs,
 ) -> vf.Environment:
     """
@@ -868,6 +885,9 @@ def load_environment(
     Returns:
         A configured MedAgentBenchEnv instance
     """
+
+    # Configure module-level verbosity for this environment.
+    globals()["verbose"] = bool(verbose)
 
     def _resolve_local_path(path_str: str) -> Path:
         path_obj = Path(path_str)
@@ -900,8 +920,9 @@ def load_environment(
                     return task_id in tasks
 
                 eval_dataset = eval_dataset.filter(filter_by_tasks)
-                print(f"Filtered dataset to tasks: {tasks}")
-                print(f"Remaining samples: {len(eval_dataset)}")
+                if verbose:
+                    print(f"Filtered dataset to tasks: {tasks}")
+                    print(f"Remaining samples: {len(eval_dataset)}")
 
             # Transform dataset to have only prompt and info columns
             eval_dataset = eval_dataset.map(
@@ -914,17 +935,21 @@ def load_environment(
                     col for col in eval_dataset.column_names if col != "id"
                 ],  # Remove all columns except 'id'
             )
-            print(eval_dataset)
+            if verbose:
+                print(eval_dataset)
         except FileNotFoundError:
             print(f"Warning: Test data file not found at {test_data_path}")
 
     # Create parser based on model type
-    print("use_think -", use_think)
+    if verbose:
+        print("use_think -", use_think)
     if use_think:
-        print("Using ThinkParser -- assumes <think> tags in the response")
+        if verbose:
+            print("Using ThinkParser -- assumes <think> tags in the response")
         parser = vf.ThinkParser()
     else:
-        print("Using normal Parser")
+        if verbose:
+            print("Using normal Parser")
         parser = vf.Parser()
 
     # Create rubric with MedAgentBench evaluation function
