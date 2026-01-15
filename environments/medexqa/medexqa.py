@@ -1,4 +1,3 @@
-import os
 from enum import Enum
 from pathlib import Path
 
@@ -8,7 +7,12 @@ import verifiers as vf
 from datasets import Dataset, concatenate_datasets
 from medarc_verifiers.parsers import XMLParser
 from medarc_verifiers.rewards.multiple_choice_accuracy import multiple_choice_accuracy
-from medarc_verifiers.utils import download_file, medarc_cache_dir
+from medarc_verifiers.utils import (
+    default_judge_api_key,
+    download_file,
+    judge_sampling_args_and_headers,
+    medarc_cache_dir,
+)
 from medarc_verifiers.utils.randomize_multiple_choice import randomize_multiple_choice
 from openai import AsyncOpenAI
 from verifiers.types import Info, State
@@ -27,31 +31,41 @@ SYSTEM_PROMPT = "Provide your explanation inside <explanation>...</explanation> 
 
 
 JUDGE_TEMPLATE = """\
-Please act as an impartial judge and evaluate the reasoning provided by an AI assistant for a medical multiple-choice question. The assistant selected the correct answer choice.
+You are grading an AI assistant's reasoning for a medical multiple-choice question. The assistant selected the correct answer.
 
-You will be given:
-- The medical question and answer options
-- Two reference reasoning traces, inside <reference_reasoning> tags
-- The assistant's reasoning, inside <assistant_reasoning> tags
+Input:
+- <question>: The question and answer options
+- <answer>: The correct answer choice
+- <reference_reasoning>: Two correct reasoning traces
+- <assistant_reasoning>: The AI's reasoning to grade
 
-Your task: Determine whether the assistant's reasoning is equivalent or inequivalent by comparing it to the two reference reasoning traces.
+Task: Determine if the assistant's reasoning is EQUIVALENT or INEQUIVALENT by comparing it to the reference reasoning traces and output your grade in <grade>...</grade> tags.
 
-Guidelines:
-- The reference reasoning traces are always correct.
-- The assistant's reasoning is equivalent if its logic is semantically aligned with at least one reference reasoning trace. It may paraphrase or omit minor details, as long as the central reasoning and decision criteria are the same and do not conflict with that reference trace.
-- The assistant's reasoning is inequivalent if it clearly contradicts both reference reasoning traces or relies on logic that is incompatible with both traces (for example, it uses a different main reason for the answer that conflicts with the references).
+Grading Rules:
+- Assume the reference reasoning traces are correct.
+- Focus on logical content and decision criteria, not style, length, or confidence.
+- Do not solve the question yourself; only compare the assistant's reasoning to the references.
 
-Begin your evaluation by comparing the assistant's reasoning to the reference traces. Identify any major differences or contradictions. Be as objective as possible. After providing your explanation, you must rule whether the assistant's reasoning is equivalent or inequivalent.
+EQUIVALENT if the assistant's reasoning is semantically aligned with at least one reference trace, including:
+- Paraphrasing or rephrasing with equivalent logic
+- Synonyms, acronyms (expanded or abbreviated), or different medical terminology with the same meaning
+- Omitting minor details while preserving central reasoning and decision criteria
+- Additional supporting details that don't contradict the reference
+- Different ordering of steps that reaches the same logical conclusion
 
-Content:
+INEQUIVALENT if any of these apply:
+- Contradicts both reference reasoning traces on key logical steps
+- Uses incompatible logic or decision criteria compared to both references
+- Relies on a different main reason that conflicts with both references
+- Contains clearly incorrect medical reasoning
+
+Be strict: clear contradictions or incompatible logic with both references = INEQUIVALENT.
 
 <question>
 {question}
 </question>
 
-<answer>
-{answer}
-</answer>
+<answer>{answer}</answer>
 
 <reference_reasoning>
 {reference_1}
@@ -65,10 +79,9 @@ Content:
 {assistant_reasoning}
 </assistant_reasoning>
 
-After providing your explanation, output your final verdict of Equivalent or Inequivalent inside <verdict> tags:
-<verdict>
-[Equivalent or Inequivalent]
-</verdict>
+Briefly explain whether the assistant's reasoning aligns with or conflicts with the references. Then output your grade as:
+
+<grade>[Equivalent or Inequivalent]</grade>
 """.strip()
 
 
@@ -135,6 +148,7 @@ def _to_vf_format(ds: Dataset, shuffle_answers: bool = False, shuffle_seed: int 
         info = dict(row)
         info["answer_text"] = answer_text
         info["answer"] = answer_letter
+        info["question"] = question
         if shuffle_answers:
             info["options"] = opts
 
@@ -305,14 +319,16 @@ def load_environment(
 
     # Optional: Use LLM-as-judge for explanation instead of lexical metrics
     if use_explanations and use_judge:
-        api_key = judge_api_key if judge_api_key else os.getenv("JUDGE_API_KEY") or os.getenv("OPENAI_API_KEY")
-        judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key) if api_key else None
+        api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
+        sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
+        judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=default_headers)
         judge_rubric = vf.JudgeRubric(
             judge_client=judge_client,
             judge_model=judge_model,
             judge_prompt="{question}",
+            sampling_args=sampling_args,
         )
-        judge_parser = XMLParser(fields=["verdict"], answer_field="verdict")
+        judge_parser = XMLParser(fields=["grade"], answer_field="grade")
 
         async def combined_judge_reward(judge, prompt, completion, answer, state: State, info: Info) -> float:
             answer = answer.strip().upper()
@@ -337,7 +353,7 @@ def load_environment(
             opts_str = "\n".join(f"{k}. {options.get(k, '')}" for k in ["A", "B", "C", "D"])
             formatted_question = f"{question}\n{opts_str}"
 
-            full_prompt = JUDGE_TEMPLATE.format(
+            judge_prompt = JUDGE_TEMPLATE.format(
                 question=formatted_question,
                 answer=answer,
                 reference_1=info.get("exp0", ""),
@@ -345,16 +361,20 @@ def load_environment(
                 assistant_reasoning=model_rational,
             )
 
-            judge_response = await judge_rubric.judge(full_prompt, "", "", state)
+            try:
+                judge_response = await judge_rubric.judge(judge_prompt, "", "", state)
+                grade = judge_parser.parse_answer(judge_response)
+            except AttributeError:
+                judge_response = await judge_rubric.judge(judge_prompt, "", "", state)
+                grade = judge_parser.parse_answer(judge_response)
 
             try:
-                verdict = judge_parser.parse_answer(judge_response)
-                verdict_norm = verdict.strip().lower()
-                explanation_passes = "equivalent" in verdict_norm and "inequivalent" not in verdict_norm
+                grade = grade.strip().lower()
+                explanation_passes = "equivalent" in grade and "inequivalent" not in grade
 
                 info.setdefault("judge_feedback", []).append(
                     {
-                        "verdict": verdict,
+                        "grade": grade,
                         "raw_judge": str(judge_response),
                     }
                 )

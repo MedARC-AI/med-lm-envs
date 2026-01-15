@@ -215,9 +215,9 @@ def test_unpaired_think_close_then_final_token_newline():
     assert multiple_choice_accuracy(response, answer_letter="A", answer_text="Option A")
 
 
-def test_unpaired_think_spurious_match():
+def test_unpaired_think_close_with_spurious_match():
     # Regression: some models emit </think> without a matching <think> and place the answer after it.
-    response = "The answer is B. But on the other hand... I know\n</think>\n\nA"
+    response = "The answer is B. But on the other hand... I know\n</think>A"
     assert multiple_choice_accuracy(response, answer_letter="A", answer_text="Option A")
 
 

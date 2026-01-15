@@ -100,101 +100,107 @@ Once your tooling is set up you can install MedARC-maintained environments direc
   results = env.evaluate(model_client, "gpt-4.1-mini", num_examples=5)
   ```
 
-## medarc-eval CLI command
+## medarc-eval CLI
 
-`medarc-eval` wraps the upstream `vf-eval` flow and adds environment-specific flags generated from each environment's `load_environment` signature to the CLI instead of requiring a json blob via `--env-args`.
+`medarc-eval` wraps the upstream `vf-eval` flow, adding environment-specific flags and batch orchestration. See [full documentation](docs/medarc-eval.md).
 
-### Quick start
+| Command | Description |
+|---------|-------------|
+| [`medarc-eval <ENV>`](docs/medarc-eval-single-run.md) | Run a single benchmark with auto-discovered environment flags |
+| [`medarc-eval bench`](docs/medarc-eval-bench.md) | Run multiple benchmarks from a YAML config with resume support |
+| [`medarc-eval process`](docs/medarc-eval-process.md) | Convert raw outputs to parquet for analysis |
+| [`medarc-eval winrate`](docs/medarc-eval-winrate.md) | Compute HELM-style win rates across models |
 
-```bash
-uv run medarc-eval medqa -m gpt-4.1-mini -n 5
-```
-
-### Discover environment flags
-
-```bash
-uv run medarc-eval medbullets --help
-```
-
-### Mix explicit flags with JSON
+### Quick Start
 
 ```bash
-uv run medarc-eval medbullets --num-options 4 --env-args '{"shuffle": true}'
+# Run a single benchmark
+uv run medarc-eval medqa -m gpt-4.1-mini -n 25
+
+# Run batch evaluations from config
+uv run medarc-eval bench --config configs/job-gpt-oss-20b.yaml
+
+# Process results and compute win rates
+uv run medarc-eval process
+uv run medarc-eval winrate
 ```
 
-Explicit flags always override JSON input. For list parameters, repeat the flag to replace the default entirely:
+### Environment-Specific Flags
+
+Each environment's `load_environment()` parameters become CLI flags automatically:
 
 ```bash
-uv run medarc-eval longhealth --section cardio --section neuro
+# Discover available flags
+uv run medarc-eval longhealth --help
+
+# Use environment-specific options
+uv run medarc-eval longhealth --task task1 --shuffle-answers -m gpt-4.1-mini -n 10
 ```
 
-Use `--env-args` for complex structures (dicts, nested generics) that cannot be mapped to simple flags:
+For complex arguments (dicts, nested structures), use `--env-args`:
 
 ```bash
-uv run medarc-eval medagentbench --env-args '{"config": {"mode": "fast"}}'
+uv run medarc-eval careqa --env-args '{"split": "open", "judge_model": "gpt-4o"}'
 ```
 
-Print the detected environment schema:
+## Batch Evaluations
+
+Use `medarc-eval bench` to run multiple model × environment evaluations from a config file. See [full batch mode documentation](docs/medarc-eval-bench.md).
+
+```yaml
+name: gpt-oss-20b-med
+
+models:
+  gpt-oss-20b:
+    model: openai/gpt-oss-20b
+    api_base_url: http://localhost:8000/v1
+    sampling_args:
+      temperature: 1.0
+      reasoning_effort: medium
+
+jobs:
+  - model: gpt-oss-20b
+    env: [m_arc, medcalc_bench, medxpertqa]
+```
 
 ```bash
-uv run medarc-eval mmlu_pro_health --print-env-schema
+# Run the batch
+uv run medarc-eval bench --config configs/job-gpt-oss-20b.yaml
+
+# Preview without executing
+uv run medarc-eval bench --config configs/job-gpt-oss-20b.yaml --dry-run
 ```
 
-## Token Tracking
+Batch mode supports automatic resume, job manifests, and matrix sweeps for parameter grids. See the [batch mode documentation](docs/medarc-eval-bench.md) for config file format, resume/restart options, and advanced features.
 
-Token usage is automatically tracked when using `medarc-eval`. Each result/rollout includes a `token_usage` column with nested dict:
+### Matrix Sweeps
 
-```json
-{
-  "token_usage": {
-    "model": {"prompt": 450, "completion": 280, "total": 730},
-    "judge": {"prompt": 3200, "completion": 150, "total": 3350},
-    "total": {"prompt": 3650, "completion": 430, "total": 4080}
-  }
-}
+Environment configs support matrix expansion for parameter grid runs:
+
+```yaml
+- id: medconceptsqa
+  module: medconceptsqa
+  num_examples: -1
+  env_args:
+    shuffle_answers: true
+  matrix:
+    difficulty: [easy, medium, hard]
+    shuffle_seed: [1618, 9331]
+  matrix_id_format: "{base}-{difficulty}-s{shuffle_seed}"
 ```
 
-### Using with medarc-eval (Recommended)
+This expands into six variants (`medconceptsqa-base-easy-s1618`, …). See [batch mode docs](docs/medarc-eval-bench.md) for full details on matrix expansion, exclusions, and split config files.
 
-Token tracking works automatically:
+## Processing and Win Rates
+
+After running benchmarks, convert results to parquet and compute model comparisons:
 
 ```bash
-uv run medarc-eval medqa -m gpt-4.1-mini -n 5 -s
+# Process raw outputs to parquet
+uv run medarc-eval process
+
+# Compute HELM-style win rates
+uv run medarc-eval winrate
 ```
 
-### Using with vf-eval
-
-To enable token tracking with `vf-eval`, add `medarc_verifiers` as a dependency in your environment's `pyproject.toml`:
-
-```toml
-[project]
-dependencies = [
-    "verifiers>=0.1.2.post0",
-    "medarc_verifiers>=0.1.0",
-]
-
-[tool.uv.sources]
-medarc_verifiers = { git = "https://github.com/MedARC-AI/med-lm-envs" }
-```
-
-Then reinstall the environment:
-
-```bash
-uv pip install -e ./environments/your-env
-vf-eval your-env -m gpt-4.1-mini -n 5 -s
-```
-
-### Disabling Token Tracking
-
-```bash
-export MEDARC_DISABLE_TOKEN_TRACKING=true
-```
-
-### Notes
-
-- Works with any OpenAI-compatible provider
-- Tokens extracted from API `response.usage` field
-- If provider doesn't return usage data, defaults to 0
-- Model tokens include all inference API calls
-- Judge tokens include all LLM-as-judge calls via `judge()` method (e.g., FactScore: 6-20 verification calls per example)
-- **Note**: Some judge implementations (e.g., FactScore claim extraction) make additional API calls (claim extraction) that are currently not tracked not part of judge() calls or get stored in state["responses"]. These represent a small overhead (~10-20% of total judge tokens) and are present in existing implementations like MedRedQA, keep in mind when calculating.
+See [processing documentation](docs/medarc-eval-process.md) and [win rate documentation](docs/medarc-eval-winrate.md) for configuration options, HuggingFace integration, and output formats.
