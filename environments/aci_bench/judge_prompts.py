@@ -1,21 +1,18 @@
-# Judge template lightly adapted from HELM's MedDialog evaluation
-MAX_SCORE = 5
-MIN_SCORE = 1
+# Judge template lightly adapted from HELM's ACI-Bench evaluation prompt
 
 JUDGE_DIMENSIONS = ("accuracy", "completeness", "clarity")
 
 JUDGE_TEMPLATE = """\
-You are a medical expert tasked with evaluating the quality of medical dialogue summaries.
+You are a medical expert tasked with evaluating the quality of a generated clinical note based on a doctor-patient conversation.
 
-Your goal is to assess how well the summary captures the patient-doctor conversation,
-and how it compares to the gold response in terms of accuracy, completeness, and clarity.
+For each of the following criteria, rate the response on a scale of 1 to 5 (1 = very poor, 5 = excellent), and provide a short justification for your score.
 
 The patient-doctor conversation will be provided in these tags:
 <conversation>
 {conversation}
 </conversation>
 
-The response will be provided in these tags:
+The generated note will be provided in these tags:
 <response>
 {response}
 </response>
@@ -25,20 +22,19 @@ The reference response will be provided in these tags:
 {gold_response}
 </gold_response>
 
-Carefully review the <response> and compare it to the <gold_response> when needed.
+Carefully review the <response> based on the <conversation> and compare it to the <gold_response> when needed.
 
-Please evaluate the generated summary on a scale of {min_score}-{max_score} ({min_score} = poor, {max_score} = excellent)
-for each of these three key dimensions:
+For each of the following criteria, rate the response on a scale of 1 to 5 (1 = very poor, 5 = excellent), and provide a short justification for your score.
 
 Evaluation Criteria:
-Accuracy ({min_score}-{max_score})
-- Does the summary correctly capture the main medical issue and clinical details from the conversation?
+Accuracy (1-5)
+- Does the note provide correct clinical information based on the conversation?
 
-Completeness ({min_score}-{max_score})
-- Does the summary include all important medical information from the conversation?
+Completeness (1-5)
+- Does the note include all important medical details from the conversation?
 
-Clarity ({min_score}-{max_score})
-- Is the summary easy to understand for clinical use?
+Clarity (1-5)
+- Is the note written clearly and organized in a standard clinical format for clinicians?
 
 Output Format:
 {output_format}
@@ -48,16 +44,16 @@ JUDGE_OUTPUT_JSON = """
 Output your evaluation as a single valid JSON object matching the following structure:
 {
     "accuracy": {
+        "explanation": "Brief explanation of why this score was given.",
         "score": 0,
-        "explanation": "Brief explanation of why this score was given."
     },
     "completeness": {
+        "explanation": "Brief explanation of why this score was given.",
         "score": 0,
-        "explanation": "Brief explanation of why this score was given."
     },
     "clarity": {
+        "explanation": "Brief explanation of why this score was given.",
         "score": 0,
-        "explanation": "Brief explanation of why this score was given."
     }
 }
 
@@ -72,16 +68,16 @@ JUDGE_OUTPUT_XML = """
 Output your evaluation as a single valid XML object matching the following structure:
 <evaluation>
   <accuracy>
-    <score>0</score>
     <explanation>Brief explanation of why this score was given.</explanation>
+    <score>0</score>
   </accuracy>
   <completeness>
-    <score>0</score>
     <explanation>Brief explanation of why this score was given.</explanation>
+    <score>0</score>
   </completeness>
   <clarity>
-    <score>0</score>
     <explanation>Brief explanation of why this score was given.</explanation>
+    <score>0</score>
   </clarity>
 </evaluation>
 

@@ -7,21 +7,23 @@ from datasets.utils.logging import disable_progress_bar
 from datasets import Dataset, DatasetDict, load_dataset, concatenate_datasets
 from medarc_verifiers.parsers import JSONParser
 from medarc_verifiers.prompts import THINK_XML_SYSTEM_PROMPT, XML_SYSTEM_PROMPT, AnswerFormat
+from medarc_verifiers.utils import default_judge_api_key, judge_sampling_args_and_headers
 from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
 from openai import AsyncOpenAI
 
-from judge_prompts import JUDGE_TEMPLATE, JUDGE_OUTPUT_JSON, JUDGE_DIMENSIONS, MAX_SCORE, MIN_SCORE
+from judge_prompts import JUDGE_TEMPLATE, JUDGE_OUTPUT_JSON, JUDGE_DIMENSIONS
 
 disable_progress_bar()  # suppress datasets progress indicators
 
 # section 4.3.1 of the ACI-Bench paper
-prompt ="""\
-Summarize the conversation to generate a clinical note with four sections: 
-HISTORY OF PRESENT ILLNESS, PHYSICAL EXAM, RESULTS, ASSESSMENT AND PLAN. 
+prompt = """\
+Summarize the conversation to generate a clinical note with four sections:
+HISTORY OF PRESENT ILLNESS, PHYSICAL EXAM, RESULTS, ASSESSMENT AND PLAN.
 
 The conversation is:
 {conversation}
 """
+
 
 def _to_vf_format(dataset: Dataset) -> Dataset:
     return dataset.map(
@@ -60,8 +62,8 @@ def _compute_normalized_reward(
     max_score: float | None = None,
 ) -> float:
     """Accumulate per-dimension judge scores normalized from [min_score, max_score] to [0.0, 1.0]"""
-    min_score = min_score if min_score is not None else float(MIN_SCORE)
-    max_score = max_score if max_score is not None else float(MAX_SCORE)
+    min_score = min_score if min_score is not None else 1
+    max_score = max_score if max_score is not None else 5
 
     total_dims = len(JUDGE_DIMENSIONS)
     if total_dims == 0:
@@ -79,7 +81,7 @@ def _compute_normalized_reward(
 
 
 def _extract_completion_text(completion: Messages, parser: vf.Parser) -> str:
-    # try using parser first -- so that, for example, the judge only sees the 
+    # try using parser first -- so that, for example, the judge only sees the
     # final answer and not the thinking process. or could use for formatting scores.
     # completion_text = parser.parse_answer(completion)
     # if completion_text is not None:
@@ -94,7 +96,6 @@ def _extract_completion_text(completion: Messages, parser: vf.Parser) -> str:
 def load_environment(
     subset: str = "all",
     transcript_version: str = "all",
-    use_think: bool = False,
     answer_format: AnswerFormat | str = AnswerFormat.XML,
     judge_model: str = "gpt-5-mini",
     judge_base_url: str | None = None,
@@ -106,59 +107,49 @@ def load_environment(
     if subset == "all":
         subsets = ["virtassist", "virtscribe", "aci"]
         ds_dicts = [load_dataset("mkieffer/ACI-Bench-MedARC", name=s) for s in subsets]
-        dataset = DatasetDict({
-            split: concatenate_datasets([d[split] for d in ds_dicts])
-            for split in ds_dicts[0].keys()
-        })
+        dataset = DatasetDict(
+            {split: concatenate_datasets([d[split] for d in ds_dicts]) for split in ds_dicts[0].keys()}
+        )
     else:
         dataset = load_dataset("mkieffer/ACI-Bench-MedARC", name=subset)
     if transcript_version != "all":
         dataset = dataset.filter(lambda row: row["transcript_version"] == transcript_version)
     train_ds = _to_vf_format(dataset["train"])
     # valid_ds = _to_vf_format(dataset["valid"])
-    test_ds  = _to_vf_format(concatenate_datasets([dataset["test1"], dataset["test2"], dataset["test3"]])) 
-
-    
+    test_ds = _to_vf_format(concatenate_datasets([dataset["test1"], dataset["test2"], dataset["test3"]]))
 
     # -------- normalize answer_format --------
     answer_format = AnswerFormat(answer_format) if isinstance(answer_format, str) else answer_format
-    
+
     if answer_format == AnswerFormat.XML:
-        system_prompt = system_prompt or (THINK_XML_SYSTEM_PROMPT if use_think else XML_SYSTEM_PROMPT)
-        parser_fields = ["think", "answer"] if use_think else ["answer"]
+        system_prompt = system_prompt or XML_SYSTEM_PROMPT
+        parser_fields = ["answer"]
         parser = vf.XMLParser(fields=parser_fields, answer_field="answer")
     elif answer_format == AnswerFormat.BOXED:
-        system_prompt = system_prompt or (THINK_BOXED_SYSTEM_PROMPT if use_think else BOXED_SYSTEM_PROMPT)
-        parser = (vf.ThinkParser(extract_fn=extract_boxed_answer) if use_think else vf.Parser(extract_fn=extract_boxed_answer))
+        system_prompt = system_prompt or BOXED_SYSTEM_PROMPT
+        parser = vf.Parser(extract_fn=extract_boxed_answer)
     else:
         raise ValueError(f"Unsupported answer format: {answer_format=}")
 
-    
     # -------- setup judge --------
-    judge_api_key = judge_api_key if judge_api_key is not None else os.getenv("JUDGE_API_KEY")
-    judge_base_url = judge_base_url if judge_base_url is not None else os.getenv("JUDGE_BASE_URL")
+    api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
+    sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
 
     judge_parser = JSONParser(fields=["accuracy", "completeness", "clarity"])
     judge_rubric = vf.JudgeRubric(
-        judge_client=AsyncOpenAI(base_url=judge_base_url, api_key=judge_api_key),
+        judge_client=AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=default_headers),
         judge_model=judge_model,
-        judge_prompt="{question}", # gets filled in during judge_rubric.judge() call. a little hacky but means we can fill the judge template in this file
-        parser=parser
+        judge_prompt="{question}",  # gets filled in during judge_rubric.judge() call. a little hacky but means we can fill the judge template in this file
+        parser=parser,
+        judge_sampling_args=sampling_args,
     )
-    
-    async def judge_rubric_reward(
-        completion: Messages, 
-        info: Info, 
-        state: State, 
-        **kwargs: Any
-    ) -> float:
+
+    async def judge_rubric_reward(completion: Messages, info: Info, state: State, **kwargs: Any) -> float:
         conversation = str(info.get("conversation") or "")
         gold_response = str(info.get("reference_response") or "")
         completion_text = _extract_completion_text(completion, parser)
 
         judge_prompt = JUDGE_TEMPLATE.format(
-            min_score=MIN_SCORE,
-            max_score=MAX_SCORE,
             conversation=conversation,
             response=completion_text,
             gold_response=gold_response,
@@ -167,17 +158,18 @@ def load_environment(
 
         # judge_prompt assigned to question var inside judge_rubric.judge() method.
         # judge_raw returned as string.
-        judge_raw = await judge_rubric.judge(
-            judge_prompt, completion_text, gold_response, state
-        )
-
-        parsed = judge_parser.parse(judge_raw, strip=True)
+        try:
+            judge_raw = await judge_rubric.judge(judge_prompt, completion_text, gold_response, state)
+            parsed = judge_parser.parse(str(judge_raw), strip=True)
+        except AttributeError:
+            judge_raw = await judge_rubric.judge(judge_prompt, completion_text, gold_response, state)
+            parsed = judge_parser.parse(str(judge_raw), strip=True)
         if parsed is None:
             parsed = {dimension: {"score": None, "explanation": None, "raw": None} for dimension in JUDGE_DIMENSIONS}
 
         normalized = _compute_normalized_reward(parsed)
 
-        state.setdefault("judge_feedback", []).append(
+        info.setdefault("judge_feedback", []).append(
             {
                 "scores": parsed,
                 "raw_judge": judge_raw,
