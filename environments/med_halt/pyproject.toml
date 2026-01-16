@@ -1,0 +1,26 @@
+[project]
+name = "med_halt"
+description = "Med-HALT (Reasoning) evaluation environment for medical LLMs"
+tags = ["medical", "hallucination", "single-turn", "multiple-choice", "reasoning", "test"]
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "datasets>=4.0.0",
+    "verifiers>=0.1.2.post0",
+    "medarc_verifiers>=0.1.0",
+]
+
+[tool.prime.environment]
+loader = "med_halt:load_environment"
+display_name = "Med-HALT (Reasoning)"
+visibility = "PUBLIC"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["med_halt.py"]
+
+[tool.uv.sources]
+medarc_verifiers = { git = "https://github.com/MedARC-AI/med-lm-envs" }

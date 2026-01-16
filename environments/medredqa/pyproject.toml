@@ -4,6 +4,9 @@ version = "0.2.8"
 description = "MedRedQA medical question answer evaluation"
 tags = ["medical", "reasoning", "single-turn", "llm-judge", "question answering"]
 requires-python = ">=3.11,<3.13"
+authors = [
+    { name = "Kunal Bagga", email = "kunal@kunalb.com" },
+]
 dependencies = [
     "verifiers>=0.1.2.post0",
     "datasets",

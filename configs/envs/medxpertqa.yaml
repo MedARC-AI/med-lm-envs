@@ -1,0 +1,32 @@
+- id: medxpertqa
+  module: medxpertqa
+  rollouts_per_example: 1
+  num_examples: -1
+  verbose: false
+  matrix:
+    question_type: [reasoning, understanding]
+  matrix_id_format: "{base}-{question_type}"
+
+- id: medxpertqa
+  module: medxpertqa
+  rollouts_per_example: 1
+  num_examples: -1
+  verbose: false
+  env_args:
+    shuffle_answers: true
+    shuffle_seed: 1618
+  matrix:
+    question_type: [reasoning, understanding]
+  matrix_id_format: "{base}-{question_type}-rollout1618"
+
+- id: medxpertqa
+  module: medxpertqa
+  rollouts_per_example: 1
+  num_examples: -1
+  verbose: false
+  env_args:
+    shuffle_answers: true
+    shuffle_seed: 9331
+  matrix:
+    question_type: [reasoning, understanding]
+  matrix_id_format: "{base}-{question_type}-rollout9331"

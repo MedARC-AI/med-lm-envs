@@ -24,3 +24,8 @@ Replace `MISTRAL_API_KEY` with your actual API key.
 ## Environment
 
 The evaluation environment is defined in `metamedqa.py` and uses the HuggingFace `maximegmd/MetaMedQA` dataset.
+
+## Authors
+This environment has been put together by:
+
+Aymane Ouraq - ([@aymaneo](https://github.com/aymaneo))

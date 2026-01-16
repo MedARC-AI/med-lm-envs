@@ -9,6 +9,7 @@ from medarc_verifiers.rewards.multiple_choice_accuracy import multiple_choice_ac
 from medarc_verifiers.utils.randomize_multiple_choice import randomize_multiple_choice
 from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
+
 disable_progress_bar()  # suppress datasets mapping progress bar
 
 
@@ -125,7 +126,7 @@ def load_environment(
 
     if vocab == Vocab.ICD10CM_SAMPLE:
         # load only the sample subset, should contain dev and test
-        ds = load_dataset("sameedkhan/medconceptsqa-sample_medarc_15k", subset.replace("_sample", ""))
+        ds = load_dataset("sameedkhan/medconceptsqa-sample_medarc_2k", subset.replace("_sample", ""))
         test = ds["test"]
     else:
         # load the entire dataset, should contain dev and test

@@ -15,7 +15,7 @@
     | `test`  | A-G    | **100**  |
 
 - **Few-shot dataset**: `MMLU-Pro-Health`
-- **Source links**: [Paper](https://arxiv.org/pdf/2406.01574), [Github](https://github.com/TIGER-AI-Lab/MMLU-Pro), [Full HF Dataset](https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro), [HF Dataset Used](https://huggingface.co/datasets/mkieffer/MMLU-Pro-Health)
+- **Source links**: [Paper](https://arxiv.org/pdf/2406.01574), [Github](https://github.com/TIGER-AI-Lab/MMLU-Pro), [HF Dataset](https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro)
 - **Split sizes**: 
 
     | Split       | Choices         | Count   |
@@ -31,13 +31,13 @@
 Run an evaluation with default settings:
 
 ```bash
-uv run vf-eval mmlu-pro-health
+uv run vf-eval m-arc
 ```
 
 Configure model and sampling:
 
 ```bash
-uv run vf-eval mmlu-pro-health \
+uv run vf-eval m-arc \
     -m gpt-4.1-mini   \
     -n -1 -r 3 -t 1024 -T 0.7  \
     -a '{"use_think": false, "num_few_shot": 1, "shuffle": true}'
@@ -53,7 +53,7 @@ Notes:
 
 | Arg                  | Type | Default | Description                                                                                                                                                                          |
 | -------------------- | ---- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `num_few_shot`  | int  | `1`    | The number of few-shot examples to use (`-1` for all)                                                                                                                                |
+| `num_few_shot`  | int  | `5`    | The number of few-shot examples to use (`-1` for all)                                                                                                                                |
 | `use_think`          | bool | `False` | Whether to check for `<think>...</think>` formatting with `ThinkParser`|
 | `shuffle`            | bool | `False` | Whether to shuffle answer choices |
 

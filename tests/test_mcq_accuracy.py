@@ -1,5 +1,7 @@
 """Tests for the simplified MCQ accuracy grader."""
 
+import pytest
+
 from medarc_verifiers.rewards.multiple_choice_accuracy import MCQAccuracyResult, multiple_choice_accuracy
 
 
@@ -58,6 +60,20 @@ def test_last_token_wrong():
     assert not multiple_choice_accuracy("My answer is A", answer_letter="B", answer_text="Correct")
 
 
+def test_last_token_disabled_when_explicit_anchor_exists_even_if_wrong():
+    # Regression: do NOT allow last_token to override an explicit (wrong) anchored choice.
+    response = (
+        "The correct answer is D. Mouth breathing.\n\nA and B are incorrect because ...\n\nC is incorrect because ..."
+    )
+    assert not multiple_choice_accuracy(response, answer_letter="C", answer_text="Both")
+
+
+def test_last_token_ignores_negative_context_incorrect():
+    # Regression: option tokens in contexts like "C is incorrect" should not count as the chosen answer.
+    response = "No anchor here. C is incorrect because the appliance is not used for both."
+    assert not multiple_choice_accuracy(response, answer_letter="C", answer_text="Both", accept_answer_text=False)
+
+
 def test_answer_text_exact_match():
     assert multiple_choice_accuracy(
         "The correct treatment is chemotherapy and radiation",
@@ -77,12 +93,6 @@ def test_answer_text_in_sentence():
 def test_answer_text_case_insensitive():
     assert multiple_choice_accuracy(
         "The diagnosis is DIABETES MELLITUS TYPE 2", answer_letter="D", answer_text="Diabetes Mellitus Type 2"
-    )
-
-
-def test_answer_text_with_negation_fails():
-    assert not multiple_choice_accuracy(
-        "This is not hypertension, it's hypotension.", answer_letter="A", answer_text="hypertension"
     )
 
 
@@ -199,6 +209,18 @@ def test_cot_without_anchor_uses_last_token():
     assert multiple_choice_accuracy(cot_response, answer_letter="C", answer_text="Match")
 
 
+def test_unpaired_think_close_then_final_token_newline():
+    # Regression: some models emit </think> without a matching <think> and place the answer after it.
+    response = "Reasoning...\n</think>\n\nA"
+    assert multiple_choice_accuracy(response, answer_letter="A", answer_text="Option A")
+
+
+def test_unpaired_think_close_with_spurious_match():
+    # Regression: some models emit </think> without a matching <think> and place the answer after it.
+    response = "The answer is B. But on the other hand... I know\n</think>A"
+    assert multiple_choice_accuracy(response, answer_letter="A", answer_text="Option A")
+
+
 def test_cot_prevents_early_letter_matching():
     # Should not match A or B from the reasoning
     cot_response = """
@@ -252,3 +274,392 @@ def test_edge_case_quoted_answer_text():
     assert multiple_choice_accuracy(
         'The diagnosis is "acute bronchitis"', answer_letter="B", answer_text="acute bronchitis"
     )
+
+
+def test_direct_answer_method_details():
+    result = multiple_choice_accuracy("C", answer_letter="C", answer_text="Option C", return_details=True)
+    assert result.is_correct is True
+    assert result.method == "direct_answer"
+    assert result.matched_answer == "c"
+    assert result.correct_answer == "C"
+
+
+def test_prefix_priority_over_generic_anchor():
+    # The explicit prefix match should be used even if a later generic anchor appears
+    response = "Answer: B. The answer is C."
+    result = multiple_choice_accuracy(
+        response, answer_letter="B", answer_text="Option B", prefix="Answer:", return_details=True
+    )
+    assert result.is_correct is True
+    assert result.method == "anchored_token"
+    assert result.matched_answer == "B"
+
+
+def test_last_token_negation_in_previous_sentence_not_blocking():
+    # Negation in an earlier sentence should not block a later correct token
+    response = "Not C. However, after reconsideration, the answer is actually C"
+    assert multiple_choice_accuracy(response, answer_letter="C", answer_text="Option C")
+
+
+def test_leading_two_digit_option():
+    assert multiple_choice_accuracy("12) Cranial nerve XII", answer_letter="12", answer_text="CN XII")
+
+
+def test_answer_text_whitespace_flexibility():
+    assert multiple_choice_accuracy(
+        "The correct diagnosis is acute   kidney\tinjury.", answer_letter="A", answer_text="acute kidney injury"
+    )
+
+
+def test_invalid_answer_letter_raises():
+    with pytest.raises(ValueError):
+        multiple_choice_accuracy("Answer: C", answer_letter="AA", answer_text="Option C")
+
+
+def test_anchored_negated_with_parentheses_should_fail():
+    assert not multiple_choice_accuracy("Final answer is not (C).", answer_letter="C", answer_text="Option C")
+
+
+def test_anchored_negated_isnt_ascii_apostrophe_should_fail():
+    assert not multiple_choice_accuracy("The answer isn't C; it's D.", answer_letter="C", answer_text="Option C")
+
+
+def test_anchored_negated_isnt_curly_apostrophe_should_fail():
+    assert not multiple_choice_accuracy("The answer isn’t C; it’s D.", answer_letter="C", answer_text="Option C")
+
+
+def test_anchored_negated_prefix_style_should_fail():
+    assert not multiple_choice_accuracy("Answer: not C", answer_letter="C", answer_text="Option C")
+
+
+def test_prefix_anchored_negated_should_fail():
+    assert not multiple_choice_accuracy(
+        "The answer is: not C", answer_letter="C", answer_text="Option C", prefix="The answer is:"
+    )
+
+
+def test_anchored_not_after_option_should_not_block():
+    # Current implementation only treats "not/isn't" as negation when it appears BEFORE the option token.
+    # So "Answer: C, not D" should still count as C.
+    assert multiple_choice_accuracy("Answer: C, not D.", answer_letter="C", answer_text="Option C")
+
+
+def test_leading_option_with_no_answer_text_should_pass():
+    # Regression: ensure "No" as answer text doesn't trigger negation handling
+    assert multiple_choice_accuracy("B. No", answer_letter="B", answer_text="No")
+
+
+def test_leading_option_with_no_and_punctuation_should_pass():
+    assert multiple_choice_accuracy("B) No.", answer_letter="B", answer_text="No")
+
+
+def test_last_token_negation_same_sentence_blocks():
+    # No anchor phrase, so it falls to last_token.
+    # Because "Not" is in the same sentence, the final "C" should be blocked.
+    assert not multiple_choice_accuracy("Not C, wait, C", answer_letter="C", answer_text="Option C")
+
+
+def test_last_token_negation_previous_sentence_does_not_block():
+    # Sentence boundary prevents earlier negation from blocking later token.
+    assert multiple_choice_accuracy("Not C. C", answer_letter="C", answer_text="Option C")
+
+
+def test_last_token_isnt_previous_sentence_does_not_block():
+    assert multiple_choice_accuracy("It isn't C. C", answer_letter="C", answer_text="Option C")
+
+
+def test_last_token_isnt_same_sentence_blocks():
+    assert not multiple_choice_accuracy("It isn't C, but maybe C", answer_letter="C", answer_text="Option C")
+
+
+def test_answer_text_does_not_override_explicit_wrong_choice():
+    response = (
+        "The other options do not account for the renal findings as well:\n"
+        "- **D (Protein deposition):** Suggests amyloidosis...\n\n"
+        "Therefore, the most accurate explanation is ... → choice **B**"
+    )
+    assert not multiple_choice_accuracy(response, answer_letter="D", answer_text="Protein deposition")
+
+
+def test_explicit_choice_correct_even_with_other_option_texts_present():
+    response = "- **D (Protein deposition):** ...\nAnswer: B"
+    assert multiple_choice_accuracy(
+        response, answer_letter="B", answer_text="Immune response to streptococcal infection"
+    )
+
+
+def test_answer_text_used_when_no_explicit_choice_letter_present():
+    response = (
+        "The presentation is classic for poststreptococcal glomerulonephritis.\n"
+        "Therefore the diagnosis is poststreptocococcal glomerulonephritis."
+    )
+    assert multiple_choice_accuracy(response, answer_letter="B", answer_text="poststreptocococcal glomerulonephritis")
+
+
+def test_negated_anchor_does_not_block_answer_text_fallback():
+    response = "The answer is not C. The correct diagnosis is acute appendicitis."
+    assert multiple_choice_accuracy(response, answer_letter="D", answer_text="acute appendicitis")
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "**B.** No",
+        "*B.* No",
+        "__B.__ No",
+        "`B.` No",
+        "~~B.~~ No",
+        "- **B.** No",
+        "* **B.** No",
+        "+ **B.** No",
+        "1. **B.** No",
+        "12. **B.** No",
+        "> **B)** No",
+        "   >   -   **B.**   No",
+        "**(B).** No",
+        "__((B))).__ No",
+    ],
+)
+def test_leading_option_markdown_wrapped_letter(response):
+    assert multiple_choice_accuracy(response, answer_letter="B", answer_text="No")
+
+
+@pytest.mark.parametrize(
+    "response, letter, text",
+    [
+        ("**12)** Cranial nerve XII", "12", "Cranial nerve XII"),
+        ("> 12) Cranial nerve XII", "12", "Cranial nerve XII"),
+        ("- `2:` Second option", "2", "Second option"),
+    ],
+)
+def test_leading_option_markdown_wrapped_number(response, letter, text):
+    assert multiple_choice_accuracy(response, answer_letter=letter, answer_text=text)
+
+
+def test_leading_option_markdown_returns_anchored_token_method():
+    result = multiple_choice_accuracy("**B.** No", answer_letter="B", answer_text="No", return_details=True)
+    assert result.is_correct is True
+    assert result.method == "anchored_token"
+    assert result.matched_answer == "B"
+    assert result.correct_answer == "B"
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "**No.**",  # no leading option token
+        "*No*",  # no delimiter after a letter/number token
+        "- **No**",  # list prefix but no option token
+        "> - No",  # quote/list but no option token
+    ],
+)
+def test_leading_option_markdown_non_option_does_not_force_leading_match(response):
+    # We just assert it doesn't incorrectly grade B as correct purely from leading parsing.
+    assert not multiple_choice_accuracy(response, answer_letter="B", answer_text="No", accept_answer_text=False)
+
+
+def test_not_leading_markdown_answer_is_not_matched_by_leading_strategy():
+    response = "Answer: **B.** No"
+    result = multiple_choice_accuracy(
+        response,
+        answer_letter="B",
+        answer_text="No",
+        accept_answer_text=False,
+        return_details=True,
+    )
+    assert result.is_correct is True
+    assert result.method == "anchored_token"
+    assert result.matched_answer == "B"
+
+
+def test_block_prompt_then_option_on_next_line_parses_choice_letter():
+    response = "The most appropriate next step is:\n\n**(B) Video-capsule endoscopy**"
+    assert multiple_choice_accuracy(
+        response, answer_letter="B", answer_text="Video-capsule endoscopy", accept_answer_text=False
+    )
+
+
+def test_anchor_phrase_with_markdown_wrapper_parses_choice_letter():
+    response = "Answer: **(C)**"
+    result = multiple_choice_accuracy(response, answer_letter="C", answer_text="Option C", return_details=True)
+    assert result.is_correct is True
+    assert result.method == "anchored_token"
+    assert result.matched_answer == "C"
+
+
+# --- Additional formatting coverage ---
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "Final answer — C",  # em dash
+        "Final answer – C",  # en dash
+        "Final answer —(C)",
+        "Answer:（C）",  # fullwidth parentheses
+        "Answer：C",  # fullwidth colon
+        "Answer → C",  # unicode arrow
+        "Answer ⇒ C",
+        "Answer: 【C】",  # CJK brackets
+    ],
+)
+def test_unicode_punctuation_variants_still_find_choice(response):
+    # We only assert correctness; method may vary (anchored vs last_token).
+    assert multiple_choice_accuracy(response, answer_letter="C", answer_text="Option C", accept_answer_text=False)
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "I think OptionC is correct",  # letter embedded in a word
+        "This is about C++ programming",  # C followed by '+'
+        "B-cell lymphoma is mentioned here",  # letter followed by '-'
+        "A/B testing is common in software",  # letters adjacent to '/'
+    ],
+)
+def test_letter_embedded_in_longer_tokens_is_not_treated_as_choice(response):
+    # These should NOT be graded as selecting the choice letter.
+    assert not multiple_choice_accuracy(response, answer_letter="C", answer_text="Option C", accept_answer_text=False)
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "Respuesta: C",  # Spanish
+        "Réponse : C",  # French
+        "Antwort: C",  # German
+        "Risposta: C",  # Italian
+    ],
+)
+def test_non_english_with_colon_still_works_via_token_extraction(response):
+    # We don't have non-English anchors; but the letter token is still extractable.
+    assert multiple_choice_accuracy(response, answer_letter="C", answer_text="Option C", accept_answer_text=False)
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "答案是C",  # Chinese: no separator between word chars and 'C'
+        "정답은C",  # Korean: same issue
+        "答えはC",  # Japanese: same issue
+    ],
+)
+def test_non_english_without_separator_does_not_match_choice_letter(response):
+    # Without a separator, the option letter is embedded in a larger token.
+    assert not multiple_choice_accuracy(response, answer_letter="C", answer_text="Option C", accept_answer_text=False)
+
+
+@pytest.mark.parametrize(
+    "response, answer_text",
+    [
+        ("The diagnosis is Parkinson's disease", "Parkinson disease"),
+        ("Organism is C. difficile", "C difficile"),
+        ("Treat with TNF-alpha inhibitor", "TNF alpha inhibitor"),
+        ("Use beta-blocker", "beta blocker"),
+    ],
+)
+def test_answer_text_requires_exact_formatting_beyond_normalization(response, answer_text):
+    # We only allow whitespace/case/unicode normalization; punctuation differences should not match.
+    assert not multiple_choice_accuracy(response, answer_letter="D", answer_text=answer_text, accept_answer_text=True)
+
+
+def test_multiple_answers_last_explicit_anchor_wins():
+    response = "Answer: B. After reconsideration, final answer: C"
+    assert multiple_choice_accuracy(response, answer_letter="C", answer_text="Option C")
+
+
+def test_multiple_answers_last_explicit_anchor_wins_even_if_first_was_correct():
+    response = "Answer: C. Actually I change my mind: Answer: B"
+    assert multiple_choice_accuracy(response, answer_letter="B", answer_text="Option B")
+    assert not multiple_choice_accuracy(response, answer_letter="C", answer_text="Option C")
+
+
+def test_multiple_answers_negated_then_corrected():
+    response = "Answer: C. Not C. Final answer: B"
+    assert multiple_choice_accuracy(response, answer_letter="B", answer_text="Option B")
+
+
+def test_solution5_answer_text_matches_beginning_region():
+    llm_answer = "Thoracic aortic rupture is the correct diagnosis based on the clinical presentation."
+    assert multiple_choice_accuracy(
+        llm_answer=llm_answer,
+        answer_letter="C",
+        answer_text="Thoracic aortic rupture",
+        accept_answer_text=True,
+    )
+
+
+def test_solution5_answer_text_matches_end_region_after_reasoning():
+    llm_answer = """
+    The patient presents with severe chest trauma. After analyzing all symptoms,
+    including hemodynamic instability, widened mediastinum, and mechanism of injury,
+    we can conclude the diagnosis is:
+
+    Thoracic aortic rupture
+    """
+    assert multiple_choice_accuracy(
+        llm_answer=llm_answer,
+        answer_letter="C",
+        answer_text="Thoracic aortic rupture",
+        accept_answer_text=True,
+    )
+
+
+def test_solution5_answer_text_does_not_match_only_in_middle_reasoning():
+    padding_before = " ".join(["word"] * 120)
+    padding_after = " ".join(["text"] * 120)
+    llm_answer = (
+        padding_before
+        + " While thoracic aortic rupture is a consideration, it is not definitive. "
+        + padding_after
+        + " The actual answer is: Tension pneumothorax"
+    )
+    assert not multiple_choice_accuracy(
+        llm_answer=llm_answer,
+        answer_letter="C",
+        answer_text="Thoracic aortic rupture",
+        accept_answer_text=True,
+    )
+
+
+def test_solution5_answer_text_allows_not_inside_answer_text():
+    long_answer = "Respect the patient's prior wishes and do not resuscitate"
+    llm_answer = f"Based on the advance directive, the correct action is: {long_answer}"
+    assert multiple_choice_accuracy(
+        llm_answer=llm_answer,
+        answer_letter="B",
+        answer_text=long_answer,
+        accept_answer_text=True,
+    )
+
+
+def test_solution5_answer_text_blocked_when_negated_before_match_in_sentence():
+    llm_answer = "The diagnosis is not Thoracic aortic rupture."
+    assert not multiple_choice_accuracy(
+        llm_answer=llm_answer,
+        answer_letter="C",
+        answer_text="Thoracic aortic rupture",
+        accept_answer_text=True,
+    )
+
+
+def test_solution5_answer_text_blocked_when_negation_precedes_location_phrase():
+    llm_answer = "Brown adipose tissue is most likely not found in Scapula."
+    assert not multiple_choice_accuracy(
+        llm_answer=llm_answer,
+        answer_letter="A",
+        answer_text="Scapula",
+        accept_answer_text=True,
+    )
+
+
+def test_solution5_parkinson_substring_anchor_regression():
+    result = multiple_choice_accuracy(
+        llm_answer="Parkinson disease",
+        answer_letter="E",
+        answer_text="Parkinson disease",
+        accept_answer_text=True,
+        return_details=True,
+    )
+    assert result.is_correct is True
+    assert result.method == "answer_text"
