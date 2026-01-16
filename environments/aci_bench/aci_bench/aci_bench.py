@@ -3,7 +3,7 @@ from typing import Any
 import verifiers as vf
 from datasets import Dataset, DatasetDict, concatenate_datasets, load_dataset
 from datasets.utils.logging import disable_progress_bar
-from judge_prompts import JUDGE_DIMENSIONS, JUDGE_OUTPUT_JSON, JUDGE_TEMPLATE
+from aci_bench.judge_prompts import JUDGE_DIMENSIONS, JUDGE_OUTPUT_JSON, JUDGE_TEMPLATE
 from medarc_verifiers.parsers import JSONParser
 from medarc_verifiers.prompts import XML_SYSTEM_PROMPT, AnswerFormat
 from medarc_verifiers.utils import default_judge_api_key, judge_sampling_args_and_headers
