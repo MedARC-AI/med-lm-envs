@@ -1,17 +1,15 @@
-import os
 from typing import Any
 
 import verifiers as vf
-from verifiers.types import Info, State, Messages
+from datasets import Dataset, DatasetDict, concatenate_datasets, load_dataset
 from datasets.utils.logging import disable_progress_bar
-from datasets import Dataset, DatasetDict, load_dataset, concatenate_datasets
+from judge_prompts import JUDGE_DIMENSIONS, JUDGE_OUTPUT_JSON, JUDGE_TEMPLATE
 from medarc_verifiers.parsers import JSONParser
-from medarc_verifiers.prompts import THINK_XML_SYSTEM_PROMPT, XML_SYSTEM_PROMPT, AnswerFormat
+from medarc_verifiers.prompts import XML_SYSTEM_PROMPT, AnswerFormat
 from medarc_verifiers.utils import default_judge_api_key, judge_sampling_args_and_headers
-from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
 from openai import AsyncOpenAI
-
-from judge_prompts import JUDGE_TEMPLATE, JUDGE_OUTPUT_JSON, JUDGE_DIMENSIONS
+from verifiers.types import Info, Messages, State
+from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
 disable_progress_bar()  # suppress datasets progress indicators
 
