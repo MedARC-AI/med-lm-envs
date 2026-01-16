@@ -7,7 +7,12 @@ import verifiers as vf
 from datasets import load_dataset
 from datasets.utils.logging import disable_progress_bar
 from medarc_verifiers.parsers.xml_parser import XMLParser
-from medarc_verifiers.utils import download_file, medarc_cache_dir
+from medarc_verifiers.utils import (
+    default_judge_api_key,
+    download_file,
+    judge_sampling_args_and_headers,
+    medarc_cache_dir,
+)
 from openai import AsyncOpenAI
 from verifiers.types import Info, Messages, State
 
@@ -135,11 +140,16 @@ def load_environment(
         except (ValueError, TypeError):
             return 0.0
 
+    api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
+    sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
+    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=default_headers)
+
     judge_rubric = vf.JudgeRubric(
         parallelize_scoring=True,
-        judge_client=AsyncOpenAI(base_url=judge_base_url, api_key=judge_api_key),
+        judge_client=judge_client,
         judge_model=judge_model,
         judge_prompt="{question}",
+        judge_sampling_args=sampling_args,
     )
 
     if eval_method in (EvalMethod.METRICS, EvalMethod.BOTH):
