@@ -76,6 +76,13 @@ _JUDGE_DEFAULTS: Iterable[JudgeSamplingDefaults] = (
         top_k=64,
     ),
     JudgeSamplingDefaults(
+        name="gemini-3",
+        temperature=1.0,
+        top_p=0.95,
+        top_k=64,
+        reasoning_effort="low",  # TODO: support responses api reasoning effort when verifiers adds suport for it
+    ),
+    JudgeSamplingDefaults(
         name="glm-4.6",
         temperature=1.0,
         top_p=0.95,
@@ -113,6 +120,10 @@ _JUDGE_DEFAULTS: Iterable[JudgeSamplingDefaults] = (
     ),
     JudgeSamplingDefaults(
         name="grok-4",
+        temperature=0.2,
+    ),
+    JudgeSamplingDefaults(
+        name="grok-4.1",
         temperature=0.2,
     ),
     JudgeSamplingDefaults(
