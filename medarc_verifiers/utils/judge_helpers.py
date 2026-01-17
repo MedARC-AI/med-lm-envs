@@ -27,16 +27,21 @@ def _is_subsequence(needle: Tuple[str, ...], haystack: Tuple[str, ...]) -> bool:
 
 @dataclass(frozen=True)
 class JudgeSamplingDefaults:
-    name: str
+    name: str | Tuple[str, ...]
     temperature: Optional[float] = None
     top_p: Optional[float] = None
     top_k: Optional[int] = None
     min_p: Optional[float] = None
     reasoning_effort: Optional[str] = None
-    segments: Tuple[str, ...] = field(init=False, repr=False)
+    segments_list: Tuple[Tuple[str, ...], ...] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "segments", _split_segments(_normalize_judge_name(self.name)))
+        names: Tuple[str, ...] = (self.name,) if isinstance(self.name, str) else self.name
+        object.__setattr__(
+            self,
+            "segments_list",
+            tuple(_split_segments(_normalize_judge_name(name)) for name in names),
+        )
 
     def as_dict(self) -> Dict[str, Union[float, int, str]]:
         payload: Dict[str, Union[float, int, str]] = {}
@@ -58,11 +63,7 @@ class JudgeSamplingDefaults:
 # with the excpetion of Claude and GPT-4o and GPT-4.1 which follow OpenAI's HealthBench judge settings.
 _JUDGE_DEFAULTS: Iterable[JudgeSamplingDefaults] = (
     JudgeSamplingDefaults(
-        name="claude-4.0",
-        temperature=0.5,
-    ),
-    JudgeSamplingDefaults(
-        name="claude-4.5",
+        name=("claude-4.0", "claude-4.5"),
         temperature=0.5,
     ),
     JudgeSamplingDefaults(
@@ -83,32 +84,23 @@ _JUDGE_DEFAULTS: Iterable[JudgeSamplingDefaults] = (
         reasoning_effort="low",  # TODO: support responses api reasoning effort when verifiers adds suport for it
     ),
     JudgeSamplingDefaults(
-        name="glm-4.6",
-        temperature=1.0,
-        top_p=0.95,
-        top_k=40,
-    ),
-    JudgeSamplingDefaults(
         name="glm-4.5",
         temperature=0.6,
         top_p=0.95,
     ),
     JudgeSamplingDefaults(
-        name="gpt-4.1",
+        name=("glm-4.6", "glm-4.7"),
+        temperature=1.0,
+        top_p=0.95,
+        top_k=40,
+    ),
+    JudgeSamplingDefaults(
+        name=("gpt-4.1", "gpt-4o"),
         temperature=0.5,
         top_p=1.0,
     ),
     JudgeSamplingDefaults(
-        name="gpt-4o",
-        temperature=0.5,
-        top_p=1.0,
-    ),
-    JudgeSamplingDefaults(
-        name="gpt-5",
-        reasoning_effort="low",  # TODO: support responses api reasoning effort when verifiers adds suport for it
-    ),
-    JudgeSamplingDefaults(
-        name="gpt-5.1",
+        name=("gpt-5", "gpt-5.1", "gpt-5.2"),
         reasoning_effort="low",  # TODO: support responses api reasoning effort when verifiers adds suport for it
     ),
     JudgeSamplingDefaults(
@@ -116,14 +108,10 @@ _JUDGE_DEFAULTS: Iterable[JudgeSamplingDefaults] = (
         temperature=1.0,
         top_p=1.0,
         top_k=0,
-        reasoning_effort="medium",  # TODO: support responses api reasoning effort when verifiers adds suport for it
+        reasoning_effort="low",  # TODO: support responses api reasoning effort when verifiers adds suport for it
     ),
     JudgeSamplingDefaults(
-        name="grok-4",
-        temperature=0.2,
-    ),
-    JudgeSamplingDefaults(
-        name="grok-4.1",
+        name=("grok-4", "grok-4.1"),
         temperature=0.2,
     ),
     JudgeSamplingDefaults(
@@ -131,7 +119,7 @@ _JUDGE_DEFAULTS: Iterable[JudgeSamplingDefaults] = (
         temperature=1.0,
     ),
     JudgeSamplingDefaults(
-        name="qwen-3-thinking",
+        name=("qwen-3-thinking", "qwen3-max"),
         temperature=0.6,
         top_p=0.95,
         top_k=20,
@@ -151,7 +139,7 @@ def judge_sampling_args_and_headers(
     normalized = _normalize_judge_name(judge_name)
     candidate_segments = _split_segments(normalized)
     for judge_defaults in _JUDGE_DEFAULTS:
-        if _is_subsequence(judge_defaults.segments, candidate_segments):
+        if any(_is_subsequence(segments, candidate_segments) for segments in judge_defaults.segments_list):
             if base_url == "https://api.pinference.ai/api/v1" and os.environ.get("PRIME_TEAM_ID") is not None:
                 prime_team_id = {"X-Prime-Team-ID": os.environ.get("PRIME_TEAM_ID")}
             else:

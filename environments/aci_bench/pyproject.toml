@@ -1,0 +1,23 @@
+[project]
+name = "aci_bench"
+description = "ACI Bench evaluation environment"
+readme = "README.md"
+tags = ["medical", "clinical", "dialogue", "summarization", "llm-judge", "single-turn", "train", "eval", "test"]
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "verifiers>=0.1.5.post0",
+    "medarc_verifiers>=0.1.0",
+]
+
+[tool.prime.environment]
+loader = "aci_bench:load_environment"
+display_name = "ACI-Bench"
+visibility = "PUBLIC"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+medarc_verifiers = { git = "https://github.com/MedARC-AI/med-lm-envs" }
