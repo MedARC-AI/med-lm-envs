@@ -26,23 +26,64 @@ class TaskScheduler:
         self._resource_manager = resource_manager
         self._max_parallel = max_parallel
 
-    async def run(self, tasks: Iterable[TaskSpec], runner: TaskRunner) -> None:
+    async def run(
+        self,
+        tasks: Iterable[TaskSpec],
+        runner: TaskRunner,
+        *,
+        shutdown_event: asyncio.Event | None = None,
+    ) -> None:
         queue: asyncio.Queue[TaskSpec] = asyncio.Queue()
         for task in tasks:
             queue.put_nowait(task)
         semaphore = asyncio.Semaphore(self._max_parallel)
+        active = 0
+        active_cond = asyncio.Condition()
 
         async def worker() -> None:
+            nonlocal active
             while True:
-                task = await queue.get()
+                if shutdown_event and shutdown_event.is_set():
+                    return
+                if shutdown_event:
+                    get_task = asyncio.create_task(queue.get())
+                    shutdown_task = asyncio.create_task(shutdown_event.wait())
+                    done, pending = await asyncio.wait(
+                        {get_task, shutdown_task}, return_when=asyncio.FIRST_COMPLETED
+                    )
+                    for pending_task in pending:
+                        pending_task.cancel()
+                    await asyncio.gather(*pending, return_exceptions=True)
+                    shutdown_requested = shutdown_task in done
+                    got_task = get_task in done
+                    if not got_task:
+                        return
+                    task = get_task.result()
+                    if shutdown_requested:
+                        queue.put_nowait(task)
+                        queue.task_done()
+                        return
+                else:
+                    task = await queue.get()
                 try:
+                    if shutdown_event and shutdown_event.is_set():
+                        queue.put_nowait(task)
+                        return
                     async with semaphore:
+                        if shutdown_event and shutdown_event.is_set():
+                            queue.put_nowait(task)
+                            return
                         try:
                             allocation = self._allocate(task)
                         except ResourceError:
+                            if shutdown_event and shutdown_event.is_set():
+                                queue.put_nowait(task)
+                                return
                             await asyncio.sleep(1.0)
                             queue.put_nowait(task)
                             continue
+                        async with active_cond:
+                            active += 1
                         try:
                             try:
                                 await runner(task, allocation)
@@ -50,11 +91,28 @@ class TaskScheduler:
                                 pass
                         finally:
                             self._release(allocation)
+                            async with active_cond:
+                                active -= 1
+                                active_cond.notify_all()
                 finally:
                     queue.task_done()
 
         workers = [asyncio.create_task(worker()) for _ in range(self._max_parallel)]
-        await queue.join()
+        if shutdown_event:
+            join_task = asyncio.create_task(queue.join())
+            shutdown_task = asyncio.create_task(shutdown_event.wait())
+            done, pending = await asyncio.wait(
+                {join_task, shutdown_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            for pending_task in pending:
+                pending_task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            if shutdown_task in done:
+                async with active_cond:
+                    while active > 0:
+                        await active_cond.wait()
+        else:
+            await queue.join()
         for worker_task in workers:
             worker_task.cancel()
         await asyncio.gather(*workers, return_exceptions=True)

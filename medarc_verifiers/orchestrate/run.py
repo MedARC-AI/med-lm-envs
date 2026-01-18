@@ -12,7 +12,13 @@ import signal
 
 from dotenv import dotenv_values
 
-from medarc_verifiers.orchestrate.bench import render_command, run_benchmark
+from medarc_verifiers.orchestrate.bench import (
+    BenchProcess,
+    render_command,
+    start_benchmark,
+    terminate_benchmark,
+    wait_benchmark,
+)
 from medarc_verifiers.orchestrate.config import PlanConfig, TaskSpec
 from medarc_verifiers.orchestrate.dashboard import OrchestratorDashboard
 from medarc_verifiers.orchestrate.docker_vllm import (
@@ -63,7 +69,9 @@ class OrchestratorRunner:
         self._dashboard = OrchestratorDashboard() if use_dashboard else None
         self._manifests: dict[str, TaskManifest] = {}
         self._active_containers: dict[str, object] = {}
+        self._bench_processes: dict[str, BenchProcess] = {}
         self._shutdown = asyncio.Event()
+        self._shutdown_mode: str | None = None
 
     def run(self) -> None:
         asyncio.run(self._run_async())
@@ -74,15 +82,18 @@ class OrchestratorRunner:
             self._dashboard.start()
         try:
             loop = asyncio.get_running_loop()
-            runner_task = asyncio.create_task(scheduler.run(self._tasks, self._run_task))
-            _register_signal_handlers(loop, lambda: self._handle_shutdown(runner_task))
+            runner_task = asyncio.create_task(
+                scheduler.run(self._tasks, self._run_task, shutdown_event=self._shutdown)
+            )
+            _register_signal_handlers(loop, lambda: self._handle_shutdown(runner_task, loop))
             await runner_task
         finally:
             if self._dashboard:
                 self._dashboard.stop()
             if self._shutdown.is_set():
                 await self._teardown_active()
-                self._mark_cancelled()
+                if self._shutdown_mode == "force":
+                    self._mark_cancelled()
 
     async def _run_task(self, task: TaskSpec, allocation: Allocation) -> None:
         manifest = self._get_or_init_manifest(task, allocation)
@@ -221,27 +232,35 @@ class OrchestratorRunner:
             command = render_command(command_template, command_context)
             manifest.bench_command = shlex.join(command)
             self._set_state(manifest, paths, JobState.running)
-            bench_result = await asyncio.to_thread(
-                run_benchmark,
+            bench_proc = await start_benchmark(
                 command,
                 cwd=repo_root,
                 env=None,
                 stdout_path=paths.stdout_path,
                 stderr_path=paths.stderr_path,
             )
+            self._bench_processes[task.task_id] = bench_proc
+            bench_result = await wait_benchmark(bench_proc)
+            self._bench_processes.pop(task.task_id, None)
             manifest.bench_exit_code = bench_result.exit_code
             manifest.bench_duration_s = bench_result.duration_s
 
             result_payload = {
                 "exit_code": bench_result.exit_code,
                 "duration_s": bench_result.duration_s,
-                "state": JobState.completed if bench_result.exit_code == 0 else JobState.failed,
+                "state": JobState.cancelled if bench_result.terminated else (
+                    JobState.completed if bench_result.exit_code == 0 else JobState.failed
+                ),
                 "command": manifest.bench_command,
                 "argv": list(command),
+                "terminated": bench_result.terminated,
             }
             write_task_result(paths, result_payload)
 
-            if bench_result.exit_code != 0:
+            if bench_result.terminated:
+                manifest.failure_reason = "bench_terminated"
+                self._set_state(manifest, paths, JobState.cancelled)
+            elif bench_result.exit_code != 0:
                 manifest.failure_reason = "bench_exit_nonzero"
                 self._set_state(manifest, paths, JobState.failed)
             else:
@@ -278,10 +297,11 @@ class OrchestratorRunner:
 
     def _mark_cancelled(self) -> None:
         for task_id, manifest in self._manifests.items():
-            if manifest.state not in {JobState.completed, JobState.failed, JobState.cancelled}:
-                manifest.failure_reason = "cancelled"
-                manifest.state = JobState.cancelled
-                manifest.completed_at = _utcnow()
+            if manifest.state in {JobState.completed, JobState.failed, JobState.cancelled, JobState.pending}:
+                continue
+            manifest.failure_reason = manifest.failure_reason or "cancelled"
+            manifest.state = JobState.cancelled
+            manifest.completed_at = _utcnow()
         write_summary(self._options.output_root / "summary.json", list(self._manifests.values()))
 
     async def _teardown_active(self) -> None:
@@ -292,11 +312,23 @@ class OrchestratorRunner:
                 continue
         self._active_containers.clear()
 
-    def _handle_shutdown(self, runner_task: asyncio.Task) -> None:
-        if self._shutdown.is_set():
+    async def _force_shutdown(self) -> None:
+        for task_id, bench_proc in list(self._bench_processes.items()):
+            try:
+                await terminate_benchmark(bench_proc)
+            except Exception:
+                continue
+        await self._teardown_active()
+
+    def _handle_shutdown(self, runner_task: asyncio.Task, loop: asyncio.AbstractEventLoop) -> None:
+        if not self._shutdown.is_set():
+            self._shutdown_mode = "graceful"
+            self._shutdown.set()
             return
-        self._shutdown.set()
-        runner_task.cancel()
+        if self._shutdown_mode == "force":
+            return
+        self._shutdown_mode = "force"
+        loop.create_task(self._force_shutdown())
 
 
 def _utcnow() -> str:
