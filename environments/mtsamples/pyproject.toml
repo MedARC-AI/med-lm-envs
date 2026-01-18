@@ -1,0 +1,21 @@
+[project]
+name = "mtsamples"
+version = "0.1.0"
+description = "MTSamples Medical Specialty Classification Environment"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "verifiers>=0.1.0",
+    "datasets>=2.14.0",
+]
+
+[tool.prime.environment]
+loader = "mtsamples:load_environment"
+display_name = "MTSamples"
+visibility = "PUBLIC"
+tags = ["medical", "classification", "transcription", "specialty", "mcq"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
