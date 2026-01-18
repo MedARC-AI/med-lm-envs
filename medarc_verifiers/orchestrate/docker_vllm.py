@@ -174,7 +174,6 @@ def create_and_start_container(
     client = docker.from_env()
     gpu_id_list = [int(gpu) for gpu in gpu_ids]
     device_request = DeviceRequest(
-        count=len(gpu_id_list),
         device_ids=[str(gpu) for gpu in gpu_id_list],
         capabilities=[["gpu"]],
     )
