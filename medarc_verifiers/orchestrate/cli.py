@@ -8,7 +8,7 @@ from datetime import datetime
 
 from medarc_verifiers.orchestrate.config import expand_tasks, load_plan
 from medarc_verifiers.orchestrate.docker_vllm import cleanup_orphan_containers
-from medarc_verifiers.orchestrate.resources import ResourceManager, parse_index_range
+from medarc_verifiers.orchestrate.resources import ResourceError, ResourceManager, discover_gpus, parse_index_range
 from medarc_verifiers.orchestrate.run import OrchestratorOptions, OrchestratorRunner
 from medarc_verifiers.orchestrate.state import filter_tasks_for_resume, load_summary
 
@@ -28,7 +28,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port-range", help="Restrict ports (e.g. 8000-8999).")
     parser.add_argument("--run-id", help="Run identifier (default: timestamp).")
     parser.add_argument("--output-dir", type=Path, help="Override output directory root.")
-    parser.add_argument("--max-parallel", type=int, default=None, help="Maximum concurrent tasks.")
+    parser.add_argument(
+        "--max-parallel",
+        type=int,
+        default=None,
+        help="Maximum concurrent tasks (defaults to GPU count when unset).",
+    )
     parser.add_argument("--readiness-timeout-s", type=int, default=None, help="Readiness timeout in seconds.")
     parser.add_argument("--resume", action="store_true", help="Skip tasks already marked completed.")
     parser.add_argument("--rerun-failed", action="store_true", help="Rerun failed tasks when resuming.")
@@ -60,7 +65,18 @@ def main(argv: list[str] | None = None) -> int:
         port_range = (int(start_str), int(end_str))
     else:
         port_range = (8000, 8999)
-    max_parallel = args.max_parallel if args.max_parallel is not None else (plan.max_parallel or 1)
+    if args.max_parallel is not None:
+        max_parallel = args.max_parallel
+    elif plan.max_parallel is not None:
+        max_parallel = plan.max_parallel
+    else:
+        if gpu_indices is not None:
+            max_parallel = max(1, len(gpu_indices))
+        else:
+            try:
+                max_parallel = max(1, len(discover_gpus()))
+            except ResourceError:
+                max_parallel = 1
     readiness_timeout_s = (
         args.readiness_timeout_s if args.readiness_timeout_s is not None else (plan.readiness_timeout_s or 1800)
     )

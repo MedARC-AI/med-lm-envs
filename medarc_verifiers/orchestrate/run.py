@@ -183,7 +183,8 @@ class OrchestratorRunner:
 
         self._set_state(manifest, paths, JobState.launching)
         try:
-            container = create_and_start_container(
+            container = await asyncio.to_thread(
+                create_and_start_container,
                 image=image,
                 name=container_name,
                 container_port=container_port,
