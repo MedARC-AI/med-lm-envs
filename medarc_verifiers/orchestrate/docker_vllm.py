@@ -260,7 +260,11 @@ def _warmup(client: httpx.Client, base_url: str, *, model_id: str | None) -> boo
 
 
 def write_container_request(path: str, payload: Mapping[str, object]) -> None:
-    with open(path, "w", encoding="utf-8") as handle:
+    from pathlib import Path
+
+    request_path = Path(path)
+    request_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(request_path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
 
 
