@@ -99,6 +99,15 @@ async def test_parallel_launch_runs_concurrently(tmp_path: Path, monkeypatch) ->
             last_error = None
         return Result()
 
+    async def fake_wait_for_readiness_async(*args, **kwargs):
+        await asyncio.sleep(0.2)
+        class Result:
+            ready = True
+            elapsed_s = 0.2
+            attempts = 1
+            last_error = None
+        return Result()
+
     async def fake_start_benchmark(*args, **kwargs):
         class Proc:
             pass
@@ -112,7 +121,7 @@ async def test_parallel_launch_runs_concurrently(tmp_path: Path, monkeypatch) ->
         return Result()
 
     monkeypatch.setattr("medarc_verifiers.orchestrate.run.create_and_start_container", fake_create_and_start_container)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.run.wait_for_readiness", fake_wait_for_readiness)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.run.wait_for_readiness_async", fake_wait_for_readiness_async)
     monkeypatch.setattr("medarc_verifiers.orchestrate.run.start_benchmark", fake_start_benchmark)
     monkeypatch.setattr("medarc_verifiers.orchestrate.run.wait_benchmark", fake_wait_benchmark)
 

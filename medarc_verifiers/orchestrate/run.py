@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
+import re
 from typing import Iterable
 import json
 import shlex
@@ -38,6 +40,30 @@ from medarc_verifiers.orchestrate.state import JobState, TaskManifest, TaskPaths
 
 COMMAND_TEMPLATE = "uv run medarc-eval bench --config {job_config_path} --api-base-url {base_url}"
 
+_TASK_DIR_ALLOWED = re.compile(r"[^a-zA-Z0-9_.-]+")
+
+
+def _sanitize_task_dirname(task_id: str, *, max_len: int = 120) -> str:
+    cleaned = _TASK_DIR_ALLOWED.sub("-", task_id).strip("-.")
+    if not cleaned:
+        cleaned = "task"
+    if cleaned != task_id:
+        suffix = hashlib.sha1(task_id.encode("utf-8")).hexdigest()[:8]  # noqa: S324
+        cleaned = f"{cleaned}-{suffix}"
+    if len(cleaned) > max_len:
+        cleaned = cleaned[:max_len].rstrip("-.")
+    return cleaned or "task"
+
+
+def _task_root_for_id(output_root: Path, task_id: str) -> Path:
+    raw = output_root / task_id
+    if raw.exists():
+        return raw
+    sanitized = output_root / _sanitize_task_dirname(task_id)
+    if sanitized.exists():
+        return sanitized
+    return sanitized
+
 
 @dataclass(frozen=True)
 class OrchestratorOptions:
@@ -45,6 +71,7 @@ class OrchestratorOptions:
     output_root: Path
     readiness_timeout_s: int
     max_parallel: int
+    prune_logs_on_success: bool = False
 
 
 class OrchestratorRunner:
@@ -121,7 +148,7 @@ class OrchestratorRunner:
         if current:
             self._active_runner_tasks[task.task_id] = current
         manifest = self._get_or_init_manifest(task, allocation)
-        paths = TaskPaths(self._options.output_root / task.task_id)
+        paths = TaskPaths(_task_root_for_id(self._options.output_root, task.task_id))
         attempt = 0
         try:
             while True:
@@ -226,6 +253,7 @@ class OrchestratorRunner:
         log_streamer.start()
         self._log_streamers[task.task_id] = log_streamer
         base_url = f"http://127.0.0.1:{allocation.port}/v1"
+        completed_successfully = False
         try:
             self._set_state(manifest, paths, JobState.loading)
             readiness = await wait_for_readiness_async(
@@ -306,12 +334,22 @@ class OrchestratorRunner:
                 self._set_state(manifest, paths, JobState.failed)
             else:
                 self._set_state(manifest, paths, JobState.completed)
+                completed_successfully = True
         finally:
             await _teardown_container(container, manifest)
             log_streamer = self._log_streamers.pop(task.task_id, None)
             if log_streamer:
                 await asyncio.to_thread(log_streamer.stop)
             self._active_containers.pop(task.task_id, None)
+            if completed_successfully and self._options.prune_logs_on_success:
+                self._prune_task_logs(paths)
+
+    def _prune_task_logs(self, paths: TaskPaths) -> None:
+        for log_path in (paths.container_logs_path, paths.stdout_path, paths.stderr_path):
+            try:
+                log_path.unlink(missing_ok=True)
+            except Exception:
+                continue
 
     def _set_state(self, manifest: TaskManifest, paths: TaskPaths, state: str) -> None:
         prev_state = manifest.state
@@ -349,7 +387,7 @@ class OrchestratorRunner:
             if manifest.state in {JobState.completed, JobState.failed, JobState.cancelled, JobState.pending}:
                 continue
             manifest.failure_reason = manifest.failure_reason or "cancelled"
-            paths = TaskPaths(self._options.output_root / task_id)
+            paths = TaskPaths(_task_root_for_id(self._options.output_root, task_id))
             self._set_state(manifest, paths, JobState.cancelled)
 
     async def _teardown_active(self) -> None:

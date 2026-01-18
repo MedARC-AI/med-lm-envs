@@ -24,6 +24,7 @@ class PlanConfig(BaseModel):
     resume: bool = False
     rerun_failed: bool = False
     kill_orphans: bool = False
+    prune_logs_on_success: bool = False
 
 
 @dataclass(frozen=True)

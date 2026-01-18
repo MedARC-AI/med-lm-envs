@@ -45,6 +45,8 @@ async def start_benchmark(
 ) -> BenchProcess:
     if isinstance(command, str):
         command = shlex.split(command)
+    stdout_path.parent.mkdir(parents=True, exist_ok=True)
+    stderr_path.parent.mkdir(parents=True, exist_ok=True)
     stdout_handle = open(stdout_path, "w", encoding="utf-8")
     stderr_handle = open(stderr_path, "w", encoding="utf-8")
     try:

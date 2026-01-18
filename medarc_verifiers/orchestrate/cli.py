@@ -43,6 +43,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Clean up containers labeled as orchestrator-managed.",
     )
+    parser.add_argument(
+        "--prune-logs-on-success",
+        action="store_true",
+        help="Delete per-task serve/bench logs for completed tasks (kept for failures).",
+    )
     return parser
 
 
@@ -100,11 +105,13 @@ def main(argv: list[str] | None = None) -> int:
         for task in tasks:
             print(f"{task.task_id}\t{task.model_id}\t{task.job_config_path}")
         return 0
+    prune_logs_on_success = args.prune_logs_on_success or plan.prune_logs_on_success
     options = OrchestratorOptions(
         run_id=run_id,
         output_root=output_root,
         readiness_timeout_s=readiness_timeout_s,
         max_parallel=max_parallel,
+        prune_logs_on_success=prune_logs_on_success,
     )
     runner = OrchestratorRunner(plan, tasks, ResourceManager(gpu_indices=gpu_indices, port_range=port_range), options=options)
     runner.run()
