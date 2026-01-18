@@ -20,13 +20,13 @@ from medarc_verifiers.orchestrate.bench import (
     wait_benchmark,
 )
 from medarc_verifiers.orchestrate.config import PlanConfig, TaskSpec
-from medarc_verifiers.orchestrate.dashboard import OrchestratorDashboard
+from medarc_verifiers.orchestrate.dashboard import ACTIVE_STATES, OrchestratorDashboard
 from medarc_verifiers.orchestrate.docker_vllm import (
     build_container_args,
+    ContainerLogStreamer,
     create_and_start_container,
     DockerLaunchError,
     sanitize_container_name,
-    stream_container_logs,
     wait_for_readiness,
     write_container_request,
 )
@@ -66,20 +66,29 @@ class OrchestratorRunner:
         )
         self._resource_manager = resource_manager
         self._options = options
-        self._dashboard = OrchestratorDashboard() if use_dashboard else None
+        self._dashboard = OrchestratorDashboard(enabled=use_dashboard)
         self._manifests: dict[str, TaskManifest] = {}
         self._active_containers: dict[str, object] = {}
         self._bench_processes: dict[str, BenchProcess] = {}
+        self._log_streamers: dict[str, ContainerLogStreamer] = {}
         self._shutdown = asyncio.Event()
         self._shutdown_mode: str | None = None
+        self._shutdown_requested_at: str | None = None
+        self._run_started_at: str | None = None
+        self._init_manifests(self._tasks)
 
     def run(self) -> None:
         asyncio.run(self._run_async())
 
     async def _run_async(self) -> None:
         scheduler = TaskScheduler(self._resource_manager, max_parallel=self._options.max_parallel)
-        if self._dashboard:
-            self._dashboard.start()
+        self._run_started_at = _utcnow()
+        self._dashboard.start()
+        self._dashboard.log(
+            f"RUN started run_id={self._options.run_id} tasks={len(self._manifests)} "
+            f"max_parallel={self._options.max_parallel} output={self._options.output_root}"
+        )
+        write_summary(self._options.output_root / "summary.json", list(self._manifests.values()))
         try:
             loop = asyncio.get_running_loop()
             runner_task = asyncio.create_task(
@@ -88,8 +97,7 @@ class OrchestratorRunner:
             _register_signal_handlers(loop, lambda: self._handle_shutdown(runner_task, loop))
             await runner_task
         finally:
-            if self._dashboard:
-                self._dashboard.stop()
+            self._dashboard.stop()
             if self._shutdown.is_set():
                 await self._teardown_active()
                 if self._shutdown_mode == "force":
@@ -194,9 +202,9 @@ class OrchestratorRunner:
         manifest.container_id = container.id
         self._active_containers[task.task_id] = container
 
-        log_task = asyncio.create_task(
-            asyncio.to_thread(stream_container_logs, container, str(paths.container_logs_path))
-        )
+        log_streamer = ContainerLogStreamer(container, str(paths.container_logs_path))
+        log_streamer.start()
+        self._log_streamers[task.task_id] = log_streamer
         base_url = f"http://127.0.0.1:{allocation.port}/v1"
         try:
             self._set_state(manifest, paths, JobState.loading)
@@ -206,6 +214,7 @@ class OrchestratorRunner:
                 model_id=task.model_id,
                 timeout_s=self._options.readiness_timeout_s,
             )
+            manifest.readiness = readiness.__dict__
             write_text(paths.readiness_path, json.dumps(readiness.__dict__, indent=2))
             if not readiness.ready:
                 manifest.failure_reason = "readiness_timeout"
@@ -216,6 +225,10 @@ class OrchestratorRunner:
                 )
                 self._set_state(manifest, paths, JobState.failed)
                 return
+            loading_elapsed = _format_elapsed(manifest.state_entered_at, _utcnow())
+            self._dashboard.log(
+                f"JOB ready task={task.task_id} attempts={readiness.attempts} loading_elapsed={loading_elapsed}"
+            )
 
             repo_root = Path(__file__).resolve().parents[2]
             command_context = {
@@ -235,6 +248,7 @@ class OrchestratorRunner:
                 if "--restart" not in command:
                     command.extend(["--restart", restart_value])
             manifest.bench_command = shlex.join(command)
+            self._dashboard.log(f"JOB bench-start task={task.task_id} cmd={manifest.bench_command}")
             self._set_state(manifest, paths, JobState.running)
             bench_proc = await start_benchmark(
                 command,
@@ -248,6 +262,10 @@ class OrchestratorRunner:
             self._bench_processes.pop(task.task_id, None)
             manifest.bench_exit_code = bench_result.exit_code
             manifest.bench_duration_s = bench_result.duration_s
+            self._dashboard.log(
+                f"JOB bench-complete task={task.task_id} exit={bench_result.exit_code} "
+                f"duration={bench_result.duration_s:.1f}s terminated={bench_result.terminated}"
+            )
 
             result_payload = {
                 "exit_code": bench_result.exit_code,
@@ -271,17 +289,25 @@ class OrchestratorRunner:
                 self._set_state(manifest, paths, JobState.completed)
         finally:
             await _teardown_container(container, manifest)
-            log_task.cancel()
+            log_streamer = self._log_streamers.pop(task.task_id, None)
+            if log_streamer:
+                await asyncio.to_thread(log_streamer.stop)
             self._active_containers.pop(task.task_id, None)
 
     def _set_state(self, manifest: TaskManifest, paths: TaskPaths, state: str) -> None:
-        manifest.state = state
+        prev_state = manifest.state
+        prev_state_entered_at = manifest.state_entered_at
+        now = _utcnow()
+        if state != prev_state:
+            manifest.state = state
+            manifest.state_entered_at = now
         if state in {JobState.completed, JobState.failed, JobState.cancelled}:
-            manifest.completed_at = _utcnow()
+            manifest.completed_at = now
         write_task_manifest(paths, manifest)
         write_summary(self._options.output_root / "summary.json", list(self._manifests.values()))
-        if self._dashboard:
-            self._dashboard.update(self._manifests.values())
+        if state != prev_state:
+            self._log_state_transition(manifest, prev_state, state, prev_state_entered_at, now)
+        self._dashboard.update(self._manifests.values(), caption=self._dashboard_caption())
 
     def _get_or_init_manifest(self, task: TaskSpec, allocation: Allocation) -> TaskManifest:
         manifest = self._manifests.get(task.task_id)
@@ -304,9 +330,8 @@ class OrchestratorRunner:
             if manifest.state in {JobState.completed, JobState.failed, JobState.cancelled, JobState.pending}:
                 continue
             manifest.failure_reason = manifest.failure_reason or "cancelled"
-            manifest.state = JobState.cancelled
-            manifest.completed_at = _utcnow()
-        write_summary(self._options.output_root / "summary.json", list(self._manifests.values()))
+            paths = TaskPaths(self._options.output_root / task_id)
+            self._set_state(manifest, paths, JobState.cancelled)
 
     async def _teardown_active(self) -> None:
         for container in list(self._active_containers.values()):
@@ -322,23 +347,144 @@ class OrchestratorRunner:
                 await terminate_benchmark(bench_proc)
             except Exception:
                 continue
+        for task_id, log_streamer in list(self._log_streamers.items()):
+            try:
+                await asyncio.to_thread(log_streamer.stop)
+            except Exception:
+                continue
+        self._log_streamers.clear()
         await self._teardown_active()
 
     def _handle_shutdown(self, runner_task: asyncio.Task, loop: asyncio.AbstractEventLoop) -> None:
         if not self._shutdown.is_set():
             self._shutdown_mode = "graceful"
+            self._shutdown_requested_at = self._shutdown_requested_at or _utcnow()
+            active = self._count_active()
+            pending = self._count_pending()
+            shutdown_elapsed = _format_elapsed(self._shutdown_requested_at, _utcnow())
+            self._dashboard.log(
+                "SHUTDOWN graceful requested (press Ctrl+C again to force) "
+                f"active={active} pending={pending} shutdown_elapsed={shutdown_elapsed} "
+                "note=\"no new jobs will start\""
+            )
             self._shutdown.set()
+            self._dashboard.update(self._manifests.values(), caption=self._dashboard_caption())
             return
         if self._shutdown_mode == "force":
             return
         self._shutdown_mode = "force"
+        active = self._count_active()
+        self._dashboard.log(
+            "SHUTDOWN force requested "
+            f"active={active} benches={len(self._bench_processes)} containers={len(self._active_containers)}"
+        )
         loop.create_task(self._force_shutdown())
+        self._dashboard.update(self._manifests.values(), caption=self._dashboard_caption())
+
+    def _init_manifests(self, tasks: Iterable[TaskSpec]) -> None:
+        for task in tasks:
+            if task.task_id in self._manifests:
+                continue
+            self._manifests[task.task_id] = TaskManifest(
+                task_id=task.task_id,
+                config_path=str(task.job_config_path),
+                model_key=task.model_key,
+                model_id=task.model_id,
+            )
+
+    def _count_active(self) -> int:
+        return sum(1 for task in self._manifests.values() if task.state in ACTIVE_STATES)
+
+    def _count_pending(self) -> int:
+        return sum(1 for task in self._manifests.values() if task.state == JobState.pending)
+
+    def _dashboard_caption(self) -> str | None:
+        if not self._run_started_at:
+            return None
+        uptime = _format_elapsed(self._run_started_at, _utcnow())
+        mode = self._shutdown_mode or "running"
+        return f"uptime={uptime} mode={mode}"
+
+    def _log_state_transition(
+        self,
+        manifest: TaskManifest,
+        prev_state: str,
+        state: str,
+        prev_state_entered_at: str | None,
+        now: str,
+    ) -> None:
+        total_elapsed = _format_elapsed(manifest.started_at, now)
+        if state == JobState.allocating:
+            gpu_text = ",".join(str(gpu) for gpu in manifest.gpu_ids or []) or "-"
+            port_text = str(manifest.port) if manifest.port is not None else "-"
+            self._dashboard.log(
+                f"JOB start task={manifest.task_id} model={manifest.model_key} "
+                f"gpus={gpu_text} port={port_text}"
+            )
+            return
+        if state in {JobState.launching, JobState.loading, JobState.running}:
+            state_elapsed = _format_elapsed(prev_state_entered_at, now)
+            self._dashboard.log(
+                f"JOB state task={manifest.task_id} {prev_state} -> {state} "
+                f"state_elapsed={state_elapsed}"
+            )
+            return
+        if state == JobState.completed:
+            exit_code = manifest.bench_exit_code
+            exit_text = str(exit_code) if exit_code is not None else "-"
+            self._dashboard.log(
+                f"JOB complete task={manifest.task_id} exit={exit_text} total_elapsed={total_elapsed}"
+            )
+            return
+        if state == JobState.failed:
+            reason = manifest.failure_reason or "unknown"
+            error = f" error={manifest.error!r}" if manifest.error else ""
+            self._dashboard.log(
+                f"JOB failed task={manifest.task_id} reason={reason} total_elapsed={total_elapsed}{error}"
+            )
+            return
+        if state == JobState.cancelled:
+            self._dashboard.log(
+                f"JOB cancelled task={manifest.task_id} at_state={prev_state} total_elapsed={total_elapsed}"
+            )
+            return
 
 
 def _utcnow() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat()
+
+
+def _format_elapsed(started_at: str | None, completed_at: str | None) -> str:
+    start = _parse_time(started_at)
+    if not start:
+        return "-"
+    end = _parse_time(completed_at)
+    if not end:
+        from datetime import datetime, timezone
+
+        end = datetime.now(timezone.utc)
+    elapsed = end - start
+    total_seconds = int(elapsed.total_seconds())
+    minutes, seconds = divmod(total_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    if minutes:
+        return f"{minutes}m{seconds:02d}s"
+    return f"{seconds}s"
+
+
+def _parse_time(value: str | None):
+    if not value:
+        return None
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 def _get_mapping(value: object, label: str) -> dict:

@@ -130,7 +130,6 @@ class TaskScheduler:
 
     def _release(self, allocation: Allocation) -> None:
         self._resource_manager.release_port(allocation.port)
-        self._resource_manager.cooldown_gpus()
         self._resource_manager.release_gpus(allocation.gpu_ids)
 
 

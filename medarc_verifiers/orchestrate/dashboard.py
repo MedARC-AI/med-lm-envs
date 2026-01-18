@@ -6,10 +6,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Iterable
 
+from rich.console import Console
 from rich.live import Live
 from rich.table import Table
 
 from medarc_verifiers.orchestrate.state import TaskManifest
+
+
+ACTIVE_STATES = {"allocating", "launching", "loading", "running"}
 
 
 def _parse_time(value: str | None) -> datetime | None:
@@ -37,38 +41,65 @@ def _format_elapsed(started_at: str | None, completed_at: str | None) -> str:
     return f"{seconds}s"
 
 
-def build_table(tasks: Iterable[TaskManifest]) -> Table:
-    table = Table(title="vLLM Orchestrator", expand=True)
+def build_table(tasks: Iterable[TaskManifest], *, caption: str | None = None) -> Table:
+    table = Table(title="Current Running Jobs", caption=caption, expand=True)
+    table.add_column("Task", no_wrap=True)
     table.add_column("Model", no_wrap=True)
     table.add_column("State", no_wrap=True)
+    table.add_column("State Elapsed", no_wrap=True)
+    table.add_column("Total Elapsed", no_wrap=True)
     table.add_column("GPUs", no_wrap=True)
     table.add_column("Port", no_wrap=True)
-    table.add_column("Elapsed", no_wrap=True)
-    table.add_column("Last Error")
+    table.add_column("Note")
     for task in tasks:
+        if task.state not in ACTIVE_STATES:
+            continue
         gpu_text = ",".join(str(gpu) for gpu in task.gpu_ids or []) or "-"
         port_text = str(task.port) if task.port is not None else "-"
-        elapsed = _format_elapsed(task.started_at, task.completed_at)
-        last_error = task.error or task.failure_reason or ""
-        table.add_row(task.model_key, task.state, gpu_text, port_text, elapsed, last_error)
+        state_elapsed = _format_elapsed(task.state_entered_at, None)
+        total_elapsed = _format_elapsed(task.started_at, None)
+        note = task.error or task.failure_reason or ""
+        table.add_row(
+            task.task_id,
+            task.model_key,
+            task.state,
+            state_elapsed,
+            total_elapsed,
+            gpu_text,
+            port_text,
+            note,
+        )
     return table
 
 
 @dataclass
 class OrchestratorDashboard:
     refresh_hz: float = 1.0
+    enabled: bool = True
 
     def __post_init__(self) -> None:
-        self._live = Live(build_table([]), refresh_per_second=self.refresh_hz, transient=False)
+        self._console = Console()
+        self._live = Live(
+            build_table([]),
+            refresh_per_second=self.refresh_hz,
+            transient=False,
+            console=self._console,
+        )
 
     def start(self) -> None:
-        self._live.start()
+        if self.enabled:
+            self._live.start()
 
-    def update(self, tasks: Iterable[TaskManifest]) -> None:
-        self._live.update(build_table(tasks))
+    def update(self, tasks: Iterable[TaskManifest], *, caption: str | None = None) -> None:
+        if self.enabled:
+            self._live.update(build_table(tasks, caption=caption))
 
     def stop(self) -> None:
-        self._live.stop()
+        if self.enabled:
+            self._live.stop()
+
+    def log(self, message: str) -> None:
+        self._console.log(message)
 
 
-__all__ = ["OrchestratorDashboard", "build_table"]
+__all__ = ["ACTIVE_STATES", "OrchestratorDashboard", "build_table"]

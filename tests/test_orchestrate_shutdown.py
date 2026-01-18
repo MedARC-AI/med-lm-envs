@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 
 from medarc_verifiers.orchestrate.bench import start_benchmark, terminate_benchmark, wait_benchmark
-from medarc_verifiers.orchestrate.config import TaskSpec
+from medarc_verifiers.orchestrate.config import PlanConfig, TaskSpec
+from medarc_verifiers.orchestrate.run import OrchestratorOptions, OrchestratorRunner
 from medarc_verifiers.orchestrate.scheduler import TaskScheduler
 
 
@@ -25,9 +26,6 @@ class DummyResourceManager:
         return None
 
     def release_port(self, port: int) -> None:
-        return None
-
-    def cooldown_gpus(self, seconds: float = 5.0) -> None:
         return None
 
 
@@ -86,3 +84,34 @@ async def test_benchmark_termination_ends_process(tmp_path: Path) -> None:
 
     assert result.terminated is True
     assert result.exit_code != 0
+
+
+@pytest.mark.asyncio
+async def test_runner_shutdown_state_machine(tmp_path: Path) -> None:
+    plan = PlanConfig(job_configs=[tmp_path / "job.yaml"])
+    tasks = [
+        TaskSpec(
+            task_id="task-1",
+            job_config_path=tmp_path / "job-1.yaml",
+            model_key="foo",
+            model_id="Foo/Bar",
+            orchestrate={"foo": {"gpus": 1}},
+        )
+    ]
+    options = OrchestratorOptions(
+        run_id="run-1",
+        output_root=tmp_path / "outputs",
+        readiness_timeout_s=1,
+        max_parallel=1,
+    )
+    runner = OrchestratorRunner(plan, tasks, DummyResourceManager(), options=options, use_dashboard=False)
+    loop = asyncio.get_running_loop()
+    runner_task = asyncio.create_task(asyncio.sleep(0))
+
+    runner._handle_shutdown(runner_task, loop)
+    assert runner._shutdown.is_set() is True
+    assert runner._shutdown_mode == "graceful"
+
+    runner._handle_shutdown(runner_task, loop)
+    await asyncio.sleep(0)
+    assert runner._shutdown_mode == "force"

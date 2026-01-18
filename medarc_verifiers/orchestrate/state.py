@@ -48,6 +48,7 @@ class TaskManifest:
     model_id: str
     state: str = JobState.pending
     updated_at: str = field(default_factory=_now)
+    state_entered_at: str | None = field(default_factory=_now)
     started_at: str | None = None
     completed_at: str | None = None
     gpu_ids: list[int] | None = None

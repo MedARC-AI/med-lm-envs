@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 import socket
-import time
 
 
 class ResourceError(RuntimeError):
@@ -119,9 +118,6 @@ class ResourceManager:
 
     def release_port(self, port: int) -> None:
         self._port_reservations.pop(port, None)
-
-    def cooldown_gpus(self, seconds: float = 5.0) -> None:
-        time.sleep(seconds)
 
 
 def _port_is_available(port: int) -> bool:

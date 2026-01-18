@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Iterable, Mapping
 import json
 import re
+import threading
 import time
 
 import httpx
@@ -200,6 +201,53 @@ def stream_container_logs(container, sink_path: str) -> None:
             handle.flush()
 
 
+class ContainerLogStreamer:
+    def __init__(self, container, sink_path: str) -> None:
+        self._container = container
+        self._sink_path = sink_path
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._stream = None
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._thread = threading.Thread(target=self._run, name="container-log-streamer", daemon=True)
+        self._thread.start()
+
+    def stop(self, *, timeout: float = 2.0) -> None:
+        self._stop_event.set()
+        self._close_stream()
+        if self._thread:
+            self._thread.join(timeout=timeout)
+
+    def is_alive(self) -> bool:
+        return bool(self._thread and self._thread.is_alive())
+
+    def _run(self) -> None:
+        try:
+            self._stream = self._container.logs(stream=True, follow=True)
+            with open(self._sink_path, "w", encoding="utf-8") as handle:
+                for chunk in self._stream:
+                    if self._stop_event.is_set():
+                        break
+                    handle.write(chunk.decode("utf-8", errors="replace"))
+                    handle.flush()
+        finally:
+            self._close_stream()
+
+    def _close_stream(self) -> None:
+        stream = self._stream
+        if stream is None:
+            return
+        close = getattr(stream, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+
+
 def wait_for_readiness(
     base_url: str,
     *,
@@ -295,6 +343,7 @@ __all__ = [
     "ReadinessResult",
     "ORCHESTRATOR_LABEL_KEY",
     "build_container_args",
+    "ContainerLogStreamer",
     "create_and_start_container",
     "cleanup_orphan_containers",
     "normalize_volumes",
