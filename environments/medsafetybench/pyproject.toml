@@ -1,0 +1,32 @@
+[project]
+name = "medsafetybench"
+version = "0.1.0"
+description = "MedSafetyBench environment for evaluating medical AI safety"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "MedARC", email = "medarc@example.com"}
+]
+
+dependencies = [
+    "verifiers>=0.1.2.post0",
+    "medarc_verifiers>=0.1.0",
+    "datasets>=2.14.0",
+    "openai>=1.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/MedARC-AI/med-lm-envs"
+Repository = "https://github.com/AI4LIFE-GROUP/med-safety-bench"
+Dataset = "https://huggingface.co/datasets/israel-adewuyi/med-safety-bench-reproduced"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.prime.environment]
+loader = "medsafetybench:load_environment"
+display_name = "MedSafetyBench"
+visibility = "PUBLIC"
+tags = ["medical", "safety", "harmful-requests", "llm-as-judge"]
