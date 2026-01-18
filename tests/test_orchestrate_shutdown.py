@@ -106,7 +106,7 @@ async def test_runner_shutdown_state_machine(tmp_path: Path) -> None:
     )
     runner = OrchestratorRunner(plan, tasks, DummyResourceManager(), options=options, use_dashboard=False)
     loop = asyncio.get_running_loop()
-    runner_task = asyncio.create_task(asyncio.sleep(0))
+    runner_task = asyncio.create_task(asyncio.sleep(999))
 
     runner._handle_shutdown(runner_task, loop)
     assert runner._shutdown.is_set() is True
@@ -115,3 +115,4 @@ async def test_runner_shutdown_state_machine(tmp_path: Path) -> None:
     runner._handle_shutdown(runner_task, loop)
     await asyncio.sleep(0)
     assert runner._shutdown_mode == "force"
+    assert runner_task.cancelled() is True

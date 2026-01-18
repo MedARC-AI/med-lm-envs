@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Iterable, Mapping
+import asyncio
 import json
 import re
 import threading
@@ -306,6 +307,51 @@ def _warmup(client: httpx.Client, base_url: str, *, model_id: str | None) -> boo
         return False
 
 
+async def wait_for_readiness_async(
+    base_url: str,
+    *,
+    model_id: str | None = None,
+    timeout_s: float = 1800,
+    poll_interval_s: float = 5.0,
+) -> ReadinessResult:
+    start = time.monotonic()
+    attempts = 0
+    last_error: str | None = None
+    timeout = httpx.Timeout(10.0, connect=5.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        while True:
+            attempts += 1
+            try:
+                resp = await client.get(f"{base_url}/models")
+                if resp.status_code == 200:
+                    payload = resp.json()
+                    if _models_ok(payload, model_id=model_id):
+                        if await _warmup_async(client, base_url, model_id=model_id):
+                            elapsed = time.monotonic() - start
+                            return ReadinessResult(ready=True, elapsed_s=elapsed, attempts=attempts)
+                else:
+                    last_error = f"GET /models {resp.status_code}"
+            except Exception as exc:  # noqa: BLE001
+                last_error = str(exc)
+            if time.monotonic() - start > timeout_s:
+                return ReadinessResult(
+                    ready=False,
+                    elapsed_s=time.monotonic() - start,
+                    attempts=attempts,
+                    last_error=last_error,
+                )
+            await asyncio.sleep(poll_interval_s)
+
+
+async def _warmup_async(client: httpx.AsyncClient, base_url: str, *, model_id: str | None) -> bool:
+    payload = {"model": model_id or "unknown", "max_tokens": 1, "messages": [{"role": "user", "content": "ping"}]}
+    try:
+        resp = await client.post(f"{base_url}/chat/completions", json=payload)
+        return resp.status_code == 200
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def write_container_request(path: str, payload: Mapping[str, object]) -> None:
     from pathlib import Path
 
@@ -350,5 +396,6 @@ __all__ = [
     "sanitize_container_name",
     "stream_container_logs",
     "wait_for_readiness",
+    "wait_for_readiness_async",
     "write_container_request",
 ]

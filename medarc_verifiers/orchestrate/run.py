@@ -27,7 +27,7 @@ from medarc_verifiers.orchestrate.docker_vllm import (
     create_and_start_container,
     DockerLaunchError,
     sanitize_container_name,
-    wait_for_readiness,
+    wait_for_readiness_async,
     write_container_request,
 )
 from medarc_verifiers.orchestrate.resources import ResourceManager
@@ -71,6 +71,7 @@ class OrchestratorRunner:
         self._active_containers: dict[str, object] = {}
         self._bench_processes: dict[str, BenchProcess] = {}
         self._log_streamers: dict[str, ContainerLogStreamer] = {}
+        self._active_runner_tasks: dict[str, asyncio.Task] = {}
         self._shutdown = asyncio.Event()
         self._shutdown_mode: str | None = None
         self._shutdown_requested_at: str | None = None
@@ -95,7 +96,11 @@ class OrchestratorRunner:
                 scheduler.run(self._tasks, self._run_task, shutdown_event=self._shutdown)
             )
             _register_signal_handlers(loop, lambda: self._handle_shutdown(runner_task, loop))
-            await runner_task
+            try:
+                await runner_task
+            except asyncio.CancelledError:
+                if self._shutdown_mode != "force":
+                    raise
         finally:
             self._dashboard.stop()
             if self._shutdown.is_set():
@@ -104,33 +109,39 @@ class OrchestratorRunner:
                     self._mark_cancelled()
 
     async def _run_task(self, task: TaskSpec, allocation: Allocation) -> None:
+        current = asyncio.current_task()
+        if current:
+            self._active_runner_tasks[task.task_id] = current
         manifest = self._get_or_init_manifest(task, allocation)
         paths = TaskPaths(self._options.output_root / task.task_id)
         attempt = 0
-        while True:
-            attempt += 1
-            try:
-                await self._run_task_once(task, allocation, manifest, paths)
-                return
-            except asyncio.CancelledError:
-                manifest.failure_reason = "cancelled"
-                self._set_state(manifest, paths, JobState.cancelled)
-                raise
-            except Exception as exc:
-                manifest.error = str(exc)
-                if attempt == 1 and _is_transient_error(exc):
-                    await asyncio.sleep(5)
-                    continue
-                if isinstance(exc, DockerLaunchError):
-                    manifest.failure_reason = "serve_launch_failed"
-                else:
-                    manifest.failure_reason = "unexpected_exception"
-                self._set_state(manifest, paths, JobState.failed)
-                write_task_result(
-                    paths,
-                    {"state": JobState.failed, "failure_reason": manifest.failure_reason, "error": manifest.error},
-                )
-                raise
+        try:
+            while True:
+                attempt += 1
+                try:
+                    await self._run_task_once(task, allocation, manifest, paths)
+                    return
+                except asyncio.CancelledError:
+                    manifest.failure_reason = "cancelled"
+                    self._set_state(manifest, paths, JobState.cancelled)
+                    raise
+                except Exception as exc:
+                    manifest.error = str(exc)
+                    if attempt == 1 and _is_transient_error(exc):
+                        await asyncio.sleep(5)
+                        continue
+                    if isinstance(exc, DockerLaunchError):
+                        manifest.failure_reason = "serve_launch_failed"
+                    else:
+                        manifest.failure_reason = "unexpected_exception"
+                    self._set_state(manifest, paths, JobState.failed)
+                    write_task_result(
+                        paths,
+                        {"state": JobState.failed, "failure_reason": manifest.failure_reason, "error": manifest.error},
+                    )
+                    raise
+        finally:
+            self._active_runner_tasks.pop(task.task_id, None)
 
     async def _run_task_once(
         self, task: TaskSpec, allocation: Allocation, manifest: TaskManifest, paths: TaskPaths
@@ -209,8 +220,7 @@ class OrchestratorRunner:
         base_url = f"http://127.0.0.1:{allocation.port}/v1"
         try:
             self._set_state(manifest, paths, JobState.loading)
-            readiness = await asyncio.to_thread(
-                wait_for_readiness,
+            readiness = await wait_for_readiness_async(
                 base_url,
                 model_id=task.model_id,
                 timeout_s=self._options.readiness_timeout_s,
@@ -379,6 +389,9 @@ class OrchestratorRunner:
             "SHUTDOWN force requested "
             f"active={active} benches={len(self._bench_processes)} containers={len(self._active_containers)}"
         )
+        runner_task.cancel()
+        for task in list(self._active_runner_tasks.values()):
+            task.cancel()
         loop.create_task(self._force_shutdown())
         self._dashboard.update(self._manifests.values(), caption=self._dashboard_caption())
 
