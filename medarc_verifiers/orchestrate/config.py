@@ -16,6 +16,15 @@ class PlanConfig(BaseModel):
     name: str | None = None
     job_configs: list[Path] = Field(..., min_length=1)
     command_template: str | None = None
+    gpu_range: str | None = None
+    port_range: str | None = None
+    run_id: str | None = None
+    output_dir: Path | None = None
+    max_parallel: int | None = None
+    readiness_timeout_s: int | None = None
+    resume: bool = False
+    rerun_failed: bool = False
+    kill_orphans: bool = False
 
 
 @dataclass(frozen=True)
@@ -48,6 +57,11 @@ def load_plan(path: Path) -> PlanConfig:
             cfg_path = base_dir / cfg_path
         resolved_job_configs.append(cfg_path.resolve())
     plan.job_configs = resolved_job_configs
+    if plan.output_dir is not None:
+        output_dir = Path(plan.output_dir).expanduser()
+        if not output_dir.is_absolute():
+            output_dir = base_dir / output_dir
+        plan.output_dir = output_dir.resolve()
     return plan
 
 
