@@ -118,8 +118,8 @@ class TaskScheduler:
         await asyncio.gather(*workers, return_exceptions=True)
 
     def _allocate(self, task: TaskSpec) -> Allocation:
-        gpus_required = int(task.vllm.get(task.model_key, {}).get("gpus", 1))
-        min_free_gb = task.vllm.get(task.model_key, {}).get("memory_min_gb")
+        gpus_required = int(task.orchestrate.get(task.model_key, {}).get("gpus", 1))
+        min_free_gb = task.orchestrate.get(task.model_key, {}).get("memory_min_gb")
         gpu_ids = self._resource_manager.reserve_gpus(task.task_id, count=gpus_required, min_free_gb=min_free_gb)
         try:
             port = self._resource_manager.reserve_port(task.task_id)

@@ -12,8 +12,9 @@ def test_plan_job_configs_resolve_relative_to_plan_file(tmp_path: Path):
 models:
   foo:
     model: Foo/Bar
-vllm:
-  docker:
+orchestrate:
+  restart: runs/raw/example-run
+  vllm-docker:
     image: vllm/vllm-openai:latest
   foo:
     gpus: 1
@@ -55,3 +56,4 @@ kill_orphans: false
 
     tasks = expand_tasks(plan)
     assert tasks[0].job_config_path == job_cfg.resolve()
+    assert tasks[0].orchestrate.get("restart") == "runs/raw/example-run"

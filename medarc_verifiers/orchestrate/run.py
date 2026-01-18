@@ -35,9 +35,7 @@ from medarc_verifiers.orchestrate.scheduler import Allocation, TaskScheduler
 from medarc_verifiers.orchestrate.state import JobState, TaskManifest, TaskPaths, write_summary, write_task_manifest, write_task_result, write_text
 
 
-DEFAULT_COMMAND_TEMPLATE = (
-    "uv run medarc-eval bench --config {job_config_path} --api-base-url {base_url}"
-)
+COMMAND_TEMPLATE = "uv run medarc-eval bench --config {job_config_path} --api-base-url {base_url}"
 
 
 @dataclass(frozen=True)
@@ -61,7 +59,9 @@ class OrchestratorRunner:
         self._plan = plan
         self._tasks = sorted(
             list(tasks),
-            key=lambda task: int(_get_mapping(task.vllm.get(task.model_key), f"vllm.{task.model_key}").get("gpus", 1)),
+            key=lambda task: int(
+                _get_mapping(task.orchestrate.get(task.model_key), f"orchestrate.{task.model_key}").get("gpus", 1)
+            ),
             reverse=True,
         )
         self._resource_manager = resource_manager
@@ -129,27 +129,27 @@ class OrchestratorRunner:
     ) -> None:
         self._set_state(manifest, paths, JobState.allocating)
 
-        vllm = task.vllm
-        docker_cfg = _get_mapping(vllm.get("docker"), "vllm.docker")
-        model_cfg = _get_mapping(vllm.get(task.model_key), f"vllm.{task.model_key}")
+        orchestrate = task.orchestrate
+        docker_cfg = _get_mapping(orchestrate.get("vllm-docker"), "orchestrate.vllm-docker")
+        model_cfg = _get_mapping(orchestrate.get(task.model_key), f"orchestrate.{task.model_key}")
         container_port = int(docker_cfg.get("container_port", 8000))
         ipc_mode = docker_cfg.get("ipc_mode")
         image = str(docker_cfg.get("image", "")).strip()
         if not image:
-            raise RuntimeError(f"Missing vllm.docker.image for {task.job_config_path}")
+            raise RuntimeError(f"Missing orchestrate.vllm-docker.image for {task.job_config_path}")
         manifest.image = image
 
         tensor_parallel = model_cfg.get("tensor_parallel_size")
         gpus_required = int(model_cfg.get("gpus", 1))
         if gpus_required > 1:
             if not tensor_parallel:
-                raise RuntimeError(f"vllm.{task.model_key}.tensor_parallel_size is required for multi-GPU.")
+                raise RuntimeError(f"orchestrate.{task.model_key}.tensor_parallel_size is required for multi-GPU.")
             if int(tensor_parallel) != gpus_required:
                 raise RuntimeError("gpus must match tensor_parallel_size for multi-GPU models.")
         if gpus_required == 1 and tensor_parallel and int(tensor_parallel) > 1:
             raise RuntimeError("tensor_parallel_size > 1 is invalid for single-GPU models.")
 
-        serve = _get_mapping(model_cfg.get("serve"), f"vllm.{task.model_key}.serve")
+        serve = _get_mapping(model_cfg.get("serve"), f"orchestrate.{task.model_key}.serve")
         container_args = build_container_args(
             task.model_id, tensor_parallel_size=int(tensor_parallel) if tensor_parallel else None, serve=serve
         )
@@ -217,7 +217,6 @@ class OrchestratorRunner:
                 self._set_state(manifest, paths, JobState.failed)
                 return
 
-            command_template = self._plan.command_template or DEFAULT_COMMAND_TEMPLATE
             repo_root = Path(__file__).resolve().parents[2]
             command_context = {
                 "base_url": base_url,
@@ -229,7 +228,12 @@ class OrchestratorRunner:
                 "task_id": task.task_id,
                 "job_config_path": str(task.job_config_path),
             }
-            command = render_command(command_template, command_context)
+            command = render_command(COMMAND_TEMPLATE, command_context)
+            restart_source = orchestrate.get("restart")
+            if restart_source:
+                restart_value = str(restart_source)
+                if "--restart" not in command:
+                    command.extend(["--restart", restart_value])
             manifest.bench_command = shlex.join(command)
             self._set_state(manifest, paths, JobState.running)
             bench_proc = await start_benchmark(

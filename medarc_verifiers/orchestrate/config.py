@@ -15,7 +15,6 @@ class PlanConfig(BaseModel):
 
     name: str | None = None
     job_configs: list[Path] = Field(..., min_length=1)
-    command_template: str | None = None
     gpu_range: str | None = None
     port_range: str | None = None
     run_id: str | None = None
@@ -35,7 +34,7 @@ class TaskSpec:
     job_config_path: Path
     model_key: str
     model_id: str
-    vllm: Mapping[str, Any]
+    orchestrate: Mapping[str, Any]
 
 
 class ConfigFormatError(ValueError):
@@ -76,7 +75,7 @@ def expand_tasks(plan: PlanConfig) -> list[TaskSpec]:
         resolved_job_path = job_path.expanduser().resolve()
         job_cfg = load_job_config(resolved_job_path)
         model_key, model_entry = _extract_single_model(job_cfg, source=resolved_job_path)
-        vllm_cfg = _extract_vllm_config(job_cfg, model_key=model_key, source=resolved_job_path)
+        orchestrate_cfg = _extract_orchestrate_config(job_cfg, model_key=model_key, source=resolved_job_path)
         model_id = str(model_entry.get("model", "")).strip()
         if not model_id:
             raise ValueError(f"Job config {resolved_job_path} is missing models.{model_key}.model.")
@@ -87,7 +86,7 @@ def expand_tasks(plan: PlanConfig) -> list[TaskSpec]:
                 job_config_path=resolved_job_path,
                 model_key=model_key,
                 model_id=model_id,
-                vllm=vllm_cfg,
+                orchestrate=orchestrate_cfg,
             )
         )
     return tasks
@@ -121,15 +120,17 @@ def _extract_single_model(payload: Mapping[str, Any], *, source: Path) -> tuple[
     return model_key, model_entry
 
 
-def _extract_vllm_config(
+def _extract_orchestrate_config(
     payload: Mapping[str, Any], *, model_key: str, source: Path
 ) -> Mapping[str, Any]:
-    vllm = payload.get("vllm")
-    if not isinstance(vllm, Mapping):
-        raise ValueError(f"Job config {source} must define a top-level vllm mapping.")
-    if model_key not in vllm:
-        raise ValueError(f"Job config {source} must define vllm.{model_key} settings.")
-    return vllm
+    orchestrate = payload.get("orchestrate")
+    if not isinstance(orchestrate, Mapping):
+        raise ValueError(f"Job config {source} must define a top-level orchestrate mapping.")
+    if "vllm-docker" not in orchestrate:
+        raise ValueError(f"Job config {source} must define orchestrate.vllm-docker settings.")
+    if model_key not in orchestrate:
+        raise ValueError(f"Job config {source} must define orchestrate.{model_key} settings.")
+    return orchestrate
 
 
 __all__ = ["ConfigFormatError", "PlanConfig", "TaskSpec", "expand_tasks", "load_job_config", "load_plan"]

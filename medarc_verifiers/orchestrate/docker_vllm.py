@@ -120,13 +120,13 @@ def normalize_volumes(volumes: object) -> dict[str, dict[str, str]]:
     if isinstance(volumes, Mapping):
         return dict(volumes)
     if not isinstance(volumes, list):
-        raise DockerLaunchError("vllm.docker.volumes must be a list of mount strings or a mapping.")
+        raise DockerLaunchError("orchestrate.vllm-docker.volumes must be a list of mount strings or a mapping.")
     mounts: dict[str, dict[str, str]] = {}
     for entry in volumes:
         if not entry:
             continue
         if not isinstance(entry, str):
-            raise DockerLaunchError("vllm.docker.volumes entries must be strings like host:container[:mode].")
+            raise DockerLaunchError("orchestrate.vllm-docker.volumes entries must be strings like host:container[:mode].")
         parts = entry.split(":")
         if len(parts) < 2 or len(parts) > 3:
             raise DockerLaunchError(f"Invalid volume mount: {entry!r} (expected host:container[:mode])")
