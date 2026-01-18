@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -76,6 +77,7 @@ class OrchestratorRunner:
         self._shutdown_mode: str | None = None
         self._shutdown_requested_at: str | None = None
         self._run_started_at: str | None = None
+        self._dashboard_refresh_task: asyncio.Task[None] | None = None
         self._init_manifests(self._tasks)
 
     def run(self) -> None:
@@ -85,6 +87,7 @@ class OrchestratorRunner:
         scheduler = TaskScheduler(self._resource_manager, max_parallel=self._options.max_parallel)
         self._run_started_at = _utcnow()
         self._dashboard.start()
+        self._dashboard_refresh_task = self._start_dashboard_refresh()
         self._dashboard.log(
             f"RUN started run_id={self._options.run_id} tasks={len(self._manifests)} "
             f"max_parallel={self._options.max_parallel} output={self._options.output_root}"
@@ -102,6 +105,11 @@ class OrchestratorRunner:
                 if self._shutdown_mode != "force":
                     raise
         finally:
+            if self._dashboard_refresh_task:
+                self._dashboard_refresh_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._dashboard_refresh_task
+                self._dashboard_refresh_task = None
             self._dashboard.stop()
             if self._shutdown.is_set():
                 await self._teardown_active()
@@ -418,6 +426,19 @@ class OrchestratorRunner:
         uptime = _format_elapsed(self._run_started_at, _utcnow())
         mode = self._shutdown_mode or "running"
         return f"uptime={uptime} mode={mode}"
+
+    def _start_dashboard_refresh(self) -> asyncio.Task[None] | None:
+        if not self._dashboard.enabled:
+            return None
+
+        async def refresh_loop() -> None:
+            refresh_hz = float(getattr(self._dashboard, "refresh_hz", 1.0) or 1.0)
+            interval_s = 1.0 / max(0.1, refresh_hz)
+            while True:
+                await asyncio.sleep(interval_s)
+                self._dashboard.update(self._manifests.values(), caption=self._dashboard_caption())
+
+        return asyncio.create_task(refresh_loop())
 
     def _log_state_transition(
         self,
