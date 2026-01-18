@@ -7,7 +7,7 @@ from datasets import load_dataset
 from datasets.utils.logging import disable_progress_bar
 from verifiers.utils.data_utils import extract_boxed_answer
 
-from prompts import system_prompt, create_prompt_no_knowledge, create_prompt_with_knowledge
+from medhallu.prompts import system_prompt, create_prompt_no_knowledge, create_prompt_with_knowledge
 
 disable_progress_bar()  # suppress datasets progress indicators
 

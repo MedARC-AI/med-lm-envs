@@ -6,7 +6,11 @@ version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
     "verifiers>=0.1.4",
-    "sklearn>=1.2.0",
+]
+
+[dependency-groups]
+postprocess = [
+    "scikit-learn>=1.2.0",
 ]
 
 [build-system]
@@ -14,7 +18,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build]
-include = ["medhallu.py", "pyproject.toml"] 
+include = ["medhallu.py", "pyproject.toml"]
 
 [tool.prime.environment]
 loader = "medhallu:load_environment"
