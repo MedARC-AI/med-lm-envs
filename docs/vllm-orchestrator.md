@@ -52,6 +52,7 @@ Common flags:
 - `--rerun-failed` reruns failed tasks on resume (enables rerun even if `rerun_failed: false` in the plan).
 - `--status` prints the latest summary status and exits.
 - `--kill-orphans` cleans up containers labeled as orchestrator-managed (also enabled by `kill_orphans: true` in the plan).
+- `--prune-logs-on-success` deletes per-task `serve/container_logs.txt` and `bench/stdout.txt`+`stderr.txt` for completed tasks.
 
 ### Outputs
 

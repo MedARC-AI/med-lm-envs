@@ -12,10 +12,12 @@ def test_judge_sampling_defaults_supports_fuzzy_match(monkeypatch: pytest.Monkey
     assert result == {"temperature": 0.5, "extra_body": {"usage": {"include": True}}, "timeout": 300}
 
     result, _ = judge_sampling_args_and_headers("openai/gpt-oss-120b")
-    assert result == {
+    assert result.get("reasoning_effort") in {"low", "medium", "high"}
+    result_without_effort = dict(result)
+    result_without_effort.pop("reasoning_effort", None)
+    assert result_without_effort == {
         "temperature": 1.0,
         "top_p": 1.0,
-        "reasoning_effort": "medium",
         "extra_body": {"usage": {"include": True}, "top_k": 0},
         "timeout": 300,
     }

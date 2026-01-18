@@ -12,6 +12,9 @@ medarc-eval bench --config configs/job-gpt-oss-20b.yaml
 
 # Preview what would run
 medarc-eval bench --config configs/job-gpt-oss-20b.yaml --dry-run
+
+# Force all jobs to use a specific API endpoint
+medarc-eval bench --config configs/job-gpt-oss-20b.yaml --api-base-url http://127.0.0.1:8000/v1
 ```
 
 ## Writing a Config File
@@ -64,6 +67,14 @@ models:
       temperature: 1.0
       top_p: 1.0
       reasoning_effort: medium
+```
+
+### Runtime API Base URL Override
+
+Use `--api-base-url` to override `models.*.api_base_url` for all jobs at runtime:
+
+```bash
+medarc-eval bench --config my-config.yaml --api-base-url http://127.0.0.1:8000/v1
 ```
 
 ### Environment Configuration
