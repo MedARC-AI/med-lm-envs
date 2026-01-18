@@ -103,6 +103,14 @@ def build_batch_parser() -> argparse.ArgumentParser:
         help=f"Default API base URL (default: {DEFAULT_API_BASE_URL}).",
     )
     parser.add_argument(
+        "--api-base-url",
+        default=None,
+        help=(
+            "Override API base URL for all models (CLI force > model api_base_url > --default-api-base-url). "
+            "Useful when pointing a config at a dynamically assigned endpoint."
+        ),
+    )
+    parser.add_argument(
         "--job-id", action="append", help="Run only the specified job identifier (repeat to select multiple)."
     )
     parser.add_argument(
@@ -1017,6 +1025,7 @@ def _execute_batch(args: argparse.Namespace) -> int:
         endpoints_path=Path(args.endpoints_path).expanduser() if args.endpoints_path else None,
         default_api_key_var=args.default_api_key_var,
         default_api_base_url=args.default_api_base_url,
+        api_base_url_override=args.api_base_url,
         log_level="DEBUG" if args.verbose else "INFO",
         verbose=args.verbose,
         save_results=args.save_results,
