@@ -19,6 +19,7 @@ Create a plan YAML listing the job configs you want to orchestrate:
 name: local-vllm
 job_configs:
   - configs/job-gpt-oss-20b.yaml
+env_file: .env
 gpu_range: "0-3"
 port_range: "8000-8999"
 max_parallel: 2
@@ -29,6 +30,9 @@ rerun_failed: false
 
 Each job config must define exactly one model under `models:` and include a top-level
 `orchestrate:` block with per-model serve settings.
+
+The `env_file` is a dotenv file that is loaded for every Docker launch. If unset and a repo-level `.env` exists,
+it is used automatically. You can also override it via `--env-file`.
 
 Optional: set `orchestrate.restart` to reuse completed jobs from a previous `medarc-eval` run (it is forwarded as
 `medarc-eval bench --restart ...`).

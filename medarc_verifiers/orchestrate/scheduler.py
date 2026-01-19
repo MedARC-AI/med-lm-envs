@@ -34,12 +34,14 @@ class TaskScheduler:
         *,
         shutdown_event: asyncio.Event | None = None,
     ) -> None:
-        queue: asyncio.PriorityQueue[tuple[int, float, int, TaskSpec]] = asyncio.PriorityQueue()
+        # PriorityQueue orders tuples lexicographically; order by (ready_at, priority, seq) so that
+        # backoff delays don't block ready tasks. We still prefer larger GPU requests among ready tasks.
+        queue: asyncio.PriorityQueue[tuple[float, int, int, TaskSpec]] = asyncio.PriorityQueue()
         sequence = 0
         retry_counts: dict[str, int] = {}
         for task in tasks:
             priority = self._task_priority(task)
-            queue.put_nowait((priority, 0.0, sequence, task))
+            queue.put_nowait((0.0, priority, sequence, task))
             sequence += 1
         semaphore = asyncio.Semaphore(self._max_parallel)
         active = 0
@@ -64,36 +66,36 @@ class TaskScheduler:
                     got_task = get_task in done
                     if not got_task:
                         return
-                    priority, ready_at, seq, task = get_task.result()
+                    ready_at, priority, seq, task = get_task.result()
                     if shutdown_requested:
-                        queue.put_nowait((priority, ready_at, seq, task))
+                        queue.put_nowait((ready_at, priority, seq, task))
                         queue.task_done()
                         return
                 else:
-                    priority, ready_at, seq, task = await queue.get()
+                    ready_at, priority, seq, task = await queue.get()
                 try:
                     if shutdown_event and shutdown_event.is_set():
-                        queue.put_nowait((priority, ready_at, seq, task))
+                        queue.put_nowait((ready_at, priority, seq, task))
                         return
                     now = time.monotonic()
                     if now < ready_at:
                         await asyncio.sleep(min(0.5, ready_at - now))
-                        queue.put_nowait((priority, ready_at, seq, task))
+                        queue.put_nowait((ready_at, priority, seq, task))
                         continue
                     async with semaphore:
                         if shutdown_event and shutdown_event.is_set():
-                            queue.put_nowait((priority, ready_at, seq, task))
+                            queue.put_nowait((ready_at, priority, seq, task))
                             return
                         try:
                             allocation = self._allocate(task)
                         except ResourceError:
                             if shutdown_event and shutdown_event.is_set():
-                                queue.put_nowait((priority, ready_at, seq, task))
+                                queue.put_nowait((ready_at, priority, seq, task))
                                 return
                             attempts = retry_counts.get(task.task_id, 0) + 1
                             retry_counts[task.task_id] = attempts
                             backoff_s = min(10.0, 0.5 * (2 ** min(attempts - 1, 4)))
-                            queue.put_nowait((priority, time.monotonic() + backoff_s, sequence, task))
+                            queue.put_nowait((time.monotonic() + backoff_s, priority, sequence, task))
                             sequence += 1
                             continue
                         async with active_cond:

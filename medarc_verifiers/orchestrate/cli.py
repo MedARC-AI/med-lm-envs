@@ -29,6 +29,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--plan", required=True, type=Path, help="Path to orchestrator plan YAML.")
     parser.add_argument(
+        "--env-file",
+        type=Path,
+        default=None,
+        help="Dotenv file shared by all Docker launches (overrides plan env_file; defaults to repo .env when present).",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print resolved tasks and exit without running.",
@@ -63,7 +69,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    plan = load_plan(args.plan)
+    plan_path = args.plan.expanduser().resolve()
+    plan = load_plan(plan_path)
+    if args.env_file is not None:
+        env_file = args.env_file.expanduser()
+        if not env_file.is_absolute():
+            env_file = plan_path.parent / env_file
+        plan.env_file = env_file.resolve()
     tasks = expand_tasks(plan)
     configured_run_id = args.run_id or plan.run_id
     timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")

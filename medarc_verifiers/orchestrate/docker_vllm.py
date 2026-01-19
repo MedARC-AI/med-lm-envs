@@ -173,7 +173,11 @@ def create_and_start_container(
         from docker.types import DeviceRequest
     except Exception as exc:  # pragma: no cover - dependency import varies
         raise DockerLaunchError("docker.types.DeviceRequest is required for GPU requests.") from exc
-    client = docker.from_env()
+
+    # Docker-py uses requests with a default read timeout of 60s; under heavy daemon load
+    # container creation can exceed that and still succeed server-side, leaving a container
+    # behind that a retry then conflicts with.
+    client = docker.from_env(timeout=600)
 
     def remove_existing_if_safe() -> bool:
         try:
@@ -201,6 +205,23 @@ def create_and_start_container(
         except Exception:
             return False
 
+    def get_existing_if_owned():
+        try:
+            existing = client.containers.get(name)
+        except Exception:
+            return None
+        try:
+            existing.reload()
+        except Exception:
+            pass
+        existing_labels = getattr(existing, "labels", None) or {}
+        if existing_labels.get(ORCHESTRATOR_LABEL_KEY) != "true":
+            return None
+        for key, value in labels.items():
+            if existing_labels.get(key) != value:
+                return None
+        return existing
+
     gpu_id_list = [int(gpu) for gpu in gpu_ids]
     device_request = DeviceRequest(
         device_ids=[str(gpu) for gpu in gpu_id_list],
@@ -223,6 +244,13 @@ def create_and_start_container(
         container = client.containers.create(**container_create_kwargs)
     except Exception as exc:
         message = str(exc)
+        lower_message = message.lower()
+        if "read timed out" in lower_message or "timeout" in lower_message:
+            existing = get_existing_if_owned()
+            if existing is not None:
+                container = existing
+            else:
+                raise DockerLaunchError(message) from exc
         if "already in use" in message.lower() or "conflict" in message.lower():
             if remove_existing_if_safe():
                 container = client.containers.create(**container_create_kwargs)
@@ -240,6 +268,12 @@ def create_and_start_container(
         container.start()
     except Exception:
         try:
+            try:
+                container.reload()
+            except Exception:
+                pass
+            if getattr(container, "status", None) == "running":
+                return container
             container.remove(v=True, force=True)
         except Exception:
             pass

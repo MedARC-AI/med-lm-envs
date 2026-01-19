@@ -15,6 +15,7 @@ class PlanConfig(BaseModel):
 
     name: str | None = None
     job_configs: list[Path] = Field(..., min_length=1)
+    env_file: Path | None = None
     gpu_range: str | None = None
     port_range: str | None = None
     run_id: str | None = None
@@ -57,6 +58,11 @@ def load_plan(path: Path) -> PlanConfig:
             cfg_path = base_dir / cfg_path
         resolved_job_configs.append(cfg_path.resolve())
     plan.job_configs = resolved_job_configs
+    if plan.env_file is not None:
+        env_file = Path(plan.env_file).expanduser()
+        if not env_file.is_absolute():
+            env_file = base_dir / env_file
+        plan.env_file = env_file.resolve()
     if plan.output_dir is not None:
         output_dir = Path(plan.output_dir).expanduser()
         if not output_dir.is_absolute():

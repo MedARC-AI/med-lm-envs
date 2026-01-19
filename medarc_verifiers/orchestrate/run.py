@@ -43,6 +43,14 @@ COMMAND_TEMPLATE = "uv run medarc-eval bench --config {job_config_path} --api-ba
 _TASK_DIR_ALLOWED = re.compile(r"[^a-zA-Z0-9_.-]+")
 
 
+def _shorten(text: str, *, max_len: int = 220) -> str:
+    if len(text) <= max_len:
+        return text
+    suffix = "…"
+    keep = max(0, max_len - len(suffix))
+    return f"{text[:keep]}{suffix}"
+
+
 def _sanitize_task_dirname(task_id: str, *, max_len: int = 120) -> str:
     cleaned = _TASK_DIR_ALLOWED.sub("-", task_id).strip("-.")
     if not cleaned:
@@ -211,7 +219,15 @@ class OrchestratorRunner:
         container_args = build_container_args(
             task.model_id, tensor_parallel_size=int(tensor_parallel) if tensor_parallel else None, serve=serve
         )
-        env = _load_env_file(docker_cfg.get("env_file"), base_dir=task.job_config_path.parent)
+        env: dict[str, str] = {}
+        repo_root = Path(__file__).resolve().parents[2]
+        if self._plan.env_file is not None:
+            env.update(_load_env_file(self._plan.env_file, base_dir=repo_root))
+        else:
+            default_env = repo_root / ".env"
+            if default_env.exists():
+                env.update(_load_env_file(default_env, base_dir=repo_root))
+        env.update(_load_env_file(docker_cfg.get("env_file"), base_dir=task.job_config_path.parent))
         volumes = docker_cfg.get("volumes", []) or []
         labels = {"orchestrator.run_id": self._options.run_id, "orchestrator.task_id": task.task_id}
         container_name = sanitize_container_name(f"vllm-{self._options.run_id}-{task.task_id}")
@@ -281,7 +297,6 @@ class OrchestratorRunner:
                 f"JOB ready task={task.task_id} attempts={readiness.attempts} loading_elapsed={loading_elapsed}"
             )
 
-            repo_root = Path(__file__).resolve().parents[2]
             command_context = {
                 "base_url": base_url,
                 "host_port": str(allocation.port),
@@ -299,7 +314,9 @@ class OrchestratorRunner:
                 if "--restart" not in command:
                     command.extend(["--restart", restart_value])
             manifest.bench_command = shlex.join(command)
-            self._dashboard.log(f"JOB bench-start task={task.task_id} cmd={manifest.bench_command}")
+            self._dashboard.log(
+                f"JOB bench-start task={task.task_id} cmd={_shorten(manifest.bench_command)}"
+            )
             self._set_state(manifest, paths, JobState.running)
             bench_proc = await start_benchmark(
                 command,
@@ -313,10 +330,19 @@ class OrchestratorRunner:
             self._bench_processes.pop(task.task_id, None)
             manifest.bench_exit_code = bench_result.exit_code
             manifest.bench_duration_s = bench_result.duration_s
-            self._dashboard.log(
-                f"JOB bench-complete task={task.task_id} exit={bench_result.exit_code} "
-                f"duration={bench_result.duration_s:.1f}s terminated={bench_result.terminated}"
-            )
+            if bench_result.terminated:
+                self._dashboard.log(
+                    f"JOB bench-terminated task={task.task_id} duration={bench_result.duration_s:.1f}s"
+                )
+            elif bench_result.exit_code == 0:
+                self._dashboard.log(
+                    f"JOB bench-ok task={task.task_id} duration={bench_result.duration_s:.1f}s"
+                )
+            else:
+                self._dashboard.log(
+                    f"JOB bench-failed task={task.task_id} exit={bench_result.exit_code} "
+                    f"duration={bench_result.duration_s:.1f}s"
+                )
 
             result_payload = {
                 "exit_code": bench_result.exit_code,
@@ -576,6 +602,10 @@ def _load_env_file(path: object, *, base_dir: Path) -> dict[str, str]:
     env_path = Path(str(path)).expanduser()
     if not env_path.is_absolute():
         env_path = (base_dir / env_path).resolve()
+    if not env_path.exists():
+        raise DockerLaunchError(
+            f"env_file not found: {env_path} (set orchestrate.vllm-docker.env_file relative to {base_dir})"
+        )
     values = dotenv_values(env_path)
     return {key: value for key, value in values.items() if value is not None}
 
@@ -602,8 +632,15 @@ def _register_signal_handlers(loop: asyncio.AbstractEventLoop, handler) -> None:
 def _is_transient_error(exc: Exception) -> bool:
     message = str(exc).lower()
     if isinstance(exc, DockerLaunchError):
-        return "port" in message or "bind" in message or "address already in use" in message
-    return "connection reset" in message
+        return (
+            "port" in message
+            or "bind" in message
+            or "address already in use" in message
+            or "read timed out" in message
+            or "timeout" in message
+            or "timed out" in message
+        )
+    return "connection reset" in message or "read timed out" in message or "timeout" in message or "timed out" in message
 
 
 __all__ = ["OrchestratorOptions", "OrchestratorRunner"]
