@@ -174,6 +174,33 @@ def create_and_start_container(
     except Exception as exc:  # pragma: no cover - dependency import varies
         raise DockerLaunchError("docker.types.DeviceRequest is required for GPU requests.") from exc
     client = docker.from_env()
+
+    def remove_existing_if_safe() -> bool:
+        try:
+            existing = client.containers.get(name)
+        except Exception:
+            return False
+        try:
+            existing.reload()
+        except Exception:
+            pass
+        existing_labels = getattr(existing, "labels", None) or {}
+        if existing_labels.get(ORCHESTRATOR_LABEL_KEY) != "true":
+            return False
+        for key, value in labels.items():
+            if existing_labels.get(key) != value:
+                return False
+        status = getattr(existing, "status", None)
+        if status == "running":
+            raise DockerLaunchError(
+                f"Container name {name!r} is already running (id={getattr(existing, 'id', '?')})."
+            )
+        try:
+            existing.remove(v=True, force=True)
+            return True
+        except Exception:
+            return False
+
     gpu_id_list = [int(gpu) for gpu in gpu_ids]
     device_request = DeviceRequest(
         device_ids=[str(gpu) for gpu in gpu_id_list],
@@ -191,10 +218,16 @@ def create_and_start_container(
         "device_requests": [device_request],
         "detach": True,
     }
+    remove_existing_if_safe()
     try:
         container = client.containers.create(**container_create_kwargs)
     except Exception as exc:
         message = str(exc)
+        if "already in use" in message.lower() or "conflict" in message.lower():
+            if remove_existing_if_safe():
+                container = client.containers.create(**container_create_kwargs)
+            else:
+                raise DockerLaunchError(message) from exc
         if "No such image" in message or "not found" in message.lower():
             try:
                 client.images.pull(image)
