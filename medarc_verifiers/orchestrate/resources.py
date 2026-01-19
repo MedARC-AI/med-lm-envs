@@ -87,13 +87,22 @@ class ResourceManager:
             gpus = [gpu for gpu in gpus if gpu.free_gb >= min_free_gb]
         return gpus
 
-    def reserve_gpus(self, task_id: str, *, count: int, min_free_gb: float | None = None) -> list[int]:
+    def reserve_gpus(
+        self,
+        task_id: str,
+        *,
+        count: int,
+        min_free_gb: float | None = None,
+        require_contiguous: bool = False,
+    ) -> list[int]:
         gpus = self.available_gpus(min_free_gb=min_free_gb)
         free = [gpu.index for gpu in gpus if gpu.index not in self._gpu_reservations]
         if len(free) < count:
             raise ResourceError("Insufficient free GPUs for reservation.")
         selection = _select_contiguous(free, count)
         if selection is None:
+            if require_contiguous and count > 1:
+                raise ResourceError("No contiguous GPUs available for reservation.")
             selection = free[:count]
         for idx in selection:
             self._gpu_reservations[idx] = task_id

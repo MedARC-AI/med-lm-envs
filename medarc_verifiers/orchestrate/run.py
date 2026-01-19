@@ -163,6 +163,10 @@ class OrchestratorRunner:
                 except Exception as exc:
                     manifest.error = str(exc)
                     if attempt == 1 and _is_transient_error(exc):
+                        write_text(
+                            paths.serve_dir / f"launch_error_attempt{attempt}.txt",
+                            f"attempt={attempt}\nstate={manifest.state}\nat={_utcnow()}\nerror={manifest.error}\n",
+                        )
                         await asyncio.sleep(5)
                         continue
                     if isinstance(exc, DockerLaunchError):

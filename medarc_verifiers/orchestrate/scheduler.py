@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import time
 from typing import Awaitable, Callable, Iterable
 
 from medarc_verifiers.orchestrate.config import TaskSpec
@@ -33,15 +34,20 @@ class TaskScheduler:
         *,
         shutdown_event: asyncio.Event | None = None,
     ) -> None:
-        queue: asyncio.Queue[TaskSpec] = asyncio.Queue()
+        queue: asyncio.PriorityQueue[tuple[int, float, int, TaskSpec]] = asyncio.PriorityQueue()
+        sequence = 0
+        retry_counts: dict[str, int] = {}
         for task in tasks:
-            queue.put_nowait(task)
+            priority = self._task_priority(task)
+            queue.put_nowait((priority, 0.0, sequence, task))
+            sequence += 1
         semaphore = asyncio.Semaphore(self._max_parallel)
         active = 0
         active_cond = asyncio.Condition()
 
         async def worker() -> None:
             nonlocal active
+            nonlocal sequence
             while True:
                 if shutdown_event and shutdown_event.is_set():
                     return
@@ -58,29 +64,37 @@ class TaskScheduler:
                     got_task = get_task in done
                     if not got_task:
                         return
-                    task = get_task.result()
+                    priority, ready_at, seq, task = get_task.result()
                     if shutdown_requested:
-                        queue.put_nowait(task)
+                        queue.put_nowait((priority, ready_at, seq, task))
                         queue.task_done()
                         return
                 else:
-                    task = await queue.get()
+                    priority, ready_at, seq, task = await queue.get()
                 try:
                     if shutdown_event and shutdown_event.is_set():
-                        queue.put_nowait(task)
+                        queue.put_nowait((priority, ready_at, seq, task))
                         return
+                    now = time.monotonic()
+                    if now < ready_at:
+                        await asyncio.sleep(min(0.5, ready_at - now))
+                        queue.put_nowait((priority, ready_at, seq, task))
+                        continue
                     async with semaphore:
                         if shutdown_event and shutdown_event.is_set():
-                            queue.put_nowait(task)
+                            queue.put_nowait((priority, ready_at, seq, task))
                             return
                         try:
                             allocation = self._allocate(task)
                         except ResourceError:
                             if shutdown_event and shutdown_event.is_set():
-                                queue.put_nowait(task)
+                                queue.put_nowait((priority, ready_at, seq, task))
                                 return
-                            await asyncio.sleep(1.0)
-                            queue.put_nowait(task)
+                            attempts = retry_counts.get(task.task_id, 0) + 1
+                            retry_counts[task.task_id] = attempts
+                            backoff_s = min(10.0, 0.5 * (2 ** min(attempts - 1, 4)))
+                            queue.put_nowait((priority, time.monotonic() + backoff_s, sequence, task))
+                            sequence += 1
                             continue
                         async with active_cond:
                             active += 1
@@ -117,10 +131,22 @@ class TaskScheduler:
             worker_task.cancel()
         await asyncio.gather(*workers, return_exceptions=True)
 
-    def _allocate(self, task: TaskSpec) -> Allocation:
+    def _task_priority(self, task: TaskSpec) -> int:
         gpus_required = int(task.orchestrate.get(task.model_key, {}).get("gpus", 1))
-        min_free_gb = task.orchestrate.get(task.model_key, {}).get("memory_min_gb")
-        gpu_ids = self._resource_manager.reserve_gpus(task.task_id, count=gpus_required, min_free_gb=min_free_gb)
+        # Lower values are dequeued first; prioritize larger GPU requests.
+        return -gpus_required
+
+    def _allocate(self, task: TaskSpec) -> Allocation:
+        model_cfg = task.orchestrate.get(task.model_key, {}) or {}
+        gpus_required = int(model_cfg.get("gpus", 1))
+        min_free_gb = model_cfg.get("memory_min_gb")
+        require_contiguous = bool(model_cfg.get("require_contiguous_gpus", gpus_required > 1))
+        gpu_ids = self._resource_manager.reserve_gpus(
+            task.task_id,
+            count=gpus_required,
+            min_free_gb=min_free_gb,
+            require_contiguous=require_contiguous,
+        )
         try:
             port = self._resource_manager.reserve_port(task.task_id)
         except Exception:

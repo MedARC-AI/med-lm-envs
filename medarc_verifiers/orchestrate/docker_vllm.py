@@ -179,19 +179,38 @@ def create_and_start_container(
         device_ids=[str(gpu) for gpu in gpu_id_list],
         capabilities=[["gpu"]],
     )
-    container = client.containers.create(
-        image=image,
-        name=name,
-        command=command,
-        ports={f"{container_port}/tcp": ("127.0.0.1", host_port)},
-        environment=dict(env),
-        volumes=normalize_volumes(volumes),
-        ipc_mode=ipc_mode,
-        labels={ORCHESTRATOR_LABEL_KEY: "true", **dict(labels)},
-        device_requests=[device_request],
-        detach=True,
-    )
-    container.start()
+    container_create_kwargs = {
+        "image": image,
+        "name": name,
+        "command": command,
+        "ports": {f"{container_port}/tcp": ("127.0.0.1", host_port)},
+        "environment": dict(env),
+        "volumes": normalize_volumes(volumes),
+        "ipc_mode": ipc_mode,
+        "labels": {ORCHESTRATOR_LABEL_KEY: "true", **dict(labels)},
+        "device_requests": [device_request],
+        "detach": True,
+    }
+    try:
+        container = client.containers.create(**container_create_kwargs)
+    except Exception as exc:
+        message = str(exc)
+        if "No such image" in message or "not found" in message.lower():
+            try:
+                client.images.pull(image)
+            except Exception as pull_exc:
+                raise DockerLaunchError(f"Failed to pull image {image!r}: {pull_exc}") from pull_exc
+            container = client.containers.create(**container_create_kwargs)
+        else:
+            raise
+    try:
+        container.start()
+    except Exception:
+        try:
+            container.remove(v=True, force=True)
+        except Exception:
+            pass
+        raise
     return container
 
 
