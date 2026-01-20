@@ -1,3 +1,4 @@
+import asyncio
 from typing import Dict, Optional, List, Tuple, NamedTuple
 
 import verifiers as vf
@@ -30,6 +31,59 @@ TASK_TO_QUESTION_KEY: Dict[str,str] = {
     'biohopr_hop2_multi':'hop2_question_multi'
 } 
 
+class AsyncBufferedEncoder:
+    """
+    Asynchronous buffered encoder for SentenceTransformer models.
+    Batches encoding requests to improve efficiency.
+    """
+    def __init__(self, model: SentenceTransformer, batch_size: int = 32, ds_len: int = 0):
+        self.model = model
+        self.batch_size = batch_size
+        self.buffer = []
+        self.futures = []
+        self.ds_len = ds_len
+        self.iter = 1
+        self.lock = asyncio.Lock()
+
+    async def encode(self, text: List[str]) -> torch.Tensor:
+        loop = asyncio.get_event_loop()
+        future = loop.create_future()
+        self.buffer.append(text)
+        self.futures.append(future)
+        self.iter += 1
+
+        #if len(self.buffer) >= self.batch_size or self.iter >= self.ds_len:
+        # Run flush asyncio task to avoid blocking
+        
+        asyncio.create_task(self._flush())
+        return await future
+
+    async def _flush(self):
+        if not self.buffer:
+            return
+        async with self.lock:
+            if not self.buffer:
+                return
+            await asyncio.sleep(0)  # slight delay to allow batching
+            texts = self.buffer[:self.batch_size]
+            futures = self.futures[:len(texts)]
+            self.buffer = self.buffer[len(texts):]
+            self.futures = self.futures[len(texts):]
+            # indexs of texts in the batch
+            idxs = [len(sublist) for sublist in texts]
+            #flatten list of lists
+            texts = [item for sublist in texts for item in sublist]
+            # Compute set of embeddings in seperate thread to avoid blocking event loop, lock if necessary
+
+            embeddings = await asyncio.to_thread(self.model.encode, texts)
+        embeddings = embeddings if isinstance(embeddings, torch.Tensor) else torch.tensor(embeddings)
+
+        # Reshape embeddings to match the original input structure
+        split_embeddings = torch.split(embeddings, idxs)
+
+        for future, embedding in zip(futures, split_embeddings):
+            future.set_result(embedding)
+
 class model_config(NamedTuple):
     judge_model: str
     judge_api_key: Optional[str]
@@ -37,6 +91,8 @@ class model_config(NamedTuple):
     judge_client: Optional[AsyncOpenAI]
     judge_answer_num: int
     embeddings_model: SentenceTransformer
+    encoder: AsyncBufferedEncoder
+    tau: float = TAU
 
 # Judge prompt template for medical diagnosis evaluation
 JUDGE_TEMPLATE = """\
@@ -72,6 +128,8 @@ Is the predicted diagnosis medically equivalent to any of the ground truth diagn
 Respond with either "EQUIVALENT" or "NOT_EQUIVALENT".
 """.strip()
 
+
+
 def parse_answers_completions(parser:vf.Parser, completion: str, info: Dict) -> Tuple[Optional[str], List[str]]:
     """
     Parses the completion to extract the answer using the provided parser.
@@ -87,7 +145,7 @@ def parse_answers_completions(parser:vf.Parser, completion: str, info: Dict) -> 
     answers = info.get("answer", [])
     return (parsed_completion, answers)
 
-def answer_completion_similarity(model: SentenceTransformer, answers: List[str], completion: str) -> torch.Tensor:
+async def answer_completion_similarity(encoder: AsyncBufferedEncoder, answer: List[str], completion: str) -> torch.Tensor:
     """
     Computes cosine similarity between the embeddings of the answer and completion.
     Args:
@@ -96,12 +154,15 @@ def answer_completion_similarity(model: SentenceTransformer, answers: List[str],
     Returns:
         Cosine similarity score between answer and completion embeddings
     """
-    completion = completion.strip().lower()
-    answer_embeds = torch.tensor(model.encode(answers))
-    completion_embed = torch.tensor(model.encode(completion))
-    similarities = (answer_embeds @ completion_embed) / ( 
-        torch.sqrt(torch.sum(answer_embeds**2,dim=1)) * torch.sqrt(torch.sum(completion_embed**2)))
-    return similarities.cpu()
+
+    answer_completions = answer+[completion.strip().lower()]
+
+    answer_comp_embeds = await encoder.encode(answer_completions)
+    answer_comp_embeds = answer_comp_embeds if isinstance(answer_comp_embeds, torch.Tensor) else torch.tensor(answer_comp_embeds)
+    similarities = (answer_comp_embeds[:len(answer)] @ answer_comp_embeds[len(answer):].T) / (
+    torch.sqrt(torch.sum(answer_comp_embeds[:len(answer)]**2, keepdim=True, dim=1)) * torch.sqrt(torch.sum(answer_comp_embeds[len(answer):]**2))
+    )
+    return similarities.flatten().cpu()
 
 async def llm_as_a_judge_impl(
     config: model_config,
@@ -119,7 +180,7 @@ async def llm_as_a_judge_impl(
     """
     parsed_completion,answers = parse_answers_completions(parser, completion, info)
     if(parsed_completion is None): return 0.0
-    similarities = answer_completion_similarity(config.embeddings_model, answers, parsed_completion)
+    similarities = await answer_completion_similarity(config.encoder, answers, parsed_completion)
 
     # Select top-K most similar answers for judging
     top_n_indices = torch.topk(similarities, k=min(config.judge_answer_num, len(answers))).indices.tolist()
@@ -131,25 +192,26 @@ async def llm_as_a_judge_impl(
     
     # Parse judge response
     judge_response_clean = judge_response.strip().upper()
+
     # Return 1.0 if equivalent, 0.0 otherwise
     if "EQUIVALENT" in judge_response_clean and "NOT_EQUIVALENT" not in judge_response_clean:
         return 1.0
     else:
         return 0.0
 
-def embedded_precision_impl(config: model_config, parser: vf.Parser, completion: str, info: Dict, **kwargs) -> float:
+async def embedded_precision_impl(config: model_config, parser: vf.Parser, completion: str, info: Dict, **kwargs) -> float:
     """Calculates embedded precision based on cosine similarity between
     completion and ground truth answers.
     """
     parsed_completion,answers = parse_answers_completions(parser, completion, info)
     if(parsed_completion is None): return 0.0
-    similarities = answer_completion_similarity(config.embeddings_model, answers, parsed_completion)
-    return 1.0 if(similarities.max() > TAU) else 0.0
+    similarities = await answer_completion_similarity(config.encoder, answers, parsed_completion)
+    return 1.0 if(similarities.max() > config.tau) else 0.0
 
 def _rubric_f(config: model_config, use_judge=True):
     "Returns a function that calculates precision based on embedded cosine similarity."
-    def embedded_precision(parser: vf.Parser, completion: str, info: Dict, **kwargs) -> float:
-        return embedded_precision_impl(config, parser, completion, info, **kwargs)
+    async def embedded_precision(parser: vf.Parser, completion: str, info: Dict) -> float:
+        return await embedded_precision_impl(config, parser, completion, info)
     async def llm_as_a_judge(judge, prompt: str, completion: str, answer: str, info: Dict, state: Dict, parser: vf.Parser, **kwargs) -> float:
         return await llm_as_a_judge_impl(config, judge, prompt, completion, answer, info, state, parser, **kwargs)
     return llm_as_a_judge if(use_judge) else embedded_precision
@@ -254,8 +316,6 @@ def create_model(model_name: str) -> SentenceTransformer:
         raise ValueError(f"Unsupported model name: {model_name=}")
     return model
 
-
-
 def load_environment(
     use_think: bool = False,
     system_prompt: Optional[str] = None,
@@ -264,9 +324,10 @@ def load_environment(
     judge_model: str = "gpt-4o-mini",
     judge_base_url: str | None = None,
     judge_api_key: str | None = None,
-    eval_method: str = "judge",  # "judge" (default), "metrics, or "judge-only",
+    eval_method: str = "metrics",  # "judge", "metrics (default), or "judge-only",
     judge_answer_num: int = 5,
-    embeddings_model: str = 'Simonlee711/Clinical_ModernBERT',
+    embeddings_model: str = 'FremyCompany/BioLORD-2023',
+    tau: float = TAU,
 ) -> vf.Environment:
     """
     BioHopR multiple-hop biomedical question answering evaluation
@@ -276,12 +337,13 @@ def load_environment(
     - task: which BioHopR task to evaluate against. Valid options are
       ['biohopr_hop1','biohopr_hop2','biohopr_hop1_multi','biohopr_hop2_multi', 'all'].
       'all' evaluates on all tasks. Default is 'biohopr_hop2'.
-    - eval_method: "judge" (default), "metrics", or "judge-only"
+    - eval_method: "judge", "metrics" (default), or "judge-only"
     - judge_model: Model name to use for judging (default: "gpt-4o-mini")
     - judge_base_url: Optional base URL for custom OpenAI-compatible API endpoint
     - judge_api_key: Optional API key for OpenAI-compatible API endpoint
     - judge_answer_num: Number of top similar ground truth answers to consider for judging
     - embeddings_model: SentenceTransformer model name for computing answer-completion similarity. Valid options: ['FremyCompany/BioLORD-2023', 'Simonlee711/Clinical_ModernBERT']
+    - tau: Cosine similarity threshold for embedded precision
     Returns:
         vf.Environment instance for BioHopR evaluation
     """
@@ -303,13 +365,16 @@ def load_environment(
     api_key = judge_api_key if judge_api_key else os.getenv("OPENAI_API_KEY")
     judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key) if api_key else None
     model = create_model(embeddings_model)
+    encoder = AsyncBufferedEncoder(model, batch_size=32, ds_len=len(ds))
     model_c = model_config(
         judge_model=judge_model,
         judge_api_key=judge_api_key,
         judge_base_url=judge_base_url,
         judge_client=judge_client,
         judge_answer_num=judge_answer_num,
-        embeddings_model=model
+        embeddings_model=model,
+        encoder=encoder,
+        tau=tau,
     )
     rubrics = _rubrics(eval_method,parser, model_c)
     

@@ -46,11 +46,12 @@ Document any supported environment arguments and their meaning. Example:
 | `system_prompt` | str | `None` | Optional custom system prompt. |
 | `answer_format` | str | `AnswerFormat.XML` | Determines how to parse completion for answer. Also sets system prompt if `system_prompt` not set. |
 | `task` | str | `biohopr_hop2` | The task to evaluate against. Determines which prompts are used from the BioHopR paper. Valid options are `['biohopr_hop1','biohopr_hop2','biohopr_hop1_multi','biohopr_hop2_multi', 'all']`. `task` also set for verifiers dataset for use with EnvGroup and RubricGroup |
-| `eval_method` | str | `judge` | Whether to use metrics from paper, or llm as a judge. Values: "judge" , "metrics", or "judge-only"
+| `eval_method` | str | `metrics` | Whether to use metrics from paper, or llm as a judge. Values: "judge" , "metrics", or "judge-only"
 | `judge_model` | str | `gpt-4o-mini` | Model name to use for judging
 | `judge_base_url` | str | `None` | Optional base URL for custom OpenAI-compatible API endpoint
 | `judge_api_key` | str | `None` | Optional API key for OpenAI-compatible API endpoint
-| `embeddings_model` | str | `Simonlee711/Clinical_ModernBERT` | SentenceTransformer model name for computing answer-completion similarity. Valid options: `['FremyCompany/BioLORD-2023', 'Simonlee711/Clinical_ModernBERT']`
+| `embeddings_model` | str | `FremyCompany/BioLORD-2023` | SentenceTransformer model name for computing answer-completion similarity. Valid options: `['FremyCompany/BioLORD-2023', 'Simonlee711/Clinical_ModernBERT']`
+| `tau` | float | 0.9 | Cosine similarity threshold for embedded precision
 
 ### Metrics
 Summarize key metrics your rubric emits and how they’re interpreted.
