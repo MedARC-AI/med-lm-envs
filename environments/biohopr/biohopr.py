@@ -19,6 +19,7 @@ import torch
 import tqdm
 from collections import namedtuple
 import numpy as np
+from sentence_transformers.models import Pooling
 
 # Cosine similarity threshold for embedded precision
 TAU: float = 0.9 
@@ -31,18 +32,19 @@ TASK_TO_QUESTION_KEY: Dict[str,str] = {
     'biohopr_hop2_multi':'hop2_question_multi'
 } 
 
-class AsyncBufferedEncoder:
+class AsyncEncoder:
+    pass
+
+class AsyncBufferedEncoder(AsyncEncoder):
     """
     Asynchronous buffered encoder for SentenceTransformer models.
     Batches encoding requests to improve efficiency.
     """
-    def __init__(self, model: SentenceTransformer, batch_size: int = 32, ds_len: int = 0):
+    def __init__(self, model: SentenceTransformer, batch_size: int = 32):
         self.model = model
         self.batch_size = batch_size
         self.buffer = []
         self.futures = []
-        self.ds_len = ds_len
-        self.iter = 1
         self.lock = asyncio.Lock()
 
     async def encode(self, text: List[str]) -> torch.Tensor:
@@ -50,7 +52,6 @@ class AsyncBufferedEncoder:
         future = loop.create_future()
         self.buffer.append(text)
         self.futures.append(future)
-        self.iter += 1
 
         #if len(self.buffer) >= self.batch_size or self.iter >= self.ds_len:
         # Run flush asyncio task to avoid blocking
@@ -84,6 +85,24 @@ class AsyncBufferedEncoder:
         for future, embedding in zip(futures, split_embeddings):
             future.set_result(embedding)
 
+class AsyncEmbeddingClient(AsyncEncoder):
+    """
+    Asynchronous embedding client for OpenAI-compatible APIs.
+    """
+    def __init__(self, client, model: str = "clinicalmodernbert"):
+        self.client = client
+        self.model = model
+
+    async def encode(self, texts: List[str]) -> torch.Tensor:
+        response = await self.client.embeddings.create(
+            model=self.model,
+            input=texts
+        )
+        embeddings = [torch.tensor(data.embedding) for data in response.data]
+        return torch.stack(embeddings)
+
+
+
 class model_config(NamedTuple):
     judge_model: str
     judge_api_key: Optional[str]
@@ -91,7 +110,7 @@ class model_config(NamedTuple):
     judge_client: Optional[AsyncOpenAI]
     judge_answer_num: int
     embeddings_model: SentenceTransformer
-    encoder: AsyncBufferedEncoder
+    encoder: AsyncEncoder
     tau: float = TAU
 
 # Judge prompt template for medical diagnosis evaluation
@@ -311,7 +330,8 @@ def create_model(model_name: str) -> SentenceTransformer:
     elif model_name=='Simonlee711/Clinical_ModernBERT':
         model = SentenceTransformer(model_name)
         f = lambda text: SentenceTransformer.encode(model,text, output_value='token_embeddings')
-        model.encode = lambda sentences,*args,**kwargs: torch.stack([ e[0] for e in f(sentences)]) if isinstance(sentences, list) else f(sentences)[0]
+        #model.encode = lambda sentences,*args,**kwargs: torch.stack([ e[0] for e in f(sentences)]) if isinstance(sentences, list) else f(sentences)[0]
+        model[1] = Pooling(model.get_sentence_embedding_dimension(), pooling_mode='cls')
     else:
         raise ValueError(f"Unsupported model name: {model_name=}")
     return model
@@ -328,6 +348,8 @@ def load_environment(
     judge_answer_num: int = 5,
     embeddings_model: str = 'FremyCompany/BioLORD-2023',
     tau: float = TAU,
+    embedding_model_url: Optional[str] = None,
+    embedding_api_key: Optional[str] = None
 ) -> vf.Environment:
     """
     BioHopR multiple-hop biomedical question answering evaluation
@@ -344,6 +366,9 @@ def load_environment(
     - judge_answer_num: Number of top similar ground truth answers to consider for judging
     - embeddings_model: SentenceTransformer model name for computing answer-completion similarity. Valid options: ['FremyCompany/BioLORD-2023', 'Simonlee711/Clinical_ModernBERT']
     - tau: Cosine similarity threshold for embedded precision
+    - embedding_model_url: Optional URL for custom embedding model
+    - embedding_api_key: Optional API key for custom embedding model
+
     Returns:
         vf.Environment instance for BioHopR evaluation
     """
@@ -360,12 +385,19 @@ def load_environment(
     ds = ds.map(partial(_biohoper_format,tasks=tasks), remove_columns=ds.column_names, batched=True)
     
     answer_format,system_prompt,parser = _prepare_parseing(answer_format,system_prompt,use_think=use_think)
-    
+    embedding_client = None
+    if (embedding_model_url is not None):
+        embedding_client = AsyncEmbeddingClient(
+            url=embedding_model_url,
+            api_key=embedding_api_key,
+            model=embeddings_model
+        )
+
     # Initialize OpenAI client for judge
     api_key = judge_api_key if judge_api_key else os.getenv("OPENAI_API_KEY")
     judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key) if api_key else None
     model = create_model(embeddings_model)
-    encoder = AsyncBufferedEncoder(model, batch_size=32, ds_len=len(ds))
+    encoder = embedding_client if (embedding_client) else AsyncBufferedEncoder(model, batch_size=32) 
     model_c = model_config(
         judge_model=judge_model,
         judge_api_key=judge_api_key,
