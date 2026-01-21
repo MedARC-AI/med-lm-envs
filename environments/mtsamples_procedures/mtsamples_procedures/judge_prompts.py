@@ -1,12 +1,11 @@
 # Judge template adapted from HELM's MTSamples Procedures Annotator
 # Evaluates clinical responses for treatment plan generation
 JUDGE_TEMPLATE = """\
-You are a medical expert tasked with evaluating the quality of a generated clinical response.
+You are a medical expert tasked with evaluating the quality of a generated response of a clinical scenario.
+Your goal is to assess how well the response addresses the patient case, follows clinical best practices,
+and compares to the gold response in terms of accuracy, completeness, and clarity.
 
-Your goal is to assess how well the generated treatment plan addresses the patient's clinical needs,
-and how it compares to the reference answer in terms of accuracy, completeness, and clarity.
-
-The patient notes will be provided in these tags:
+The user's request will be provided in these tags:
 <procedure_note>
 {procedure_note}
 </procedure_note>
@@ -21,8 +20,7 @@ The reference answer will be provided in these tags:
 {gold_plan}
 </gold_plan>
 
-Carefully review the <response> based on the <procedure_note> and compare it to the <gold_plan> when needed.
-
+Carefully analyze the <response>.
 For each of the following criteria, rate the response on a scale of 1 to 5 (1 = very poor, 5 = excellent), and provide a short justification for your score.
 
 Evaluation Criteria:

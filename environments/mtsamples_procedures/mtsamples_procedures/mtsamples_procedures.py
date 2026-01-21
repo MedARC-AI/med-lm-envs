@@ -64,15 +64,11 @@ def _extract_sections(text: str) -> tuple[str | None, str | None, str | None]:
 
 
 def _remove_sections(text: str) -> str:
-  
-    sections = ["PLAN:", "SUMMARY:", "FINDINGS:"]
-
-    for section in sections:
-        if section in text.upper():
-            idx = text.upper().find(section)
-            text = text[:idx].strip()
-
+    for section in ["PLAN:", "SUMMARY:", "FINDINGS:"]:
+        if section in text:
+            return text.split(section, 1)[0].strip()
     return text
+
 
 
 def _download_txt_files(cache_path: Path) -> list[Path]:

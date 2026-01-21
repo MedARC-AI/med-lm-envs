@@ -2,8 +2,7 @@
 
 ### Overview
 - **Environment ID**: `mtsamples_procedures`
-- **Short description**: MTSamples Procedures is a benchmark of medical transcription samples that tests a model's ability to generate reasonable treatment plans from patient procedure notes.
-
+- **Short description**: MTSamples Procedures is a benchmark composed of transcribed operative notes, focused on documenting surgical procedures. Each example presents a brief patient case involving a surgical intervention, and the model is tasked with generating a coherent and clinically accurate procedural summary or treatment plan.
 ### Dataset
 - **Split sizes**:
   - Evaluation: ~90 examples (all used for evaluation)
