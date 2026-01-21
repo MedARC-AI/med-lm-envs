@@ -1,0 +1,26 @@
+[project]
+name = "pubhealthbench"
+version = "0.1.0"
+description = "Evaluation environment for the Joshua-Harris/PubHealthBench public health MCQ dataset"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "datasets>=4.0.0",
+    "verifiers>=0.1.2.post0",
+    "medarc_verifiers>=0.1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["pubhealthbench.py"]
+
+[tool.uv.sources]
+medarc_verifiers = { git = "https://github.com/MedARC-AI/med-lm-envs" }
+
+[tool.prime.environment]
+loader = "pubhealthbench:load_environment"
+display_name = "PubHealthBench"
+visibility = "PUBLIC"
