@@ -36,13 +36,11 @@ class AsyncBufferedEncoder:
     Asynchronous buffered encoder for SentenceTransformer models.
     Batches encoding requests to improve efficiency.
     """
-    def __init__(self, model: SentenceTransformer, batch_size: int = 32, ds_len: int = 0):
+    def __init__(self, model: SentenceTransformer, batch_size: int = 32):
         self.model = model
         self.batch_size = batch_size
         self.buffer = []
         self.futures = []
-        self.ds_len = ds_len
-        self.iter = 1
         self.lock = asyncio.Lock()
 
     async def encode(self, text: List[str]) -> torch.Tensor:
@@ -50,9 +48,7 @@ class AsyncBufferedEncoder:
         future = loop.create_future()
         self.buffer.append(text)
         self.futures.append(future)
-        self.iter += 1
 
-        #if len(self.buffer) >= self.batch_size or self.iter >= self.ds_len:
         # Run flush asyncio task to avoid blocking
         
         asyncio.create_task(self._flush())
@@ -328,6 +324,8 @@ def load_environment(
     judge_answer_num: int = 5,
     embeddings_model: str = 'FremyCompany/BioLORD-2023',
     tau: float = TAU,
+    use_cuda: bool = torch.cuda.is_available(),
+    embedding_batch_size: int = 32,
 ) -> vf.Environment:
     """
     BioHopR multiple-hop biomedical question answering evaluation
@@ -344,6 +342,8 @@ def load_environment(
     - judge_answer_num: Number of top similar ground truth answers to consider for judging
     - embeddings_model: SentenceTransformer model name for computing answer-completion similarity. Valid options: ['FremyCompany/BioLORD-2023', 'Simonlee711/Clinical_ModernBERT']
     - tau: Cosine similarity threshold for embedded precision
+    - use_cuda: Whether to use CUDA for embedding model
+    - embedding_batch_size: Maximum batch size for embedding model encoding, use in case of out of memory error
     Returns:
         vf.Environment instance for BioHopR evaluation
     """
@@ -365,7 +365,9 @@ def load_environment(
     api_key = judge_api_key if judge_api_key else os.getenv("OPENAI_API_KEY")
     judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key) if api_key else None
     model = create_model(embeddings_model)
-    encoder = AsyncBufferedEncoder(model, batch_size=32, ds_len=len(ds))
+    if(use_cuda):
+        model = model.cuda()
+    encoder = AsyncBufferedEncoder(model, batch_size=embedding_batch_size)
     model_c = model_config(
         judge_model=judge_model,
         judge_api_key=judge_api_key,

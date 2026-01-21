@@ -52,6 +52,8 @@ Document any supported environment arguments and their meaning. Example:
 | `judge_api_key` | str | `None` | Optional API key for OpenAI-compatible API endpoint
 | `embeddings_model` | str | `FremyCompany/BioLORD-2023` | SentenceTransformer model name for computing answer-completion similarity. Valid options: `['FremyCompany/BioLORD-2023', 'Simonlee711/Clinical_ModernBERT']`
 | `tau` | float | 0.9 | Cosine similarity threshold for embedded precision
+| `use_cuda` | bool | "if available" | Whether to use CUDA for embedding model, uses cuda if available, set to false to disable. 
+| `embedding_batch_size` | int | 32 |  Maximum batch size for embedding model encoding, use in case of out of memory error
 
 ### Metrics
 Summarize key metrics your rubric emits and how they’re interpreted.
