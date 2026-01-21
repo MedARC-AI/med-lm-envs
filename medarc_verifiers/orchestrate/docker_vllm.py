@@ -56,6 +56,7 @@ def _render_serve_flags(serve: Mapping[str, object]) -> list[str]:
         "reasoning_parser_plugin": "--reasoning-parser-plugin",
         "tool_call_parser": "--tool-call-parser",
         "mamba_ssm_cache_dtype": "--mamba_ssm_cache_dtype",
+        "quantization": "--quantization",
     }
     for key, flag in scalar_map.items():
         if key in serve and serve[key] is not None:
@@ -93,6 +94,7 @@ def _validate_serve_config(serve: Mapping[str, object]) -> None:
         "reasoning_parser_plugin",
         "tool_call_parser",
         "mamba_ssm_cache_dtype",
+        "quantization",
     }
     bool_keys = {
         "async_scheduling",
