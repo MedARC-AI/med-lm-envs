@@ -525,13 +525,6 @@ class OrchestratorRunner:
                 f"gpus={gpu_text} port={port_text}"
             )
             return
-        if state in {JobState.launching, JobState.loading, JobState.running}:
-            state_elapsed = _format_elapsed(prev_state_entered_at, now)
-            self._dashboard.log(
-                f"JOB state task={manifest.task_id} {prev_state} -> {state} "
-                f"state_elapsed={state_elapsed}"
-            )
-            return
         if state == JobState.completed:
             exit_code = manifest.bench_exit_code
             exit_text = str(exit_code) if exit_code is not None else "-"
