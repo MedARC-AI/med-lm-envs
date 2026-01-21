@@ -231,6 +231,29 @@ def _sampling_args_override(
     return normalized_sampling
 
 
+def _merge_unique_model_payload(
+    container: dict[str, dict[str, Any]],
+    key: str,
+    payload: dict[str, Any],
+    *,
+    allow_mismatch: bool,
+) -> None:
+    existing = container.get(key)
+    if existing is None:
+        container[key] = payload
+        return
+    if existing == payload:
+        return
+    if allow_mismatch:
+        container[key] = payload
+        return
+    if _sanitize_model_payload(existing) == _sanitize_model_payload(payload):
+        container[key] = payload
+        return
+    msg = f"Conflicting model payload for '{key}'."
+    raise ValueError(msg)
+
+
 def _merge_unique_payload(
     container: dict[str, dict[str, Any]],
     key: str,
@@ -246,6 +269,7 @@ def _merge_unique_payload(
     if existing != payload and not allow_mismatch:
         msg = f"Conflicting {label} payload for '{key}'."
         raise ValueError(msg)
+    container[key] = payload
 
 
 def _resolve_env_identifier(job: ResolvedJob) -> str:
@@ -282,12 +306,11 @@ def build_job_entry(
     env_variant_id = env_payload.get("id") or job.job_id
     sampling_override = _sampling_args_override(sampling_args=sampling_args, model_payload=model_payload)
     if models is not None:
-        _merge_unique_payload(
+        _merge_unique_model_payload(
             models,
             _resolve_model_identifier(job),
             model_payload,
             allow_mismatch=allow_model_mismatch,
-            label="model",
         )
     if env_templates is not None:
         _merge_unique_payload(
