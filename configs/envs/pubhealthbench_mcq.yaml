@@ -1,0 +1,26 @@
+# Full test set - single unshuffled run
+- id: pubhealthbench_full
+  module: pubhealthbench
+  num_examples: -1
+  verbose: false
+  env_args:
+    split: full
+
+# Reviewed set - shuffled with matrix
+- id: pubhealthbench_reviewed
+  module: pubhealthbench
+  num_examples: -1
+  verbose: false
+  env_args:
+    split: reviewed
+
+- id: pubhealthbench_reviewed
+  module: pubhealthbench
+  num_examples: -1
+  verbose: false
+  env_args:
+    split: reviewed
+    shuffle_answers: true
+  matrix:
+    shuffle_seed: [1618, 9331]
+  matrix_id_format: "{base}-rollout{shuffle_seed}"
