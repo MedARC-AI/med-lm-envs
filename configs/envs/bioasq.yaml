@@ -1,0 +1,17 @@
+- id: bioasq
+  module: bioasq
+  rollouts_per_example: 1
+  num_examples: -1
+  verbose: false
+  env_args:
+    answer_format: xml
+    judge_model: gpt-4o-mini
+
+- id: bioasq-boxed
+  module: bioasq
+  rollouts_per_example: 1
+  num_examples: -1
+  verbose: false
+  env_args:
+    answer_format: boxed
+    judge_model: gpt-4o-mini
