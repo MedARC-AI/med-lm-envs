@@ -38,11 +38,6 @@ Definitions (from Nature Medicine reader study criteria):
 - Completeness: Does the summary completely capture important information? Evaluate recall—the amount of clinically important detail retained from the input findings.
 - Conciseness: Does the summary contain non-important information? Evaluate brevity—the value of a summary decreases with superfluous information. A good summary should be as brief as possible while capturing key findings.
 
-IMPORTANT for Conciseness scoring:
-- Compare the model's impression length to the reference impression length.
-- If the model output is significantly longer than the reference without adding clinically important information, penalize heavily.
-- Ideal summaries are similar in length to or shorter than the reference while capturing key findings.
-
 The radiology findings will be provided in these tags:
 <radiology_findings>
 {findings}
@@ -57,6 +52,11 @@ The reference impression will be provided in these tags:
 <reference_impression>
 {reference}
 </reference_impression>
+
+Length information (pre-computed):
+- Model impression length: {model_length} characters
+- Reference impression length: {reference_length} characters
+- Length ratio: {length_ratio}x
 
 For each dimension:
 1. Provide a brief explanation (1–3 sentences) describing why you assigned the score.
@@ -76,12 +76,14 @@ Completeness scoring:
 - 2: Several important findings omitted
 - 1: Critical findings missing
 
-Conciseness scoring:
-- 5: Similar length or shorter than reference while capturing key findings
-- 4: Slightly longer (up to 1.5x) but additional content is clinically relevant
-- 3: Moderately longer (1.5-2x) with some unnecessary detail
-- 2: Much longer (2-3x) with substantial superfluous information
-- 1: Excessively verbose (>3x reference length) or contains much irrelevant content
+Conciseness scoring (STRICTLY based on length ratio above):
+- 5: Length ratio ≤ 1.0 (same length or shorter than reference)
+- 4: Length ratio 1.0-1.5 (up to 50% longer)
+- 3: Length ratio 1.5-2.0 (50-100% longer)
+- 2: Length ratio 2.0-3.0 (2-3x longer)
+- 1: Length ratio > 3.0 (more than 3x longer)
+
+IMPORTANT: The conciseness score MUST follow the length ratio guidelines above. Do not override based on content quality.
 
 {output_format}
 """
@@ -261,11 +263,26 @@ def load_environment(
         reference = str(state.get("answer", ""))
         model_response = extract_answer_section(_extract_completion_text(completion))
 
+        # Compute length metrics for conciseness scoring
+        model_length = len(model_response)
+        reference_length = len(reference) if reference else 1  # avoid division by zero
+        length_ratio = model_length / reference_length
+
+        # Store length info for analysis
+        info["length_metrics"] = {
+            "model_length": model_length,
+            "reference_length": reference_length,
+            "length_ratio": round(length_ratio, 2),
+        }
+
         # --- LLM-as-Judge Evaluation ---
         judge_prompt = JUDGE_TEMPLATE.format(
             findings=findings,
             response=model_response,
             reference=reference,
+            model_length=model_length,
+            reference_length=reference_length,
+            length_ratio=f"{length_ratio:.1f}",
             output_format=JUDGE_OUTPUT_JSON,
         )
 
