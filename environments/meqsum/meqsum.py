@@ -315,10 +315,13 @@ def load_environment(
             predictions = [model_response]
             references = [reference]
 
-            # BLEU
+            # BLEU (with smoothing for sentence-level evaluation)
             try:
-                bleu_scores = bleu_metric.compute(predictions=predictions, references=references)
-                auto_metrics["bleu"] = bleu_scores.get("bleu", 0.0)
+                from sacrebleu.metrics import BLEU
+
+                bleu_scorer = BLEU(smooth_method="exp", effective_order=True)
+                bleu_result = bleu_scorer.sentence_score(model_response, [reference])
+                auto_metrics["bleu"] = bleu_result.score / 100.0  # normalize to 0-1
             except Exception:
                 auto_metrics["bleu"] = 0.0
 
