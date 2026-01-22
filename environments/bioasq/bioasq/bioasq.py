@@ -156,13 +156,11 @@ def load_environment(
         )
 
         # judge_prompt assigned to question var inside judge_rubric.judge() method
+        judge_raw = await judge_rubric.judge(judge_prompt, completion_text, gold_answer, state)
         try:
-            judge_raw = await judge_rubric.judge(judge_prompt, completion_text, gold_answer, state)
             parsed = judge_parser.parse(str(judge_raw), strip=True)
         except AttributeError:
-            judge_raw = await judge_rubric.judge(judge_prompt, completion_text, gold_answer, state)
-            parsed = judge_parser.parse(str(judge_raw), strip=True)
-        
+            parsed = None
         if parsed is None:
             parsed = {dimension: {"score": None, "explanation": None, "raw": None} for dimension in JUDGE_DIMENSIONS}
 
