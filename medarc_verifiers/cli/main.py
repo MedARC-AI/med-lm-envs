@@ -72,6 +72,15 @@ def build_batch_parser() -> argparse.ArgumentParser:
             "Pass --no-auto-resume to force a fresh run."
         ),
     )
+    parser.add_argument(
+        "--on-complete",
+        choices=("exit", "continue", "rerun", "new", "prompt"),
+        default="prompt",
+        help=(
+            "Action when all selected jobs are already completed. "
+            "Use 'prompt' for interactive selection (default: prompt)."
+        ),
+    )
     parser.add_argument("--force", action="store_true", help="Re-run every job regardless of manifest state.")
     parser.add_argument(
         "--forced",
@@ -984,8 +993,9 @@ def _execute_batch(args: argparse.Namespace) -> int:
         )
 
         if all_completed and selected_jobs and not args.dry_run and not args.force:
-            # Prompt user for action
-            choice = _prompt_completed_jobs_action()
+            choice = args.on_complete
+            if choice == "prompt":
+                choice = _prompt_completed_jobs_action()
             if choice == "new":
                 logger.info("Creating a new run with all jobs...")
                 # Create a fresh run by disabling auto-resume and forcing a new run_id

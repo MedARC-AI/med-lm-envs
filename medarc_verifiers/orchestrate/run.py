@@ -38,7 +38,9 @@ from medarc_verifiers.orchestrate.scheduler import Allocation, TaskScheduler
 from medarc_verifiers.orchestrate.state import JobState, TaskManifest, TaskPaths, write_summary, write_task_manifest, write_task_result, write_text
 
 
-COMMAND_TEMPLATE = "uv run medarc-eval bench --config {job_config_path} --api-base-url {base_url}"
+COMMAND_TEMPLATE = (
+    "uv run medarc-eval bench --config {job_config_path} --api-base-url {base_url} --on-complete exit"
+)
 
 _TASK_DIR_ALLOWED = re.compile(r"[^a-zA-Z0-9_.-]+")
 
