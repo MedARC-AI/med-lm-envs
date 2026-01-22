@@ -9,6 +9,7 @@ from medarc_verifiers.parsers.json_parser import JSONParser
 from medarc_verifiers.parsers.xml_parser import XMLParser
 from medarc_verifiers.prompts import AnswerFormat
 from medarc_verifiers.rewards.multiple_choice_accuracy import multiple_choice_accuracy
+from medarc_verifiers.parsers import get_parsed_field
 from medarc_verifiers.utils import default_judge_api_key, judge_sampling_args_and_headers
 from medarc_verifiers.utils.randomize_multiple_choice import randomize_multiple_choice
 from openai import AsyncOpenAI
@@ -279,17 +280,15 @@ def _load_freeform_environment(
             judge_response = await judge_rubric.judge(judge_prompt, "", "", state)
             parsed = judge_parser.parse(judge_response)
 
-        predicted_correct = getattr(parsed, "predicted_correct", False)
+        predicted_correct = get_parsed_field(parsed, "predicted_correct", False)
         if isinstance(predicted_correct, str):
             predicted_correct = predicted_correct.lower().strip()
             predicted_correct = "true" in predicted_correct and "false" not in predicted_correct
 
-        reasoning = getattr(parsed, "reasoning", "")
-
         info.setdefault("judge_feedback", []).append(
             {
                 "predicted_correct": predicted_correct,
-                "reasoning": reasoning,
+                "reasoning": get_parsed_field(parsed, "reasoning", ""),
                 "raw_judge": str(judge_response),
             }
         )
