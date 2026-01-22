@@ -22,17 +22,26 @@ from verifiers.types import Info, Messages, State
 disable_progress_bar()  # suppress datasets progress bar
 
 # --- Judge Prompt Template ---
+# Evaluation criteria adapted from:
+# Buckley T. et al., "Accuracy of a vision-language model on challenging medical cases"
+# Nature Medicine (2024). https://doi.org/10.1038/s41591-024-02855-5
+# See: Methods - Reader study section
 
 JUDGE_TEMPLATE = """\
 You are a radiology expert tasked with evaluating how well a model summarized radiology findings into an impression.
 
 Your goal is to assess the quality of the model's generated impression compared to the reference impression.
-You will rate the impression along three dimensions: accuracy, completeness, and conciseness.
+You will rate the impression along three dimensions: correctness, completeness, and conciseness.
 
-Definitions:
-- Accuracy: Does the impression correctly reflect the key findings without introducing errors or hallucinations?
-- Completeness: Does the impression capture all clinically significant findings from the radiology report?
-- Conciseness: Is the impression appropriately brief while conveying the essential information?
+Definitions (from Nature Medicine reader study criteria):
+- Correctness: Does the summary include false information? Evaluate precision—penalize any fabricated or incorrect information not supported by the findings.
+- Completeness: Does the summary completely capture important information? Evaluate recall—the amount of clinically important detail retained from the input findings.
+- Conciseness: Does the summary contain non-important information? Evaluate brevity—the value of a summary decreases with superfluous information. A good summary should be as brief as possible while capturing key findings.
+
+IMPORTANT for Conciseness scoring:
+- Compare the model's impression length to the reference impression length.
+- If the model output is significantly longer than the reference without adding clinically important information, penalize heavily.
+- Ideal summaries are similar in length to or shorter than the reference while capturing key findings.
 
 The radiology findings will be provided in these tags:
 <radiology_findings>
@@ -52,7 +61,27 @@ The reference impression will be provided in these tags:
 For each dimension:
 1. Provide a brief explanation (1–3 sentences) describing why you assigned the score.
 2. Then assign a score from 1 to 5:
-   1 = very poor, 2 = poor, 3 = adequate, 4 = good, 5 = excellent.
+
+Correctness scoring:
+- 5: No false or fabricated information
+- 4: Minor inaccuracy that doesn't affect clinical interpretation
+- 3: Some inaccurate information present
+- 2: Multiple inaccuracies or one significant error
+- 1: Major fabrications or errors
+
+Completeness scoring:
+- 5: All clinically important information captured
+- 4: Most important information captured, minor omissions
+- 3: Key findings present but some important details missing
+- 2: Several important findings omitted
+- 1: Critical findings missing
+
+Conciseness scoring:
+- 5: Similar length or shorter than reference while capturing key findings
+- 4: Slightly longer (up to 1.5x) but additional content is clinically relevant
+- 3: Moderately longer (1.5-2x) with some unnecessary detail
+- 2: Much longer (2-3x) with substantial superfluous information
+- 1: Excessively verbose (>3x reference length) or contains much irrelevant content
 
 {output_format}
 """
@@ -60,7 +89,7 @@ For each dimension:
 JUDGE_OUTPUT_JSON = """
 Output your evaluation as a single valid JSON object matching the following structure:
 {
-  "accuracy": {
+  "correctness": {
     "reason": "Brief explanation of why this score was given.",
     "score": 0
   },
@@ -82,7 +111,8 @@ Ensure the output is valid JSON:
 """
 
 # Scored dimensions must match the keys emitted by JUDGE_TEMPLATE
-JUDGE_DIMENSIONS = ["accuracy", "completeness", "conciseness"]
+# Note: "correctness" replaces "accuracy" per Nature Medicine paper terminology
+JUDGE_DIMENSIONS = ["correctness", "completeness", "conciseness"]
 
 
 def _extract_completion_text(completion: Messages) -> str:

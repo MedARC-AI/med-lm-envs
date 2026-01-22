@@ -26,10 +26,15 @@ Evaluation environment for radiology report summarization: generating impression
 - **Input:** Radiology findings (chest X-ray report text)
 - **Output:** Clinical impression (summary)
 - **Evaluation:** Dual evaluation approach following the Nature Medicine paper:
-  1. **LLM-as-Judge**: Evaluates accuracy, completeness, and conciseness (1-5 scale each)
+  1. **LLM-as-Judge**: Evaluates correctness, completeness, and conciseness (1-5 scale each)
   2. **Automatic Metrics**: BLEU, ROUGE (1/2/L/Lsum), BERTScore (precision/recall/F1)
 
-The LLM-as-judge implementation follows the pattern established in `medicationqa`, using multi-dimensional scoring with a JSONParser.
+The LLM-as-judge criteria are adapted from the **Nature Medicine reader study** (Methods section):
+- **Correctness**: "Which summary includes less false information?" — evaluates precision (penalizes fabricated information)
+- **Completeness**: "Which summary more completely captures important information?" — evaluates recall (clinically important detail retained)
+- **Conciseness**: "Which summary contains less non-important information?" — evaluates brevity (penalizes superfluous information)
+
+The implementation follows the pattern established in `medicationqa`, using multi-dimensional scoring with a JSONParser.
 
 ---
 
@@ -109,14 +114,17 @@ python -m medarc_verifiers.cli.main open_i_summarization \
 #### Primary Metric (Reward)
 | Metric | Meaning |
 |--------|---------|
-| `reward` | Normalized LLM-judge score (0-1), averaged across accuracy, completeness, and conciseness |
+| `reward` | Normalized LLM-judge score (0-1), averaged across correctness, completeness, and conciseness |
 
 #### LLM-Judge Dimensions (1-5 scale)
+
+Criteria adapted from [Van Veen et al., Nature Medicine 2024](https://doi.org/10.1038/s41591-024-02855-5) (Methods - Reader study):
+
 | Dimension | Description |
 |-----------|-------------|
-| `accuracy` | Does the impression correctly reflect the key findings without errors or hallucinations? |
-| `completeness` | Does the impression capture all clinically significant findings? |
-| `conciseness` | Is the impression appropriately brief while conveying essential information? |
+| `correctness` | Does the summary include false information? Evaluates precision—penalizes fabricated or incorrect information. |
+| `completeness` | Does the summary completely capture important information? Evaluates recall—clinically important detail retained. |
+| `conciseness` | Does the summary contain non-important information? Evaluates brevity—penalizes superfluous information. Compares output length to reference. |
 
 #### Automatic Metrics (following Van Veen et al.)
 | Metric | Description |
@@ -149,24 +157,33 @@ python -m medarc_verifiers.cli.main open_i_summarization \
 
 ### Example Results
 
+The LLM-as-judge now applies stricter conciseness scoring based on the Nature Medicine paper criteria:
+
 ```
 === Example 1 ===
-Model output: Normal heart size; no acute pulmonary findings; mediastinal 
-              calcification and dense right upper lung nodule consistent 
-              with prior granulomatous disease.
+Model output: Normal heart size; no alveolar consolidation, pleural effusion, 
+              or pulmonary edema; mediastinal calcification and right upper 
+              lung nodule indicate prior granulomatous disease.
 Reference: No acute cardiopulmonary findings
-Reward: 1.0
+Length ratio: 5.3x
+Reward: 0.933
 
 LLM-as-Judge Scores:
-  accuracy: 5/5
-  completeness: 5/5
-  conciseness: 5/5
+  correctness: 5/5 (no false information)
+  completeness: 5/5 (all key findings captured)
+  conciseness: 4/5 (longer than reference, but clinically relevant)
 
-Automatic Metrics:
-  BLEU: 0.0000
-  ROUGE-1: 0.2500
-  ROUGE-L: 0.2500
-  BERTScore F1: 0.8507
+=== Example 2 ===
+Model output: Right middle and lower lobe opacity; mediastinal contours normal; 
+              no fissure displacement or pneumothorax.
+Reference: Opacification of the right middle and lower lobes.
+Length ratio: 2.1x
+Reward: 0.867
+
+LLM-as-Judge Scores:
+  correctness: 5/5
+  completeness: 5/5
+  conciseness: 3/5 (approximately 2x longer with additional details)
 ```
 
 ---

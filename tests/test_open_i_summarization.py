@@ -55,7 +55,7 @@ def test_compute_normalized_judge_reward_perfect_scores() -> None:
     from open_i_summarization import _compute_normalized_judge_reward
 
     scores = {
-        "accuracy": {"score": 5, "reason": "Perfect"},
+        "correctness": {"score": 5, "reason": "Perfect"},
         "completeness": {"score": 5, "reason": "Perfect"},
         "conciseness": {"score": 5, "reason": "Perfect"},
     }
@@ -67,7 +67,7 @@ def test_compute_normalized_judge_reward_mixed_scores() -> None:
     from open_i_summarization import _compute_normalized_judge_reward
 
     scores = {
-        "accuracy": {"score": 5, "reason": "Good"},
+        "correctness": {"score": 5, "reason": "Good"},
         "completeness": {"score": 3, "reason": "Partial"},
         "conciseness": {"score": 4, "reason": "Good"},
     }
@@ -80,7 +80,7 @@ def test_compute_normalized_judge_reward_zero_scores() -> None:
     from open_i_summarization import _compute_normalized_judge_reward
 
     scores = {
-        "accuracy": {"score": 0, "reason": "Poor"},
+        "correctness": {"score": 0, "reason": "Poor"},
         "completeness": {"score": 0, "reason": "Poor"},
         "conciseness": {"score": 0, "reason": "Poor"},
     }
@@ -92,10 +92,10 @@ def test_compute_normalized_judge_reward_missing_scores() -> None:
     from open_i_summarization import _compute_normalized_judge_reward
 
     scores = {
-        "accuracy": {"score": 5, "reason": "Good"},
+        "correctness": {"score": 5, "reason": "Good"},
         # completeness and conciseness missing
     }
-    # Only accuracy is counted: (5/5) / 3 = 0.333...
+    # Only correctness is counted: (5/5) / 3 = 0.333...
     assert _compute_normalized_judge_reward(scores) == pytest.approx(1 / 3)
 
 
@@ -104,7 +104,7 @@ def test_compute_normalized_judge_reward_string_scores() -> None:
     from open_i_summarization import _compute_normalized_judge_reward
 
     scores = {
-        "accuracy": {"score": "4", "reason": "Good"},
+        "correctness": {"score": "4", "reason": "Good"},
         "completeness": {"score": "3", "reason": "Partial"},
         "conciseness": {"score": "5", "reason": "Excellent"},
     }
@@ -126,7 +126,8 @@ def test_judge_dimensions_defined() -> None:
     """Test that judge dimensions are properly defined."""
     from open_i_summarization import JUDGE_DIMENSIONS
 
-    assert "accuracy" in JUDGE_DIMENSIONS
+    # Note: "correctness" replaces "accuracy" per Nature Medicine paper terminology
+    assert "correctness" in JUDGE_DIMENSIONS
     assert "completeness" in JUDGE_DIMENSIONS
     assert "conciseness" in JUDGE_DIMENSIONS
     assert len(JUDGE_DIMENSIONS) == 3
