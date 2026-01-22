@@ -19,23 +19,34 @@ def log_results_summary(
     reward_limit: int = 25,
 ) -> None:
     """Emit a concise summary of rewards and key metrics for a run."""
-    metadata = results.metadata
-    avg_reward = metadata.avg_reward
-    rollouts = metadata.rollouts_per_example
-    examples = metadata.num_examples
-    logger.info(
-        "[%s] %s / %s: avg_reward=%.4f, examples=%d, rollouts_per_example=%d",
-        stage,
-        env_slug,
-        judge_name,
-        avg_reward,
-        examples,
-        rollouts,
-    )
+    metadata = _safe_get(results, "metadata", {}) or {}
+    avg_reward = _safe_get(metadata, "avg_reward", None)
+    rollouts = _safe_get(metadata, "rollouts_per_example", None)
+    examples = _safe_get(metadata, "num_examples", None)
 
-    rewards = results.reward
+    if avg_reward is None:
+        logger.info(
+            "[%s] %s / %s: examples=%s, rollouts_per_example=%s",
+            stage,
+            env_slug,
+            judge_name,
+            examples,
+            rollouts,
+        )
+    else:
+        logger.info(
+            "[%s] %s / %s: avg_reward=%.4f, examples=%s, rollouts_per_example=%s",
+            stage,
+            env_slug,
+            judge_name,
+            float(avg_reward),
+            examples,
+            rollouts,
+        )
+
+    rewards = _safe_get(results, "reward", None)
     per_rollout: list[list[float]] = []
-    if rollouts > 0 and rewards:
+    if isinstance(rollouts, int) and rollouts > 0 and rewards:
         block = len(rewards) // rollouts
         for idx in range(rollouts):
             start = idx * block
@@ -48,7 +59,7 @@ def log_results_summary(
             suffix = f" (showing first {reward_limit} of {len(sequence)})"
         logger.info("  r%d rewards: %s%s", idx, [round(val, 3) for val in display], suffix)
 
-    pass_rate = _summarize_metric(results.metrics, "pass_rate")
+    pass_rate = _summarize_metric(_safe_get(results, "metrics", {}) or {}, "pass_rate")
     if pass_rate is not None:
         logger.info("  pass_rate avg: %.4f", pass_rate)
 
@@ -113,3 +124,9 @@ def _summarize_metric(metrics: Mapping[str, Iterable[float]], key: str) -> float
     if not values_list:
         return None
     return sum(values_list) / len(values_list)
+
+
+def _safe_get(obj: object, key: str, default: object = None) -> object:
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)

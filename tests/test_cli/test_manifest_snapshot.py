@@ -34,7 +34,7 @@ def _build_job() -> ResolvedJob:
         num_examples=3,
         rollouts_per_example=2,
         max_concurrent=4,
-        interleave_scoring=False,
+        independent_scoring=False,
         state_columns=["student_answer", "score"],
         env_args={"difficulty": "easy", "runner_seed": 99},
     )
@@ -101,6 +101,37 @@ def test_run_manifest_snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     loaded = RunManifest.load(manifest_path, persist=False)
     assert loaded.model.config_checksum == expected["config_checksum"]
     assert loaded.jobs[0].status == "pending"
+
+
+def test_manifest_load_upgrades_interleave_scoring(tmp_path: Path) -> None:
+    """Older manifests may store interleave_scoring in env_templates; load should upgrade it."""
+    manifest_path = tmp_path / "run_manifest.json"
+    payload = {
+        "version": 2,
+        "run_id": "demo",
+        "name": "Demo",
+        "config_source": "configs/demo.yaml",
+        "config_checksum": "abc",
+        "created_at": "2024-03-01T00:00:00Z",
+        "updated_at": "2024-03-01T00:00:00Z",
+        "models": {},
+        "env_templates": {
+            "env:template": {
+                "module": "environments.snapshot_env",
+                "num_examples": 3,
+                "rollouts_per_example": 2,
+                "interleave_scoring": False,
+            }
+        },
+        "jobs": [],
+        "summary": {},
+    }
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = RunManifest.load(manifest_path, persist=False)
+    template = loaded.model.env_templates["env:template"]
+    assert "interleave_scoring" not in template
+    assert template["independent_scoring"] is False
 
 
 def test_manifest_serialization_prunes_nones_and_relativizes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

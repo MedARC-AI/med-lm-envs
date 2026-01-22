@@ -523,6 +523,7 @@ class RunManifest:
             raise FileNotFoundError(f"Run manifest '{path}' not found.")
         with path.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
+        payload, _ = _upgrade_manifest_payload(payload)
         model = RunManifestModel.model_validate(payload)
         return cls(path=path, model=model, persist=persist)
 
@@ -583,3 +584,24 @@ __all__ = [
     "resolved_job_signature",
     "timestamp",
 ]
+
+
+def _upgrade_manifest_payload(payload: Any) -> tuple[Any, bool]:
+    """Apply in-memory migrations for older manifest payloads."""
+    if not isinstance(payload, dict):
+        return payload, False
+
+    changed = False
+    env_templates = payload.get("env_templates")
+    if isinstance(env_templates, dict):
+        for template_id, template in env_templates.items():
+            if not isinstance(template, dict):
+                continue
+            if "interleave_scoring" not in template:
+                continue
+            interleave_value = template.pop("interleave_scoring")
+            template.setdefault("independent_scoring", interleave_value)
+            env_templates[template_id] = template
+            changed = True
+
+    return payload, changed
