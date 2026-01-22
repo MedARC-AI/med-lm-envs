@@ -13,9 +13,6 @@ from .judge_prompts import JUDGE_DIMENSIONS, JUDGE_OUTPUT_JSON, JUDGE_TEMPLATE
 
 disable_progress_bar()  # suppress datasets progress indicators
 
-# System prompt aligned with BioASQ Task 1b synthesis requirement  
-PROMPT = "Provide a comprehensive answer to the following biomedical question strictly based on the provided snippets."
-
 def _parse_bioasq_hf(example: dict[str, Any]) -> dict[str, Any]:
     """Parses Hugging Face BioASQ format into the Med-LM-Env structure."""
     # Note: Structure depends on the specific HF version; 
