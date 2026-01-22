@@ -113,7 +113,7 @@ def load_environment(
     """
     # Load from the provided Hugging Face path
     raw_ds = load_dataset("kroshan/BioASQ", split="train")
-    dataset = raw_ds.map(lambda x, idx: _parse_bioasq_hf(x), with_indices=True)
+    dataset = raw_ds.map(_parse_bioasq_hf)
 
     # -------- normalize answer_format --------
     answer_format = AnswerFormat(answer_format) if isinstance(answer_format, str) else answer_format
