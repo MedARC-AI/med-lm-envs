@@ -113,10 +113,8 @@ uv run vf-eval bioasq --env-args '{"use_think": true}'
 
 The `info` field contains BioASQ-specific metadata for each example:
 
-* **`filename`** – Unique question identifier
 * **`question_type`** – One of: `yesno`, `factoid`, `list`, `summary`
 * **`ideal_answer`** – Gold standard paragraph-sized reference answer
-* **`exact_answer`** – Expected exact answer (format depends on question type)
 * **`documents`** – List of relevant PubMed document URLs
 * **`context`** – Concatenated text snippets used as supporting evidence
 * **`judge_feedback`** – Judge explanations and per-dimension scores
