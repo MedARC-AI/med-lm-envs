@@ -57,7 +57,6 @@ Run evaluation with default settings (dataset downloads automatically):
 
 ```bash
 uv run vf-eval bioasq
-````
 
 ### Use a custom judge model
 
