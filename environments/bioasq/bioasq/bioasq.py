@@ -78,7 +78,7 @@ def _compute_normalized_reward(
         score = _coerce_score(scores.get(dimension, {}).get("score"))
         if score is None:
             continue
-        clamped = max(0.0, min(max_score, score))
+        clamped = max(min_score, min(max_score, score))
         accumulated += clamped / max_score
 
     return max(0.0, min(1.0, accumulated / total_dims))
