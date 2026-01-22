@@ -177,3 +177,18 @@ This allows you to see exactly which criteria the model passed or failed, along 
 - Arrays in `info` (criteria, points_list, axes, consensus_criteria) are all aligned by index - the first element of each corresponds to the first rubric criterion
 - Point values can be negative for undesirable behaviors (e.g., -2 points for "Gives dangerous medical advice")
 - The total score is normalized to 0-1 regardless of the actual point scale used
+
+
+### References
+
+```bibtex
+@misc{arora2025healthbenchevaluatinglargelanguage,
+      title={HealthBench: Evaluating Large Language Models Towards Improved Human Health}, 
+      author={Rahul K. Arora and Jason Wei and Rebecca Soskin Hicks and Preston Bowman and Joaquin Quiñonero-Candela and Foivos Tsimpourlas and Michael Sharman and Meghan Shah and Andrea Vallone and Alex Beutel and Johannes Heidecke and Karan Singhal},
+      year={2025},
+      eprint={2505.08775},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2505.08775}, 
+}
+```
