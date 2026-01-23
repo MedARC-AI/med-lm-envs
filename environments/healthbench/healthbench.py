@@ -7,9 +7,7 @@ from pathlib import Path
 
 from datasets import load_dataset
 from datasets.utils.logging import disable_progress_bar
-from medarc_verifiers.utils import default_judge_api_key, judge_sampling_args_and_headers
-from openai import AsyncOpenAI
-from verifiers import JudgeRubric
+from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric
 from verifiers.envs.singleturn_env import SingleTurnEnv
 from verifiers.types import Info, Messages, State
 
@@ -83,12 +81,13 @@ Return just the json object in markdown format. Do not include any other text in
 
 
 def load_environment(
-    judge_model: str = "gpt-4o-mini",
+    judge_model: str | list[str] = "gpt-4o-mini",
     difficulty: str = "all",
-    judge_base_url: str | None = None,
-    judge_api_key: str | None = None,
+    judge_base_url: str | list[str] | None = None,
+    judge_api_key: str | list[str] | None = None,
     make_dataset: bool = False,
-    max_parallel_judges: int = 5,
+    judge_timeout: int | None = 300,
+    max_parallel_judges: int | None = None,
     **kwargs,
 ) -> SingleTurnEnv:
     try:
@@ -98,16 +97,21 @@ def load_environment(
     except KeyError:
         raise ValueError(f"Invalid difficulty: {difficulty}")
 
-    api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
-    sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
-    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=default_headers)
-
-    jr = JudgeRubric(
-        judge_client=judge_client,
+    multi_judge = MultiJudge.from_env_args(
         judge_model=judge_model,
+        judge_base_url=judge_base_url,
+        judge_api_key=judge_api_key,
         judge_prompt="{question}",
-        judge_sampling_args=sampling_args,
+        judge_timeout=judge_timeout,
     )
+    rubric = MultiJudgeRubric(multi_judge)
+
+    criteria_parallel = max_parallel_judges if max_parallel_judges is not None else 3
+    if len(multi_judge.judge_models) > 1:
+        rubric.logger.warning(
+            "HealthBench judge calls scale as (#criteria * #judges). "
+            "Consider reducing evaluation concurrency to control cost."
+        )
 
     async def reward_healthbench(prompt: Messages, completion: Messages, info: Info, state: State) -> float:
         """
@@ -134,7 +138,7 @@ def load_environment(
         current_reward = 0.0
 
         # Limit concurrent judge calls PER rollout using a shared semaphore
-        semaphore = asyncio.Semaphore(max_parallel_judges)
+        semaphore = asyncio.Semaphore(criteria_parallel)
 
         tasks = [
             _judge_single_criterion(
@@ -142,7 +146,7 @@ def load_environment(
                 criterion=criterion,
                 points_possible=points_possible,
                 conversation=conversation,
-                judge_rubric=jr,
+                rubric=rubric,
                 semaphore=semaphore,
                 state=state,
             )
@@ -150,7 +154,18 @@ def load_environment(
         ]
 
         judgments = await asyncio.gather(*tasks)
-        current_reward += sum(judgment["points_possible"] if judgment["criteria_met"] else 0 for judgment in judgments)
+        per_judge_scores = defaultdict(list)
+        for judgment in judgments:
+            points_possible = judgment["points_possible"]
+            judges = judgment.get("judges", [])
+            judge_scores = []
+            for judge_entry in judges:
+                score = points_possible if judge_entry.get("criteria_met") else 0.0
+                judge_scores.append(score)
+                judge_name = judge_entry.get("model")
+                if judge_name:
+                    per_judge_scores[judge_name].append(score)
+            current_reward += rubric.multi_judge.mean(judge_scores)
 
         ## Update state to record performance by rubric
         if make_dataset:
@@ -164,10 +179,29 @@ def load_environment(
 
             state["performance_by_rubric"].append(judgments_sorted)
 
-        return float(max(0.0, min(1.0, current_reward / total_reward)))
+        aggregated = float(max(0.0, min(1.0, current_reward / total_reward)))
+        judge_feedback = []
+        for judge_id, scores in per_judge_scores.items():
+            judge_feedback.append(
+                {
+                    "model": judge_id,
+                    "raw": None,
+                    "error": None,
+                    "scores": {"criterion_scores": scores},
+                    "score": rubric.multi_judge.mean(scores),
+                }
+            )
+        info.setdefault("judge_feedback", []).append(
+            {
+                "judges": judge_feedback,
+                "score": aggregated,
+            }
+        )
 
-    jr.add_reward_func(reward_healthbench, weight=1.0)
-    return SingleTurnEnv(eval_dataset=dataset, system_prompt="", rubric=jr)
+        return aggregated
+
+    rubric.add_reward_func(reward_healthbench, weight=1.0)
+    return SingleTurnEnv(eval_dataset=dataset, system_prompt="", rubric=rubric)
 
 
 async def _judge_single_criterion(
@@ -175,7 +209,7 @@ async def _judge_single_criterion(
     criterion: str,
     points_possible: int,
     conversation: str,
-    judge_rubric: JudgeRubric,
+    rubric: MultiJudgeRubric,
     semaphore: asyncio.Semaphore,
     state: dict,
 ) -> dict[str, str | int | bool]:
@@ -183,21 +217,42 @@ async def _judge_single_criterion(
     async with semaphore:
         rubric_text = f"[{points_possible}] {criterion}"
         full_prompt = HEALTHBENCH_JUDGE_TEMPLATE.replace("<<conversation>>", conversation).replace("<<rubric_item>>", rubric_text)  # fmt: skip
-        raw_resp = await judge_rubric.judge(
+        judge_results = await rubric.judge(
             [{"role": "user", "content": full_prompt}],
             "",  # completion
             "",  # answer
             state,  # pass real state for token tracking
         )
 
-        dict_resp = _parse_json(str(raw_resp))
-        criteria_met = bool(dict_resp.get("criteria_met", False)) if isinstance(dict_resp, dict) else False
+        judges = []
+        for result in judge_results:
+            entry_error = result.error
+            try:
+                dict_resp = _parse_json(str(result.raw))
+            except AttributeError:
+                result = await rubric.rerun_judge(result, [{"role": "user", "content": full_prompt}], "", "", state)
+                dict_resp = _parse_json(str(result.raw))
+                entry_error = result.error
+            except Exception:
+                dict_resp = {}
+            criteria_met = bool(dict_resp.get("criteria_met", False)) if isinstance(dict_resp, dict) else False
+            judges.append(
+                {
+                    "model": result.model,
+                    "raw": result.raw,
+                    "error": entry_error,
+                    "criteria_met": criteria_met,
+                    "judge_explanation": dict_resp.get("explanation", None) if isinstance(dict_resp, dict) else None,
+                }
+            )
 
+        aggregated_met = any(judge_entry.get("criteria_met") for judge_entry in judges)
         return {
             "idx": idx,
             "points_possible": points_possible,
-            "criteria_met": criteria_met,
-            "judge_explanation": dict_resp.get("explanation", None),
+            "criteria_met": aggregated_met,
+            "judge_explanation": judges[0].get("judge_explanation") if judges else None,
+            "judges": judges,
         }
 
 
