@@ -69,3 +69,18 @@ Summarize key metrics your rubric emits and how they’re interpreted.
 ### Embedding Server Note 
 We recommend using infinity embed server for serving embeddings. This was the only server we found compatible with BioLORD embeddings. You may find them here: https://github.com/michaelfeil/infinity
 At the time of writing their server errors at the time of setup. Further instructions can be found here: https://github.com/michaelfeil/infinity/issues/649
+
+
+### Citation
+Dataset:
+```bibtex
+@misc{kim2025biohoprbenchmarkmultihopmultianswer,
+      title={BioHopR: A Benchmark for Multi-Hop, Multi-Answer Reasoning in Biomedical Domain}, 
+      author={Yunsoo Kim and Yusuf Abdulle and Honghan Wu},
+      year={2025},
+      eprint={2505.22240},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2505.22240}, 
+}
+```
