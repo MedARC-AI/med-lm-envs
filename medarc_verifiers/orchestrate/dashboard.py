@@ -73,7 +73,12 @@ def _format_elapsed(started_at: str | None, completed_at: str | None) -> str:
     return f"{seconds}s"
 
 
-def build_table(tasks: Iterable[TaskManifest], *, caption: str | None = None) -> Table:
+def build_table(
+    tasks: Iterable[TaskManifest],
+    *,
+    caption: str | None = None,
+    include_summary: bool = False,
+) -> Table:
     task_list = list(tasks)
     pending_count = sum(1 for task in task_list if task.state == "pending")
     completed_count = sum(1 for task in task_list if task.state == "completed")
@@ -107,26 +112,27 @@ def build_table(tasks: Iterable[TaskManifest], *, caption: str | None = None) ->
             Text(note, style=note_style),
         )
 
-    table.add_row(
-        Text("PENDING (all)", style="dim"),
-        Text("-", style="dim"),
-        Text("pending", style=STATE_STYLES["pending"]),
-        Text("-", style="dim"),
-        Text("-", style="dim"),
-        Text("-", style="dim"),
-        Text("-", style="dim"),
-        Text(f"count={pending_count}", style="dim"),
-    )
-    table.add_row(
-        Text("COMPLETED (all)", style="dim"),
-        Text("-", style="dim"),
-        Text("completed", style=STATE_STYLES["completed"]),
-        Text("-", style="dim"),
-        Text("-", style="dim"),
-        Text("-", style="dim"),
-        Text("-", style="dim"),
-        Text(f"count={completed_count}", style="dim"),
-    )
+    if include_summary:
+        table.add_row(
+            Text("PENDING (all)", style="dim"),
+            Text("-", style="dim"),
+            Text("pending", style=STATE_STYLES["pending"]),
+            Text("-", style="dim"),
+            Text("-", style="dim"),
+            Text("-", style="dim"),
+            Text("-", style="dim"),
+            Text(f"count={pending_count}", style="dim"),
+        )
+        table.add_row(
+            Text("COMPLETED (all)", style="dim"),
+            Text("-", style="dim"),
+            Text("completed", style=STATE_STYLES["completed"]),
+            Text("-", style="dim"),
+            Text("-", style="dim"),
+            Text("-", style="dim"),
+            Text("-", style="dim"),
+            Text(f"count={completed_count}", style="dim"),
+        )
     return table
 
 
@@ -158,7 +164,7 @@ class OrchestratorDashboard:
         # Keep logs human-readable: no source file/line prefixes and no automatic syntax highlighting.
         self._console = Console(log_path=False, highlight=False)
         self._live = Live(
-            build_table([]),
+            build_table([], include_summary=True),
             refresh_per_second=self.refresh_hz,
             transient=False,
             console=self._console,
@@ -170,7 +176,7 @@ class OrchestratorDashboard:
 
     def update(self, tasks: Iterable[TaskManifest], *, caption: str | None = None) -> None:
         if self.enabled:
-            self._live.update(build_table(tasks, caption=caption))
+            self._live.update(build_table(tasks, caption=caption, include_summary=True))
 
     def stop(self) -> None:
         if self.enabled:

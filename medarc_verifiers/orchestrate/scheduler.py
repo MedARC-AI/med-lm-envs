@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import time
+import heapq
 from typing import Awaitable, Callable, Iterable
 
 from medarc_verifiers.orchestrate.config import TaskSpec
@@ -34,104 +35,139 @@ class TaskScheduler:
         *,
         shutdown_event: asyncio.Event | None = None,
     ) -> None:
-        # PriorityQueue orders tuples lexicographically; order by (ready_at, priority, seq) so that
-        # backoff delays don't block ready tasks. We still prefer larger GPU requests among ready tasks.
-        queue: asyncio.PriorityQueue[tuple[float, int, int, TaskSpec]] = asyncio.PriorityQueue()
+        # Order by (ready_at, priority, seq) so delays don't block ready tasks and
+        # larger GPU requests are preferred among ready tasks.
+        ready: list[tuple[float, int, int, TaskSpec]] = []
+        blocked: list[tuple[float, int, int, TaskSpec]] = []
         sequence = 0
-        retry_counts: dict[str, int] = {}
         for task in tasks:
             priority = self._task_priority(task)
-            queue.put_nowait((0.0, priority, sequence, task))
+            heapq.heappush(ready, (0.0, priority, sequence, task))
             sequence += 1
-        semaphore = asyncio.Semaphore(self._max_parallel)
+
+        remaining = len(ready)
         active = 0
         active_cond = asyncio.Condition()
+        slot_available = asyncio.Event()
+        slot_available.set()
+        resources_changed = asyncio.Event()
+        runner_tasks: set[asyncio.Task[None]] = set()
+        blocked_cooldown_s = 0.2
 
-        async def worker() -> None:
+        def _sync_slot_available() -> None:
+            if active < self._max_parallel:
+                slot_available.set()
+            else:
+                slot_available.clear()
+
+        async def _wait_for_events(
+            timeout: float | None = None,
+            *,
+            wait_for_slot: bool = False,
+        ) -> None:
+            waiters: list[asyncio.Task[None]] = []
+            try:
+                if shutdown_event:
+                    waiters.append(asyncio.create_task(shutdown_event.wait()))
+                waiters.append(asyncio.create_task(resources_changed.wait()))
+                if wait_for_slot:
+                    waiters.append(asyncio.create_task(slot_available.wait()))
+                if timeout is not None:
+                    waiters.append(asyncio.create_task(asyncio.sleep(timeout)))
+                await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                for waiter in waiters:
+                    if not waiter.done():
+                        waiter.cancel()
+                if waiters:
+                    await asyncio.gather(*waiters, return_exceptions=True)
+
+        async def _runner_wrapper(task: TaskSpec, allocation: Allocation) -> None:
+            nonlocal active, remaining
+            try:
+                try:
+                    await runner(task, allocation)
+                except Exception:
+                    pass
+            finally:
+                self._release(allocation)
+                resources_changed.set()
+                async with active_cond:
+                    active -= 1
+                    remaining -= 1
+                    _sync_slot_available()
+                    active_cond.notify_all()
+
+        def _launch_runner(task: TaskSpec, allocation: Allocation) -> None:
             nonlocal active
-            nonlocal sequence
+            active += 1
+            _sync_slot_available()
+            task_runner = asyncio.create_task(_runner_wrapper(task, allocation))
+            runner_tasks.add(task_runner)
+            task_runner.add_done_callback(runner_tasks.discard)
+
+        async def _drain_active() -> None:
+            async with active_cond:
+                while active > 0:
+                    await active_cond.wait()
+
+        try:
             while True:
                 if shutdown_event and shutdown_event.is_set():
+                    await _drain_active()
                     return
-                if shutdown_event:
-                    get_task = asyncio.create_task(queue.get())
-                    shutdown_task = asyncio.create_task(shutdown_event.wait())
-                    done, pending = await asyncio.wait(
-                        {get_task, shutdown_task}, return_when=asyncio.FIRST_COMPLETED
-                    )
-                    for pending_task in pending:
-                        pending_task.cancel()
-                    await asyncio.gather(*pending, return_exceptions=True)
-                    shutdown_requested = shutdown_task in done
-                    got_task = get_task in done
-                    if not got_task:
-                        return
-                    ready_at, priority, seq, task = get_task.result()
-                    if shutdown_requested:
-                        queue.put_nowait((ready_at, priority, seq, task))
-                        queue.task_done()
-                        return
-                else:
-                    ready_at, priority, seq, task = await queue.get()
+                if remaining == 0 and active == 0:
+                    return
+                if active >= self._max_parallel:
+                    await _wait_for_events(wait_for_slot=True)
+                    continue
+                if resources_changed.is_set():
+                    for _, priority, seq, task in blocked:
+                        heapq.heappush(ready, (0.0, priority, seq, task))
+                    blocked.clear()
+                    resources_changed.clear()
+                now = time.monotonic()
+                if blocked:
+                    still_blocked = []
+                    for retry_at, priority, seq, task in blocked:
+                        if retry_at <= now:
+                            heapq.heappush(ready, (0.0, priority, seq, task))
+                        else:
+                            still_blocked.append((retry_at, priority, seq, task))
+                    blocked = still_blocked
+                if not ready:
+                    timeout = None
+                    if blocked:
+                        next_retry = min(item[0] for item in blocked)
+                        timeout = max(0.0, next_retry - time.monotonic())
+                    await _wait_for_events(timeout=timeout)
+                    continue
+                ready_at, priority, seq, task = heapq.heappop(ready)
+                now = time.monotonic()
+                if ready_at > now:
+                    heapq.heappush(ready, (ready_at, priority, seq, task))
+                    await _wait_for_events(timeout=ready_at - now)
+                    continue
+                if shutdown_event and shutdown_event.is_set():
+                    await _drain_active()
+                    return
                 try:
-                    if shutdown_event and shutdown_event.is_set():
-                        queue.put_nowait((ready_at, priority, seq, task))
-                        return
-                    now = time.monotonic()
-                    if now < ready_at:
-                        await asyncio.sleep(min(0.5, ready_at - now))
-                        queue.put_nowait((ready_at, priority, seq, task))
-                        continue
-                    async with semaphore:
-                        if shutdown_event and shutdown_event.is_set():
-                            queue.put_nowait((ready_at, priority, seq, task))
-                            return
-                        try:
-                            allocation = self._allocate(task)
-                        except ResourceError:
-                            if shutdown_event and shutdown_event.is_set():
-                                queue.put_nowait((ready_at, priority, seq, task))
-                                return
-                            attempts = retry_counts.get(task.task_id, 0) + 1
-                            retry_counts[task.task_id] = attempts
-                            backoff_s = min(10.0, 0.5 * (2 ** min(attempts - 1, 4)))
-                            queue.put_nowait((time.monotonic() + backoff_s, priority, sequence, task))
-                            sequence += 1
-                            continue
-                        async with active_cond:
-                            active += 1
-                        try:
-                            try:
-                                await runner(task, allocation)
-                            except Exception:
-                                pass
-                        finally:
-                            self._release(allocation)
-                            async with active_cond:
-                                active -= 1
-                                active_cond.notify_all()
-                finally:
-                    queue.task_done()
-
-        workers = [asyncio.create_task(worker()) for _ in range(self._max_parallel)]
-        if shutdown_event:
-            join_task = asyncio.create_task(queue.join())
-            shutdown_task = asyncio.create_task(shutdown_event.wait())
-            done, pending = await asyncio.wait(
-                {join_task, shutdown_task}, return_when=asyncio.FIRST_COMPLETED
-            )
-            for pending_task in pending:
-                pending_task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
-            if shutdown_task in done:
-                async with active_cond:
-                    while active > 0:
-                        await active_cond.wait()
-        else:
-            await queue.join()
-        for worker_task in workers:
-            worker_task.cancel()
-        await asyncio.gather(*workers, return_exceptions=True)
+                    allocation = self._allocate(task)
+                except ResourceError:
+                    blocked.append(
+                        (time.monotonic() + blocked_cooldown_s, priority, seq, task)
+                    )
+                    continue
+                if shutdown_event and shutdown_event.is_set():
+                    self._release(allocation)
+                    await _drain_active()
+                    return
+                _launch_runner(task, allocation)
+        except asyncio.CancelledError:
+            for task in runner_tasks:
+                task.cancel()
+            await asyncio.gather(*runner_tasks, return_exceptions=True)
+            raise
 
     def _task_priority(self, task: TaskSpec) -> int:
         gpus_required = int(task.orchestrate.get(task.model_key, {}).get("gpus", 1))

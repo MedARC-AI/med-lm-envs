@@ -14,7 +14,14 @@ class DummyResourceManager:
     def __init__(self) -> None:
         self._next_port = 8000
 
-    def reserve_gpus(self, task_id: str, *, count: int, min_free_gb=None):
+    def reserve_gpus(
+        self,
+        task_id: str,
+        *,
+        count: int,
+        min_free_gb=None,
+        require_contiguous: bool = False,
+    ):
         return list(range(count))
 
     def reserve_port(self, task_id: str) -> int:
@@ -27,6 +34,36 @@ class DummyResourceManager:
 
     def release_port(self, port: int) -> None:
         return None
+
+
+class ShutdownResourceManager:
+    def __init__(self, shutdown_event: asyncio.Event) -> None:
+        self._shutdown_event = shutdown_event
+        self.released_gpus = False
+        self.released_port = False
+        self._next_port = 8100
+
+    def reserve_gpus(
+        self,
+        task_id: str,
+        *,
+        count: int,
+        min_free_gb=None,
+        require_contiguous: bool = False,
+    ):
+        self._shutdown_event.set()
+        return list(range(count))
+
+    def reserve_port(self, task_id: str) -> int:
+        port = self._next_port
+        self._next_port += 1
+        return port
+
+    def release_gpus(self, indices):
+        self.released_gpus = True
+
+    def release_port(self, port: int) -> None:
+        self.released_port = True
 
 
 @pytest.mark.asyncio
@@ -66,6 +103,35 @@ async def test_scheduler_shutdown_stops_new_tasks(tmp_path: Path) -> None:
     await run_task
 
     assert started == ["task-1"]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_shutdown_during_allocation(tmp_path: Path) -> None:
+    tasks = [
+        TaskSpec(
+            task_id="task-1",
+            job_config_path=tmp_path / "job-1.yaml",
+            model_key="foo",
+            model_id="Foo/Bar",
+            orchestrate={"foo": {"gpus": 1}},
+        )
+    ]
+    shutdown_event = asyncio.Event()
+    resource_manager = ShutdownResourceManager(shutdown_event)
+    scheduler = TaskScheduler(resource_manager, max_parallel=1)
+    started = asyncio.Event()
+
+    async def runner(task: TaskSpec, allocation) -> None:
+        started.set()
+
+    await asyncio.wait_for(
+        asyncio.create_task(scheduler.run(tasks, runner, shutdown_event=shutdown_event)),
+        timeout=1.0,
+    )
+
+    assert started.is_set() is False
+    assert resource_manager.released_gpus is True
+    assert resource_manager.released_port is True
 
 
 @pytest.mark.asyncio

@@ -1,9 +1,11 @@
+import asyncio
 import time
 from pathlib import Path
 
 import pytest
 
 from medarc_verifiers.orchestrate.config import PlanConfig, TaskSpec
+from medarc_verifiers.orchestrate.resources import ResourceError
 from medarc_verifiers.orchestrate.run import OrchestratorOptions, OrchestratorRunner
 
 
@@ -12,10 +14,17 @@ class DummyResourceManager:
         self._next_port = 8000
         self._gpu_reservations: set[int] = set()
 
-    def reserve_gpus(self, task_id: str, *, count: int, min_free_gb=None):
+    def reserve_gpus(
+        self,
+        task_id: str,
+        *,
+        count: int,
+        min_free_gb=None,
+        require_contiguous: bool = False,
+    ):
         free = [idx for idx in range(4) if idx not in self._gpu_reservations]
         if len(free) < count:
-            raise RuntimeError("Insufficient free GPUs for reservation.")
+            raise ResourceError("Insufficient free GPUs for reservation.")
         selection = free[:count]
         self._gpu_reservations.update(selection)
         return selection

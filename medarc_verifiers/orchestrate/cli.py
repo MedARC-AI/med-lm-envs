@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from datetime import datetime
 
-from medarc_verifiers.orchestrate.config import expand_tasks, load_plan
+from medarc_verifiers.orchestrate.config import TaskSpec, expand_tasks, load_plan
 from medarc_verifiers.orchestrate.docker_vllm import cleanup_orphan_containers
 from medarc_verifiers.orchestrate.resources import ResourceError, ResourceManager, discover_gpus, parse_index_range
 from medarc_verifiers.orchestrate.run import OrchestratorOptions, OrchestratorRunner
@@ -64,6 +64,64 @@ def build_parser() -> argparse.ArgumentParser:
         help="Delete per-task serve/bench logs for completed tasks (kept for failures).",
     )
     return parser
+
+
+def _has_contiguous_run(indices: list[int], *, length: int) -> bool:
+    if length <= 1:
+        return True
+    sorted_indices = sorted(indices)
+    run = 1
+    for idx in range(1, len(sorted_indices)):
+        if sorted_indices[idx] == sorted_indices[idx - 1] + 1:
+            run += 1
+        else:
+            run = 1
+        if run >= length:
+            return True
+    return False
+
+
+def _validate_schedule(
+    tasks: list[TaskSpec],
+    *,
+    gpu_indices: list[int] | None,
+    port_range: tuple[int, int],
+    max_parallel: int,
+) -> None:
+    try:
+        gpus = discover_gpus()
+    except ResourceError as exc:
+        raise ValueError("GPU discovery failed; ensure NVML/pynvml is available.") from exc
+    discovered_indices = [gpu.index for gpu in gpus]
+    if gpu_indices is not None:
+        allowed_set = set(gpu_indices)
+        allowed_indices = [idx for idx in discovered_indices if idx in allowed_set]
+        allowed_desc = ",".join(str(idx) for idx in gpu_indices)
+    else:
+        allowed_indices = list(discovered_indices)
+        allowed_desc = "all"
+    for task in tasks:
+        model_cfg = task.orchestrate.get(task.model_key, {}) or {}
+        gpus_required = int(model_cfg.get("gpus", 1))
+        require_contiguous = bool(model_cfg.get("require_contiguous_gpus", gpus_required > 1))
+        if gpus_required > len(allowed_indices):
+            raise ValueError(
+                f"Task {task.task_id} ({task.job_config_path}) requests {gpus_required} GPUs, "
+                f"but only {len(allowed_indices)} available in range {allowed_desc}."
+            )
+        if gpus_required > 1 and require_contiguous and not _has_contiguous_run(allowed_indices, length=gpus_required):
+            raise ValueError(
+                f"Task {task.task_id} ({task.job_config_path}) requires {gpus_required} contiguous GPUs, "
+                f"but allowed indices {allowed_desc} have no contiguous run."
+            )
+    start, end = port_range
+    if end < start:
+        raise ValueError(f"Port range is invalid: {start}-{end}.")
+    port_capacity = end - start + 1
+    if port_capacity < max_parallel:
+        raise ValueError(
+            f"Port range {start}-{end} has {port_capacity} ports, but max_parallel={max_parallel}."
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -128,6 +186,8 @@ def main(argv: list[str] | None = None) -> int:
     if resume and summary_path.exists():
         summary = load_summary(summary_path)
         tasks = filter_tasks_for_resume(tasks, summary, rerun_failed=rerun_failed)
+    if tasks:
+        _validate_schedule(tasks, gpu_indices=gpu_indices, port_range=port_range, max_parallel=max_parallel)
     if args.dry_run:
         for task in tasks:
             print(f"{task.task_id}\t{task.model_id}\t{task.job_config_path}")
