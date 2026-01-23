@@ -31,7 +31,7 @@ uv run vf-eval biohopr
 Configure model and sampling:
 
 ```bash
-uv run vf-eval biohopr   -m gpt-4.1-mini   -n 20   -a '{"key": "value"}'  # env-specific args as JSON
+vf-eval biohopr -n 32 --api-base-url http://localhost:5000/v1/ -a '{"eval_method":"metrics","judge_base_url":"http://localhost:5000/v1/","judge_model":"openai/gpt-oss-20b","embedding_model_url":"http://localhost:8001/"}' -m 'openai/gpt-oss-20b'
 ```
 
 Notes:
