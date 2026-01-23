@@ -47,9 +47,10 @@ uv run vf-eval pubhealthbench --split freeform -m gpt-5-mini -n 10
 | `shuffle_answers` | bool | False | Randomize answer option order (MCQ only) |
 | `shuffle_seed` | int | 1618 | Seed for deterministic shuffling (MCQ only) |
 | `answer_format` | str | "xml" | Answer format: "xml" or "boxed" (MCQ only) |
-| `judge_model` | str | "gpt-4o-mini" | Judge model for freeform evaluation |
-| `judge_base_url` | str | None | Base URL for judge API |
-| `judge_api_key` | str | None | API key for judge |
+| `judge_model` | str \| list[str] | "gpt-4o-mini" | Judge model(s) for freeform evaluation |
+| `judge_base_url` | str \| list[str] | None | Base URL(s) for judge API |
+| `judge_api_key` | str \| list[str] | None | API key(s) for judge |
+| `judge_timeout` | int \| None | 300 | Timeout in seconds for judge calls |
 
 ### Authors
 This environment has been put together by:

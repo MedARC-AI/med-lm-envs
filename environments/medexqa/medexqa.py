@@ -6,15 +6,10 @@ import pandas as pd
 import verifiers as vf
 from datasets import Dataset, concatenate_datasets
 from medarc_verifiers.parsers import XMLParser
+from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric
 from medarc_verifiers.rewards.multiple_choice_accuracy import multiple_choice_accuracy
-from medarc_verifiers.utils import (
-    default_judge_api_key,
-    download_file,
-    judge_sampling_args_and_headers,
-    medarc_cache_dir,
-)
+from medarc_verifiers.utils import download_file, medarc_cache_dir
 from medarc_verifiers.utils.randomize_multiple_choice import randomize_multiple_choice
-from openai import AsyncOpenAI
 from verifiers.types import Info, State
 
 
@@ -172,9 +167,10 @@ def load_environment(
     explanation_metrics: list[str] | str | None = None,  # None/"all" => average of all four
     # Optional judge settings
     use_judge: bool = False,
-    judge_model: str = "gpt-4o-mini",
-    judge_base_url: str | None = None,
-    judge_api_key: str | None = None,
+    judge_model: str | list[str] = "gpt-4o-mini",
+    judge_base_url: str | list[str] | None = None,
+    judge_api_key: str | list[str] | None = None,
+    judge_timeout: int | None = 300,
     **kwargs,
 ) -> vf.Environment:
     """
@@ -186,7 +182,7 @@ def load_environment(
       - Specialty selection: accepts list or string; loads requested specialties (None/ALL => all).
       - Optional answer shuffling for robustness (keeps options in info when enabled).
       - Unified scoring: MCQ must be correct or the score is 0; if MCQ is correct but explanation fails, score is 0.5; if both pass, score is 1.0.
-      - Explanation check: lexical metrics (ROUGE-L, BLEU, METEOR, BERTScore) or JudgeRubric (LLM-as-a-judge).
+      - Explanation check: lexical metrics (ROUGE-L, BLEU, METEOR, BERTScore) or LLM-as-a-judge (single or multi-judge).
     """
 
     # Load specialties (one or more)
@@ -319,18 +315,18 @@ def load_environment(
 
     # Optional: Use LLM-as-judge for explanation instead of lexical metrics
     if use_explanations and use_judge:
-        api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
-        sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
-        judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=default_headers)
-        judge_rubric = vf.JudgeRubric(
-            judge_client=judge_client,
+        multi_judge = MultiJudge.from_env_args(
             judge_model=judge_model,
+            judge_base_url=judge_base_url,
+            judge_api_key=judge_api_key,
             judge_prompt="{question}",
-            sampling_args=sampling_args,
+            judge_timeout=judge_timeout,
+            completion_parser=parser,
         )
         judge_parser = XMLParser(fields=["grade"], answer_field="grade")
+        rubric = MultiJudgeRubric(multi_judge)
 
-        async def combined_judge_reward(judge, prompt, completion, answer, state: State, info: Info) -> float:
+        async def combined_judge_reward(prompt, completion, answer, state: State, info: Info) -> float:
             answer = answer.strip().upper()
             answer_text = info.get("answer_text", "")
             parsed = parser.parse(completion, last=True)
@@ -361,29 +357,44 @@ def load_environment(
                 assistant_reasoning=model_rational,
             )
 
-            try:
-                judge_response = await judge_rubric.judge(judge_prompt, "", "", state)
-                grade = judge_parser.parse_answer(judge_response)
-            except AttributeError:
-                judge_response = await judge_rubric.judge(judge_prompt, "", "", state)
-                grade = judge_parser.parse_answer(judge_response)
+            judge_results = await rubric.judge(judge_prompt, "", "", state)
+            judge_entries = []
+            scores = []
+            explanation_passes = False
+            for result in judge_results:
+                entry_error = result.error
+                try:
+                    grade = judge_parser.parse_answer(result.raw).strip().lower()
+                except AttributeError:
+                    result = await rubric.rerun_judge(result, judge_prompt, "", "", state)
+                    grade = judge_parser.parse_answer(result.raw).strip().lower()
+                    entry_error = result.error
 
-            try:
-                grade = grade.strip().lower()
-                explanation_passes = "equivalent" in grade and "inequivalent" not in grade
-
-                info.setdefault("judge_feedback", []).append(
+                passes = "equivalent" in grade and "inequivalent" not in grade
+                score = 1.0 if passes else 0.5 if grade else None
+                scores.append(score)
+                judge_entries.append(
                     {
+                        "model": result.model,
+                        "raw": result.raw,
+                        "error": entry_error,
                         "grade": grade,
-                        "raw_judge": str(judge_response),
+                        "score": score,
                     }
                 )
-            except Exception:
-                explanation_passes = False
-            return 1.0 if explanation_passes else 0.5
+                explanation_passes = explanation_passes or passes
 
-        judge_rubric.add_reward_func(combined_judge_reward, weight=1.0)
-        rubric = judge_rubric
+            aggregated = rubric.multi_judge.mean(scores)
+            info.setdefault("judge_feedback", []).append(
+                {
+                    "judges": judge_entries,
+                    "score": aggregated,
+                }
+            )
+
+            return aggregated if aggregated > 0 else 0.5 if explanation_passes else 0.0
+
+        rubric.add_reward_func(combined_judge_reward, weight=1.0)
     else:
         rubric = vf.Rubric(funcs=[combined_reward], weights=[1.0], parser=parser)
 

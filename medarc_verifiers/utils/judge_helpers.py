@@ -119,7 +119,7 @@ _JUDGE_DEFAULTS: Iterable[JudgeSamplingDefaults] = (
         temperature=1.0,
     ),
     JudgeSamplingDefaults(
-        name=("qwen-3-thinking", "qwen3-max"),
+        name=("qwen-3-thinking", "qwen3-thinking", "qwen3-max"),
         temperature=0.6,
         top_p=0.95,
         top_k=20,

@@ -6,7 +6,10 @@ Automatically enabled on import unless MEDARC_DISABLE_TOKEN_TRACKING=true.
 
 import logging
 
+from medarc_verifiers.judging.judge_core import call_judge_model
+
 logger = logging.getLogger(__name__)
+TOKEN_TRACKING_ENABLED = False
 
 
 class TokenTracker:
@@ -94,116 +97,39 @@ class TokenTracker:
             TokenTracker._update_usage_stats(state[TokenTracker.STATE_KEY]["judge"], usage)
 
 
+def get_judge_core_with_tokens():
+    async def judge_core_with_tokens(
+        judge_client,
+        judge_model: str,
+        judge_prompt: str,
+        judge_sampling_args: dict,
+        state: dict,
+        logger_override=None,
+    ) -> str:
+        response_text, response_obj = await call_judge_model(
+            judge_client,
+            judge_model,
+            judge_prompt,
+            judge_sampling_args,
+            logger_override or logger,
+        )
+        TokenTracker.track_judge_tokens(state, response_obj)
+        return response_text
+
+    return judge_core_with_tokens
+
+
 def install_patches() -> bool:
     """
     Monkey-patch verifiers for token tracking.
     Patches:
-    1. JudgeRubric.judge() - Track judge tokens before text extraction
-    2. eval_utils.make_dataset() - Extract model + judge tokens, add to results
+    1. eval_utils.make_dataset() - Extract model + judge tokens, add to results
     Returns:
         bool: True on success, False on failure (with warning)
     """
     try:
-        from verifiers.rubrics.judge_rubric import JudgeRubric
         from verifiers.utils import eval_utils
-        from verifiers.utils.async_utils import maybe_await
-        from openai import APIError, APITimeoutError, RateLimitError
-
-        # ===== PATCH 1: JudgeRubric.judge() =====
-        # Store original as a class attribute to ensure all instances see it
-        if not hasattr(JudgeRubric, "_original_judge_unpatched"):
-            JudgeRubric._original_judge_unpatched = JudgeRubric.judge
-
-        async def patched_judge(self, prompt, completion, answer, state, **kwargs):
-            """Patched judge() that tracks token usage before text extraction."""
-
-            # Replicate cache check logic from original
-            if isinstance(prompt, list):
-                last_msg = prompt[-1]
-                if isinstance(last_msg, dict) and "content" in last_msg:
-                    question = str(last_msg["content"])
-                else:
-                    question = ""
-            else:
-                question = str(prompt)
-
-            response_text = self.parser.parse_answer(completion)
-            judge_prompt = self.judge_prompt.format(question=question, answer=answer, response=response_text)
-
-            # Check cache
-            cached = state.get("judge_response")
-            if isinstance(cached, dict) and judge_prompt in cached:
-                return cached[judge_prompt]  # Cache hit, no API call
-
-            # Normalize judge sampling args for chat API
-            judge_args = dict(self.judge_sampling_args or {})
-            if "max_tokens" in judge_args:
-                if judge_args["max_tokens"] is None:
-                    judge_args.pop("max_tokens")
-                else:
-                    judge_args["max_completion_tokens"] = judge_args.pop("max_tokens")
-            if "max_completion_tokens" in judge_args and judge_args["max_completion_tokens"] is None:
-                judge_args.pop("max_completion_tokens")
-            judge_args = {k: v for k, v in judge_args.items() if v is not None}
-
-            # Make API call with error handling
-            try:
-                judge_response_obj = await maybe_await(
-                    self.judge_client.chat.completions.create,
-                    model=self.judge_model,
-                    messages=[{"role": "user", "content": judge_prompt}],
-                    **judge_args,
-                )
-
-                # *** TRACK TOKENS BEFORE DISCARDING, not implemented in verifiers judgerubric ***
-                TokenTracker.track_judge_tokens(state, judge_response_obj)
-
-                # Extract text (original behavior)
-                judge_response_text = str(judge_response_obj.choices[0].message.content)
-            except RateLimitError as e:
-                self.logger.warning(
-                    f"Rate limit exceeded when calling judge model '{self.judge_model}'. "
-                    f"Try reducing concurrency or waiting before retrying. Error: {str(e)}"
-                )
-                raise RuntimeError(
-                    f"Judge model rate limit exceeded. Try reducing concurrency or waiting before retrying. "
-                    f"Model: {self.judge_model}, Error: {str(e)}"
-                ) from e
-            except APITimeoutError as e:
-                self.logger.warning(
-                    f"Timeout when calling judge model '{self.judge_model}'. "
-                    f"Increase timeout in judge_sampling_args or check model responsiveness. Error: {str(e)}"
-                )
-                raise RuntimeError(
-                    f"Judge model timeout. Increase timeout in judge_sampling_args or check model responsiveness. "
-                    f"Model: {self.judge_model}, Error: {str(e)}"
-                ) from e
-            except APIError as e:
-                self.logger.warning(
-                    f"API error when calling judge model '{self.judge_model}'. "
-                    f"Check model availability and API key. Error: {str(e)}"
-                )
-                raise RuntimeError(
-                    f"Judge model API error. Check model availability and API key. "
-                    f"Model: {self.judge_model}, Error: {str(e)}"
-                ) from e
-            except Exception as e:
-                self.logger.warning(f"Unexpected error when calling judge model '{self.judge_model}'. Error: {str(e)}")
-                raise RuntimeError(
-                    f"Unexpected error when calling judge model '{self.judge_model}'. Error: {str(e)}"
-                ) from e
-
-            # Cache and return
-            if not isinstance(cached, dict):
-                cached = {}
-            cached[judge_prompt] = judge_response_text
-            state["judge_response"] = cached
-
-            return judge_response_text
-
-        JudgeRubric.judge = patched_judge
-
-        # ===== PATCH 2: eval_utils.make_dataset() =====
+        # ===== PATCH 1: eval_utils.make_dataset() =====
         original_make_dataset = eval_utils.make_dataset
 
         def patched_make_dataset(results, push_to_hf_hub=False, hf_hub_dataset_name=None, **kwargs):
@@ -293,6 +219,9 @@ def install_patches() -> bool:
                     raise
 
         eval_utils.make_dataset = patched_make_dataset
+
+        global TOKEN_TRACKING_ENABLED
+        TOKEN_TRACKING_ENABLED = True
 
         logger.debug("Token tracking patches installed successfully")
         return True

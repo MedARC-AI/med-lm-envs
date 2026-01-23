@@ -10,9 +10,8 @@ from medarc_verifiers.parsers.xml_parser import XMLParser
 from medarc_verifiers.prompts import AnswerFormat
 from medarc_verifiers.rewards.multiple_choice_accuracy import multiple_choice_accuracy
 from medarc_verifiers.parsers import get_parsed_field
-from medarc_verifiers.utils import default_judge_api_key, judge_sampling_args_and_headers
+from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric
 from medarc_verifiers.utils.randomize_multiple_choice import randomize_multiple_choice
-from openai import AsyncOpenAI
 from verifiers.types import Info, State
 from verifiers.utils.data_utils import extract_boxed_answer
 
@@ -85,9 +84,10 @@ def load_environment(
     shuffle_seed: int | None = 1618,
     answer_format: AnswerFormat | str = AnswerFormat.XML,
     category: Category | str = Category.ALL,
-    judge_model: str = "gpt-5-mini",
-    judge_base_url: str | None = None,
-    judge_api_key: str | None = None,
+    judge_model: str | list[str] = "gpt-5-mini",
+    judge_base_url: str | list[str] | None = None,
+    judge_api_key: str | list[str] | None = None,
+    judge_timeout: int | None = 300,
 ) -> vf.Environment:
     """
     PubHealthBench evaluation environment.
@@ -106,9 +106,10 @@ def load_environment(
         shuffle_seed: Seed for deterministic answer shuffling (MCQ only).
         answer_format: Answer format - "xml" (default) or "boxed" (MCQ only).
         category: Filter rows by one category value (exact match).
-        judge_model: Model for LLM-as-judge evaluation (freeform only).
-        judge_base_url: Base URL for judge API (freeform only).
-        judge_api_key: API key for judge (freeform only).
+        judge_model: Model(s) for LLM-as-judge evaluation (freeform only).
+        judge_base_url: Base URL(s) for judge API (freeform only).
+        judge_api_key: API key(s) for judge (freeform only).
+        judge_timeout: Timeout in seconds for judge calls (freeform only).
 
     Returns:
         A vf.Environment configured for PubHealthBench evaluation.
@@ -126,6 +127,7 @@ def load_environment(
             judge_model=judge_model,
             judge_base_url=judge_base_url,
             judge_api_key=judge_api_key,
+            judge_timeout=judge_timeout,
         )
     else:
         return _load_mcq_environment(
@@ -217,9 +219,10 @@ def _load_freeform_environment(
     hf_split: str,
     system_prompt: Optional[str],
     category: Category,
-    judge_model: str,
-    judge_base_url: str | None,
-    judge_api_key: str | None,
+    judge_model: str | list[str],
+    judge_base_url: str | list[str] | None,
+    judge_api_key: str | list[str] | None,
+    judge_timeout: int | None,
 ) -> vf.Environment:
     """Load PubHealthBench freeform environment with LLM-as-judge evaluation."""
     ds = load_dataset("Joshua-Harris/PubHealthBench")
@@ -248,21 +251,17 @@ def _load_freeform_environment(
 
     eval_dataset = eval_dataset.map(_map, remove_columns=eval_dataset.column_names)
 
-    # Judge client setup
-    api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
-    sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
-    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=default_headers)
     judge_parser = JSONParser(fields=["reasoning", "predicted_correct"], answer_field="predicted_correct")
-
-    judge_rubric = vf.JudgeRubric(
-        parser=judge_parser,
-        judge_client=judge_client,
+    multi_judge = MultiJudge.from_env_args(
         judge_model=judge_model,
+        judge_base_url=judge_base_url,
+        judge_api_key=judge_api_key,
         judge_prompt="{question}",
-        judge_sampling_args=sampling_args,
+        judge_timeout=judge_timeout,
     )
+    rubric = MultiJudgeRubric(multi_judge)
 
-    async def accuracy(judge, prompt, completion, answer, state: State, info: Info) -> float:
+    async def accuracy(prompt, completion, answer, state: State, info: Info) -> float:
         """Evaluate using LLM-as-judge."""
         completion_text = completion if isinstance(completion, str) else str(completion)
         response = extract_answer_section(completion_text)
@@ -273,31 +272,48 @@ def _load_freeform_environment(
             ground_truth_answer=answer,
             given_answer=response,
         )
-        try:
-            judge_response = await judge_rubric.judge(judge_prompt, "", "", state)
-            parsed = judge_parser.parse(judge_response)
-        except AttributeError:
-            judge_response = await judge_rubric.judge(judge_prompt, "", "", state)
-            parsed = judge_parser.parse(judge_response)
+        judge_results = await rubric.judge(judge_prompt, "", "", state)
+        judge_entries = []
+        scores = []
+        for result in judge_results:
+            entry_error = result.error
+            try:
+                parsed = judge_parser.parse(result.raw)
+            except AttributeError:
+                result = await rubric.rerun_judge(result, judge_prompt, "", "", state)
+                parsed = judge_parser.parse(result.raw)
+                entry_error = result.error
 
-        predicted_correct = get_parsed_field(parsed, "predicted_correct", False)
-        if isinstance(predicted_correct, str):
-            predicted_correct = predicted_correct.lower().strip()
-            predicted_correct = "true" in predicted_correct and "false" not in predicted_correct
+            predicted_correct = get_parsed_field(parsed, "predicted_correct", False)
+            if isinstance(predicted_correct, str):
+                predicted_correct = predicted_correct.lower().strip()
+                predicted_correct = "true" in predicted_correct and "false" not in predicted_correct
 
+            score = 1.0 if predicted_correct else 0.0
+            scores.append(score if result.raw is not None else None)
+            judge_entries.append(
+                {
+                    "model": result.model,
+                    "raw": result.raw,
+                    "error": entry_error,
+                    "predicted_correct": predicted_correct,
+                    "reasoning": get_parsed_field(parsed, "reasoning", ""),
+                }
+            )
+
+        aggregated = rubric.multi_judge.mean(scores)
         info.setdefault("judge_feedback", []).append(
             {
-                "predicted_correct": predicted_correct,
-                "reasoning": get_parsed_field(parsed, "reasoning", ""),
-                "raw_judge": str(judge_response),
+                "judges": judge_entries,
+                "score": aggregated,
             }
         )
-        return 1.0 if predicted_correct else 0.0
+        return aggregated
 
-    judge_rubric.add_reward_func(accuracy, weight=1.0)
+    rubric.add_reward_func(accuracy, weight=1.0)
 
     return vf.SingleTurnEnv(
         eval_dataset=eval_dataset,
         system_prompt=system_prompt or QUESTION_SYSTEM_PROMPT,
-        rubric=judge_rubric,
+        rubric=rubric,
     )

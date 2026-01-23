@@ -4,11 +4,10 @@ from typing import Optional
 
 import verifiers as vf
 from datasets import load_dataset
+from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric, JudgeResult
 from medarc_verifiers.parsers.xml_parser import XMLParser
 from medarc_verifiers.rewards.multiple_choice_accuracy import multiple_choice_accuracy
-from medarc_verifiers.utils import default_judge_api_key, judge_sampling_args_and_headers
 from medarc_verifiers.utils.randomize_multiple_choice import randomize_multiple_choice
-from openai import AsyncOpenAI
 from verifiers.types import Info, State
 from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
@@ -94,9 +93,10 @@ def load_environment(
     shuffle_answers: bool = False,
     shuffle_seed: int | None = 1618,
     # Open-ended specific options
-    judge_model: str = "gpt-4o-mini",
-    judge_base_url: str | None = None,
-    judge_api_key: str | None = None,
+    judge_model: str | list[str] = "gpt-4o-mini",
+    judge_base_url: str | list[str] | None = None,
+    judge_api_key: str | list[str] | None = None,
+    judge_timeout: int | None = 300,
     **kwargs,
 ) -> vf.Environment:
     """
@@ -107,9 +107,10 @@ def load_environment(
         system_prompt: Custom system prompt (uses mode-appropriate default if None).
         shuffle_answers: Shuffle MCQ answer options (MCQ mode only).
         shuffle_seed: Seed for answer shuffling (MCQ mode only).
-        judge_model: Model to use for LLM-as-judge evaluation (Open-ended mode only).
-        judge_base_url: Base URL for judge API (Open-ended mode only).
-        judge_api_key: API key for judge (Open-ended mode only).
+        judge_model: Model(s) to use for LLM-as-judge evaluation (Open-ended mode only).
+        judge_base_url: Base URL(s) for judge API (Open-ended mode only).
+        judge_api_key: API key(s) for judge (Open-ended mode only).
+        judge_timeout: Timeout in seconds for judge calls (Open-ended mode only).
 
     Returns:
         A vf.Environment configured for the selected mode.
@@ -127,6 +128,7 @@ def load_environment(
             judge_model=judge_model,
             judge_base_url=judge_base_url,
             judge_api_key=judge_api_key,
+            judge_timeout=judge_timeout,
         )
     else:
         raise ValueError(f"Invalid mode: {split}")
@@ -184,9 +186,10 @@ def _load_mcq_environment(
 
 def _load_open_ended_environment(
     system_prompt: Optional[str],
-    judge_model: str,
-    judge_base_url: str | None,
-    judge_api_key: str | None,
+    judge_model: str | list[str],
+    judge_base_url: str | list[str] | None,
+    judge_api_key: str | list[str] | None,
+    judge_timeout: int | None,
 ) -> vf.Environment:
     """Load CareQA open-ended environment with LLM-as-judge evaluation."""
     eval_dataset = load_dataset("HPAI-BSC/CareQA", "CareQA_en_open", split="test")
@@ -207,49 +210,58 @@ def _load_open_ended_environment(
         "Instructions: The following text is a medical question. Answer it in the most factual, concise, and informative way possible."
     )
 
-    # Judge client setup
-    api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
-    sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
-    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=default_headers)
     judge_parser = XMLParser(fields=["grade"], answer_field="grade")
-
-    judge_rubric = vf.JudgeRubric(
-        parser=judge_parser,
-        judge_client=judge_client,
+    multi_judge = MultiJudge.from_env_args(
         judge_model=judge_model,
-        judge_prompt="{question}",
-        judge_sampling_args=sampling_args,
+        judge_base_url=judge_base_url,
+        judge_api_key=judge_api_key,
+        judge_timeout=judge_timeout,
     )
+    rubric = MultiJudgeRubric(multi_judge)
 
-    async def accuracy(judge, prompt, completion, answer, state: State, info: Info) -> float:
+    async def accuracy(prompt, completion, answer, state: State, info: Info) -> float:
         """Evaluate medical equivalence using LLM-as-judge."""
         completion_text = completion if isinstance(completion, str) else str(completion)
         response = extract_answer_section(completion_text)
 
-        try:
-            judge_prompt = JUDGE_TEMPLATE.format(question=info.get("question", ""), answer=answer, response=response)
-            judge_response = await judge_rubric.judge(judge_prompt, "", "", state)
-            grade = judge_parser.parse_answer(judge_response).strip().lower()
-        except AttributeError:
-            judge_response = await judge_rubric.judge(judge_prompt, "", "", state)
-            grade = judge_parser.parse_answer(judge_response).strip().lower()
+        judge_prompt = JUDGE_TEMPLATE.format(question=info.get("question", ""), answer=answer, response=response)
+        judge_results: list[JudgeResult] = await rubric.judge(judge_prompt, "", "", state)
+        judge_entries = []
+        scores = []
+        for result in judge_results:
+            entry_error = result.error
+            try:
+                grade = judge_parser.parse_answer(result.raw).strip().lower()
+            except AttributeError:
+                result = await rubric.rerun_judge(result, judge_prompt, "", "", state)
+                grade = judge_parser.parse_answer(result.raw).strip().lower()
+                entry_error = result.error
 
+            score = 1.0 if "correct" in grade and "incorrect" not in grade else 0.0 if grade else None
+            scores.append(score)
+            judge_entries.append(
+                {
+                    "model": result.model,
+                    "raw": result.raw,
+                    "error": entry_error,
+                    "score": score,
+                }
+            )
+
+        aggregated = rubric.multi_judge.mean(scores)
         info.setdefault("judge_feedback", []).append(
             {
-                "grade": grade,
-                "raw_judge": str(judge_response),
+                "judges": judge_entries,
+                "score": aggregated,
             }
         )
 
-        if "correct" in grade and "incorrect" not in grade:
-            return 1.0
-        else:
-            return 0.0
+        return aggregated
 
-    judge_rubric.add_reward_func(accuracy, weight=1.0)
+    rubric.add_reward_func(accuracy, weight=1.0)
 
     return vf.SingleTurnEnv(
         eval_dataset=eval_dataset,
         system_prompt=final_system_prompt,
-        rubric=judge_rubric,
+        rubric=rubric,
     )

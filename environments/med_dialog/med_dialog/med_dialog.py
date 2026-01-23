@@ -6,8 +6,8 @@ import verifiers as vf
 from datasets import Dataset, concatenate_datasets, load_dataset
 from datasets.utils.logging import disable_progress_bar
 from medarc_verifiers.parsers import JSONParser
-from medarc_verifiers.utils import default_judge_api_key, download_file, judge_sampling_args_and_headers
-from openai import AsyncOpenAI
+from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric
+from medarc_verifiers.utils import download_file
 from verifiers.types import Info, Messages, State
 
 from med_dialog.judge_prompts import JUDGE_OUTPUT_JSON, JUDGE_TEMPLATE
@@ -80,9 +80,10 @@ def _load_split_dataset(subsets: Sequence[str], split: str, cache_path: Path) ->
 def load_environment(
     use_think: bool = False,
     cache_dir: Path | str | None = None,
-    judge_model: str = "gpt-4o-mini",
-    judge_base_url: str | None = None,
-    judge_api_key: str | None = None,
+    judge_model: str | list[str] = "gpt-4o-mini",
+    judge_base_url: str | list[str] | None = None,
+    judge_api_key: str | list[str] | None = None,
+    judge_timeout: int | None = 300,
     **kwargs: Any,
 ) -> vf.Environment:
     """
@@ -94,18 +95,17 @@ def load_environment(
     train_dataset = _load_split_dataset(subsets=SUBSETS, split="train", cache_path=cache_path)
     eval_dataset = _load_split_dataset(subsets=SUBSETS, split="test", cache_path=cache_path)
 
-    api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
-    sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
     judge_parser = JSONParser(fields=["accuracy", "completeness", "clarity"])
-
-    judge_rubric = vf.JudgeRubric(
-        parser=vf.ThinkParser(extract_fn=lambda x: x) if use_think else None,
-        parallelize_scoring=True,
-        judge_client=AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=default_headers),
+    completion_parser = vf.ThinkParser(extract_fn=lambda x: x) if use_think else None
+    multi_judge = MultiJudge.from_env_args(
         judge_model=judge_model,
+        judge_base_url=judge_base_url,
+        judge_api_key=judge_api_key,
         judge_prompt="{question}",
-        judge_sampling_args=sampling_args,
+        judge_timeout=judge_timeout,
+        completion_parser=completion_parser,
     )
+    rubric = MultiJudgeRubric(multi_judge)
 
     async def reward_meddialog(
         prompt: Messages,
@@ -124,34 +124,51 @@ def load_environment(
             output_format=JUDGE_OUTPUT_JSON,
         )
 
-        try:
-            judge_raw = await judge_rubric.judge(judge_prompt, completion_text, gold_response, state)
-            parsed = judge_parser.parse(str(judge_raw), strip=True)
-        except AttributeError:
-            judge_raw = await judge_rubric.judge(judge_prompt, "", "", state)
-            parsed = judge_parser.parse(str(judge_raw), strip=True)
+        judge_results = await rubric.judge(judge_prompt, completion_text, gold_response, state)
+        judge_entries = []
+        scores = []
+        for result in judge_results:
+            entry_error = result.error
+            try:
+                parsed = judge_parser.parse(str(result.raw), strip=True)
+            except AttributeError:
+                result = await rubric.rerun_judge(result, judge_prompt, completion_text, gold_response, state)
+                parsed = judge_parser.parse(str(result.raw), strip=True)
+                entry_error = result.error
 
-        if parsed is None:
-            parsed = {dimension: {"score": None, "explanation": None, "raw": None} for dimension in JUDGE_DIMENSIONS}
+            if parsed is None:
+                parsed = {dimension: {"score": None, "explanation": None} for dimension in JUDGE_DIMENSIONS}
 
-        normalized = _compute_normalized_reward(parsed)
+            normalized = _compute_normalized_reward(parsed)
+            score = normalized if result.raw is not None else None
+            scores.append(score)
+            judge_entries.append(
+                {
+                    "model": result.model,
+                    "raw": result.raw,
+                    "error": entry_error,
+                    "scores": parsed,
+                    "score": score,
+                }
+            )
 
+        aggregated = rubric.multi_judge.mean(scores)
         info.setdefault("judge_feedback", []).append(
             {
-                "scores": parsed,
-                "raw_judge": str(judge_raw),
+                "judges": judge_entries,
+                "score": aggregated,
             }
         )
 
-        return normalized
+        return aggregated
 
-    judge_rubric.add_reward_func(reward_meddialog, weight=1.0)
+    rubric.add_reward_func(reward_meddialog, weight=1.0)
 
     return vf.SingleTurnEnv(
         dataset=train_dataset,
         eval_dataset=eval_dataset,
         system_prompt=PROMPT_THINK if use_think else PROMPT,
-        rubric=judge_rubric,
+        rubric=rubric,
         **kwargs,
     )
 
