@@ -20,6 +20,8 @@ import tqdm
 from collections import namedtuple
 import numpy as np
 from sentence_transformers.models import Pooling
+from abc import ABC, abstractmethod
+from typing import Coroutine, Any
 
 # Cosine similarity threshold for embedded precision
 TAU: float = 0.9 
@@ -32,8 +34,10 @@ TASK_TO_QUESTION_KEY: Dict[str,str] = {
     'biohopr_hop2_multi':'hop2_question_multi'
 } 
 
-class AsyncEncoder:
-    pass
+class AsyncEncoder(ABC):
+    @abstractmethod
+    def encode(self, texts: List[str]) -> Coroutine[Any, Any, torch.Tensor]:
+        pass
 
 class AsyncBufferedEncoder(AsyncEncoder):
     """
@@ -47,10 +51,10 @@ class AsyncBufferedEncoder(AsyncEncoder):
         self.futures = []
         self.lock = asyncio.Lock()
 
-    async def encode(self, text: List[str]) -> torch.Tensor:
+    async def encode(self, texts: List[str]) -> torch.Tensor:
         loop = asyncio.get_event_loop()
         future = loop.create_future()
-        self.buffer.append(text)
+        self.buffer.append(texts)
         self.futures.append(future)
 
         # Run flush asyncio task to avoid blocking
@@ -163,7 +167,7 @@ def parse_answers_completions(parser:vf.Parser, completion: str, info: Dict) -> 
     answers = info.get("answer", [])
     return (parsed_completion, answers)
 
-async def answer_completion_similarity(encoder: AsyncBufferedEncoder, answer: List[str], completion: str) -> torch.Tensor:
+async def answer_completion_similarity(encoder: AsyncEncoder, answer: List[str], completion: str) -> torch.Tensor:
     """
     Computes cosine similarity between the embeddings of the answer and completion.
     Args:
