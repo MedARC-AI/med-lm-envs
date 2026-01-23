@@ -64,7 +64,7 @@ def test_metrics(ds,config,parser,related=True, num_examples=32):
         judge_client=None,
         judge_answer_num=5,
         embeddings_model=model,
-        encoder=AsyncBufferedEncoder(model, ds_len = len(ds))
+        encoder=AsyncBufferedEncoder(model)
     )
     rubrics = _rubrics('metrics',parser, model_c)
 
@@ -185,7 +185,7 @@ def test_biolord_vs_bert(ds, config, data_parser, num_examples=32):
         judge_client=None,
         judge_answer_num=5,
         embeddings_model=model_biolord,
-        encoder=AsyncBufferedEncoder(model_biolord,ds_len = num_examples),
+        encoder=AsyncBufferedEncoder(model_biolord),
     )
     model_c_bert = model_config(
         judge_model=config.judge_model,
@@ -194,7 +194,7 @@ def test_biolord_vs_bert(ds, config, data_parser, num_examples=32):
         judge_client=None,
         judge_answer_num=5,
         embeddings_model=model_bert,
-        encoder=AsyncBufferedEncoder(model_bert,ds_len = num_examples),
+        encoder=AsyncBufferedEncoder(model_bert),
         tau=0.97,
     )
 
@@ -244,43 +244,23 @@ def test_biolord_vs_bert(ds, config, data_parser, num_examples=32):
         }
         f.write(json.dumps(log_entry) + '\n')
 
-def test_server_vs_local_embeddings(ds, config:RemoteModelConfig, data_parser:vf.Parser, num_examples=32):
-    client = AsyncOpenAI(base_url="http://localhost:8001/v1/", api_key=config.api_key, timeout=60*60)
+def test_server_vs_local_embeddings(ds, config:RemoteModelConfig, data_parser:vf.Parser, embedding_url, embedding_api_key, num_examples=32):
+    client = AsyncOpenAI(base_url=embedding_url, api_key=embedding_api_key, timeout=60*60)
 
     # Query clinicalmodernbert model for embeddings
     response = asyncio.run(client.embeddings.create(
-        model="clinicalmodernbert",
+        model="FremyCompany/BioLORD-2023",
         input=["Test sentence for embeddings."],
     ))
-    print("Embeddings response from clinicalmodernbert model:", len(response.data[0].embedding), "dimensions.")
 
     client_encoder = AsyncEmbeddingClient(
             client=client,
-            model="clinicalmodernbert",
+            model="FremyCompany/BioLORD-2023",
         )
 
-    print("Client encoder len:", asyncio.run(client_encoder.encode(["Test"])).shape)
-
-    model_bert = create_model('Simonlee711/Clinical_ModernBERT').cuda()
+    model_bert = create_model('FremyCompany/BioLORD-2023').cuda()
     local_encoder = AsyncBufferedEncoder(model_bert, batch_size=32)
 
-    print(model_bert[0])
-
-    # Local vs Server embedding test
-    local_tensor = asyncio.run(local_encoder.encode(["Test sentence for embeddings."]))
-    server_tensor = asyncio.run(client_encoder.encode(["Test sentence for embeddings."]))
-
-
-    print("Local encoder embedding:", local_tensor)
-    print("Server encoder embedding:", server_tensor)
-
-    # if server_tensor in local_tensor:
-    for o in local_tensor:
-        if torch.allclose(o.cpu(), server_tensor.cpu(), atol=1e-4):
-            print("Local and server embeddings match closely.")
-            break
-
-    exit()
 
     model_c_local = model_config(
         judge_model=config.judge_model,
@@ -355,6 +335,8 @@ def main():
     parser.add_argument('--judge_model', type=str, default='openai/gpt-oss-20b', help='Model name to use for judging')
     parser.add_argument('--num_examples', type=int, default=32, help='Number of examples to use for evaluation')
     parser.add_argument('--completion_model', type=str, default='openai/gpt-oss-20b', help='Model name to use for generating completions')
+    parser.add_argument('--embedding_url', type=str, default=None, help='Base URL for embedding model server')
+    parser.add_argument('--embedding_api_key', type=str, default=None, help='API key for embedding model server')
 
     args, _ = parser.parse_known_args()
     api_key = args.api_key if args.api_key else os.getenv("OPENAI_API_KEY")
@@ -373,11 +355,12 @@ def main():
     answer_format = AnswerFormat.XML
     answer_format,system_prompt,data_parser = _prepare_parseing(answer_format,None)
 
-    #test_metrics_vs_judge(ds,config,data_parser, num_examples=args.num_examples)
+    test_metrics_vs_judge(ds,config,data_parser, num_examples=args.num_examples)
 
-    #test_biolord_vs_bert(ds, config, data_parser, num_examples=args.num_examples)
+    test_biolord_vs_bert(ds, config, data_parser, num_examples=args.num_examples)
 
-    test_server_vs_local_embeddings(ds, config, data_parser, num_examples=args.num_examples)
+    if args.embedding_url is not None:
+        test_server_vs_local_embeddings(ds, config, data_parser, args.embedding_url, args.embedding_api_key, num_examples=args.num_examples)
 
 if __name__ == "__main__":
     main()

@@ -329,8 +329,6 @@ def create_model(model_name: str, use_cuda: bool = False) -> SentenceTransformer
         model= SentenceTransformer(model_name)
     elif model_name=='Simonlee711/Clinical_ModernBERT':
         model = SentenceTransformer(model_name)
-        f = lambda text: SentenceTransformer.encode(model,text, output_value='token_embeddings')
-        #model.encode = lambda sentences,*args,**kwargs: torch.stack([ e[0] for e in f(sentences)]) if isinstance(sentences, list) else f(sentences)[0]
         model[1] = Pooling(model.get_sentence_embedding_dimension(), pooling_mode='cls')
     else:
         raise ValueError(f"Unsupported model name: {model_name=}")
@@ -350,10 +348,10 @@ def load_environment(
     judge_answer_num: int = 5,
     embeddings_model: str = 'FremyCompany/BioLORD-2023',
     tau: float = TAU,
-    embedding_model_url: Optional[str] = None,
-    embedding_api_key: Optional[str] = None,
     use_cuda: bool = torch.cuda.is_available(),
     embedding_batch_size: int = 32,
+    embedding_model_url: Optional[str] = None,
+    embedding_api_key: Optional[str] = None,
 ) -> vf.Environment:
     """
     BioHopR multiple-hop biomedical question answering evaluation
@@ -370,10 +368,11 @@ def load_environment(
     - judge_answer_num: Number of top similar ground truth answers to consider for judging
     - embeddings_model: SentenceTransformer model name for computing answer-completion similarity. Valid options: ['FremyCompany/BioLORD-2023', 'Simonlee711/Clinical_ModernBERT']
     - tau: Cosine similarity threshold for embedded precision
-    - embedding_model_url: Optional URL for custom embedding model
-    - embedding_api_key: Optional API key for custom embedding model
     - use_cuda: Whether to use CUDA for embedding model
     - embedding_batch_size: Maximum batch size for embedding model encoding, use in case of out of memory error
+    - embedding_model_url: Optional URL for OpenAI-compatible embedding model API
+    - embedding_api_key: Optional API key for OpenAI-compatible embedding model API
+
     Returns:
         vf.Environment instance for BioHopR evaluation
     """
@@ -393,17 +392,18 @@ def load_environment(
     embedding_client = None
     if (embedding_model_url is not None):
         embedding_client = AsyncEmbeddingClient(
-            url=embedding_model_url,
-            api_key=embedding_api_key,
+            client=AsyncOpenAI(
+                base_url=embedding_model_url,
+                api_key=embedding_api_key if embedding_api_key else os.getenv("OPENAI_API_KEY"),
+            ),
             model=embeddings_model
         )
 
     # Initialize OpenAI client for judge
     api_key = judge_api_key if judge_api_key else os.getenv("OPENAI_API_KEY")
     judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key) if api_key else None
-    model = create_model(embeddings_model, use_cuda=use_cuda) if (embedding_client) else None
-    encoder = embedding_client if (embedding_client) else AsyncBufferedEncoder(model, batch_size=32)
-    encoder = AsyncBufferedEncoder(model, batch_size=embedding_batch_size)
+    model = create_model(embeddings_model, use_cuda=use_cuda) if (not embedding_client) else None
+    encoder = embedding_client if (embedding_client) else AsyncBufferedEncoder(model, batch_size=embedding_batch_size)
 
     model_c = model_config(
         judge_model=judge_model,

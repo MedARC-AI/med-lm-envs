@@ -54,6 +54,8 @@ Document any supported environment arguments and their meaning. Example:
 | `tau` | float | 0.9 | Cosine similarity threshold for embedded precision
 | `use_cuda` | bool | "if available" | Whether to use CUDA for embedding model, uses cuda if available, set to false to disable. 
 | `embedding_batch_size` | int | 32 |  Maximum batch size for embedding model encoding, use in case of out of memory error
+| `embedding_model_url` |  str | None | Optional URL for OpenAI-compatible embedding model API
+| `embedding_api_key` | str | None |  Optional API key for OpenAI-compatible embedding model API
 
 ### Metrics
 Summarize key metrics your rubric emits and how they’re interpreted.
@@ -64,3 +66,6 @@ Summarize key metrics your rubric emits and how they’re interpreted.
 | `llm_as_a_judge` | Reward function that uses LLM judge to evaluate medical diagnosis equivalence. |
 | `embedded_precision` | Precision based on embedded cosine similarity. A completion is embedded, that compared to a list of possible answer embeddings. If cosine similarity is >tau(0.9) then it is considered a true positive. Final score is true_positives/predicted_responses. |
 
+### Embedding Server Note 
+We recommend using infinity embed server for serving embeddings. This was the only server we found compatible with BioLORD embeddings. You may find them here: https://github.com/michaelfeil/infinity
+At the time of writing their server errors at the time of setup. Further instructions can be found here: https://github.com/michaelfeil/infinity/issues/649
