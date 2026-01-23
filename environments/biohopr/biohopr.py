@@ -53,7 +53,6 @@ class AsyncBufferedEncoder(AsyncEncoder):
         self.buffer.append(text)
         self.futures.append(future)
 
-        #if len(self.buffer) >= self.batch_size or self.iter >= self.ds_len:
         # Run flush asyncio task to avoid blocking
         
         asyncio.create_task(self._flush())
@@ -317,11 +316,12 @@ def _rubrics(eval_method:str,parser:vf.Parser, config: model_config) -> List[vf.
         rubrics += [vf.Rubric( funcs=[_rubric_f(config,use_judge=False)], weights=[weight], parser=parser)]
     return rubrics
 
-def create_model(model_name: str) -> SentenceTransformer:
+def create_model(model_name: str, use_cuda: bool = False) -> SentenceTransformer:
     """
     Creates a SentenceTransformer model instance based on the provided model name.
     Args:
         model_name: Name of the SentenceTransformer model to load
+        use_cuda: Whether to use CUDA for the model
     Returns:
         Loaded SentenceTransformer model instance
     """
@@ -334,6 +334,8 @@ def create_model(model_name: str) -> SentenceTransformer:
         model[1] = Pooling(model.get_sentence_embedding_dimension(), pooling_mode='cls')
     else:
         raise ValueError(f"Unsupported model name: {model_name=}")
+    if(use_cuda):
+        model = model.cuda()
     return model
 
 def load_environment(
@@ -349,7 +351,9 @@ def load_environment(
     embeddings_model: str = 'FremyCompany/BioLORD-2023',
     tau: float = TAU,
     embedding_model_url: Optional[str] = None,
-    embedding_api_key: Optional[str] = None
+    embedding_api_key: Optional[str] = None,
+    use_cuda: bool = torch.cuda.is_available(),
+    embedding_batch_size: int = 32,
 ) -> vf.Environment:
     """
     BioHopR multiple-hop biomedical question answering evaluation
@@ -368,7 +372,8 @@ def load_environment(
     - tau: Cosine similarity threshold for embedded precision
     - embedding_model_url: Optional URL for custom embedding model
     - embedding_api_key: Optional API key for custom embedding model
-
+    - use_cuda: Whether to use CUDA for embedding model
+    - embedding_batch_size: Maximum batch size for embedding model encoding, use in case of out of memory error
     Returns:
         vf.Environment instance for BioHopR evaluation
     """
@@ -396,8 +401,10 @@ def load_environment(
     # Initialize OpenAI client for judge
     api_key = judge_api_key if judge_api_key else os.getenv("OPENAI_API_KEY")
     judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key) if api_key else None
-    model = create_model(embeddings_model)
-    encoder = embedding_client if (embedding_client) else AsyncBufferedEncoder(model, batch_size=32) 
+    model = create_model(embeddings_model, use_cuda=use_cuda) if (embedding_client) else None
+    encoder = embedding_client if (embedding_client) else AsyncBufferedEncoder(model, batch_size=32)
+    encoder = AsyncBufferedEncoder(model, batch_size=embedding_batch_size)
+
     model_c = model_config(
         judge_model=judge_model,
         judge_api_key=judge_api_key,
