@@ -1,4 +1,4 @@
-# biohopr
+# BioHopR
 
 ### Overview
 - **Environment ID**: `biohopr`
