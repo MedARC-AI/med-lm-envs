@@ -154,7 +154,7 @@ def load_environment(
         ]
 
         judgments = await asyncio.gather(*tasks)
-        per_judge_scores = defaultdict(list)
+        per_judge_data: dict[str, dict] = {}
         for judgment in judgments:
             points_possible = judgment["points_possible"]
             judges = judgment.get("judges", [])
@@ -164,7 +164,11 @@ def load_environment(
                 judge_scores.append(score)
                 judge_name = judge_entry.get("model")
                 if judge_name:
-                    per_judge_scores[judge_name].append(score)
+                    if judge_name not in per_judge_data:
+                        per_judge_data[judge_name] = {"scores": [], "raw": [], "errors": []}
+                    per_judge_data[judge_name]["scores"].append(score)
+                    per_judge_data[judge_name]["raw"].append(judge_entry.get("raw"))
+                    per_judge_data[judge_name]["errors"].append(judge_entry.get("error"))
             current_reward += rubric.multi_judge.mean(judge_scores)
 
         ## Update state to record performance by rubric
@@ -181,12 +185,14 @@ def load_environment(
 
         aggregated = float(max(0.0, min(1.0, current_reward / total_reward)))
         judge_feedback = []
-        for judge_id, scores in per_judge_scores.items():
+        for judge_id, data in per_judge_data.items():
+            scores = data["scores"]
+            errors = [e for e in data["errors"] if e is not None]
             judge_feedback.append(
                 {
                     "model": judge_id,
-                    "raw": None,
-                    "error": None,
+                    "raw": data["raw"],
+                    "error": errors if errors else None,
                     "scores": {"criterion_scores": scores},
                     "score": rubric.multi_judge.mean(scores),
                 }
