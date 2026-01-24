@@ -1,5 +1,4 @@
 import asyncio
-import time
 from pathlib import Path
 
 import pytest
@@ -96,11 +95,23 @@ async def test_parallel_launch_runs_concurrently(tmp_path: Path, monkeypatch) ->
     runner = OrchestratorRunner(plan, tasks, DummyResourceManager(), options=options, use_dashboard=False)
 
     def fake_create_and_start_container(**kwargs):
-        time.sleep(0.2)
         return FakeContainer(kwargs["name"])
 
-    def fake_wait_for_readiness(*args, **kwargs):
-        time.sleep(0.2)
+    first_readiness_started = asyncio.Event()
+    first_readiness_done = asyncio.Event()
+    readiness_overlapped = False
+
+    async def fake_wait_for_readiness_async(*args, **kwargs):
+        nonlocal readiness_overlapped
+        await asyncio.sleep(0.2)
+        if not first_readiness_started.is_set():
+            first_readiness_started.set()
+            await asyncio.sleep(0.2)
+            first_readiness_done.set()
+        else:
+            if not first_readiness_done.is_set():
+                readiness_overlapped = True
+            await asyncio.sleep(0.2)
         class Result:
             ready = True
             elapsed_s = 0.2
@@ -108,14 +119,9 @@ async def test_parallel_launch_runs_concurrently(tmp_path: Path, monkeypatch) ->
             last_error = None
         return Result()
 
-    async def fake_wait_for_readiness_async(*args, **kwargs):
+    async def fake_to_thread(func, /, *args, **kwargs):
         await asyncio.sleep(0.2)
-        class Result:
-            ready = True
-            elapsed_s = 0.2
-            attempts = 1
-            last_error = None
-        return Result()
+        return func(*args, **kwargs)
 
     async def fake_start_benchmark(*args, **kwargs):
         class Proc:
@@ -133,9 +139,16 @@ async def test_parallel_launch_runs_concurrently(tmp_path: Path, monkeypatch) ->
     monkeypatch.setattr("medarc_verifiers.orchestrate.run.wait_for_readiness_async", fake_wait_for_readiness_async)
     monkeypatch.setattr("medarc_verifiers.orchestrate.run.start_benchmark", fake_start_benchmark)
     monkeypatch.setattr("medarc_verifiers.orchestrate.run.wait_benchmark", fake_wait_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.run.asyncio.to_thread", fake_to_thread)
+    monkeypatch.setattr(
+        "medarc_verifiers.orchestrate.docker_vllm.create_and_start_container",
+        fake_create_and_start_container,
+    )
+    monkeypatch.setattr(
+        "medarc_verifiers.orchestrate.docker_vllm.wait_for_readiness_async",
+        fake_wait_for_readiness_async,
+    )
 
-    start = time.monotonic()
     await runner._run_async()
-    elapsed = time.monotonic() - start
 
-    assert elapsed < 0.6
+    assert readiness_overlapped
