@@ -327,7 +327,6 @@ def test_server_vs_local_embeddings(ds, config:RemoteModelConfig, data_parser:vf
         }
         f.write(json.dumps(log_entry) + '\n')
 
-
 def main():
     parser = argparse.ArgumentParser(description='Test BioHopR Judge vs Metrics')
     parser.add_argument('--api_key', type=str, default=None, help='OpenAI API key')

@@ -2,7 +2,6 @@ import asyncio
 from typing import Dict, Optional, List, Tuple, NamedTuple
 
 import verifiers as vf
-from sentence_transformers import SentenceTransformer
 from datasets import load_dataset
 from medarc_verifiers.prompts import THINK_XML_SYSTEM_PROMPT, XML_SYSTEM_PROMPT,AnswerFormat
 from verifiers.utils.data_utils import (
@@ -16,16 +15,19 @@ from functools import partial
 import os
 from openai import AsyncOpenAI
 import torch
+from torch import nn
 import tqdm
 from collections import namedtuple
 import numpy as np
-from sentence_transformers.models import Pooling
 from abc import ABC, abstractmethod
 from typing import Coroutine, Any
+from transformers import AutoTokenizer, AutoModel
+from torch.nn import functional as F
+from transformers.utils import logging
 
 # Cosine similarity threshold for embedded precision
-TAU: float = 0.9 
-TASKS: List[str] = ['biohopr_hop1','biohopr_hop2','biohopr_hop1_multi','biohopr_hop2_multi']
+TAU: float = 0.9
+TASKS: List[str] = ['biohopr_hop1', 'biohopr_hop2', 'biohopr_hop1_multi', 'biohopr_hop2_multi']
 # Mapping from task names to Huggingface dataset question keys
 TASK_TO_QUESTION_KEY: Dict[str,str] = {
     'biohopr_hop1':'hop1_question',
@@ -34,6 +36,47 @@ TASK_TO_QUESTION_KEY: Dict[str,str] = {
     'biohopr_hop2_multi':'hop2_question_multi'
 } 
 
+def mean_pooling(model_output, attention_mask):
+        token_embeddings = model_output[0] #First element of model_output contains all token embeddings
+        input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+        token_embeddings = torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+        return F.normalize(token_embeddings, p=2, dim=1)
+
+"""Credits: Code mostly from https://huggingface.co/FremyCompany/BioLORD-2023"""
+class EncodingModel:
+
+    pooling = {
+        'FremyCompany/BioLORD-2023': mean_pooling,
+        'Simonlee711/Clinical_ModernBERT': lambda output,mask: output[0][:,0],  # CLS pooling
+    }
+
+    def __init__(self, model_name: str):
+        super(EncodingModel, self).__init__()
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        # Set to ERROR to hide warnings/info
+        verbosity = logging.get_verbosity()
+        logging.set_verbosity_error() 
+        self.model = AutoModel.from_pretrained(model_name)
+        logging.set_verbosity(verbosity)
+        self.use_cuda = False
+        self.pooling_f = self.pooling.get(model_name, mean_pooling)
+
+    def encode(self, input_texts: List[str]) -> torch.Tensor:
+        # Tokenize sentences
+        encoded_input = self.tokenizer(input_texts, padding=True, truncation=True, return_tensors='pt')
+        if self.use_cuda:
+            encoded_input = {key: val.cuda() for key, val in encoded_input.items()}
+        # Compute token embeddings
+        with torch.no_grad():
+            model_output = self.model(**encoded_input)
+        embeddings = self.pooling_f(model_output, encoded_input['attention_mask'])
+        return embeddings
+    
+    def cuda(self):
+        self.model = self.model.cuda()
+        self.use_cuda = True
+        return self
+
 class AsyncEncoder(ABC):
     @abstractmethod
     def encode(self, texts: List[str]) -> Coroutine[Any, Any, torch.Tensor]:
@@ -41,10 +84,10 @@ class AsyncEncoder(ABC):
 
 class AsyncBufferedEncoder(AsyncEncoder):
     """
-    Asynchronous buffered encoder for SentenceTransformer models.
+    Asynchronous buffered encoder for EncodingModel models.
     Batches encoding requests to improve efficiency.
     """
-    def __init__(self, model: SentenceTransformer, batch_size: int = 32):
+    def __init__(self, model: EncodingModel, batch_size: int = 32):
         self.model = model
         self.batch_size = batch_size
         self.buffer = []
@@ -104,15 +147,13 @@ class AsyncEmbeddingClient(AsyncEncoder):
         embeddings = [torch.tensor(data.embedding) for data in response.data]
         return torch.stack(embeddings)
 
-
-
 class model_config(NamedTuple):
     judge_model: str
     judge_api_key: Optional[str]
     judge_base_url: Optional[str]
     judge_client: Optional[AsyncOpenAI]
     judge_answer_num: int
-    embeddings_model: SentenceTransformer
+    embeddings_model: EncodingModel
     encoder: AsyncEncoder
     tau: float = TAU
 
@@ -197,7 +238,7 @@ async def llm_as_a_judge_impl(
     parser: vf.Parser,
     **kwargs
 ) -> float:
-    """SentenceTransformer
+    """EncodingModel
     Reward function that uses LLM judge to evaluate medical diagnosis equivalence.
     """
     parsed_completion,answers = parse_answers_completions(parser, completion, info)
@@ -320,20 +361,19 @@ def _rubrics(eval_method:str,parser:vf.Parser, config: model_config) -> List[vf.
         rubrics += [vf.Rubric( funcs=[_rubric_f(config,use_judge=False)], weights=[weight], parser=parser)]
     return rubrics
 
-def create_model(model_name: str, use_cuda: bool = False) -> SentenceTransformer:
+def create_model(model_name: str, use_cuda: bool = False) -> EncodingModel:
     """
-    Creates a SentenceTransformer model instance based on the provided model name.
+    Creates an EncodingModel instance based on the provided model name.
     Args:
-        model_name: Name of the SentenceTransformer model to load
+        model_name: Name of the EncodingModel to load
         use_cuda: Whether to use CUDA for the model
     Returns:
-        Loaded SentenceTransformer model instance
+        Loaded EncodingModel instance
     """
     if model_name=='FremyCompany/BioLORD-2023':
-        model= SentenceTransformer(model_name)
+        model= EncodingModel(model_name)
     elif model_name=='Simonlee711/Clinical_ModernBERT':
-        model = SentenceTransformer(model_name)
-        model[1] = Pooling(model.get_sentence_embedding_dimension(), pooling_mode='cls')
+        model = EncodingModel(model_name)
     else:
         raise ValueError(f"Unsupported model name: {model_name=}")
     if(use_cuda):
@@ -370,7 +410,7 @@ def load_environment(
     - judge_base_url: Optional base URL for custom OpenAI-compatible API endpoint
     - judge_api_key: Optional API key for OpenAI-compatible API endpoint
     - judge_answer_num: Number of top similar ground truth answers to consider for judging
-    - embeddings_model: SentenceTransformer model name for computing answer-completion similarity. Valid options: ['FremyCompany/BioLORD-2023', 'Simonlee711/Clinical_ModernBERT']
+    - embeddings_model: EncodingModel name for computing answer-completion similarity. Valid options: ['FremyCompany/BioLORD-2023', 'Simonlee711/Clinical_ModernBERT']
     - tau: Cosine similarity threshold for embedded precision
     - use_cuda: Whether to use CUDA for embedding model
     - embedding_batch_size: Maximum batch size for embedding model encoding, use in case of out of memory error
