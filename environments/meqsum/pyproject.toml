@@ -7,7 +7,11 @@ requires-python = ">=3.11"
 dependencies = [
     "verifiers>=0.1.4",
     "datasets",
-    "medarc_verifiers>=0.1.0",
+    "medarc_verifiers>=0.1.0"
+]
+
+[project.optional-dependencies]
+metrics = [
     "evaluate",
     "bert_score",
     "rouge_score",
