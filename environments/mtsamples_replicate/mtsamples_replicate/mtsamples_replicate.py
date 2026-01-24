@@ -33,10 +33,10 @@ JUDGE_DIMENSIONS = ("accuracy", "completeness", "clarity")
 
 def _resolve_cache_dir(cache_dir: Path | str | None) -> Path:
     if cache_dir is None:
-        env_override = os.getenv("MTSAMPLES_PROCEDURES_CACHE_DIR")
+        env_override = os.getenv("MTSAMPLES_replicate_CACHE_DIR")
         if env_override:
             return Path(env_override)
-        return Path.home() / ".cache" / "mtsamples_procedures"
+        return Path.home() / ".cache" / "mtsamples_replicate"
     return Path(cache_dir)
 
 
