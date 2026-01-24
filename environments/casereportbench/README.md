@@ -15,7 +15,7 @@ CaseReportBench is a benchmark designed for dense information extraction from cl
 ### Task
 - **Type**: Single-turn information extraction.
 - **Parser**: `JSONParser` (expects JSON with keys like `extractions`, `findings`, or `output`).
-- **Input Format**: Case report text followed by category-specific extraction instructions.
+- **Methodology**: Supports the paper’s **UCP** and **UGP** settings with **FS**/**ZS** prompting.
 
 ### Metrics
 This environment replicates the paper's metrics. When running `vf-eval`, the `reward` column corresponds to the **Token Set Ratio (TSR)**.
@@ -30,44 +30,65 @@ This environment replicates the paper's metrics. When running `vf-eval`, the `re
 | `hallucination` | 1.0 if model stayed silent when expert was; 0.0 if invention. |
 
 ### Quickstart
-Run an evaluation with default settings (all categories, first 5 examples):
 
 ```bash
 # Install the environment
 vf-install casereportbench
 
-# Run evaluation
-vf-eval casereportbench -m gpt-4o-mini -n 5
-```
-
-### Usage
-To run an evaluation using `vf-eval` with the OpenAI API:
-
-```bash
+# Run evaluation (default: UCP + Few-Shot, all 13 categories)
 export OPENAI_API_KEY=sk-...
-vf-eval \
-  -m gpt-4o-mini \
-  -n 10 \
-  -s \
-  casereportbench
+vf-eval casereportbench -m gpt-4o-mini -n 5 -s
 ```
 
-To evaluate a specific clinical category:
+**Note**: With default UCP mode, this evaluates all 13 categories separately (13 prompts per case report).
+
+### Paper Configurations
+
 ```bash
-vf-eval casereportbench -m gpt-4o-mini -a '{"task": "Neuro"}'
+# UCP (Uniform Category-Specific) + Few-Shot [default]
+vf-eval casereportbench -m gpt-4o-mini -a '{"method":"UCP","prompting":"FS"}'
+
+# UCP + Zero-Shot
+vf-eval casereportbench -m gpt-4o-mini -a '{"method":"UCP","prompting":"ZS"}'
+
+# UGP (Unified Global Prompting) + Few-Shot
+vf-eval casereportbench -m gpt-4o-mini -a '{"method":"UGP","prompting":"FS"}'
+
+# UGP + Zero-Shot
+vf-eval casereportbench -m gpt-4o-mini -a '{"method":"UGP","prompting":"ZS"}'
 ```
+
+**Note**: FCSP (Filtered Category-Specific Prompting) is not implemented due to missing subheading metadata in the HuggingFace dataset.
+
+### Evaluate Specific Categories
+
+```bash
+# Single category
+vf-eval casereportbench -m gpt-4o-mini -a '{"task":"Neuro"}'
+
+# Limit examples
+vf-eval casereportbench -m gpt-4o-mini -a '{"max_examples":10}'
+```
+
+### Metrics
+
+| Metric | Description |
+|--------|-------------|
+| `reward` (TSR) | **Primary metric**. Token Set Ratio normalized by token length (0–1) |
+| `bleu1` | 1-gram precision |
+| `bleu4` | 4-gram precision |
+| `rougeL` | Longest Common Subsequence overlap |
+| `omission` | Penalty for missing expert-labeled extractions |
+| `hallucination` | Penalty for extracting when expert found nothing |
 
 ### Environment Arguments
 
-| Arg | Type | Default | Description |
-| --- | ---- | ------- | ----------- |
-| `task` | str | `"all"` | Which category to evaluate: `"Neuro"`, `"CVS"`, `"RESP"`, etc. Use `"all"` for all 13. |
-| `max_examples` | int | `-1` | Limit number of examples (-1 for all) |
-
-### Authors
-This environment has been put together by:
-
-Shamus Sim Zi Yang - ([@ss8319](https://github.com/ss8319))
+| Argument | Type | Default | Options |
+|----------|------|---------|---------|
+| `task` | str | `"all"` | `"Neuro"`, `"CVS"`, `"RESP"`, `"GI"`, `"GU"`, `"MSK"`, `"DERM"`, `"EENT"`, `"LYMPH"`, `"ENDO"`, `"History"`, `"Pregnancy"`, `"Vitals_Hema"`, or `"all"` |
+| `method` | str | `"UCP"` | `"UCP"` (per-category prompt), `"UGP"` (unified prompt) |
+| `prompting` | str | `"FS"` | `"FS"` (few-shot), `"ZS"` (zero-shot) |
+| `max_examples` | int | `-1` | Number of examples (-1 for all 138) |
 
 ### Credits 
 Dataset:
