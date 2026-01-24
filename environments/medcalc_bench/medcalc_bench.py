@@ -11,10 +11,48 @@ from medarc_verifiers.prompts import THINK_XML_SYSTEM_PROMPT, XML_SYSTEM_PROMPT,
 from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
 from medarc_verifiers.parsers.xml_parser import XMLParser
 
-from prompts import code_execution_prompt, zero_shot_prompt, one_shot_prompt, code_execution_one_shot_prompt
-from pyrepl_env import PyREPLEnv
+from prompts import tool_use_prompt, tool_use_one_shot_prompt, zero_shot_prompt, one_shot_prompt, get_tool_description
+from tools import SimpleToolEnv
 
 disable_progress_bar()  # suppress datasets progress indicators
+
+# Tool descriptions for system prompts
+_TOOL_DESCRIPTIONS = {
+    "python": "a Python code execution tool (python) for running Python code",
+    "calculator": "a calculator tool for evaluating mathematical expressions",
+}
+
+
+def _build_tool_system_prompt(
+    allow_python_tool: bool,
+    allow_calculator_tool: bool,
+    use_think: bool,
+    answer_format: AnswerFormat,
+) -> str:
+    """Build a system prompt that describes the available tools."""
+    tools = []
+    if allow_python_tool:
+        tools.append(_TOOL_DESCRIPTIONS["python"])
+    if allow_calculator_tool:
+        tools.append(_TOOL_DESCRIPTIONS["calculator"])
+
+    if len(tools) == 1:
+        tool_text = f"You have access to {tools[0]}. Use it to perform calculations when needed."
+    else:
+        tool_text = f"You have access to {tools[0]} and {tools[1]}. Use them to perform calculations when needed."
+
+    if answer_format == AnswerFormat.XML:
+        if use_think:
+            return f"{tool_text} Think step-by-step inside <think>...</think> tags. Then, give your final answer inside <answer>...</answer> XML tags."
+        else:
+            return f"{tool_text} Please reason step by step, then give your final answer within <answer>...</answer> XML tags."
+    elif answer_format == AnswerFormat.BOXED:
+        if use_think:
+            return f"{tool_text} Think step-by-step. Then, give your final answer inside \\boxed{{}}."
+        else:
+            return f"{tool_text} Please reason step by step, then give your final answer inside \\boxed{{}}."
+    else:
+        raise ValueError(f"Unsupported answer format: {answer_format=}")
 
 
 def extract_boxed_answer_strict(text: str) -> str:
@@ -24,7 +62,9 @@ def extract_boxed_answer_strict(text: str) -> str:
     return extract_boxed_answer(text)
 
 
-def _one_shot_response(answer: str, reasoning: str, use_think: bool = False, answer_format: AnswerFormat = AnswerFormat.XML) -> str:
+def _one_shot_response(
+    answer: str, reasoning: str, use_think: bool = False, answer_format: AnswerFormat = AnswerFormat.XML
+) -> str:
     """Format a one-shot response as XML or Boxed"""
     if use_think:
         reasoning = f"<think>{reasoning}</think>\n"
@@ -39,14 +79,19 @@ def _one_shot_response(answer: str, reasoning: str, use_think: bool = False, ans
 def _build_prompt(
     row: dict,
     one_shot_examples: dict | None = None,
-    code_execution: bool = False,
+    allow_python_tool: bool = False,
+    allow_calculator_tool: bool = False,
     one_shot: bool = False,
     use_think: bool = False,
     answer_format: AnswerFormat = AnswerFormat.XML,
 ) -> str:
     calc_id = int(row["Calculator ID"])
-    if code_execution and one_shot:
-        return code_execution_one_shot_prompt.format(
+    tool_use = allow_python_tool or allow_calculator_tool
+    tool_description = get_tool_description(allow_python_tool, allow_calculator_tool)
+
+    if tool_use and one_shot:
+        return tool_use_one_shot_prompt.format(
+            tool_description=tool_description,
             example_note=one_shot_examples[calc_id]["Patient Note"],
             example_question=one_shot_examples[calc_id]["Question"],
             example_response=_one_shot_response(
@@ -58,8 +103,9 @@ def _build_prompt(
             patient_note=row["Patient Note"],
             question=row["Question"],
         )
-    elif code_execution:
-        return code_execution_prompt.format(
+    elif tool_use:
+        return tool_use_prompt.format(
+            tool_description=tool_description,
             patient_note=row["Patient Note"],
             question=row["Question"],
         )
@@ -270,23 +316,35 @@ def check_correctness(parser, completion, info, **kwargs):
 
 def load_environment(
     one_shot: bool = False,
-    code_execution: bool = False,
-    max_turns: int = 20, # https://github.com/ncbi-nlp/MedCalc-Bench/blob/main/evaluation/generate_code_prompt.py#L145
+    allow_python_tool: bool = False,
+    allow_calculator_tool: bool = False,
+    max_turns: int = 20,  # https://github.com/ncbi-nlp/MedCalc-Bench/blob/main/evaluation/generate_code_prompt.py#L145
     answer_format: AnswerFormat | str = AnswerFormat.XML,
     use_think: bool = False,
     system_prompt: str | None = None,
     **kwargs,
 ) -> vf.Environment:
-
     # -------- normalize answer_format --------
     answer_format = AnswerFormat(answer_format) if isinstance(answer_format, str) else answer_format
-    
+
     if answer_format == AnswerFormat.XML:
-        system_prompt = system_prompt or (THINK_XML_SYSTEM_PROMPT if use_think else XML_SYSTEM_PROMPT)
+        if system_prompt is None:
+            if allow_python_tool or allow_calculator_tool:
+                system_prompt = _build_tool_system_prompt(
+                    allow_python_tool, allow_calculator_tool, use_think, answer_format
+                )
+            else:
+                system_prompt = THINK_XML_SYSTEM_PROMPT if use_think else XML_SYSTEM_PROMPT
         parser_fields = ["think", "answer"] if use_think else ["answer"]
-        parser = XMLParser(fields=parser_fields, answer_field="answer") # medarc_verifiers' XMLParser
+        parser = XMLParser(fields=parser_fields, answer_field="answer")  # medarc_verifiers' XMLParser
     elif answer_format == AnswerFormat.BOXED:
-        system_prompt = system_prompt or (THINK_BOXED_SYSTEM_PROMPT if use_think else BOXED_SYSTEM_PROMPT)
+        if system_prompt is None:
+            if allow_python_tool or allow_calculator_tool:
+                system_prompt = _build_tool_system_prompt(
+                    allow_python_tool, allow_calculator_tool, use_think, answer_format
+                )
+            else:
+                system_prompt = THINK_BOXED_SYSTEM_PROMPT if use_think else BOXED_SYSTEM_PROMPT
         parser = vf.Parser(extract_fn=extract_boxed_answer_strict)
     else:
         raise ValueError(f"Unsupported answer format: {answer_format=}")
@@ -309,7 +367,15 @@ def load_environment(
 
     def _map(row: dict):
         return {
-            "question": _build_prompt(row, one_shot_examples, code_execution, one_shot, use_think, answer_format),
+            "question": _build_prompt(
+                row,
+                one_shot_examples,
+                allow_python_tool=allow_python_tool,
+                allow_calculator_tool=allow_calculator_tool,
+                one_shot=one_shot,
+                use_think=use_think,
+                answer_format=answer_format,
+            ),
             "answer": row["Ground Truth Answer"],
             "task": "medcalc_bench",
             "info": {
@@ -327,16 +393,22 @@ def load_environment(
     rubric = vf.Rubric(funcs=[check_correctness], weights=[1.0], parser=parser)
 
     # -------- create environment --------
-    if code_execution:
-        return PyREPLEnv(
+    if allow_python_tool or allow_calculator_tool:
+        env = SimpleToolEnv(
             dataset=train_mapped,
             eval_dataset=test_mapped,
             system_prompt=system_prompt,
             parser=parser,
             rubric=rubric,
             max_turns=max_turns,
+            use_python=allow_python_tool,
+            use_calculator=allow_calculator_tool,
             **kwargs,
         )
+        # Add ToolRubric to track tool usage metrics
+        tool_rubric = vf.ToolRubric(tools=env.tools)
+        env.rubric = vf.RubricGroup(rubrics=[tool_rubric, env.rubric])
+        return env
     else:
         return vf.SingleTurnEnv(
             dataset=train_mapped,

@@ -1,11 +1,14 @@
 # based on https://github.com/langchain-ai/langchain-experimental/blob/main/libs/experimental/langchain_experimental/utilities/python.py
 import ast
 import io
+import math
 import traceback
+import re
+from simpleeval import SimpleEval
 from contextlib import redirect_stderr, redirect_stdout
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 import verifiers as vf
 
 # Per-async-task storage to isolate parallel REPL sessions
@@ -62,7 +65,7 @@ class ReplSession:
         return stdout + stderr
 
 
-def python_repl(*, code: str) -> str:
+def python(*, code: str) -> str:
     """Execute Python code in a persistent REPL environment. Variables persist across calls.
 
     Packages available: numpy (as np), math, and Python standard library.
@@ -87,15 +90,119 @@ def python_repl(*, code: str) -> str:
     return session.run(code)
 
 
-class PyREPLEnv(vf.StatefulToolEnv):
+# SimpleEval-based calculator implementation
+_ALLOWED_FUNCS: dict[str, Callable] = {
+    "sqrt": math.sqrt,
+    "sin": math.sin,
+    "cos": math.cos,
+    "tan": math.tan,
+    "log": math.log,
+    "log10": math.log10,
+    "exp": math.exp,
+    "abs": abs,
+    "round": round,
+}
+_ALLOWED_NAMES: dict[str, float] = {
+    "pi": math.pi,
+    "e": math.e,
+}
+
+
+def safe_simpleeval(expr: str) -> float:
+    expr = (expr or "").strip()
+    if not expr:
+        raise ValueError("Empty expression")
+    if len(expr) > 200:
+        raise ValueError("Expression too long")
+    # Normalize common LLM/user math notation
+    expr = expr.replace("^", "**")
+    expr = expr.replace("×", "*").replace("÷", "/")
+
+    # Basic character allowlist
+    if not re.fullmatch(r"[0-9\.\+\-\*\/\%\(\)\,\s\*\^a-zA-Z_×÷]+", expr):
+        raise ValueError("Invalid characters")
+
+    s = SimpleEval(functions=_ALLOWED_FUNCS, names=_ALLOWED_NAMES)
+    # Extra paranoia: disallow attribute access / indexing
+    s.ATTR_INDEX_FALLBACK = None
+    return float(s.eval(expr))
+
+
+def calculator(*, expression: str) -> str:
+    """Evaluate a mathematical expression safely.
+
+    Supports basic arithmetic (+, -, *, /, %, **), parentheses, and common math functions.
+    Use ^ or ** for exponentiation.
+
+    Args:
+        expression: A mathematical expression to evaluate.
+
+    Available functions: sqrt, sin, cos, tan, log, log10, exp, abs, round
+    Available constants: pi, e
+
+    Returns:
+        The numeric result as a string, or an error message.
+
+    Examples:
+        {"expression": "(140 - 87) * 48 * 0.85 / 1.4"} -> "1544.5714285714284"
+        {"expression": "sqrt(16) + 2^3"} -> "12.0"
+        {"expression": "round(3.14159, 2)"} -> "3.14"
+        {"expression": "log10(1000)"} -> "3.0"
+        {"expression": "2 * pi * 5"} -> "31.41592653589793"
+    """
+    expression = (expression or "").strip()
+    if not expression:
+        return "Error: Empty expression"
+    try:
+        result = safe_simpleeval(expression)
+        return str(result)
+    except ZeroDivisionError:
+        return "Error: Division by zero"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+class SimpleToolEnv(vf.StatefulToolEnv):
     """
     Python REPL environment with persistent state across calls within a single rollout (one dataset row).
+
+    Supports configurable tools:
+    - python: Full Python execution with persistent state
+    - calculator: Safe mathematical expression evaluator
     """
+
     SESSION_KEY = "python_repl_session"
 
-    def __init__(self, **kwargs: Any):
-        # only python_repl tool available for this env
-        super().__init__(tools=[python_repl], **kwargs)
+    def __init__(
+        self,
+        use_python: bool = True,
+        use_calculator: bool = False,
+        tools: list[Callable] | None = None,
+        **kwargs: Any,
+    ):
+        """Initialize the environment with configurable tools.
+
+        Args:
+            use_python: Include the python_repl tool (default: True)
+            use_calculator: Include the calculator tool (default: False)
+            tools: Override with a custom list of tools (ignores use_python/use_calculator)
+            **kwargs: Additional arguments passed to StatefulToolEnv
+        """
+        if tools is not None:
+            # Custom tools provided, use them directly
+            selected_tools = tools
+        else:
+            # Build tool list from flags
+            selected_tools = []
+            if use_calculator:
+                selected_tools.append(calculator)
+            if use_python:
+                selected_tools.append(python)
+
+            if not selected_tools:
+                raise ValueError("At least one tool must be enabled (use_python or use_calculator)")
+
+        super().__init__(tools=selected_tools, **kwargs)
 
     def update_tool_args(
         self,
@@ -114,7 +221,8 @@ class PyREPLEnv(vf.StatefulToolEnv):
         between questions, since each new episode gets a new state dict and thus
         a new ReplSession.
         """
-        if tool_name != "python_repl":
+        # Only the python tool needs session management; calculator is stateless
+        if tool_name not in ("python"):
             return tool_args
 
         session = state.get(self.SESSION_KEY)
