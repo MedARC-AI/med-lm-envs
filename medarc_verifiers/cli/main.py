@@ -158,6 +158,15 @@ def build_batch_parser() -> argparse.ArgumentParser:
         default=False,
         help="Enable per-call model retry wrapper (default: disabled).",
     )
+    parser.add_argument(
+        "--include-usage",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Include usage reporting in API requests (extra_body.usage.include). "
+            "Default: auto-detect (enabled for Prime Inference, disabled otherwise)."
+        ),
+    )
     return parser
 
 
@@ -894,6 +903,12 @@ def _run_winrate_mode(argv: Sequence[str]) -> int:
 
 
 def _execute_batch(args: argparse.Namespace) -> int:
+    # Set the include_usage environment variable if explicitly specified
+    if getattr(args, "include_usage", None) is not None:
+        import os
+
+        os.environ["MEDARC_INCLUDE_USAGE"] = "true" if args.include_usage else "false"
+
     config_path = Path(args.config).expanduser()
     env_root_override = Path(args.env_config_root).expanduser().resolve() if args.env_config_root else None
     run_config = load_run_config(config_path, env_default_root=env_root_override)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -191,6 +192,10 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         print(eval_config.model_dump_json(indent=2))
         return 0
 
+    # Set the include_usage environment variable if explicitly specified
+    if args.include_usage is not None:
+        os.environ["MEDARC_INCLUDE_USAGE"] = "true" if args.include_usage else "false"
+
     try:
         asyncio.run(run_evaluation(eval_config))
     except KeyboardInterrupt:
@@ -326,6 +331,15 @@ def build_base_parser(*, require_env: bool, add_help: bool) -> argparse.Argument
     parser.add_argument("--hf-hub-dataset-name", "-D", default="", help="Custom Hugging Face dataset name when saving.")
     parser.add_argument(
         "--dry-run", action="store_true", help="Print the resolved EvalConfig and exit without running."
+    )
+    parser.add_argument(
+        "--include-usage",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Include usage reporting in API requests (extra_body.usage.include). "
+            "Default: auto-detect (enabled for Prime Inference, disabled otherwise)."
+        ),
     )
     return parser
 
