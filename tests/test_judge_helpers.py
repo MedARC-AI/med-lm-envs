@@ -3,7 +3,6 @@ import pytest
 from medarc_verifiers.utils.judge_helpers import (
     PRIME_INFERENCE_URL,
     default_judge_api_key,
-    is_prime_inference_url,
     judge_sampling_args_and_headers,
 )
 
@@ -132,10 +131,3 @@ def test_default_judge_api_key_prefers_pinference_judge_key(
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     assert default_judge_api_key(base_url=PRIME_INFERENCE_URL) == "secret-key"
-
-
-def test_is_prime_inference_url() -> None:
-    """Test the is_prime_inference_url helper function."""
-    assert is_prime_inference_url(PRIME_INFERENCE_URL) is True
-    assert is_prime_inference_url("https://api.openai.com/v1") is False
-    assert is_prime_inference_url(None) is False

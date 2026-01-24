@@ -23,6 +23,7 @@ from medarc_verifiers.cli.utils.shared import (
     resolve_env_identifier,
     resolve_max_concurrent,
 )
+from medarc_verifiers.utils.prime_inference import prime_inference_overrides
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +36,15 @@ def build_client_config(
     default_api_base_url: str,
     timeout_override: float | None,
     headers: list[str] | dict[str, str] | None,
-) -> tuple[str, ClientConfig]:
-    """Resolve model alias + endpoint settings into a ClientConfig."""
+) -> tuple[str, ClientConfig, dict[str, Any]]:
+    """Resolve model alias + endpoint settings into a ClientConfig.
+
+    Returns:
+        A tuple of (resolved_model, client_config, sampling_overrides).
+        - resolved_model: The resolved model identifier
+        - client_config: The ClientConfig for API calls
+        - sampling_overrides: Prime Inference sampling args to merge (e.g., usage reporting)
+    """
     normalized_headers = normalize_headers(headers if headers is not None else model_cfg.headers)
     model_alias = model_cfg.model or model_cfg.id
     if not model_alias:
@@ -51,10 +59,19 @@ def build_client_config(
         default_base_url=default_base_url,
     )
 
+    # Get Prime Inference-specific overrides (headers, sampling args, api_key_var)
+    prime_headers, sampling_overrides, prime_api_key_var = prime_inference_overrides(api_base_url)
+
+    # Use Prime API key if auto-detected and user didn't explicitly override
+    effective_api_key_var = prime_api_key_var if prime_api_key_var else api_key_var
+
+    # Merge headers: user-provided headers take precedence over Prime auto-detected
+    merged_headers = {**prime_headers, **(normalized_headers or {})}
+
     client_kwargs: dict[str, Any] = {
-        "api_key_var": api_key_var,
+        "api_key_var": effective_api_key_var,
         "api_base_url": api_base_url,
-        "extra_headers": normalized_headers or None,
+        "extra_headers": merged_headers or None,
     }
     timeout = timeout_override if timeout_override is not None else model_cfg.timeout
     if timeout is not None:
@@ -66,7 +83,7 @@ def build_client_config(
     if model_cfg.max_retries is not None:
         client_kwargs["max_retries"] = model_cfg.max_retries
 
-    return resolved_model, ClientConfig(**client_kwargs)
+    return resolved_model, ClientConfig(**client_kwargs), sampling_overrides
 
 
 def build_eval_config(

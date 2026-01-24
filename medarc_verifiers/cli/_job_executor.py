@@ -130,7 +130,7 @@ def execute_jobs(
 
         try:
             endpoints = _load_endpoints_for_model(job.model, settings, cache=endpoints_cache)
-            resolved_model, client_config = build_client_config(
+            resolved_model, client_config, prime_sampling_overrides = build_client_config(
                 job.model,
                 endpoints=endpoints,
                 default_api_key_var=settings.default_api_key_var,
@@ -138,12 +138,14 @@ def execute_jobs(
                 timeout_override=settings.timeout,
                 headers=job.model.headers,
             )
+            # Merge Prime Inference overrides with job sampling args (job args take precedence)
+            merged_sampling_args = {**prime_sampling_overrides, **job.sampling_args}
             eval_config = build_eval_config(
                 job_label=job.job_id,
                 model_cfg=job.model,
                 env_cfg=job.env,
                 env_args=job.env_args,
-                sampling_args=job.sampling_args,
+                sampling_args=merged_sampling_args,
                 cli_env_args=settings.cli_env_args,
                 cli_sampling_args=settings.cli_sampling_args,
                 resolved_model=resolved_model,

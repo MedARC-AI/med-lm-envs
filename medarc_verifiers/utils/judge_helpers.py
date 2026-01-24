@@ -2,8 +2,7 @@ from dataclasses import dataclass, field
 import os
 from typing import Dict, Iterable, Optional, Tuple, Union
 from .sampling_args import sanitize_sampling_args_for_openai
-
-PRIME_INFERENCE_URL = "https://api.pinference.ai/api/v1"
+from .prime_inference import PRIME_INFERENCE_URL, _resolve_include_usage
 
 
 def _normalize_judge_name(name: str) -> str:
@@ -129,24 +128,6 @@ _JUDGE_DEFAULTS: Iterable[JudgeSamplingDefaults] = (
         min_p=0.0,
     ),
 )
-
-
-def _resolve_include_usage(include_usage: bool | None, is_prime_inference: bool) -> bool:
-    """Resolve the effective include_usage value.
-
-    Priority:
-    1. Explicit include_usage parameter (if not None)
-    2. MEDARC_INCLUDE_USAGE environment variable (if set)
-    3. Auto-detect based on whether base_url is Prime Inference
-    """
-    if include_usage is not None:
-        return include_usage
-
-    env_value = os.environ.get("MEDARC_INCLUDE_USAGE")
-    if env_value is not None:
-        return env_value.lower() in ("1", "true", "yes")
-
-    return is_prime_inference
 
 
 def judge_sampling_args_and_headers(

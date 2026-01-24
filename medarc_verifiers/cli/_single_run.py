@@ -144,7 +144,7 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         parser.error(f"Failed to load endpoints registry: {exc}")
 
     model_cfg = ModelConfigSchema(model=args.model)
-    resolved_model, client_config = build_client_config(
+    resolved_model, client_config, prime_sampling_overrides = build_client_config(
         model_cfg,
         endpoints=endpoints,
         default_api_key_var=args.api_key_var,
@@ -152,6 +152,9 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         timeout_override=args.timeout,
         headers=headers,
     )
+
+    # Merge Prime Inference overrides with user sampling args (user args take precedence)
+    merged_sampling_args = {**prime_sampling_overrides, **merged_sampling_args}
 
     env_cfg = _SingleRunEnvConfig(
         id=args.env,
