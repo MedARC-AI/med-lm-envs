@@ -189,10 +189,9 @@ models:
   my-model:
     model: openai/gpt-5-nano
     api_base_url: https://api.pinference.ai/api/v1
-    api_key_var: PRIME_API_KEY
 ```
 
-Manual header/usage configuration is only needed to override auto-detection:
+Manual configuration is only needed to override auto-detection:
 
 ```yaml
 models:
@@ -264,6 +263,12 @@ medarc-eval bench --config my-config.yaml --max-concurrent 5
 
 # Change temperature for all jobs
 medarc-eval bench --config my-config.yaml --sampling-args '{"temperature": 0.5}'
+
+# Enable usage reporting for all jobs
+medarc-eval bench --config my-config.yaml --include-usage
+
+# Disable usage reporting (overrides auto-detection for Prime Inference)
+medarc-eval bench --config my-config.yaml --no-include-usage
 ```
 
 ## Next Steps
