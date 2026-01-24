@@ -124,6 +124,7 @@ class OrchestratorRunner:
         scheduler = TaskScheduler(self._resource_manager, max_parallel=self._options.max_parallel)
         self._run_started_at = _utcnow()
         self._dashboard.start()
+        self._dashboard.update(self._manifests.values(), caption=self._dashboard_caption())
         self._dashboard_refresh_task = self._start_dashboard_refresh()
         self._dashboard.log(
             f"RUN started run_id={self._options.run_id} tasks={len(self._manifests)} "
@@ -506,7 +507,10 @@ class OrchestratorRunner:
             interval_s = 1.0 / max(0.1, refresh_hz)
             while True:
                 await asyncio.sleep(interval_s)
-                self._dashboard.update(self._manifests.values(), caption=self._dashboard_caption())
+                try:
+                    self._dashboard.update(self._manifests.values(), caption=self._dashboard_caption())
+                except Exception as exc:  # noqa: BLE001
+                    self._dashboard.log(f"RUN dashboard-refresh failed error={exc!r}")
 
         return asyncio.create_task(refresh_loop())
 
