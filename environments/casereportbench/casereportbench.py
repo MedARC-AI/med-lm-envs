@@ -70,6 +70,15 @@ PREGNANCY_PREFIX = """Based on the provided text, extract and return information
                     "pregnancy_tests_image_exam": []
                   }"""
 
+PREGNANCY_PREFIX_ZERO_SHOT = """Based on the provided text, extract and return information directly relevant to pregnancy, neonatal, and maternal health in a structured dictionary format. Include the following top-level keys:
+                                - 'neonatal_health': List conditions or observations directly related to the infant's health. Use an empty list [] if no pertinent information is available.
+                                - 'maternal_health': List conditions or observations directly related to the mother's health. Use an empty list [] if no pertinent information is available.
+                                - 'prengancy_test_imaging_exam': List all maternal and neonate lab tests, genetics tests, physical exam, and diangostic 
+                                imaging and their respective positive and negative results. Use an empty list [] if no complications are found.
+                                All entries are verbatim quotes from or clear deductions based on the provided text, without making assumptions.
+                                All entries should focus on diagnostic clarity and exclude any treatment details, references to figures, tables.
+                                For all entries, do not infer or suggest possible underlying or associated conditions that are not explicitly part of the pregnancy, maternal or neonatal observations."""
+                        
 # =============================================================================
 # VITALS_HEMA 
 # =============================================================================
@@ -110,6 +119,17 @@ VITALS_HEMA_PREFIX = """Based on the provided text, extract and return vital sig
                     "hematology_tests_measurements": []
                   }"""
 
+VITALS_HEMA_PREFIX_ZERO_SHOT = """Based on the provided text, extract and return vital signs and hematological information in a structured dictionary format. Include the following top-level keys:
+                                - 'temperature': List the temperature values combined with units if mentioned. Use an empty list [] if no temperature data is available.
+                                - 'pulse': List pulse rate values combined with units if mentioned. Use an empty list [] if no pulse data is available.
+                                - 'respiratory_rate': List respiratory rate values combined with units if mentioned. Use an empty list [] if no respiratory data is available.
+                                - 'blood_pressure': List blood pressure readings, specifying both systolic and diastolic values combined with units if mentioned. Use an empty list [] if no blood pressure data is available.
+                                - 'oxygen_saturation (SpO2)': List oxygen saturation values combined with units if mentioned. Use an empty list [] if no SpO2 data is available.
+                                - 'hematological_conditions': List conditions or observations directly related to the the blood system, which includes components like red blood cells, white blood cells, platelets, blood vessels, bone marrow, lymph nodes, and the proteins involved in bleeding and clotting.
+                                - 'hematology_tests_measurements': List all hematological related measurements such as hemoglobin, hematocrit, white blood cell count, platelet count, and any other relevant blood test results. Use an empty list [] if no hematology data is available.
+                                Ensure all entries are verbatim quotations from or clear deductions from the text, without making assumptions. 
+                                Focus on diagnostic clarity and ensure that the output is directly relevant to the reasons for the medical visit. 
+                                Exclude reference to any figures or tables."""  
 # =============================================================================
 # NEURO 
 # =============================================================================
@@ -137,6 +157,14 @@ NEURO_PREFIX = """Based on the provided text, extract and return information dir
                     "cognitive": [],
                     "Neuro_tests_image_exam": []
                   }"""
+NEURO_PREFIX_ZERO_SHOT = """Based on the provided text, extract and return information directly relevant to neurological and cognitive functions as well as head-related conditions in a structured dictionary format. Include the following top-level keys:
+                            - 'neurological': List observations and conditions directly related to the neurological system. Use an empty list [] if no pertinent information is available.
+                            - 'cognitive': List observations and conditions directly related to cognitive functions. Use an empty list [] if no pertinent information is available.
+                            - 'Neuro_Tests_Imaging_Exam': List descriptions of tests, measurements, physical exam, and diagnostic imaging specific to the neurological and cognitive areas, detailing both positive and negative findings if available. Use an empty list [] if no applicable data is found.
+                            Ensure all entries are verbatim quotes from or clear deductions based from the provided text, without making assumptions or inference.  
+                            All entries should focus on diagnostic clarity and exclude any treatment details, references to figures and tables.
+                            For all entries, do not infer or suggest possible underlying or associated conditions that are not explicitly part of the neurological observations."""
+                  
 
 # =============================================================================
 # EENT 
@@ -174,6 +202,17 @@ EENT_PREFIX = """Based on the provided text, extract and return information dire
                     "EENT_tests_image_exam": []
 """
 
+EENT_PREFIX_ZERO_SHOT = """Based on the provided text, extract and return information directly relevant to EENT conditions in a structured dictionary format. Include observations or symptoms for 'eyes', 'ears', 'nose', and 'throat', using the following top-level keys:
+                            - 'eyes': Include only direct observations or symptoms related to eye conditions. Use an empty list [] if no information is available.
+                            - 'ears': Include only direct observations or symptoms related to ear conditions. Use an empty list [] if no information is available.
+                            - 'nose': Include only direct observations or symptoms related to nose conditions. Use an empty list [] if no information is available.
+                            - 'throat': Include only direct observations or symptoms related specifically to throat conditions. Use an empty list [] if no information is available.
+                            - 'EENT_tests_image_exam': Include a sub-dictionary for EENT-specific tests, measurements, physical exam, and diagnostic imaging, detailing their respective positive and negative findings if available. Use an empty list [] if no relevant tests or imaging results are mentioned.
+                            Ensure all entries are verbatim or clear deductions from the provided text without making assumptions. 
+                            all entries should focus on diagnostic clarity and exclude any treatment details, references to figures or tables.
+                            For all entries, do not infer or suggest possible underlying or associated conditions that are not explicitly part of the ears, eyes, nose and throat observations."""
+                            
+
 # =============================================================================
 # CVS 
 # =============================================================================
@@ -200,7 +239,13 @@ CVS_PREFIX = """Based on the provided text, extract and return relevant informat
                     "vascular": [],
                     "CVS_tests_image_exam": []
                   }"""
-
+CVS_PREFIX_ZERO_SHOT = """Based on the provided text, extract and return relevant information in a structured dictionary format. Include the following top-level keys:
+                        - 'cardiac': List observations, signs, symptoms, or conditions directly related to the heart and its immediate functions also include cardiocerebral conditions such as stroke. Use an empty list [] if no pertinent information is available.
+                        - 'vascular': List observations, signs, symptoms, or conditions directly related to the blood vessels and circulatory system. Use an empty list [] if no applicable data is found.
+                        - 'CVS_tests_image_exam': List all cardiovascular lab tests, genetics tests, physical exam, and diangostic imaging and their respective positive and negative results if available. Use an empty list [] if no complications are found.
+                        All entries are verbatim quotes from or clear deductions based on the provided text, without making assumptions.
+                        All entries should focus on diagnostic clarity and exclude any treatment details, references to figures, tables.
+                        For all entries, do not infer or suggest possible underlying or associated conditions that are not explicitly part of the cardiovascular observations."""
 # =============================================================================
 # RESP 
 # =============================================================================
@@ -225,6 +270,13 @@ RESP_PREFIX = """Based on the provided text, extract and return relevant respira
                     "respiratory": [],
                     "RESP_tests_image_exam": []
                   }"""
+RESP_PREFIX_ZERO_SHOT = """Based on the provided text, extract and return relevant respiratory system information in a structured dictionary format. Include the following top-level keys:
+                        - 'respiratory': List observations, signs, symptoms, or conditions directly related to the respiratory system. Use an empty list [] if no pertinent information is available.
+                        - 'RESP_tests_image_exam': List descriptions of tests, measurements, physical exams, and diagnostic imaging specific to the respiratory system, including both positive and negative findings. Use an empty list [] if no applicable data is found. 
+                        All entries are verbatim quotes from or clear deductions based on the provided text, without making assumptions.
+                        All entries should focus on diagnostic clarity and exclude any treatment details, references to figures, tables.
+                        For all entries, do not infer or suggest possible underlying or associated conditions that are not explicitly part of the respiratory observations."""
+                
 
 # =============================================================================
 # GI 
@@ -251,6 +303,12 @@ GI_PREFIX = """Based on the provided text, extract and return relevant gastroint
                     "GI_tests_image_exam": []
                   }"""
 
+GI_PREFIX_ZERO_SHOT = """Based on the provided text, extract and return relevant gastrointestinal system information in a structured dictionary format. Include the following top-level keys:
+                        - 'gastrointestinal': List observations, signs, symptoms, or conditions directly related to the gastrointestinal system. Use an empty list [] if no pertinent information is available.
+                        - 'GI_tests_image_exam': List descriptions of tests, measurements, physical exams and diagnostic imaging specific to the gastrointestinal system, including both positive and negative findings if available. Use an empty list [] if no applicable data is found.
+                        Ensure all entries are verbatim or clear deductions from the provided text without making assumptions. 
+                        All etnries should focus on diagnostic clarity. Exclude any treatment details and exclude references to figures or tables.
+                        For all entries, do not infer or suggest possible underlying or associated conditions that are not explicitly part of the gastrointestinal observations."""
 # =============================================================================
 # GU 
 # =============================================================================
@@ -278,6 +336,14 @@ GU_PREFIX = """Based on the provided text, extract and return the relevant genit
                     "genital": [],
                     "GU_tests_image_exam": []
                   }"""
+GU_PREFIX_ZERO_SHOT = """Based on the provided text, extract and return the relevant genitourinary system information in a structured dictionary format. Separate the information into the following top-level keys:
+                        - 'urinary': List observations and conditions directly related to the urinary tract. Use an empty list [] if no pertinent information is available.
+                        - 'genital': List observations and conditions directly related to the genital organs. Use an empty list [] if no pertinent information is available.
+                        - 'GU_tests_image_exam':  List descriptions of tests, measurements, physical exams and diagnostic imaging specific to the genital and urinary systems, detailing both positive and negative findings if available. 
+                        Use an empty list [] if no applicable data is found.
+                        All entries are verbatim quotes from or clear deductions based on the provided text, without making assumptions.
+                        All entries should focus on diagnostic clarity and exclude any treatment details, references to figures, tables.
+                        For all entries, do not infer or suggest possible underlying or associated conditions that are not explicitly part of the genitourinary observations."""
 
 # =============================================================================
 # DERM  
@@ -311,6 +377,16 @@ DERM_PREFIX = """Based on the provided text, extract and return the relevant der
                     "derm_breasts_facial_tests_image_exam": []
                   }"""
 
+DERM_PREFIX_ZERO_SHOT = """Based on the provided text, extract and return the relevant dermatological information in a structured dictionary format. Separate the information into the following top-level keys:
+                            - 'skin_conditions': List observations and conditions directly related to the skin. Use an empty list [] if no pertinent information is available.
+                            - 'facial_features': List observations and conditions directly related to the facial features. Use an empty list [] if no pertinent information is available.
+                            - 'breast_conditions': List observations and conditions directly related to the breasts. Use an empty list [] if no pertinent information is available.
+                            - 'derm_breasts_facial_tests_image_exam': List descriptions of tests, measurements, physical exams and diagnostic imaging specific to dermatological, breasts and facial feature assessments, detailing both positive and negative findings if available. Use an empty list [] if no applicable data is found.
+                            All entries are verbatim quotes from or clear deductions based on the provided text, without making assumptions.
+                            All entries should focus on diagnostic clarity and exclude any treatment details, references to figures, tables.
+                            For all entries, do not infer or suggest possible underlying or associated conditions that are not explicitly part of the dermatology or facial or breasts observations."""
+                    
+
 # =============================================================================
 # MSK           
 # =============================================================================
@@ -338,6 +414,14 @@ MSK_PREFIX = """Based on the provided text, extract and return the relevant musc
                     "skeletal": [],
                     "MSK_tests_image_exam": []
                   }"""
+
+MSK_PREFIX_ZERO_SHOT = """Based on the provided text, extract and return the relevant musculoskeletal system information in a structured dictionary format. Organize the information into the following top-level keys:
+                        - 'muscle': List observations and conditions directly related to muscle health and function. Use an empty list [] if no pertinent muscle information is available.
+                        - 'skeletal': List observations and conditions directly related to the skeletal system, including bones and joints. Use an empty list [] if no pertinent skeletal information is available.
+                        - 'MSK_tests_image_exam': List descriptions of tests, measurements, and diagnostic imaging that are specific to the musculoskeletal system, covering both muscles and bones, detailing both positive and negative findings if available. Use an empty list [] if no applicable data is found.
+                        All entries are verbatim quotes from or clear deductions based on the provided text, without making assumptions.
+                        All entries should focus on diagnostic clarity and exclude any treatment details, references to figures, tables.
+                        For all entries, do not infer or suggest possible underlying or associated conditions that are not explicitly part of the musculoskeletal observations."""
 
 # =============================================================================
 # LYMPH
@@ -386,6 +470,21 @@ LYMPH_PREFIX = """Based on the provided text, extract and return the relevant ly
                     "Lymphatic_tests_image_exam": []
                   }"""
 
+
+LYMPH_PREFIX_ZERO_SHOT = """Based on the provided text, extract and return the relevant lymphatic system information in a structured dictionary format. 
+                            Exclude reference to figures, tables or citations. Separate the information into the following top-level keys:
+                            - 'adenoid': List observations and conditions directly related to adenoids. Use an empty list [] if no pertinent information is available.
+                            - 'tonsils': List observations and conditions directly related to the tonsils. Use an empty list [] if no pertinent information is available.
+                            - 'lymphatic_tissues': List observations and conditions directly related to general lymphatic tissues. Use an empty list [] if no pertinent information is available.
+                            - 'lymph_nodes': List observations and conditions directly related to lymph nodes. Use an empty list [] if no pertinent information is available.
+                            - 'thymus': List observations and conditions directly related to the thymus. Use an empty list [] if no pertinent information is available.
+                            - 'bone_marrow': List observations and conditions directly related to bone marrow. Use an empty list [] if no pertinent information is available.
+                            - 'spleen': List observations and conditions directly related to the spleen. Use an empty list [] if no pertinent information is available.
+                            - 'immune_cells': List observations and conditions directly related to immune cells. Use an empty list [] if no pertinent information is available.
+                            - 'Lymphatic_tests_image_exam': List descriptions of tests, measurements, physical exams and diagnostic imaging for any part of the lymphatic system, detailing both positive and negative findings if available. Use an empty list [] if no applicable data is found.
+                            All entries are verbatim quotes from or clear deductions based on the provided text, without making assumptions.
+                            All entries should focus on diagnostic clarity and exclude any treatment details, references to figures, tables.
+                            For all entries, do not infer or suggest possible underlying or associated conditions that are not explicitly part of the lymphatic system observations."""
 # =============================================================================
 # ENDO 
 # =============================================================================
@@ -411,6 +510,12 @@ ENDO_PREFIX = """Based on the provided text, extract and return the relevant end
                     "Endocrine_tests_image_exam": []
                   }"""
 
+ENDO_PREFIX_ZERO_SHOT = """Based on the provided text, extract and return the relevant endocrine system information in a structured dictionary format. Separate the information into the following top-level keys:
+                        - 'endocrine_glands': List observations and conditions directly related to specific endocrine glands such as the thyroid, pancreas, adrenal glands, pituitary gland, and others. Use an empty list [] if no pertinent information is available.
+                        - 'Endocrine_tests_image_exam': List descriptions of tests, measurements, physical exams, and diagnostic imaging specific to the endocrine system, including both positive and negative findings if available. Use an empty list [] if no applicable data is found.
+                        All entries are verbatim quotes from or clear deductions based on the provided text, without making assumptions.
+                        All entries should focus on diagnostic clarity and exclude any treatment details, references to figures, tables.
+                        For all entries, do not infer or suggest possible underlying or associated conditions that are not explicitly part of the endocrine system observations."""
 # =============================================================================
 # HISTORY       
 # =============================================================================
@@ -448,75 +553,199 @@ HISTORY_PREFIX = """Based on the provided text, extract and return the relevant 
                     "chief_complaint": [] 
                   }"""
 
-
-# =============================================================================
-# FULL PROMPT CONSTRUCTION - Combines all three components like DSPy does
-# =============================================================================
-
-def _build_full_prompt(docstring: str, desc: str, prefix: str) -> str:
-    """Construct the full prompt as DSPy would format it.
-    
-    DSPy Signature prompts are constructed from:
-    1. Class docstring (task context)
-    2. OutputField desc (output format description)
-    3. OutputField prefix (detailed instructions + few-shot examples)
-    """
-    return f"""{docstring}
-
-{desc}
-
-{prefix}"""
-
-
-# Pre-built full prompts for each category
-PREGNANCY_PROMPT = _build_full_prompt(PREGNANCY_DOCSTRING, PREGNANCY_DESC, PREGNANCY_PREFIX)
-VITALS_HEMA_PROMPT = _build_full_prompt(VITALS_HEMA_DOCSTRING, VITALS_HEMA_DESC, VITALS_HEMA_PREFIX)
-NEURO_PROMPT = _build_full_prompt(NEURO_DOCSTRING, NEURO_DESC, NEURO_PREFIX)
-EENT_PROMPT = _build_full_prompt(EENT_DOCSTRING, EENT_DESC, EENT_PREFIX)
-CVS_PROMPT = _build_full_prompt(CVS_DOCSTRING, CVS_DESC, CVS_PREFIX)
-RESP_PROMPT = _build_full_prompt(RESP_DOCSTRING, RESP_DESC, RESP_PREFIX)
-GI_PROMPT = _build_full_prompt(GI_DOCSTRING, GI_DESC, GI_PREFIX)
-GU_PROMPT = _build_full_prompt(GU_DOCSTRING, GU_DESC, GU_PREFIX)
-DERM_PROMPT = _build_full_prompt(DERM_DOCSTRING, DERM_DESC, DERM_PREFIX)
-MSK_PROMPT = _build_full_prompt(MSK_DOCSTRING, MSK_DESC, MSK_PREFIX)
-LYMPH_PROMPT = _build_full_prompt(LYMPH_DOCSTRING, LYMPH_DESC, LYMPH_PREFIX)
-ENDO_PROMPT = _build_full_prompt(ENDO_DOCSTRING, ENDO_DESC, ENDO_PREFIX)
-HISTORY_PROMPT = _build_full_prompt(HISTORY_DOCSTRING, HISTORY_DESC, HISTORY_PREFIX)
+HISTORY_PREFIX_ZERO_SHOT = """Based on the provided text, extract and return the relevant historical information in a structured dictionary format. Separate the information into the following top-level keys:
+                            - 'past_medical_history': List conditions and previous diagnoses related to the patient's past medical history. Use an empty list [] if no pertinent information is available.
+                            - 'past_surgical_history': List past surgical interventions and outcomes. Use an empty list [] if no relevant surgical history is available.
+                            - 'history_of_present_illness': List the chief complaint and detail the chronological development of the patient's current complaints and symptoms. Use an empty list [] if no detailed current illness history is provided.
+                            - 'social_history': Include relevant lifestyle factors such as smoking, alcohol use, occupation, and living conditions. Use an empty list [] if no social history is available.
+                            - 'family_and_genetics_history': List any known genetic conditions or diseases prevalent in the patient's family that might affect the patient's health. Use an empty list [] if no family or genetic history is available.
+                            - 'chief complaint': List any known chief complaint that brought patient to seek medical attention. Use an empty list [] if no information. 
+                            All entries are verbatim quotes from or clear deductions based on the provided text, without making assumptions.
+                            All entries should focus on diagnostic clarity and exclude any treatment details, references to figures, tables.
+                            For all entries, do not infer or suggest possible underlying or associated conditions that are not explicitly part of the historical information provided."""
 
 
 # =============================================================================
-# PROMPT MAPPING - Maps task enum values to full prompts
+# COMPONENT MAPPING - For precise DSPy-faithful template construction
 # =============================================================================
-PROMPTS = {
-    "Vitals_Hema": VITALS_HEMA_PROMPT,
-    "Neuro": NEURO_PROMPT,
-    "EENT": EENT_PROMPT,
-    "CVS": CVS_PROMPT,
-    "RESP": RESP_PROMPT,
-    "GI": GI_PROMPT,
-    "GU": GU_PROMPT,
-    "MSK": MSK_PROMPT,
-    "DERM": DERM_PROMPT,
-    "LYMPH": LYMPH_PROMPT,
-    "History": HISTORY_PROMPT,
-    "ENDO": ENDO_PROMPT,
-    "Pregnancy": PREGNANCY_PROMPT,
+
+# Most tasks use the default "Medical text." description for the input field.
+# Pregnancy has a specialized description in the original repo.
+INPUT_DESCRIPTIONS = {
+    "Pregnancy": "Provide medical text that includes specific observations, health assessments, or conditions related to pregnancy, neonatal and maternal health.",
 }
 
+def _get_input_desc(task: str) -> str:
+    return INPUT_DESCRIPTIONS.get(task, "Medical text.")
 
-def get_prompt(task: str) -> str:
-    """Get the full prompt for a given task.
+# Store raw components instead of pre-concatenated strings to allow structured template building
+COMPONENTS = {
+    "Vitals_Hema": {
+        "doc": VITALS_HEMA_DOCSTRING,
+        "desc": VITALS_HEMA_DESC,
+        "fs": VITALS_HEMA_PREFIX,
+        "zs": VITALS_HEMA_PREFIX_ZERO_SHOT
+    },
+    "Neuro": {
+        "doc": NEURO_DOCSTRING,
+        "desc": NEURO_DESC,
+        "fs": NEURO_PREFIX,
+        "zs": NEURO_PREFIX_ZERO_SHOT
+    },
+    "EENT": {
+        "doc": EENT_DOCSTRING,
+        "desc": EENT_DESC,
+        "fs": EENT_PREFIX,
+        "zs": EENT_PREFIX_ZERO_SHOT
+    },
+    "CVS": {
+        "doc": CVS_DOCSTRING,
+        "desc": CVS_DESC,
+        "fs": CVS_PREFIX,
+        "zs": CVS_PREFIX_ZERO_SHOT
+    },
+    "RESP": {
+        "doc": RESP_DOCSTRING,
+        "desc": RESP_DESC,
+        "fs": RESP_PREFIX,
+        "zs": RESP_PREFIX_ZERO_SHOT
+    },
+    "GI": {
+        "doc": GI_DOCSTRING,
+        "desc": GI_DESC,
+        "fs": GI_PREFIX,
+        "zs": GI_PREFIX_ZERO_SHOT
+    },
+    "GU": {
+        "doc": GU_DOCSTRING,
+        "desc": GU_DESC,
+        "fs": GU_PREFIX,
+        "zs": GU_PREFIX_ZERO_SHOT
+    },
+    "DERM": {
+        "doc": DERM_DOCSTRING,
+        "desc": DERM_DESC,
+        "fs": DERM_PREFIX,
+        "zs": DERM_PREFIX_ZERO_SHOT
+    },
+    "MSK": {
+        "doc": MSK_DOCSTRING,
+        "desc": MSK_DESC,
+        "fs": MSK_PREFIX,
+        "zs": MSK_PREFIX_ZERO_SHOT
+    },
+    "LYMPH": {
+        "doc": LYMPH_DOCSTRING,
+        "desc": LYMPH_DESC,
+        "fs": LYMPH_PREFIX,
+        "zs": LYMPH_PREFIX_ZERO_SHOT
+    },
+    "History": {
+        "doc": HISTORY_DOCSTRING,
+        "desc": HISTORY_DESC,
+        "fs": HISTORY_PREFIX,
+        "zs": HISTORY_PREFIX_ZERO_SHOT
+    },
+    "ENDO": {
+        "doc": ENDO_DOCSTRING,
+        "desc": ENDO_DESC,
+        "fs": ENDO_PREFIX,
+        "zs": ENDO_PREFIX_ZERO_SHOT
+    },
+    "Pregnancy": {
+        "doc": PREGNANCY_DOCSTRING,
+        "desc": PREGNANCY_DESC,
+        "fs": PREGNANCY_PREFIX,
+        "zs": PREGNANCY_PREFIX_ZERO_SHOT
+    },
+}
+
+def _build_dspy_predict_prompt(docstring: str, input_label: str, input_desc: str, output_label: str, output_desc: str, value: str, prefix: str) -> str:
+    """Replicates the standard dspy.Predict template exactly."""
+    return f"""{docstring}
+
+---
+
+Follow the format below.
+
+{input_label}: {input_desc}
+{output_label}: {output_desc}
+
+---
+
+{input_label}: {value}
+{output_label}: {prefix}"""
+
+def _build_ucp_question(*, text: str, task: str, prompting: str) -> str:
+    """Build a prompt for UCP that is word-for-word faithful to DSPy's Predict template."""
+    comp = COMPONENTS[task]
+    prefix = comp["fs"] if prompting.upper() == "FS" else comp["zs"]
     
-    Args:
-        task: One of the 13 CaseReportBench task names.
-        
-    Returns:
-        The complete prompt text including docstring, description, and few-shot examples.
-        This matches the format DSPy would construct from the Signature class.
+    return _build_dspy_predict_prompt(
+        docstring=comp["doc"],
+        input_label="Text",
+        input_desc=_get_input_desc(task),
+        output_label="Extract Info",
+        output_desc=comp["desc"],
+        value=text,
+        prefix=prefix
+    )
+
+def _build_ugp_instructions(tasks: list[str], prompting: str) -> str:
+    """Build a unified global prompt (UGP) by consolidating categories into one signature.
+    
+    This replicates how a single DSPy Signature with 13 output fields would be formatted.
     """
-    if task not in PROMPTS:
-        raise ValueError(f"Unknown task: {task}. Valid tasks: {list(PROMPTS.keys())}")
-    return PROMPTS[task]
+    # We use the generic "dense extraction" docstring for UGP
+    docstring = "Extract structured clinical information from the provided case report text across multiple categories."
+    
+    # Header: Field descriptions
+    format_section = "Follow the format below.\n\nText: Medical text."
+    value_section = ""
+    
+    for t in tasks:
+        comp = COMPONENTS[t]
+        label = f"Extract Info {t}"
+        format_section += f"\n{label}: {comp['desc']}"
+        
+        prefix = comp["fs"] if prompting.upper() == "FS" else comp["zs"]
+        value_section += f"\n{label}: {prefix}"
+
+    # Use a format where Text is provided once, followed by all Extract Info fields
+    return f"""{docstring}
+
+---
+
+{format_section}
+
+---
+
+Text: {{text}}
+{value_section}"""
+
+def get_prompt(task: str, prompting: str = "FS") -> str:
+    """Deprecated: Use _build_ucp_question or _build_ugp_instructions directly for fidelity."""
+    comp = COMPONENTS[task]
+    prefix = comp["fs"] if prompting.upper() == "FS" else comp["zs"]
+    return f"{comp['doc']}\n\n{comp['desc']}\n\n{prefix}"
+
+
+def _build_ugp_answer_obj(row: dict[str, Any], tasks: list[str]) -> dict[str, list[str]]:
+    """Build the UGP ground-truth answer object: {category: [items...]}."""
+    answer_obj: dict[str, list[str]] = {}
+    for t in tasks:
+        gt_list = row.get(t)
+        if not isinstance(gt_list, list):
+            gt_list = []
+        answer_obj[t] = _normalize_items(_flatten_to_strings(gt_list))
+    return answer_obj
+
+
+def _ugp_get_items_strict(obj: dict[str, Any] | None, category: str) -> list[str]:
+    """Strict UGP extraction: only accept exact category keys."""
+    if not obj or category not in obj:
+        return []
+    return _normalize_items(_flatten_to_strings(obj.get(category)))
 
 def compute_normalized_token_set_ratio(list1: List[str], list2: List[str], method: str = "average") -> float:
     """
@@ -624,7 +853,12 @@ def compute_rouge_l(pred_text: str, ref_text: str) -> float:
 
 
 class CaseReportBenchTask(str, Enum):
-    """The 14 clinical categories from the CaseReportBench dataset."""
+    """The clinical categories from the CaseReportBench dataset.
+
+    Note: The original dataset includes a `Lab_Image` column, but the prompt text for
+    `Lab_Image` is not present in the upstream DSPy signature file (`extractAug24.py`)
+    in this workspace copy. This environment therefore implements 13 categories.
+    """
     VITALS_HEMA = "Vitals_Hema"
     NEURO = "Neuro"
     EENT = "EENT"
@@ -676,6 +910,8 @@ def _normalize_items(items: Iterable[str]) -> list[str]:
 
 def load_environment(
     task: str | CaseReportBenchTask = CaseReportBenchTask.ALL,
+    method: str = "UCP",
+    prompting: str = "FS",
     max_examples: int = -1,
     **kwargs,
 ) -> vf.Environment:
@@ -685,7 +921,10 @@ def load_environment(
     (extractAug24.py) to ensure direct comparability to the paper's published results.
     
     Args:
-        task: Which clinical category to evaluate. Use "all" for all 14 categories.
+        task: Which clinical category to evaluate. Use "all" for all 13 categories.
+        method: Data integration method from the paper. "UCP" (category prompts on full text) or
+            "UGP" (one unified prompt). "FCSP" is not supported in this environment.
+        prompting: Prompting style from the paper. "FS" (few-shot) or "ZS" (zero-shot).
         max_examples: Maximum number of examples to load. -1 for all.
         **kwargs: Additional arguments passed to vf.SingleTurnEnv.
         
@@ -693,6 +932,19 @@ def load_environment(
         A verifiers Environment configured for CaseReportBench evaluation.
     """
     
+    method_norm = str(method).strip().upper()
+    prompting_norm = str(prompting).strip().upper()
+    if method_norm not in {"UCP", "UGP", "FCSP"}:
+        raise ValueError("Invalid method. Choose 'UCP', 'UGP', or 'FCSP'.")
+    if prompting_norm not in {"FS", "ZS"}:
+        raise ValueError("Invalid prompting. Choose 'FS' or 'ZS'.")
+    if method_norm == "FCSP":
+        raise NotImplementedError(
+            "FCSP requires subheading/section segmentation (paper §4.1/§4.2.1). "
+            "The Hugging Face dataset used here provides only a flat `text` field, "
+            "so FCSP is not implemented yet."
+        )
+
     # Load dataset from Hugging Face
     raw = load_dataset(
         "cxyzhang/caseReportBench_ClinicalDenseExtraction_Benchmark", 
@@ -714,33 +966,36 @@ def load_environment(
             continue
         pmcid = row.get("pmcid")
         
-        for t in tasks_to_load:
-            # Get ground truth annotations for this category
-            gt_list = row.get(t.value)
-            if not isinstance(gt_list, list):
-                gt_list = []
-            
-            gt_items = _normalize_items(_flatten_to_strings(gt_list))
-            
-            # Get the VERBATIM prompt from author's DSPy signature
-            author_prompt = get_prompt(t.value)
-            
-            # Construct the full prompt with case report text
-            # This matches how DSPy would format the input
-            prompt = (
-                f"{author_prompt}\n\n"
-                "---\n"
-                "Medical text:\n"
-                f"{text}\n"
-                "---\n\n"
-                "extract_info:"
+        if method_norm == "UGP":
+            # One example per case: answer is a dict keyed by category
+            tasks = [t.value for t in tasks_to_load]
+            answer_obj = _build_ugp_answer_obj(row, tasks)
+
+            ugp_prompt = _build_ugp_instructions(tasks, prompting=prompting_norm)
+            question = ugp_prompt.format(text=text)
+            examples.append(
+                {
+                    "question": question,
+                    "answer": json.dumps(answer_obj, ensure_ascii=False),
+                    "info": {"text": text, "pmcid": pmcid, "method": "UGP", "prompting": prompting_norm},
+                }
             )
-            
-            examples.append({
-                "question": prompt,
-                "answer": json.dumps(gt_items, ensure_ascii=False),
-                "info": {"text": text, "pmcid": pmcid, "task": t.value}
-            })
+        else:
+            # UCP: one example per category
+            for t in tasks_to_load:
+                gt_list = row.get(t.value)
+                if not isinstance(gt_list, list):
+                    gt_list = []
+                gt_items = _normalize_items(_flatten_to_strings(gt_list))
+
+                question = _build_ucp_question(text=text, task=t.value, prompting=prompting_norm)
+                examples.append(
+                    {
+                        "question": question,
+                        "answer": json.dumps(gt_items, ensure_ascii=False),
+                        "info": {"text": text, "pmcid": pmcid, "task": t.value, "method": "UCP", "prompting": prompting_norm},
+                    }
+                )
     
     # Limit examples if requested
     if max_examples > 0:
@@ -749,19 +1004,20 @@ def load_environment(
     eval_dataset = Dataset.from_list(examples)
     
     # Parser for JSON output
-    # Accepts multiple field names to handle variations in model output
-    parser = JSONParser(
-        fields=[("extractions", "findings", "output")], 
-        answer_field="extractions"
-    )
+    # - UCP: accept common output key variants
+    # - UGP: parse full object and read category keys strictly
+    if method_norm == "UGP":
+        ugp_keys = [t.value for t in tasks_to_load] if tasks_to_load else list(PROMPTS_FS.keys())
+        parser = JSONParser(fields=ugp_keys, answer_field=ugp_keys[0] if ugp_keys else "answer")
+    else:
+        parser = JSONParser(fields=[("extractions", "findings", "output")], answer_field="extractions")
     
     def _parse_items(content: Any) -> list[str]:
-        """Parse model output into a list of extracted items."""
+        """Parse model output into a list of extracted items (UCP)."""
         if not content:
             return []
         if isinstance(content, list):
             return _normalize_items(_flatten_to_strings(content))
-        # Handle string completion - try to parse as JSON
         try:
             parsed = parser.parse(str(content), strip=True)
             if parsed:
@@ -769,6 +1025,21 @@ def load_environment(
         except Exception:
             pass
         return []
+
+    def _parse_obj(content: Any) -> dict[str, Any] | None:
+        """Parse model output into a JSON object (UGP). Strict: no key aliases."""
+        if not content:
+            return None
+        if isinstance(content, dict):
+            return content
+        try:
+            parsed = parser.parse(str(content), strip=True)
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            return None
+
+    def _ugp_get_items(obj: dict[str, Any] | None, category: str) -> list[str]:
+        return _ugp_get_items_strict(obj, category)
 
     # =========================================================================
     # REWARD FUNCTIONS - Strictly following paper's metrics
@@ -780,52 +1051,117 @@ def load_environment(
         This is the paper's signature metric for fuzzy clinical match.
         Replicates compute_normalized_token_set_ratio from eval_metrics.py.
         """
-        pred_items = _parse_items(completion)
-        gt_items = json.loads(answer)
-        # TSR returns 0-100, normalize to 0-1 for reward
-        return compute_normalized_token_set_ratio(pred_items, gt_items) / 100.0
+        if method_norm == "UGP":
+            pred_obj = _parse_obj(completion)
+            gt_obj = json.loads(answer)
+            scores = []
+            for t in tasks_to_load:
+                pred_items = _ugp_get_items(pred_obj, t.value)
+                gt_items = gt_obj.get(t.value, [])
+                scores.append(compute_normalized_token_set_ratio(pred_items, gt_items) / 100.0)
+            return float(np.mean(scores)) if scores else 0.0
+        else:
+            pred_items = _parse_items(completion)
+            gt_items = json.loads(answer)
+            return compute_normalized_token_set_ratio(pred_items, gt_items) / 100.0
 
     def bleu1_reward(parser, completion, answer, **kwargs) -> float:
         """BLEU-1: 1-gram precision."""
-        pred_items = _parse_items(completion)
-        gt_items = json.loads(answer)
-        return compute_bleu(" ".join(pred_items), " ".join(gt_items), k=1)
+        if method_norm == "UGP":
+            pred_obj = _parse_obj(completion)
+            gt_obj = json.loads(answer)
+            scores = []
+            for t in tasks_to_load:
+                pred_items = _ugp_get_items(pred_obj, t.value)
+                gt_items = gt_obj.get(t.value, [])
+                scores.append(compute_bleu(" ".join(pred_items), " ".join(gt_items), k=1))
+            return float(np.mean(scores)) if scores else 0.0
+        else:
+            pred_items = _parse_items(completion)
+            gt_items = json.loads(answer)
+            return compute_bleu(" ".join(pred_items), " ".join(gt_items), k=1)
 
     def bleu4_reward(parser, completion, answer, **kwargs) -> float:
         """BLEU-4: 4-gram precision."""
-        pred_items = _parse_items(completion)
-        gt_items = json.loads(answer)
-        return compute_bleu(" ".join(pred_items), " ".join(gt_items), k=4)
+        if method_norm == "UGP":
+            pred_obj = _parse_obj(completion)
+            gt_obj = json.loads(answer)
+            scores = []
+            for t in tasks_to_load:
+                pred_items = _ugp_get_items(pred_obj, t.value)
+                gt_items = gt_obj.get(t.value, [])
+                scores.append(compute_bleu(" ".join(pred_items), " ".join(gt_items), k=4))
+            return float(np.mean(scores)) if scores else 0.0
+        else:
+            pred_items = _parse_items(completion)
+            gt_items = json.loads(answer)
+            return compute_bleu(" ".join(pred_items), " ".join(gt_items), k=4)
 
     def rougeL_reward(parser, completion, answer, **kwargs) -> float:
         """ROUGE-L: Longest Common Subsequence overlap."""
-        pred_items = _parse_items(completion)
-        gt_items = json.loads(answer)
-        return compute_rouge_l(" ".join(pred_items), " ".join(gt_items))
+        if method_norm == "UGP":
+            pred_obj = _parse_obj(completion)
+            gt_obj = json.loads(answer)
+            scores = []
+            for t in tasks_to_load:
+                pred_items = _ugp_get_items(pred_obj, t.value)
+                gt_items = gt_obj.get(t.value, [])
+                scores.append(compute_rouge_l(" ".join(pred_items), " ".join(gt_items)))
+            return float(np.mean(scores)) if scores else 0.0
+        else:
+            pred_items = _parse_items(completion)
+            gt_items = json.loads(answer)
+            return compute_rouge_l(" ".join(pred_items), " ".join(gt_items))
 
     def omission_reward(parser, completion, answer, **kwargs) -> float:
         """Paper's Omission metric: penalize if ref has info but LLM has none.
         
         Returns 0.0 if omission occurred, 1.0 otherwise.
         """
-        pred_items = _parse_items(completion)
-        gt_items = json.loads(answer)
-        ref_has_info = len(gt_items) > 0
-        llm_empty = len(pred_items) == 0
-        is_omission = ref_has_info and llm_empty
-        return 0.0 if is_omission else 1.0
+        if method_norm == "UGP":
+            pred_obj = _parse_obj(completion)
+            gt_obj = json.loads(answer)
+            scores = []
+            for t in tasks_to_load:
+                pred_items = _ugp_get_items(pred_obj, t.value)
+                gt_items = gt_obj.get(t.value, [])
+                ref_has_info = len(gt_items) > 0
+                llm_empty = len(pred_items) == 0
+                is_omission = ref_has_info and llm_empty
+                scores.append(0.0 if is_omission else 1.0)
+            return float(np.mean(scores)) if scores else 1.0
+        else:
+            pred_items = _parse_items(completion)
+            gt_items = json.loads(answer)
+            ref_has_info = len(gt_items) > 0
+            llm_empty = len(pred_items) == 0
+            is_omission = ref_has_info and llm_empty
+            return 0.0 if is_omission else 1.0
 
     def hallucination_reward(parser, completion, answer, **kwargs) -> float:
         """Paper's Hallucination metric: penalize if ref empty but LLM has info.
         
         Returns 0.0 if hallucination occurred, 1.0 otherwise.
         """
-        pred_items = _parse_items(completion)
-        gt_items = json.loads(answer)
-        ref_empty = len(gt_items) == 0
-        llm_has_info = len(pred_items) > 0
-        is_hallucination = ref_empty and llm_has_info
-        return 0.0 if is_hallucination else 1.0
+        if method_norm == "UGP":
+            pred_obj = _parse_obj(completion)
+            gt_obj = json.loads(answer)
+            scores = []
+            for t in tasks_to_load:
+                pred_items = _ugp_get_items(pred_obj, t.value)
+                gt_items = gt_obj.get(t.value, [])
+                ref_empty = len(gt_items) == 0
+                llm_has_info = len(pred_items) > 0
+                is_hallucination = ref_empty and llm_has_info
+                scores.append(0.0 if is_hallucination else 1.0)
+            return float(np.mean(scores)) if scores else 1.0
+        else:
+            pred_items = _parse_items(completion)
+            gt_items = json.loads(answer)
+            ref_empty = len(gt_items) == 0
+            llm_has_info = len(pred_items) > 0
+            is_hallucination = ref_empty and llm_has_info
+            return 0.0 if is_hallucination else 1.0
 
     # Create rubric with strict adherence to paper's metrics
     # TSR is the primary metric (weight=1.0), others are logged (weight=0.0)
