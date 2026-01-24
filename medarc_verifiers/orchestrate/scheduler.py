@@ -91,12 +91,13 @@ class TaskScheduler:
                     pass
             finally:
                 self._release(allocation)
-                resources_changed.set()
                 async with active_cond:
                     active -= 1
                     remaining -= 1
                     _sync_slot_available()
                     active_cond.notify_all()
+                # Wake the scheduler after we free a slot so it doesn't spin on a stale `active` count.
+                resources_changed.set()
 
         def _launch_runner(task: TaskSpec, allocation: Allocation) -> None:
             nonlocal active
@@ -113,6 +114,14 @@ class TaskScheduler:
 
         try:
             while True:
+                # Always drain/clear resource notifications first. Otherwise, if we're at the
+                # concurrency cap, we can keep waking immediately on an already-set Event and
+                # starve the event loop (breaking dashboard refresh + signal handling).
+                if resources_changed.is_set():
+                    for _, priority, seq, task in blocked:
+                        heapq.heappush(ready, (0.0, priority, seq, task))
+                    blocked.clear()
+                    resources_changed.clear()
                 if shutdown_event and shutdown_event.is_set():
                     await _drain_active()
                     return
@@ -121,11 +130,6 @@ class TaskScheduler:
                 if active >= self._max_parallel:
                     await _wait_for_events(wait_for_slot=True)
                     continue
-                if resources_changed.is_set():
-                    for _, priority, seq, task in blocked:
-                        heapq.heappush(ready, (0.0, priority, seq, task))
-                    blocked.clear()
-                    resources_changed.clear()
                 now = time.monotonic()
                 if blocked:
                     still_blocked = []
@@ -157,6 +161,8 @@ class TaskScheduler:
                     blocked.append(
                         (time.monotonic() + blocked_cooldown_s, priority, seq, task)
                     )
+                    # Yield to event loop to allow other tasks (e.g., dashboard refresh) to run
+                    await asyncio.sleep(0)
                     continue
                 if shutdown_event and shutdown_event.is_set():
                     self._release(allocation)
