@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 import os
 from typing import Dict, Iterable, Optional, Tuple, Union
 from .sampling_args import sanitize_sampling_args_for_openai
+from .prime_inference import PRIME_INFERENCE_URL, _resolve_include_usage
 
 
 def _normalize_judge_name(name: str) -> str:
@@ -43,7 +44,7 @@ class JudgeSamplingDefaults:
             tuple(_split_segments(_normalize_judge_name(name)) for name in names),
         )
 
-    def as_dict(self) -> Dict[str, Union[float, int, str]]:
+    def as_dict(self, *, include_usage: bool = True) -> Dict[str, Union[float, int, str]]:
         payload: Dict[str, Union[float, int, str]] = {}
         if self.temperature is not None:
             payload["temperature"] = self.temperature
@@ -55,7 +56,8 @@ class JudgeSamplingDefaults:
             payload["min_p"] = self.min_p
         if self.reasoning_effort is not None:
             payload["reasoning_effort"] = self.reasoning_effort
-        payload["extra_body"] = {"usage": {"include": True}}
+        if include_usage:
+            payload["extra_body"] = {"usage": {"include": True}}
         return payload
 
 
@@ -129,31 +131,48 @@ _JUDGE_DEFAULTS: Iterable[JudgeSamplingDefaults] = (
 
 
 def judge_sampling_args_and_headers(
-    judge_name: str, base_url: str | None = None, timeout: int | None = 300
+    judge_name: str,
+    base_url: str | None = None,
+    timeout: int | None = 300,
+    include_usage: bool | None = None,
 ) -> Tuple[Dict[str, Union[float, int, str]], Optional[Dict[str, str]]]:
     """Return the sampling defaults for the provided judge name.
 
     Matches are case-insensitive and use the canonical judge identifier.
+
+    Args:
+        judge_name: The name of the judge model.
+        base_url: The base URL for the API. Used for Prime Inference detection.
+        timeout: Request timeout in seconds.
+        include_usage: Whether to include usage reporting in extra_body.
+            If None (default), checks MEDARC_INCLUDE_USAGE env var, then
+            auto-detects based on base_url:
+            - True if base_url is Prime Inference URL
+            - False otherwise
     """
 
     normalized = _normalize_judge_name(judge_name)
     candidate_segments = _split_segments(normalized)
     for judge_defaults in _JUDGE_DEFAULTS:
         if any(_is_subsequence(segments, candidate_segments) for segments in judge_defaults.segments_list):
-            if base_url == "https://api.pinference.ai/api/v1" and os.environ.get("PRIME_TEAM_ID") is not None:
+            is_prime_inference = base_url == PRIME_INFERENCE_URL
+            if is_prime_inference and os.environ.get("PRIME_TEAM_ID") is not None:
                 prime_team_id = {"X-Prime-Team-ID": os.environ.get("PRIME_TEAM_ID")}
             else:
                 prime_team_id = None
-            payload = judge_defaults.as_dict()
+
+            effective_include_usage = _resolve_include_usage(include_usage, is_prime_inference)
+
+            payload = judge_defaults.as_dict(include_usage=effective_include_usage)
             if timeout is not None:
                 payload["timeout"] = timeout
             return sanitize_sampling_args_for_openai(payload), prime_team_id
 
-    raise KeyError(f"No sampling defaults available for judge “{judge_name}”.")
+    raise KeyError(f"No sampling defaults available for judge '{judge_name}'.")
 
 
 def default_judge_api_key(base_url: str | None = None) -> str | None:
-    if base_url == "https://api.pinference.ai/api/v1" and os.environ.get("PRIME_API_KEY") is not None:
+    if base_url == PRIME_INFERENCE_URL and os.environ.get("PRIME_API_KEY") is not None:
         return os.environ.get("PRIME_API_KEY")
     elif os.environ.get("OPENAI_API_KEY") is not None:
         return os.environ.get("OPENAI_API_KEY")

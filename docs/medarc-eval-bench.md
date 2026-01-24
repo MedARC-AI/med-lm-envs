@@ -168,6 +168,45 @@ medarc-eval bench --config my-config.yaml --forced medqa,pubmedqa
 | `--sampling-args JSON` | Override sampling args for all jobs |
 | `--max-concurrent N` | Override concurrency for all jobs |
 | `--timeout SEC` | Override timeout for all jobs |
+| `--include-usage` / `--no-include-usage` | Enable/disable usage reporting (auto-detected for Prime Inference) |
+
+### Prime Inference
+
+When using Prime Inference (`https://api.pinference.ai/api/v1`), the CLI automatically:
+- Uses `PRIME_API_KEY` for authentication (if set)
+- Adds `X-Prime-Team-ID` header from the `PRIME_TEAM_ID` env var
+- Enables usage reporting in API requests
+
+Just set the environment variables and the config stays simple:
+
+```bash
+export PRIME_API_KEY=your-api-key
+export PRIME_TEAM_ID=your-team-id
+```
+
+```yaml
+models:
+  my-model:
+    model: openai/gpt-5-nano
+    api_base_url: https://api.pinference.ai/api/v1
+    api_key_var: PRIME_API_KEY
+```
+
+Manual header/usage configuration is only needed to override auto-detection:
+
+```yaml
+models:
+  my-model:
+    model: openai/gpt-5-nano
+    api_base_url: https://api.pinference.ai/api/v1
+    api_key_var: PRIME_API_KEY
+    headers:
+      X-Prime-Team-ID: override-team-id
+    sampling_args:
+      extra_body:
+        usage:
+          include: false  # disable usage reporting
+```
 
 ## Output Structure
 
