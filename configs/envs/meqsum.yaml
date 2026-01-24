@@ -1,0 +1,20 @@
+# MeQSum - Consumer Health Question Summarization
+# Dataset: medarc/MeQSum-patient-consumer-health-questions
+
+meqsum:
+  env_name: meqsum
+  env_args:
+    split: test
+    compute_auto_metrics: true
+
+meqsum_val:
+  env_name: meqsum
+  env_args:
+    split: validation
+    compute_auto_metrics: true
+
+meqsum_fast:
+  env_name: meqsum
+  env_args:
+    split: test
+    compute_auto_metrics: false
