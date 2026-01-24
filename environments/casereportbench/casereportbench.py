@@ -566,7 +566,7 @@ HISTORY_PREFIX_ZERO_SHOT = """Based on the provided text, extract and return the
 
 
 # =============================================================================
-# COMPONENT MAPPING - For precise DSPy-faithful template construction
+# FULL PROMPT CONSTRUCTION - Combines all three components like DSPy does
 # =============================================================================
 
 # Most tasks use the default "Medical text." description for the input field.
@@ -677,7 +677,7 @@ Follow the format below.
 {output_label}: {prefix}"""
 
 def _build_ucp_question(*, text: str, task: str, prompting: str) -> str:
-    """Build a prompt for UCP that is word-for-word faithful to DSPy's Predict template."""
+    """Build a prompt for UCP."""
     comp = COMPONENTS[task]
     prefix = comp["fs"] if prompting.upper() == "FS" else comp["zs"]
     
@@ -853,12 +853,7 @@ def compute_rouge_l(pred_text: str, ref_text: str) -> float:
 
 
 class CaseReportBenchTask(str, Enum):
-    """The clinical categories from the CaseReportBench dataset.
-
-    Note: The original dataset includes a `Lab_Image` column, but the prompt text for
-    `Lab_Image` is not present in the upstream DSPy signature file (`extractAug24.py`)
-    in this workspace copy. This environment therefore implements 13 categories.
-    """
+    """The 14 clinical categories from the CaseReportBench dataset."""
     VITALS_HEMA = "Vitals_Hema"
     NEURO = "Neuro"
     EENT = "EENT"
