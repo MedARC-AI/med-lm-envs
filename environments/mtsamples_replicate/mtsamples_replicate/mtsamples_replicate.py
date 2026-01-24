@@ -12,9 +12,9 @@ from medarc_verifiers.utils import default_judge_api_key, judge_sampling_args_an
 from openai import AsyncOpenAI
 from verifiers.types import Info, Messages, State
 
-from mtsamples_procedures.judge_prompts import JUDGE_OUTPUT_JSON, JUDGE_TEMPLATE
+from mtsamples_replicate.judge_prompts import JUDGE_OUTPUT_JSON, JUDGE_TEMPLATE
 
-disable_progress_bar()  
+disable_progress_bar()
 
 GIT_HASH = "ebc104a4f96c5b7602242f301e081e9934a23344"
 BASE_URL = f"https://raw.githubusercontent.com/raulista1997/benchmarkdata/{GIT_HASH}/mtsamples_processed"
@@ -41,32 +41,31 @@ def _resolve_cache_dir(cache_dir: Path | str | None) -> Path:
 
 
 def _extract_sections(text: str) -> tuple[str | None, str | None, str | None]:
- 
     plan, summary, findings = None, None, None
     text_upper = text.upper()
 
     if "PLAN:" in text_upper:
         idx = text_upper.find("PLAN:")
-        after_header = text[idx + len("PLAN:"):]
+        after_header = text[idx + len("PLAN:") :]
         first_line = after_header.split("\n", 1)[0].strip()
         plan = first_line if first_line else None
 
     if "SUMMARY:" in text_upper:
         idx = text_upper.find("SUMMARY:")
-        after_header = text[idx + len("SUMMARY:"):]
+        after_header = text[idx + len("SUMMARY:") :]
         first_line = after_header.split("\n", 1)[0].strip()
         summary = first_line if first_line else None
 
     if "FINDINGS:" in text_upper:
         idx = text_upper.find("FINDINGS:")
-        after_header = text[idx + len("FINDINGS:"):]
+        after_header = text[idx + len("FINDINGS:") :]
         first_line = after_header.split("\n", 1)[0].strip()
         findings = first_line if first_line else None
 
     return plan, summary, findings
 
+
 def _remove_plan_section(text: str) -> str:
-  
     sections = ["PLAN:"]
 
     for section in sections:
@@ -78,7 +77,6 @@ def _remove_plan_section(text: str) -> str:
 
 
 def _download_txt_files(cache_path: Path) -> list[Path]:
-
     txt_dir = cache_path / "txt_files"
     txt_dir.mkdir(parents=True, exist_ok=True)
 
@@ -93,20 +91,19 @@ def _download_txt_files(cache_path: Path) -> list[Path]:
     downloaded_files = []
     for file_info in files_data:
         if file_info["name"].endswith(".txt"):
-            encoded_name = quote(file_info['name'])
+            encoded_name = quote(file_info["name"])
             file_url = f"{BASE_URL}/{encoded_name}"
             dest_path = txt_dir / file_info["name"]
 
             file_response = requests.get(file_url)
             file_response.raise_for_status()
-            dest_path.write_text(file_response.text, encoding='utf-8')
+            dest_path.write_text(file_response.text, encoding="utf-8")
             downloaded_files.append(dest_path)
 
     return downloaded_files
 
 
 def _load_dataset(cache_dir: Path | str | None = None) -> Dataset:
- 
     cache_path = _resolve_cache_dir(cache_dir)
     cache_path.mkdir(parents=True, exist_ok=True)
 
@@ -119,7 +116,7 @@ def _load_dataset(cache_dir: Path | str | None = None) -> Dataset:
     examples = []
 
     for idx, txt_file in enumerate(txt_files):
-        text = txt_file.read_text(encoding='utf-8')
+        text = txt_file.read_text(encoding="utf-8")
 
         plan, summary, findings = _extract_sections(text)
 
@@ -140,17 +137,19 @@ def _load_dataset(cache_dir: Path | str | None = None) -> Dataset:
 
         input_text = _remove_plan_section(text)
 
-        examples.append({
-            "id": idx,
-            "question": input_text,
-            "answer": reference,
-            "info": {
-                "filename": txt_file.name,
-                "extracted_section": extracted_section,
-                "procedure_note": input_text,
-                "reference_plan": reference,
+        examples.append(
+            {
+                "id": idx,
+                "question": input_text,
+                "answer": reference,
+                "info": {
+                    "filename": txt_file.name,
+                    "extracted_section": extracted_section,
+                    "procedure_note": input_text,
+                    "reference_plan": reference,
+                },
             }
-        })
+        )
 
     dataset = Dataset.from_list(examples)
 
@@ -167,8 +166,6 @@ def load_environment(
     judge_api_key: str | None = None,
     **kwargs: Any,
 ) -> vf.Environment:
-
-  
     eval_dataset = _load_dataset(cache_dir)
 
     api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
