@@ -72,6 +72,15 @@ def build_batch_parser() -> argparse.ArgumentParser:
             "Pass --no-auto-resume to force a fresh run."
         ),
     )
+    parser.add_argument(
+        "--on-complete",
+        choices=("exit", "continue", "rerun", "new", "prompt"),
+        default="prompt",
+        help=(
+            "Action when all selected jobs are already completed. "
+            "Use 'prompt' for interactive selection (default: prompt)."
+        ),
+    )
     parser.add_argument("--force", action="store_true", help="Re-run every job regardless of manifest state.")
     parser.add_argument(
         "--forced",
@@ -101,6 +110,14 @@ def build_batch_parser() -> argparse.ArgumentParser:
         "--default-api-base-url",
         default=DEFAULT_API_BASE_URL,
         help=f"Default API base URL (default: {DEFAULT_API_BASE_URL}).",
+    )
+    parser.add_argument(
+        "--api-base-url",
+        default=None,
+        help=(
+            "Override API base URL for all models (CLI force > model api_base_url > --default-api-base-url). "
+            "Useful when pointing a config at a dynamically assigned endpoint."
+        ),
     )
     parser.add_argument(
         "--job-id", action="append", help="Run only the specified job identifier (repeat to select multiple)."
@@ -991,8 +1008,9 @@ def _execute_batch(args: argparse.Namespace) -> int:
         )
 
         if all_completed and selected_jobs and not args.dry_run and not args.force:
-            # Prompt user for action
-            choice = _prompt_completed_jobs_action()
+            choice = args.on_complete
+            if choice == "prompt":
+                choice = _prompt_completed_jobs_action()
             if choice == "new":
                 logger.info("Creating a new run with all jobs...")
                 # Create a fresh run by disabling auto-resume and forcing a new run_id
@@ -1032,6 +1050,7 @@ def _execute_batch(args: argparse.Namespace) -> int:
         endpoints_path=Path(args.endpoints_path).expanduser() if args.endpoints_path else None,
         default_api_key_var=args.default_api_key_var,
         default_api_base_url=args.default_api_base_url,
+        api_base_url_override=args.api_base_url,
         log_level="DEBUG" if args.verbose else "INFO",
         verbose=args.verbose,
         save_results=args.save_results,

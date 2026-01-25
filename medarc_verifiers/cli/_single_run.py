@@ -149,6 +149,7 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         endpoints=endpoints,
         default_api_key_var=args.api_key_var,
         default_api_base_url=args.api_base_url,
+        api_base_url_override=None,
         timeout_override=args.timeout,
         headers=headers,
     )

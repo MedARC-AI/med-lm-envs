@@ -18,13 +18,20 @@
 - **Parser**: Boxed answer parser (`extract_boxed_answer`) - expects answers in `\boxed{}`
 - **Rubric overview**: 
   - `+1.0` for correct classification (matching target `0` or `1`)
-  - `-0.01` for abstaining with `2` (unsure)
-  - `-1.0` for incorrect classification
+  - `+0.01` for abstaining with `2` (unsure) (configurable via `unsure_reward`)
+  - `0.0` for incorrect classification or malformed answer
 
 The model is presented with a medical question and an answer, then must judge:
 - `0` = Answer is factual
 - `1` = Answer is hallucinated
 - `2` = Unsure (partial credit)
+
+### Differences verses MedHallu paper
+
+This environment intentionally differs from the MedHallu paper’s evaluation protocol:
+
+- **We evaluate both options per item**: for each dataset row, we create two evaluation examples — one pairing the question with the **Ground Truth** answer (label `0`) and one pairing it with the **Hallucinated Answer** (label `1`). The paper’s implementation samples one of the two.
+- **F1 is computed via postprocessing**: the paper reports **F1** (treating hallucination as the positive class). In this repo, you should compute F1 by postprocessing the `results.jsonl` output and dropping `\boxed{2}` (unsure) predictions.
 
 ### Quickstart
 Run an evaluation with default settings:
@@ -50,14 +57,31 @@ Notes:
 | Arg | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
 | `subset` | str | `"pqa_labeled"` | Dataset subset: `"pqa_labeled"` (1k high-quality) or `"pqa_artificial"` (9k generated) |
+| `difficulty` | str | `"all"` | Filter by difficulty: `"easy"`, `"medium"`, `"hard"`, or `"all"` |
 | `use_knowledge` | bool | `False` | If `True`, includes the "Knowledge" field in the prompt as additional context |
+| `unsure_reward` | float | `0.01` | Reward assigned when the model outputs `\boxed{2}` |
 
 ### Metrics
 
 | Metric | Meaning |
 | ------ | ------- |
-| `reward` | Main scalar reward: +1.0 correct, -0.01 unsure, -1.0 incorrect |
-| `accuracy` | Exact match on target answer (0 or 1) |
+| `reward` | Scalar reward used by Verifiers (see rubric overview above) |
+| `accuracy` | Exact match on the target label (`0` or `1`) |
+| `precision/recall/f1` | Not produced by the environment directly; compute via postprocessing (below) |
+
+### Postprocessing (F1)
+
+After you run an eval, compute paper-style F1 (positive label `1`) and update the run’s `metadata.json`:
+
+```bash
+uv run python environments/medhallu/postprocess.py /path/to/results.jsonl
+```
+
+This script:
+- extracts `\boxed{0|1|2}` from completions
+- drops missing/malformed answers
+- drops `\boxed{2}` (unsure)
+- computes `accuracy`, `precision`, `recall`, `f1` (with `1` as the positive class)
 
 ### Hallucination Types
 The model is trained to detect these hallucination categories:

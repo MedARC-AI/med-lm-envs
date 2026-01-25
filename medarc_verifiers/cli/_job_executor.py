@@ -45,6 +45,7 @@ class ExecutorSettings(BaseModel):
     endpoints_path: Path | None = None
     default_api_key_var: str
     default_api_base_url: str
+    api_base_url_override: str | None = None
     log_level: str = "INFO"
     verbose: bool = False
     save_results: bool = True
@@ -135,6 +136,7 @@ def execute_jobs(
                 endpoints=endpoints,
                 default_api_key_var=settings.default_api_key_var,
                 default_api_base_url=settings.default_api_base_url,
+                api_base_url_override=settings.api_base_url_override,
                 timeout_override=settings.timeout,
                 headers=job.model.headers,
             )

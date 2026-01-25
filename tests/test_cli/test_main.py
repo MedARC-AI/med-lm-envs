@@ -132,6 +132,66 @@ def test_cli_runs_configuration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert manifest["jobs"][0]["status"] == "completed"
 
 
+def test_batch_api_base_url_override_forces_endpoint(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    _write_config(
+        config_path,
+        """
+        models:
+          model-a:
+            model: alias-model
+            api_base_url: https://config.example/v1
+        envs:
+          medqa:
+            env_args: {}
+        jobs:
+          - model: model-a
+            env: medqa
+        """,
+    )
+
+    captured = []
+
+    async def fake_run(config):
+        captured.append(config)
+        return _stub_cli_result()
+
+    monkeypatch.setattr("medarc_verifiers.cli._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        "medarc_verifiers.cli._job_executor.load_endpoint_registry",
+        lambda *args, **kwargs: {
+            "alias-model": {"model": "resolved-model", "url": "https://endpoint.example/v1", "key": "REGISTRY_KEY"}
+        },
+    )
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
+
+    output_dir = tmp_path / "runs_out"
+    env_dir = tmp_path / "envs"
+    env_dir.mkdir()
+
+    override_url = "http://127.0.0.1:8000/v1"
+    assert (
+        main.main(
+            [
+                "bench",
+                "--config",
+                str(config_path),
+                "--output-dir",
+                str(output_dir),
+                "--env-dir",
+                str(env_dir),
+                "--api-base-url",
+                override_url,
+            ]
+        )
+        == 0
+    )
+
+    assert len(captured) == 1
+    assert captured[0].client_config.api_base_url == override_url
+
+
 def test_model_level_max_concurrent_applies(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     _write_config(

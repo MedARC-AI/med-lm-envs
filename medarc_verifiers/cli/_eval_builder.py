@@ -34,6 +34,7 @@ def build_client_config(
     endpoints: EndpointRegistry,
     default_api_key_var: str,
     default_api_base_url: str,
+    api_base_url_override: str | None,
     timeout_override: float | None,
     headers: list[str] | dict[str, str] | None,
 ) -> tuple[str, ClientConfig, dict[str, Any]]:
@@ -58,6 +59,9 @@ def build_client_config(
         default_key_var=default_key_var,
         default_base_url=default_base_url,
     )
+    if api_base_url_override is not None:
+        logger.debug("Forcing api_base_url override for model '%s'.", model_alias)
+        api_base_url = api_base_url_override
 
     # Get Prime Inference-specific overrides (headers, sampling args, api_key_var)
     prime_headers, sampling_overrides, prime_api_key_var = prime_inference_overrides(api_base_url)

@@ -78,6 +78,9 @@ medarc-eval bench --config configs/job-gpt-oss-20b.yaml
 
 # Preview what would run without executing
 medarc-eval bench --config configs/job-gpt-oss-20b.yaml --dry-run
+
+# Force all jobs to use a specific API endpoint
+medarc-eval bench --config configs/job-gpt-oss-20b.yaml --api-base-url http://127.0.0.1:8000/v1
 ```
 
 ### Processing Mode (`medarc-eval process`)
@@ -166,4 +169,3 @@ prime env install owner/environment-name@0.1.3
 - [Batch Mode](medarc-eval-bench.md) - Configure and run systematic evaluations
 - [Processing](medarc-eval-process.md) - Prepare results for analysis
 - [Win Rates](medarc-eval-winrate.md) - Compare models across benchmarks
-
