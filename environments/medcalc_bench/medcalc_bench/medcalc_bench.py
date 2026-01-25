@@ -16,10 +16,16 @@ from medarc_verifiers.prompts import (
     XML_TOOL_SYSTEM_PROMPT,
     AnswerFormat,
 )
-from tools import SimpleToolEnv
 from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
-from prompts import get_tool_description, one_shot_prompt, tool_use_one_shot_prompt, tool_use_prompt, zero_shot_prompt
+from medcalc_bench.prompts import (
+    get_tool_description,
+    one_shot_prompt,
+    tool_use_one_shot_prompt,
+    tool_use_prompt,
+    zero_shot_prompt,
+)
+from medcalc_bench.tools import SimpleToolEnv
 
 disable_progress_bar()  # suppress datasets progress indicators
 

@@ -10,6 +10,7 @@ dependencies = [
     "numpy>=1.26.0",
     "simpleeval>=0.9.10",
     "medarc_verifiers>=0.1.0",
+    "RestrictedPython>=8.0",
 ]
 
 [build-system]
