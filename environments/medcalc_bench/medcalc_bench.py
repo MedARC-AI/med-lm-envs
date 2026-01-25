@@ -1,58 +1,27 @@
-import re
 import math
+import re
 from datetime import datetime
 
 import numpy as np
-from datasets.utils.logging import disable_progress_bar
-from datasets import load_dataset
-
 import verifiers as vf
-from medarc_verifiers.prompts import THINK_XML_SYSTEM_PROMPT, XML_SYSTEM_PROMPT, AnswerFormat
-from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
+from datasets import load_dataset
+from datasets.utils.logging import disable_progress_bar
 from medarc_verifiers.parsers.xml_parser import XMLParser
-
-from prompts import tool_use_prompt, tool_use_one_shot_prompt, zero_shot_prompt, one_shot_prompt, get_tool_description
+from medarc_verifiers.prompts import (
+    BOXED_TOOL_SYSTEM_PROMPT,
+    THINK_BOXED_TOOL_SYSTEM_PROMPT,
+    THINK_XML_SYSTEM_PROMPT,
+    THINK_XML_TOOL_SYSTEM_PROMPT,
+    XML_SYSTEM_PROMPT,
+    XML_TOOL_SYSTEM_PROMPT,
+    AnswerFormat,
+)
 from tools import SimpleToolEnv
+from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
+
+from prompts import get_tool_description, one_shot_prompt, tool_use_one_shot_prompt, tool_use_prompt, zero_shot_prompt
 
 disable_progress_bar()  # suppress datasets progress indicators
-
-# Tool descriptions for system prompts
-_TOOL_DESCRIPTIONS = {
-    "python": "a Python code execution tool (python) for running Python code",
-    "calculator": "a calculator tool for evaluating mathematical expressions",
-}
-
-
-def _build_tool_system_prompt(
-    allow_python_tool: bool,
-    allow_calculator_tool: bool,
-    use_think: bool,
-    answer_format: AnswerFormat,
-) -> str:
-    """Build a system prompt that describes the available tools."""
-    tools = []
-    if allow_python_tool:
-        tools.append(_TOOL_DESCRIPTIONS["python"])
-    if allow_calculator_tool:
-        tools.append(_TOOL_DESCRIPTIONS["calculator"])
-
-    if len(tools) == 1:
-        tool_text = f"You have access to {tools[0]}. Use it to perform calculations when needed."
-    else:
-        tool_text = f"You have access to {tools[0]} and {tools[1]}. Use them to perform calculations when needed."
-
-    if answer_format == AnswerFormat.XML:
-        if use_think:
-            return f"{tool_text} Think step-by-step inside <think>...</think> tags. Then, give your final answer inside <answer>...</answer> XML tags."
-        else:
-            return f"{tool_text} Please reason step by step, then give your final answer within <answer>...</answer> XML tags."
-    elif answer_format == AnswerFormat.BOXED:
-        if use_think:
-            return f"{tool_text} Think step-by-step. Then, give your final answer inside \\boxed{{}}."
-        else:
-            return f"{tool_text} Please reason step by step, then give your final answer inside \\boxed{{}}."
-    else:
-        raise ValueError(f"Unsupported answer format: {answer_format=}")
 
 
 def extract_boxed_answer_strict(text: str) -> str:
@@ -330,24 +299,21 @@ def load_environment(
     if answer_format == AnswerFormat.XML:
         if system_prompt is None:
             if allow_python_tool or allow_calculator_tool:
-                system_prompt = _build_tool_system_prompt(
-                    allow_python_tool, allow_calculator_tool, use_think, answer_format
-                )
+                system_prompt = THINK_XML_TOOL_SYSTEM_PROMPT if use_think else XML_TOOL_SYSTEM_PROMPT
             else:
                 system_prompt = THINK_XML_SYSTEM_PROMPT if use_think else XML_SYSTEM_PROMPT
+        else:
+            system_prompt = system_prompt
         parser_fields = ["think", "answer"] if use_think else ["answer"]
         parser = XMLParser(fields=parser_fields, answer_field="answer")  # medarc_verifiers' XMLParser
     elif answer_format == AnswerFormat.BOXED:
         if system_prompt is None:
             if allow_python_tool or allow_calculator_tool:
-                system_prompt = _build_tool_system_prompt(
-                    allow_python_tool, allow_calculator_tool, use_think, answer_format
-                )
+                system_prompt = THINK_BOXED_TOOL_SYSTEM_PROMPT if use_think else BOXED_TOOL_SYSTEM_PROMPT
             else:
                 system_prompt = THINK_BOXED_SYSTEM_PROMPT if use_think else BOXED_SYSTEM_PROMPT
-        parser = vf.Parser(extract_fn=extract_boxed_answer_strict)
-    else:
-        raise ValueError(f"Unsupported answer format: {answer_format=}")
+        else:
+            system_prompt = system_prompt
 
     # -------- load dataset and convert to vf format --------
     ds = load_dataset("ncbi/MedCalc-Bench-v1.2")

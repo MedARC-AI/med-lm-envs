@@ -57,11 +57,11 @@ Question:
 
 
 # Tool descriptions for prompts
-PYTHON_TOOL_DESCRIPTION = "You have access to a python code execution tool that you should use to do any math based on values in the patient note. Make sure the code prints all of its outputs. If there are any errors with compiling your script, you may need to re-write your code to obtain the output."
+PYTHON_TOOL_DESCRIPTION = "You have access to a python code execution tool that you should use to do any math based on values in the patient note. Make sure the code returns or prints all of its outputs. If there are any errors with compiling your or running script, you may need to re-write your code to obtain the output."
 
 CALCULATOR_TOOL_DESCRIPTION = "You have access to a calculator tool that you should use to evaluate mathematical expressions based on values in the patient note."
 
-BOTH_TOOLS_DESCRIPTION = "You have access to a calculator tool and a python code execution tool. Use them to do any math based on values in the patient note. If using the python tool, make sure the code prints all of its outputs. If there are any errors with compiling your script, you may need to re-write your code to obtain the output."
+BOTH_TOOLS_DESCRIPTION = "You have access to a calculator tool and a python code execution tool. Use them to do any math based on values in the patient note. If using the python tool, make sure the code returns or prints all of its outputs. If there are any errors with compiling or running your script, you may need to re-write your code to obtain the output."
 
 
 def get_tool_description(allow_python: bool, allow_calculator: bool) -> str:
