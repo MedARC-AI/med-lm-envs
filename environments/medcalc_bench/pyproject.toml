@@ -11,6 +11,7 @@ dependencies = [
     "simpleeval>=0.9.10",
     "medarc_verifiers>=0.1.0",
     "RestrictedPython>=8.0",
+    "scipy>=1.16",
 ]
 
 [build-system]
