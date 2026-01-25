@@ -345,7 +345,7 @@ class SimpleToolEnv(vf.StatefulToolEnv):
     def update_tool_args(
         self,
         tool_name: str,
-        tool_args: dict,
+        tool_args: Any,
         messages: vf.Messages,
         state: vf.State,
         **kwargs: Any,
@@ -360,6 +360,8 @@ class SimpleToolEnv(vf.StatefulToolEnv):
         a new ReplSession.
         """
         allowed_args: dict[str, set[str]] = {"code_interpreter": {"code"}, "calculator": {"expression"}}
+        if not isinstance(tool_args, dict):
+            tool_args = {}
         if tool_name in allowed_args:
             tool_args = {key: value for key, value in tool_args.items() if key in allowed_args[tool_name]}
 
@@ -383,23 +385,54 @@ class SimpleToolEnv(vf.StatefulToolEnv):
         implementation `json.loads(...)` will raise and crash the rollout. Here we convert those into
         a tool error message instead.
         """
+        # TODO: Remove this override once verifiers handles malformed/non-JSON tool calls upstream
+        # (including invalid JSON escapes in `function.arguments`) without crashing or 400ing providers.
         assert isinstance(messages, list)
         tool_calls = messages[-1].get("tool_calls", [])
 
+        def _set_tool_call_arguments(tc: Any, args: str) -> None:
+            # Some OpenAI-compatible servers validate that `function.arguments` is a JSON string.
+            # If a model emits invalid JSON escapes, sending the raw arguments back can 400 the next request.
+            try:
+                if isinstance(tc, dict):
+                    func = tc.get("function")
+                    if isinstance(func, dict):
+                        func["arguments"] = args
+                    return
+                func = getattr(tc, "function", None)
+                if func is not None:
+                    try:
+                        func.arguments = args
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        def _set_tool_call_name(tc: Any, name: str) -> None:
+            try:
+                if isinstance(tc, dict):
+                    func = tc.get("function")
+                    if isinstance(func, dict):
+                        func["name"] = name
+                    return
+                func = getattr(tc, "function", None)
+                if func is not None:
+                    try:
+                        func.name = name
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
         tool_messages: list[vf.Message] = []
+        sanitized_tool_calls: list[Any] = []
         for tool_call in tool_calls:
             # Some providers/models emit tool calls as JSON-encoded strings. Normalize those.
             if isinstance(tool_call, str):
                 try:
                     tool_call = json.loads(tool_call)
                 except json.JSONDecodeError:
-                    tool_messages.append(
-                        {
-                            "role": "tool",
-                            "content": "Error: Invalid tool formatting.",
-                            "tool_call_id": "",
-                        }
-                    )
+                    # Can't reliably recover a tool_call_id; drop it from history.
                     continue
 
             # Support both OpenAI tool-call objects and plain dicts.
@@ -412,14 +445,18 @@ class SimpleToolEnv(vf.StatefulToolEnv):
             tool_name = getattr(func, "name", None) or (func.get("name", "") if isinstance(func, dict) else "")
             raw_args = getattr(func, "arguments", None) or (func.get("arguments", "") if isinstance(func, dict) else "")
 
-            try:
-                # Empty/None arguments occur in the wild; treat them as {} so we can return a normal
-                # tool error (e.g. missing required params) rather than crashing on JSONDecodeError.
-                if raw_args is None or str(raw_args).strip() == "":
-                    tool_args = {}
-                else:
-                    tool_args = json.loads(raw_args)
-            except json.JSONDecodeError:
+            # Some models hallucinate tool call names (including newlines/markdown). If we keep those
+            # invalid tool calls in the message history, some providers 400 on the next request.
+            if (
+                not isinstance(tool_name, str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", tool_name)
+                or tool_name not in self.tool_map
+            ):
+                # Rewrite to a known-good tool name and empty args, so the transcript stays valid.
+                safe_name = "code_interpreter" if "code_interpreter" in self.tool_map else next(iter(self.tool_map))
+                _set_tool_call_name(tool_call, safe_name)
+                _set_tool_call_arguments(tool_call, "{}")
+                sanitized_tool_calls.append(tool_call)
                 tool_messages.append(
                     {
                         "role": "tool",
@@ -429,8 +466,55 @@ class SimpleToolEnv(vf.StatefulToolEnv):
                 )
                 continue
 
+            try:
+                # Empty/None arguments occur in the wild; treat them as {} so we can return a normal
+                # tool error (e.g. missing required params) rather than crashing on JSONDecodeError.
+                if raw_args is None or str(raw_args).strip() == "":
+                    tool_args = {}
+                elif isinstance(raw_args, dict):
+                    tool_args = raw_args
+                else:
+                    tool_args = json.loads(raw_args)
+                    # Some providers double-encode arguments as a JSON string containing JSON.
+                    if isinstance(tool_args, str):
+                        tool_args = json.loads(tool_args)
+            except (json.JSONDecodeError, TypeError):
+                _set_tool_call_arguments(tool_call, "{}")
+                sanitized_tool_calls.append(tool_call)
+                tool_messages.append(
+                    {
+                        "role": "tool",
+                        "content": (f"Error: Invalid tool formatting for '{tool_name}'."),
+                        "tool_call_id": tool_call_id or "",
+                    }
+                )
+                continue
+
+            if not isinstance(tool_args, dict):
+                _set_tool_call_arguments(tool_call, "{}")
+                sanitized_tool_calls.append(tool_call)
+                tool_messages.append(
+                    {
+                        "role": "tool",
+                        "content": (f"Error: Invalid tool formatting for '{tool_name}'."),
+                        "tool_call_id": tool_call_id or "",
+                    }
+                )
+                continue
+
+            # Canonicalize arguments back onto the tool call to avoid invalid escapes on the next turn.
+            _set_tool_call_arguments(tool_call, json.dumps(tool_args))
+            sanitized_tool_calls.append(tool_call)
+
             tool_args = self.update_tool_args(tool_name, tool_args, messages, state, **kwargs)
             tool_message = await self.call_tool(tool_name, tool_args, tool_call_id or "")
             tool_messages.append(tool_message)
+
+        # Replace any string tool calls with the parsed dict form so future turns don't resend invalid structures.
+        if isinstance(messages[-1], dict):
+            if sanitized_tool_calls:
+                messages[-1]["tool_calls"] = sanitized_tool_calls
+            else:
+                messages[-1].pop("tool_calls", None)
 
         return tool_messages, state
