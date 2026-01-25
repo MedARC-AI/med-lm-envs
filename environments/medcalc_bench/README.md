@@ -16,7 +16,7 @@
     | test  | 1100  |
 
 ### Task
-- **Type**: single-turn
+- **Type**: single-turn, multi-turn with tool use
 - **Prompt**: `_build_prompt(patient_note, question)` instructs `<think>...</think>` and `<answer>...</answer>`.
 - **Parser**: medarc_verifiers' `XMLParser` reads both `<think>` and `<answer>` tags.
 - **Rubric**: `check_correctness` validates by calculator type:
@@ -38,21 +38,23 @@ Configure model and sampling:
 uv run vf-eval medcalc-bench \
     -m gpt-4.1-mini \
     -n 5 -r 3 -t 1024 -T 0.7 \
-    -a '{"one_shot": false, "code_execution": false}'
+    -a '{"one_shot": true, "add_python_tool": true}'
 ```
 
 Notes:
 - Use `-a` / `--env-args` to pass environment-specific configuration as a JSON object.
 - Setting `use_think` to `True` works best with `one_shot` set to `True`, so that the LLM can learn exactly how it should format its answer.
 - The packaged `medarc_verifiers` XMLParser suppresses the upstream warning about `<think>` and still parses `<answer>` even if `<think>` is malformed.
+- **Tool safety**: The Python tool uses [`RestrictedPython`](https://restrictedpython.readthedocs.io/) for sandboxed execution with limited builtins (only `math`, `numpy`, `scipy` imports allowed). The calculator tool uses [`simpleeval`](https://github.com/danthedeckie/simpleeval) with only safe math operations.
 
 ### Environment Arguments
 
 | Arg         | Type | Default | Description |
 | ----------- | ---- | ------- | ----------- |
 | `one_shot` | bool | `False` | Whether to use the one-shot prompt |
-| `code_execution` | bool | `False` | Whether to use Python code execution environment |
-| `max_turns` | int | `20` | Maximum number of turns in code execution environment|
+| `add_python_tool` | bool | `False` | Add the Python code execution tool (uses restricted Python with limited builtins) |
+| `add_calculator_tool` | bool | `False` | Add the calculator tool (uses simple eval with safe math operations) |
+| `max_turns` | int | `20` | Maximum number of turns in tool use environment |
 | `answer_format` | str | `"xml"` | Answer format: `"xml"` (default) or `"boxed"` |
 | `use_think` | bool | `False` | Whether to instruct `<think>...</think>` formatting |
 | `system_prompt` | str | `None` | Custom system prompt (defaults to standard XML/BOXED prompt based on `answer_format`) |

@@ -54,15 +54,15 @@ def _one_shot_response(
 def _build_prompt(
     row: dict,
     one_shot_examples: dict | None = None,
-    allow_python_tool: bool = False,
-    allow_calculator_tool: bool = False,
+    add_python_tool: bool = False,
+    add_calculator_tool: bool = False,
     one_shot: bool = False,
     use_think: bool = False,
     answer_format: AnswerFormat = AnswerFormat.XML,
 ) -> str:
     calc_id = int(row["Calculator ID"])
-    tool_use = allow_python_tool or allow_calculator_tool
-    tool_description = get_tool_description(allow_python_tool, allow_calculator_tool)
+    tool_use = add_python_tool or add_calculator_tool
+    tool_description = get_tool_description(add_python_tool, add_calculator_tool)
 
     if tool_use and one_shot:
         return tool_use_one_shot_prompt.format(
@@ -291,8 +291,8 @@ def check_correctness(parser, completion, info, **kwargs):
 
 def load_environment(
     one_shot: bool = False,
-    allow_python_tool: bool = False,
-    allow_calculator_tool: bool = False,
+    add_python_tool: bool = False,
+    add_calculator_tool: bool = False,
     max_turns: int = 20,  # https://github.com/ncbi-nlp/MedCalc-Bench/blob/main/evaluation/generate_code_prompt.py#L145
     answer_format: AnswerFormat | str = AnswerFormat.XML,
     use_think: bool = False,
@@ -304,7 +304,7 @@ def load_environment(
 
     if answer_format == AnswerFormat.XML:
         if system_prompt is None:
-            if allow_python_tool or allow_calculator_tool:
+            if add_python_tool or add_calculator_tool:
                 system_prompt = THINK_XML_TOOL_SYSTEM_PROMPT if use_think else XML_TOOL_SYSTEM_PROMPT
             else:
                 system_prompt = THINK_XML_SYSTEM_PROMPT if use_think else XML_SYSTEM_PROMPT
@@ -314,7 +314,7 @@ def load_environment(
         parser = XMLParser(fields=parser_fields, answer_field="answer")  # medarc_verifiers' XMLParser
     elif answer_format == AnswerFormat.BOXED:
         if system_prompt is None:
-            if allow_python_tool or allow_calculator_tool:
+            if add_python_tool or add_calculator_tool:
                 system_prompt = THINK_BOXED_TOOL_SYSTEM_PROMPT if use_think else BOXED_TOOL_SYSTEM_PROMPT
             else:
                 system_prompt = THINK_BOXED_SYSTEM_PROMPT if use_think else BOXED_SYSTEM_PROMPT
@@ -342,8 +342,8 @@ def load_environment(
             "question": _build_prompt(
                 row,
                 one_shot_examples,
-                allow_python_tool=allow_python_tool,
-                allow_calculator_tool=allow_calculator_tool,
+                add_python_tool=add_python_tool,
+                add_calculator_tool=add_calculator_tool,
                 one_shot=one_shot,
                 use_think=use_think,
                 answer_format=answer_format,
@@ -365,7 +365,7 @@ def load_environment(
     rubric = vf.Rubric(funcs=[check_correctness], weights=[1.0], parser=parser)
 
     # -------- create environment --------
-    if allow_python_tool or allow_calculator_tool:
+    if add_python_tool or add_calculator_tool:
         env = SimpleToolEnv(
             dataset=train_mapped,
             eval_dataset=test_mapped,
@@ -373,8 +373,8 @@ def load_environment(
             parser=parser,
             rubric=rubric,
             max_turns=max_turns,
-            use_python=allow_python_tool,
-            use_calculator=allow_calculator_tool,
+            use_python=add_python_tool,
+            use_calculator=add_calculator_tool,
             **kwargs,
         )
         # Add ToolRubric to track tool usage metrics
