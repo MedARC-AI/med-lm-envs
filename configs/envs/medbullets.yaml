@@ -1,0 +1,20 @@
+- id: medbullets
+  module: medbullets
+  rollouts_per_example: 1
+  num_examples: -1
+  verbose: false
+  matrix:
+    num_options: [4, 5]
+  matrix_id_format: "{base}-op{num_options}"
+
+- id: medbullets
+  module: medbullets
+  rollouts_per_example: 1
+  num_examples: -1
+  verbose: false
+  env_args:
+    shuffle_answers: true
+  matrix:
+    num_options: [4, 5]
+    shuffle_seed: [1618, 9331]
+  matrix_id_format: "{base}-op{num_options}-rollout{shuffle_seed}"

@@ -390,7 +390,7 @@ def load_environment(
     system_prompt: str | None = None,
     shuffle_answers: bool = False,
     shuffle_seed: int | None = 1618,
-    test_split: str | MedHaltSplit = MedHaltSplit.REASONING_FCT,
+    question_type: str | MedHaltSplit = MedHaltSplit.REASONING_FCT,
     num_few_shot: int = 2,
     **kwargs,
 ) -> vf.Environment:
@@ -402,15 +402,15 @@ def load_environment(
         system_prompt: Custom system prompt (defaults to standard XML/BOXED prompt)
         shuffle_answers: Randomize the order of answer choices
         shuffle_seed: Random seed for reproducible shuffling
-        test_split: The test split to use (default: "reasoning_fct"). Supported: "reasoning_fct", "reasoning_nota"
+        question_type: The test split to use (default: "reasoning_fct"). Supported: "reasoning_fct", "reasoning_nota"
         num_few_shot: Number of few-shot examples to include (default: 2)
 
     Returns:
         A SingleTurnEnv configured for Med-HALT reasoning evaluation
     """
 
-    test_split = MedHaltSplit(test_split) if isinstance(test_split, str) else test_split
-    test_type = test_split.value if test_split is not MedHaltSplit.REASONING_FCT else "reasoning_FCT"
+    question_type = MedHaltSplit(question_type) if isinstance(question_type, str) else question_type
+    test_type = question_type.value if question_type is not MedHaltSplit.REASONING_FCT else "reasoning_FCT"
 
     # Med-HALT exposes a single HF "train" split and uses a split_type column
     # to mark logical train/val/test. We select the desired logical split here.

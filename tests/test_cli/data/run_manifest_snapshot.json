@@ -1,0 +1,77 @@
+{
+  "config_checksum": "ed4d807a185aa9e4e582ec021105cbd56b6c3f99142135c5e08a850a2dd38bf9",
+  "config_source": "configs/snapshot.yaml",
+  "created_at": "2024-03-01T00:00:00Z",
+  "env_templates": {
+    "environments.snapshot_env:63923c6b7b00": {
+      "interleave_scoring": false,
+      "max_concurrent": 4,
+      "module": "environments.snapshot_env",
+      "num_examples": 3,
+      "print_results": false,
+      "rerun": false,
+      "rollouts_per_example": 2,
+      "state_columns": [
+        "student_answer",
+        "score"
+      ]
+    }
+  },
+  "jobs": [
+    {
+      "attempt": 0,
+      "env_args": {
+        "difficulty": "easy",
+        "job_seed": 7,
+        "runner_seed": 99,
+        "split": "dev"
+      },
+      "env_id": "environments.snapshot_env",
+      "env_template_id": "environments.snapshot_env:63923c6b7b00",
+      "env_variant_id": "snapshot-env",
+      "job_id": "snapshot-model-snapshot-env",
+      "job_name": "snapshot-eval",
+      "model_id": "snapshot-model",
+      "sampling_args": {
+        "eval_seed": 17,
+        "max_tokens": 256,
+        "temperature": 0.3
+      },
+      "status": "pending"
+    }
+  ],
+  "models": {
+    "snapshot-model": {
+      "env_args": {
+        "split": "dev"
+      },
+      "env_overrides": {
+        "snapshot-env": {
+          "temperature": 0.2
+        }
+      },
+      "headers": {
+        "X-Test": "one"
+      },
+      "id": "snapshot-model",
+      "model": "gpt-4o-mini",
+      "sampling_args": {
+        "max_tokens": 256,
+        "temperature": 0.3
+      }
+    }
+  },
+  "name": "Snapshot Run",
+  "restart_source": "baseline-run",
+  "run_id": "snapshot-run",
+  "summary": {
+    "completed": 0,
+    "failed": 0,
+    "pending": 1,
+    "running": 0,
+    "skipped": 0,
+    "total": 1
+  },
+  "updated_at": "2024-03-01T00:00:00Z",
+  "version": 2
+}

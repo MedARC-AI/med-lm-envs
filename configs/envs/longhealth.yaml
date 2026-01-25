@@ -1,0 +1,39 @@
+# Base variants (no answer shuffling)
+- id: longhealth
+  module: longhealth
+  rollouts_per_example: 1
+  num_examples: -1
+  verbose: false
+  env_args:
+    doc_shuffle_seed: 2718
+  matrix:
+    task: [task1, task2]
+  matrix_id_format: "{base}-{task}"
+
+# Shuffled variants with different seeds
+- id: longhealth
+  module: longhealth
+  rollouts_per_example: 1
+  num_examples: -1
+  verbose: false
+  env_args:
+    shuffle_answers: true
+    shuffle_seed: 1618
+    doc_shuffle_seed: 1618
+  matrix:
+    task: [task1, task2]
+  matrix_id_format: "{base}-{task}-rollout1618"
+
+# Shuffled variants with different seeds
+- id: longhealth
+  module: longhealth
+  rollouts_per_example: 1
+  num_examples: -1
+  verbose: false
+  env_args:
+    shuffle_answers: true
+    shuffle_seed: 9331
+    doc_shuffle_seed: 9331
+  matrix:
+    task: [task1, task2]
+  matrix_id_format: "{base}-{task}-rollout9331"

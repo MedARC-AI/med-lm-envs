@@ -2,14 +2,15 @@ import re
 from enum import Enum
 from typing import Optional
 
-from datasets import load_dataset
-from openai import AsyncOpenAI
 import verifiers as vf
-from medarc_verifiers.rewards.multiple_choice_accuracy import multiple_choice_accuracy
-from medarc_verifiers.utils.randomize_multiple_choice import randomize_multiple_choice
+from datasets import load_dataset
 from medarc_verifiers.parsers.xml_parser import XMLParser
+from medarc_verifiers.rewards.multiple_choice_accuracy import multiple_choice_accuracy
+from medarc_verifiers.utils import default_judge_api_key, judge_sampling_args_and_headers
+from medarc_verifiers.utils.randomize_multiple_choice import randomize_multiple_choice
+from openai import AsyncOpenAI
 from verifiers.types import Info, State
-from verifiers.utils.data_utils import extract_boxed_answer, BOXED_SYSTEM_PROMPT
+from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
 
 class CareQASplit(Enum):
@@ -207,7 +208,9 @@ def _load_open_ended_environment(
     )
 
     # Judge client setup
-    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=judge_api_key)
+    api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
+    sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
+    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=default_headers)
     judge_parser = XMLParser(fields=["grade"], answer_field="grade")
 
     judge_rubric = vf.JudgeRubric(
@@ -215,6 +218,7 @@ def _load_open_ended_environment(
         judge_client=judge_client,
         judge_model=judge_model,
         judge_prompt="{question}",
+        judge_sampling_args=sampling_args,
     )
 
     async def accuracy(judge, prompt, completion, answer, state: State, info: Info) -> float:

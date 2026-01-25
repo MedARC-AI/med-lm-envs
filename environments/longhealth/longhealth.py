@@ -19,8 +19,11 @@ from typing import Any
 
 import verifiers as vf
 from datasets import Dataset
+from datasets.utils.logging import disable_progress_bar
 from medarc_verifiers.rewards.multiple_choice_accuracy import multiple_choice_accuracy
 from medarc_verifiers.utils.randomize_multiple_choice import randomize_multiple_choice
+
+disable_progress_bar()  # suppress datasets progress indicators
 
 # Reuse the system prompt from the original LongHealth implementation
 LONGHEALTH_SYSTEM_PROMPT = """You are a highly skilled and detail-oriented assistant, specifically trained to assist medical professionals in interpreting and extracting key information from medical documents. Your primary responsibility will be to analyze discharge letters from hospitals. When you receive one or more of these letters, you will be expected to carefully review the contents and accurately answer multiple-choice questions related to these documents. 
