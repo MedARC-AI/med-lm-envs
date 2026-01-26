@@ -1190,7 +1190,6 @@ def load_environment(
 
     return vf.SingleTurnEnv(
         eval_dataset=eval_dataset,
-        system_prompt="You are a specialized medical information extraction assistant.",
         rubric=rubric,
         parser=parser,
         **kwargs
