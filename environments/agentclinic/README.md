@@ -30,7 +30,6 @@ uv run --active -m verifiers.scripts.eval \
   --env-args '{
     "dataset_path": "DATASET.jsonl",
     "dataset_type": "medqa",
-    "task_mode": "free_turn",
     "patient_model": "MODEL",
     "patient_base_url": "URL",
     "patient_api_key": "KEY",
@@ -95,13 +94,13 @@ uv run --active -m verifiers.scripts.eval \
   -s \
   --env-args '{
     "dataset_path": "agentclinic_medqa_extended.jsonl",
-    "patient_model": "gpt-4o-mini",
+    "patient_model": "gpt-5-mini",
     "patient_base_url": "https://api.openai.com/v1",
     "patient_api_key": "'$OPENAI_API_KEY'",
-    "measurement_model": "gpt-4o-mini",
+    "measurement_model": "gpt-5-mini",
     "measurement_base_url": "https://api.openai.com/v1",
     "measurement_api_key": "'$OPENAI_API_KEY'",
-    "judge_model": "gpt-4o-mini",
+    "judge_model": "gpt-5-mini",
     "judge_base_url": "https://api.openai.com/v1",
     "judge_api_key": "'$OPENAI_API_KEY'"
   }'
@@ -122,7 +121,6 @@ Each agent (patient, measurement) can be configured via `--env-args`:
 ### Other Options
 
 - `dataset_type`: `medqa` or `nejm` (auto-detect if omitted)
-- `task_mode`: `free_turn` (default) or `oracle`
 - `max_turns`: Maximum conversation turns (default: 20)
 - `use_think`: Enable chain-of-thought prompting (default: false)
 - `patient_temperature` / `measurement_temperature`

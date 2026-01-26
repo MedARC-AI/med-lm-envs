@@ -26,7 +26,6 @@ def test_judge_sampling_defaults_supports_fuzzy_match(monkeypatch: pytest.Monkey
     assert result_without_effort == {
         "temperature": 1.0,
         "top_p": 1.0,
-        "reasoning_effort": "low",
         "extra_body": {"top_k": 0},  # top_k goes to extra_body, but not usage
         "timeout": 300,
     }
@@ -125,6 +124,22 @@ def test_judge_sampling_defaults_supports_multiple_names_per_defaults(
 
     result_47, _ = judge_sampling_args_and_headers("glm-4.7")
     assert result_47 == result_46
+
+
+def test_judge_sampling_override_temperature_non_reasoning(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PRIME_TEAM_ID", raising=False)
+    monkeypatch.delenv("MEDARC_INCLUDE_USAGE", raising=False)
+
+    result, _ = judge_sampling_args_and_headers("gpt-4.1", temperature=0.123)
+    assert result["temperature"] == 0.123
+
+
+def test_judge_sampling_reasoning_forces_temperature(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PRIME_TEAM_ID", raising=False)
+    monkeypatch.delenv("MEDARC_INCLUDE_USAGE", raising=False)
+
+    result, _ = judge_sampling_args_and_headers("gpt-5.2", temperature=0.0, reasoning_effort="low")
+    assert result["temperature"] == 1.0
 
 
 def test_default_judge_api_key_prefers_pinference_judge_key(

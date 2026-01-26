@@ -34,6 +34,7 @@ class JudgeSamplingDefaults:
     top_k: Optional[int] = None
     min_p: Optional[float] = None
     reasoning_effort: Optional[str] = None
+    frozen_temperature: bool = False
     segments_list: Tuple[Tuple[str, ...], ...] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -84,6 +85,7 @@ _JUDGE_DEFAULTS: Iterable[JudgeSamplingDefaults] = (
         top_p=0.95,
         top_k=64,
         reasoning_effort="low",  # TODO: support responses api reasoning effort when verifiers adds suport for it
+        frozen_temperature=True,
     ),
     JudgeSamplingDefaults(
         name="glm-4.5",
@@ -103,7 +105,9 @@ _JUDGE_DEFAULTS: Iterable[JudgeSamplingDefaults] = (
     ),
     JudgeSamplingDefaults(
         name=("gpt-5", "gpt-5.1", "gpt-5.2"),
+        temperature=1.0,
         reasoning_effort="low",  # TODO: support responses api reasoning effort when verifiers adds suport for it
+        frozen_temperature=True,
     ),
     JudgeSamplingDefaults(
         name="gpt-oss",
@@ -111,6 +115,7 @@ _JUDGE_DEFAULTS: Iterable[JudgeSamplingDefaults] = (
         top_p=1.0,
         top_k=0,
         reasoning_effort="low",  # TODO: support responses api reasoning effort when verifiers adds suport for it
+        frozen_temperature=True,
     ),
     JudgeSamplingDefaults(
         name=("grok-4", "grok-4.1"),
@@ -135,6 +140,8 @@ def judge_sampling_args_and_headers(
     base_url: str | None = None,
     timeout: int | None = 300,
     include_usage: bool | None = None,
+    temperature: float | None = None,
+    reasoning_effort: str | None = None,
 ) -> Tuple[Dict[str, Union[float, int, str]], Optional[Dict[str, str]]]:
     """Return the sampling defaults for the provided judge name.
 
@@ -149,6 +156,9 @@ def judge_sampling_args_and_headers(
             auto-detects based on base_url:
             - True if base_url is Prime Inference URL
             - False otherwise
+        temperature: Optional temperature override. For reasoning-capable models
+            (those with a non-null reasoning_effort), temperature is forced to 1.0.
+        reasoning_effort: Optional reasoning effort override.
     """
 
     normalized = _normalize_judge_name(judge_name)
@@ -164,6 +174,17 @@ def judge_sampling_args_and_headers(
             effective_include_usage = _resolve_include_usage(include_usage, is_prime_inference)
 
             payload = judge_defaults.as_dict(include_usage=effective_include_usage)
+            if reasoning_effort is not None and "reasoning_effort" in payload:
+                if isinstance(reasoning_effort, str) and reasoning_effort.lower().strip() == "none":
+                    payload.pop("reasoning_effort", None)
+                else:
+                    payload["reasoning_effort"] = reasoning_effort
+
+            if judge_defaults.frozen_temperature:
+                payload.setdefault("temperature", 1.0)
+            elif temperature is not None:
+                payload["temperature"] = temperature
+
             if timeout is not None:
                 payload["timeout"] = timeout
             return sanitize_sampling_args_for_openai(payload), prime_team_id

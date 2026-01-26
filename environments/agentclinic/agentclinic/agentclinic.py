@@ -2,11 +2,10 @@
 AgentClinic Environment
 """
 
-from __future__ import annotations
-
 import json
 import os
 import re
+
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -14,14 +13,17 @@ import verifiers as vf
 from datasets import Dataset
 from medarc_verifiers.utils import default_judge_api_key, judge_sampling_args_and_headers
 from openai import AsyncOpenAI
-from verifiers.utils.data_utils import extract_boxed_answer
 
 from agentclinic.message_utils import extract_last_assistant_text
 from agentclinic.prompts import (
-    DOCTOR_BIASES,
-    FINAL_TURN_HINT,
+    DatasetType,
+    DoctorBias,
+    JUDGE_PROMPT,
     NORMAL_READINGS,
-    PATIENT_BIASES,
+    NEXT_TO_LAST_TURN_HINT,
+    PatientBias,
+    PROGRESS_TURN_HINT_TEMPLATE,
+    FINAL_TURN_HINT,
     doctor_system_prompt,
     measurement_system_prompt,
     normalize_bias,
@@ -39,14 +41,14 @@ def read_jsonl(path: str) -> List[Dict[str, Any]]:
     return rows
 
 
-def _detect_dataset_type(cases: List[Dict[str, Any]]) -> str:
+def _detect_dataset_type(cases: List[Dict[str, Any]]) -> DatasetType:
     if not cases:
         raise ValueError("Empty dataset")
     first_case = cases[0]
     if "OSCE_Examination" in first_case:
-        return "medqa"
+        return DatasetType.MEDQA
     if "image_url" in first_case and "answers" in first_case:
-        return "nejm"
+        return DatasetType.NEJM
     raise ValueError(f"Unknown dataset format. Keys: {list(first_case.keys())}")
 
 
@@ -63,44 +65,10 @@ def _resolve_dataset_path(dataset_path: Optional[str]) -> str:
     raise FileNotFoundError(f"Dataset not found: {filename}")
 
 
-def _has_diagnosis_ready(text: str) -> bool:
-    return re.search(r"diagnosis\s*ready\s*[:\-]?", text, re.IGNORECASE) is not None
-
-
-_TEST_REQUEST_RE = re.compile(r"(?im)^\s*REQUEST\s+TEST\s*:\s*(.+?)\s*$")
-
-
-def _extract_test_request(text: str) -> str | None:
-    if not text:
-        return None
-    match = _TEST_REQUEST_RE.search(text)
-    if not match:
-        return None
-    requested = match.group(1).strip()
-    return requested or None
-
-
-def _extract_diagnosis_text(text: str, use_think: bool) -> str:
-    if not text:
-        return ""
-    match = re.search(r"diagnosis\s*ready\s*[:\-]?\s*", text, re.IGNORECASE)
-    if match:
-        text = text[match.end() :]
-    if use_think:
-        try:
-            boxed = extract_boxed_answer(text)
-            if boxed:
-                text = boxed
-        except Exception:
-            pass
-    return text.strip()
-
-
-def _build_initial_question(objective: str, asked_so_far: int) -> str:
+def _build_initial_question(objective: str) -> str:
     return (
-        f"Below is all of the information you have. {objective}. "
-        "\n\nRemember, you must discover their disease by asking them questions. You are also able to provide exams."
-        f"\n\nYou have asked {asked_so_far} questions so far."
+        f"SYSTEM: Below is all of the information you have.\n{objective} "
+        "\n\nRemember, you must discover their disease by asking them questions. You are also able to request tests or perform exams."
     )
 
 
@@ -113,6 +81,39 @@ def _turn_count(state: vf.State) -> int:
         return int(state.get("turn", 0) or 0)
     except Exception:
         return 0
+
+
+_PATIENT_PREFIX_RE = re.compile(r"(?is)^\s*(\*\*)?\s*patient\s*:\s*")
+_RESULTS_PREFIX_RE = re.compile(r"(?is)^\s*(\*\*)?\s*results\s*:\s*")
+
+
+def _progress_checkpoints(max_turns: int) -> set[int]:
+    """Return a small set of "used responses so far" checkpoints for progress banners."""
+    if max_turns <= 0:
+        return set()
+    if max_turns < 6:
+        return {max(1, max_turns // 2)}
+    if max_turns < 12:
+        return {max(1, max_turns // 3), max(1, (2 * max_turns) // 3)}
+    return {max(1, max_turns // 4), max(1, max_turns // 2), max(1, (3 * max_turns) // 4)}
+
+
+def _ensure_patient_prefix(text: str) -> str:
+    normalized = (text or "").strip()
+    if not normalized:
+        return "Patient:"
+    if _PATIENT_PREFIX_RE.search(normalized):
+        return normalized
+    return f"Patient: {normalized}"
+
+
+def _ensure_results_prefix(text: str) -> str:
+    normalized = (text or "").strip()
+    if not normalized:
+        return "RESULTS:"
+    if _RESULTS_PREFIX_RE.search(normalized):
+        return normalized
+    return f"RESULTS: {normalized}"
 
 
 class Scenario:
@@ -166,14 +167,14 @@ class PatientAgent:
         self,
         client: AsyncOpenAI,
         model: str,
-        temperature: float,
-        max_tokens: int,
+        sampling_args: dict[str, Any],
+        max_completion_tokens: int,
         bias: str | None,
     ):
         self.client = client
         self.model = model
-        self.temperature = temperature
-        self.max_tokens = max_tokens
+        self.sampling_args = sampling_args
+        self.max_completion_tokens = max_completion_tokens
         self.bias = bias
         self.agent_hist = ""
         self.symptoms: dict[str, Any] = {}
@@ -202,8 +203,8 @@ class PatientAgent:
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
+                max_completion_tokens=self.max_completion_tokens,
+                **self.sampling_args,
             )
             answer = response.choices[0].message.content or ""
         except Exception as e:
@@ -221,15 +222,15 @@ class MeasurementAgent:
         scenario_data: Dict[str, Any],
         client: AsyncOpenAI,
         model: str,
-        temperature: float,
-        max_tokens: int,
+        sampling_args: dict[str, Any],
+        max_completion_tokens: int,
     ):
         self.agent_hist = ""
         self.information = scenario_data
         self.client = client
         self.model = model
-        self.temperature = temperature
-        self.max_tokens = max_tokens
+        self.sampling_args = sampling_args
+        self.max_completion_tokens = max_completion_tokens
 
     def system_prompt(self) -> str:
         return measurement_system_prompt(self.information)
@@ -250,8 +251,8 @@ class MeasurementAgent:
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
+                max_completion_tokens=self.max_completion_tokens,
+                **self.sampling_args,
             )
             answer = response.choices[0].message.content or ""
         except Exception as e:
@@ -268,13 +269,12 @@ class AgentClinicEnv(vf.MultiTurnEnv):
         self,
         scenarios: list[Scenario | NEJMScenario],
         max_turns: int,
-        use_think: bool,
         patient_client: AsyncOpenAI,
         patient_model: str,
-        patient_temperature: float,
+        patient_sampling_args: dict[str, Any],
         measurement_client: AsyncOpenAI,
         measurement_model: str,
-        measurement_temperature: float,
+        measurement_sampling_args: dict[str, Any],
         aux_max_tokens: int,
         doctor_bias: str | None,
         patient_bias: str | None,
@@ -285,17 +285,15 @@ class AgentClinicEnv(vf.MultiTurnEnv):
         system_prompt = doctor_system_prompt(
             max_turns=max_turns,
             doctor_bias=doctor_bias,
-            use_think=use_think,
         )
         super().__init__(name=name, dataset=dataset, system_prompt=system_prompt, max_turns=max_turns, **kwargs)
         self._scenarios = scenarios
-        self._use_think = use_think
         self._patient_client = patient_client
         self._patient_model = patient_model
-        self._patient_temperature = patient_temperature
+        self._patient_sampling_args = patient_sampling_args
         self._measurement_client = measurement_client
         self._measurement_model = measurement_model
-        self._measurement_temperature = measurement_temperature
+        self._measurement_sampling_args = measurement_sampling_args
         self._aux_max_tokens = aux_max_tokens
         self._patient_bias = patient_bias
 
@@ -307,8 +305,8 @@ class AgentClinicEnv(vf.MultiTurnEnv):
         patient_agent = PatientAgent(
             client=self._patient_client,
             model=self._patient_model,
-            temperature=self._patient_temperature,
-            max_tokens=self._aux_max_tokens,
+            sampling_args=self._patient_sampling_args,
+            max_completion_tokens=self._aux_max_tokens,
             bias=self._patient_bias,
         )
         patient_agent.reset(scenario.patient_information())
@@ -317,14 +315,16 @@ class AgentClinicEnv(vf.MultiTurnEnv):
             scenario_data=scenario.exam_information(),
             client=self._measurement_client,
             model=self._measurement_model,
-            temperature=self._measurement_temperature,
-            max_tokens=self._aux_max_tokens,
+            sampling_args=self._measurement_sampling_args,
+            max_completion_tokens=self._aux_max_tokens,
         )
 
         state["case_index"] = case_index
         state["_patient_agent"] = patient_agent
         state["_measurement_agent"] = measurement_agent
         state["scenario"] = scenario
+        state.setdefault("num_tests_requested", 0)
+        state.setdefault("num_exams_requested", 0)
         return state
 
     async def is_completed(self, messages: vf.Messages, state: vf.State, **kwargs: Any) -> bool:
@@ -333,61 +333,72 @@ class AgentClinicEnv(vf.MultiTurnEnv):
         if _turn_count(state) == 0:
             return False
         last_text = extract_last_assistant_text(messages)
-        return _has_diagnosis_ready(last_text)
+        return "DIAGNOSIS READY" in (last_text or "").upper()
 
     async def env_response(self, messages: vf.Messages, state: vf.State, **kwargs: Any):
         patient_agent: PatientAgent = state["_patient_agent"]
         measurement_agent: MeasurementAgent = state["_measurement_agent"]
 
         doctor_dialogue = extract_last_assistant_text(messages)
-        requested_test = _extract_test_request(doctor_dialogue)
+        # Match original AgentClinic: trigger on substring and forward full doctor dialogue.
+        upper_dialogue = (doctor_dialogue or "").upper()
 
-        if requested_test is not None:
+        is_measurement_request = ("REQUEST TEST" in upper_dialogue) or ("PERFORM EXAM" in upper_dialogue)
+        if "REQUEST TEST" in upper_dialogue:
+            state["num_tests_requested"] = int(state.get("num_tests_requested", 0) or 0) + 1
+        if "PERFORM EXAM" in upper_dialogue:
+            state["num_exams_requested"] = int(state.get("num_exams_requested", 0) or 0) + 1
+
+        if is_measurement_request:
             response_text = await measurement_agent.inference_measurement(doctor_dialogue)
             patient_agent.add_hist(response_text)
+            response_text = _ensure_results_prefix(response_text)
         else:
             response_text = await patient_agent.inference_patient(doctor_dialogue)
             measurement_agent.add_hist(response_text)
+            response_text = _ensure_patient_prefix(response_text)
 
-        include_final_hint = _turn_count(state) == self.max_turns - 1
-        response_with_hint = response_text
-        if include_final_hint:
-            response_with_hint = response_with_hint + "\n" + FINAL_TURN_HINT
+        used = _turn_count(state)
+        system_lines: list[str] = []
 
-        asked_so_far = _turn_count(state)
-        response_with_hint = response_with_hint + f"\n\nYou have asked {asked_so_far} questions so far."
+        # Countdown warnings (always when applicable). These take precedence over
+        # generic progress banners to avoid redundant stacked system messages.
+        if self.max_turns >= 3 and used == self.max_turns - 2:
+            system_lines.append(NEXT_TO_LAST_TURN_HINT)
+        elif self.max_turns >= 2 and used == self.max_turns - 1:
+            system_lines.append(FINAL_TURN_HINT)
+        # Periodic progress banner (subset only).
+        elif used in _progress_checkpoints(self.max_turns):
+            system_lines.append(PROGRESS_TURN_HINT_TEMPLATE.format(used=used, max_turns=self.max_turns))
 
-        return ([{"role": "user", "content": response_with_hint}], state)
+        if system_lines:
+            content = "\n".join(system_lines) + "\n\n" + response_text
+        else:
+            content = response_text
 
-
-JUDGE_PROMPT = (
-    "You are responsible for determining if the corrent diagnosis and the doctor diagnosis are the same disease. "
-    "Please respond only with Yes or No. Nothing else.\n\n"
-    "Here is the correct diagnosis: {answer}\n Here was the doctor dialogue: {response}\nAre these the same?"
-)
+        return ([{"role": "user", "content": content}], state)
 
 
 def load_environment(
     dataset_path: Optional[str] = None,
-    dataset_type: Optional[str] = None,
-    task_mode: str = "free_turn",
-    use_think: bool = False,
+    dataset_type: DatasetType | str = DatasetType.MEDQA,
     max_turns: int = 20,
-    patient_model: str = "gpt-4o-mini",
+    aux_max_tokens: int = 500,
+    doctor_bias: DoctorBias | str | None = None,
+    patient_bias: PatientBias | str | None = None,
+    patient_model: str = "gpt-5-mini",
     patient_base_url: Optional[str] = None,
     patient_api_key: Optional[str] = None,
-    measurement_model: str = "gpt-4o-mini",
+    measurement_model: str = "gpt-5-mini",
     measurement_base_url: Optional[str] = None,
     measurement_api_key: Optional[str] = None,
-    patient_temperature: float = 0.05,
-    measurement_temperature: float = 0.05,
-    aux_max_tokens: int = 200,
-    doctor_bias: Optional[str] = None,
-    patient_bias: Optional[str] = None,
-    judge_model: str = "gpt-4o-mini",
+    judge_model: str = "gpt-5-mini",
     judge_base_url: Optional[str] = None,
     judge_api_key: Optional[str] = None,
-    judge_timeout_s: Optional[float] = None,
+    patient_reasoning_effort: str | None = None,
+    measurement_reasoning_effort: str | None = None,
+    patient_temperature: float | None = None,
+    measurement_temperature: float | None = None,
     **kwargs: Any,
 ) -> vf.Environment:
     dataset_path = _resolve_dataset_path(dataset_path)
@@ -397,19 +408,13 @@ def load_environment(
 
     if dataset_type is None:
         dataset_type = _detect_dataset_type(cases)
-    dataset_type = dataset_type.lower()
-    if dataset_type not in {"medqa", "nejm"}:
-        raise ValueError(f"Unknown dataset type: {dataset_type}. Use 'medqa' or 'nejm'")
 
-    doctor_bias = normalize_bias(doctor_bias, DOCTOR_BIASES, "doctor")
-    patient_bias = normalize_bias(patient_bias, PATIENT_BIASES, "patient")
-
-    task_mode = task_mode.lower()
-    if task_mode not in {"free_turn", "oracle"}:
-        raise ValueError("task_mode must be 'free_turn' or 'oracle'")
+    dataset_type = DatasetType(dataset_type.lower()) if isinstance(dataset_type, str) else dataset_type
+    doctor_bias = normalize_bias(doctor_bias, DoctorBias, "doctor")
+    patient_bias = normalize_bias(patient_bias, PatientBias, "patient")
 
     scenarios: list[Scenario | NEJMScenario]
-    if dataset_type == "medqa":
+    if dataset_type == DatasetType.MEDQA:
         scenarios = [Scenario(c) for c in cases]
     else:
         scenarios = [NEJMScenario(c) for c in cases]
@@ -417,7 +422,7 @@ def load_environment(
     records = []
     for i, scenario in enumerate(scenarios):
         objective = scenario.examiner_information()
-        question = _build_initial_question(objective, 0)
+        question = _build_initial_question(objective)
         info = {
             "gold": scenario.diagnosis_information(),
             "reference_response": scenario.diagnosis_information(),
@@ -436,49 +441,57 @@ def load_environment(
     dataset = Dataset.from_list(records)
 
     api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
-    judge_sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
-    if judge_timeout_s is not None:
-        judge_sampling_args = dict(judge_sampling_args or {})
-        judge_sampling_args["timeout"] = judge_timeout_s
+    judge_sampling_args, judge_default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
 
-    client_cache: dict[tuple[Optional[str], Optional[str], tuple[tuple[str, str], ...]], AsyncOpenAI] = {}
-
-    def get_client(base_url: Optional[str], key: Optional[str], headers: Optional[dict[str, str]]) -> AsyncOpenAI:
-        headers_tuple = tuple(sorted((headers or {}).items()))
-        cache_key = (base_url, key, headers_tuple)
-        if cache_key not in client_cache:
-            client_cache[cache_key] = AsyncOpenAI(base_url=base_url, api_key=key, default_headers=headers)
-        return client_cache[cache_key]
-
-    judge_client = get_client(judge_base_url, api_key, default_headers)
+    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=judge_default_headers)
 
     # Default helper agents to the judge credentials for convenience (MedRBench pattern),
     # but still fall back to OPENAI_API_KEY for backwards compatibility.
     patient_api_key = patient_api_key or api_key or os.environ.get("OPENAI_API_KEY")
     measurement_api_key = measurement_api_key or api_key or os.environ.get("OPENAI_API_KEY")
 
-    patient_headers = default_headers if patient_base_url == judge_base_url else None
-    measurement_headers = default_headers if measurement_base_url == judge_base_url else None
-    patient_client = get_client(patient_base_url, patient_api_key, patient_headers)
-    measurement_client = get_client(measurement_base_url, measurement_api_key, measurement_headers)
+    patient_sampling_args, patient_headers = judge_sampling_args_and_headers(
+        patient_model,
+        patient_base_url,
+        temperature=patient_temperature,
+        reasoning_effort=patient_reasoning_effort,
+    )
 
-    parser = vf.Parser(extract_fn=lambda text: _extract_diagnosis_text(text, use_think))
+    measurement_sampling_args, measurement_headers = judge_sampling_args_and_headers(
+        measurement_model,
+        measurement_base_url,
+        temperature=measurement_temperature,
+        reasoning_effort=measurement_reasoning_effort,
+    )
+
+    patient_client = AsyncOpenAI(base_url=patient_base_url, api_key=patient_api_key, default_headers=patient_headers)
+    measurement_client = AsyncOpenAI(
+        base_url=measurement_base_url, api_key=measurement_api_key, default_headers=measurement_headers
+    )
+
+    # Match original AgentClinic moderator scoring: judge sees the doctor's final turn
+    # (whatever the model emitted alongside "DIAGNOSIS READY"), not a separate
+    # post-processed "diagnosis-only" string.
+    parser = vf.Parser(extract_fn=lambda text: (text or "").strip())
 
     rubric = vf.JudgeRubric(
         judge_client=judge_client,
         judge_model=judge_model,
-        judge_prompt=JUDGE_PROMPT,
+        judge_prompt="{question}",
         parser=parser,
         judge_sampling_args=judge_sampling_args,
     )
 
     async def diagnosis_reward_func(completion: vf.Messages, info: vf.Info, state: vf.State, **_kwargs: Any) -> float:
+        info.setdefault("turns_used", _turn_count(state))
+        info.setdefault("exam_requests", state.get("num_exams_requested", 0))
+        info.setdefault("test_requests", state.get("num_tests_requested", 0))
         gold = str(info.get("reference_response") or info.get("gold") or "")
-        try:
-            judge_text = await rubric.judge("", completion, gold, state)
-        except Exception:
-            judge_text = "Error during judge evaluation"
-        is_correct = judge_text.lower().strip().startswith("yes")
+        response = parser.parse_answer(completion) or ""
+
+        judge_text = await rubric.judge(JUDGE_PROMPT.format(answer=gold, response=response), completion, "", state)
+        judge_text = judge_text.lower().strip()
+        is_correct = "yes" in judge_text and "no" not in judge_text
         info.setdefault("judge_feedback", []).append({"raw_judge": judge_text, "is_correct": is_correct})
         return 1.0 if is_correct else 0.0
 
@@ -486,53 +499,17 @@ def load_environment(
 
     env_kwargs = dict(kwargs)
     env_kwargs.pop("max_turns", None)
-
-    if task_mode == "oracle":
-        oracle_records = []
-        for i, scenario in enumerate(scenarios):
-            full_info = {
-                "patient_info": scenario.patient_information(),
-                "physical_exams": scenario.exam_information(),
-            }
-            question = (
-                "Below is all of the information you have. "
-                f"{scenario.examiner_information()}\n\n"
-                f"{json.dumps(full_info, ensure_ascii=False)}"
-            )
-            info = {
-                "gold": scenario.diagnosis_information(),
-                "reference_response": scenario.diagnosis_information(),
-                "case_id": i,
-                "dataset_type": dataset_type,
-            }
-            oracle_records.append(
-                {
-                    "question": question,
-                    "answer": scenario.diagnosis_information(),
-                    "task": f"agentclinic-{dataset_type}-oracle",
-                    "info": info,
-                }
-            )
-        oracle_dataset = Dataset.from_list(oracle_records)
-        system_prompt = doctor_system_prompt(max_turns=1, doctor_bias=doctor_bias, use_think=use_think)
-        return vf.SingleTurnEnv(
-            eval_dataset=oracle_dataset,
-            system_prompt=system_prompt,
-            rubric=rubric,
-            parser=parser,
-            **env_kwargs,
-        )
+    env_kwargs.pop("task_mode", None)
 
     env = AgentClinicEnv(
         scenarios=scenarios,
         max_turns=max_turns,
-        use_think=use_think,
         patient_client=patient_client,
         patient_model=patient_model,
-        patient_temperature=patient_temperature,
+        patient_sampling_args=patient_sampling_args,
         measurement_client=measurement_client,
         measurement_model=measurement_model,
-        measurement_temperature=measurement_temperature,
+        measurement_sampling_args=measurement_sampling_args,
         aux_max_tokens=aux_max_tokens,
         doctor_bias=doctor_bias,
         patient_bias=patient_bias,
@@ -543,21 +520,3 @@ def load_environment(
         **env_kwargs,
     )
     return env
-
-
-def load_medqa_environment(**kwargs) -> vf.Environment:
-    dataset_path = kwargs.pop("dataset_path", None)
-    if dataset_path is None:
-        dataset_path = str(Path(__file__).resolve().parent / "agentclinic_medqa_extended.jsonl")
-    return load_environment(dataset_path=dataset_path, dataset_type="medqa", **kwargs)
-
-
-def load_nejm_environment(**kwargs) -> vf.Environment:
-    dataset_path = kwargs.pop("dataset_path", None)
-    if dataset_path is None:
-        dataset_path = str(Path(__file__).resolve().parent / "agentclinic_nejm_extended.jsonl")
-    return load_environment(dataset_path=dataset_path, dataset_type="nejm", **kwargs)
-
-
-def get_environment(*args: Any, **kwargs: Any) -> vf.Environment:
-    return load_environment(*args, **kwargs)

@@ -1,15 +1,53 @@
 import json
+from enum import StrEnum
 from typing import Any
 
-from verifiers.utils.data_utils import THINK_BOXED_SYSTEM_PROMPT
+
+class DatasetType(StrEnum):
+    MEDQA = "medqa"
+    NEJM = "nejm"
+
+
+class DoctorBias(StrEnum):
+    RECENCY = "recency"
+    FREQUENCY = "frequency"
+    FALSE_CONSENSUS = "false_consensus"
+    STATUS_QUO = "status_quo"
+    CONFIRMATION = "confirmation"
+    GENDER = "gender"
+    RACE = "race"
+    SEXUAL_ORIENTATION = "sexual_orientation"
+    CULTURAL = "cultural"
+    EDUCATION = "education"
+    RELIGION = "religion"
+    SOCIOECONOMIC = "socioeconomic"
+
+
+class PatientBias(StrEnum):
+    RECENCY = "recency"
+    FREQUENCY = "frequency"
+    FALSE_CONSENSUS = "false_consensus"
+    SELF_DIAGNOSIS = "self_diagnosis"
+    GENDER = "gender"
+    RACE = "race"
+    SEXUAL_ORIENTATION = "sexual_orientation"
+    CULTURAL = "cultural"
+    EDUCATION = "education"
+    RELIGION = "religion"
+    SOCIOECONOMIC = "socioeconomic"
+
 
 DOCTOR_BASE_PROMPT = (
     "You are a doctor named Dr. Agent who only responds in the form of dialogue. "
     "You are inspecting a patient who you will ask questions in order to understand their disease. "
-    "You are only allowed to ask {max_turns} questions total before you must make a decision. "
+    "You are only allowed {max_turns} responses total before you must make a decision. "
     'You can request test results using the format "REQUEST TEST: [test]". '
-    'For example, "REQUEST TEST: Chest_X-Ray". '
-    "Your dialogue will only be 1-3 sentences in length. "
+    'For example, "REQUEST TEST: Chest X-Ray". '
+    'You can perform physical exams or take vitals using the format "PERFORM EXAM: [exam]". '
+    'For example, "PERFORM EXAM: Respiratory examination". '
+    "You may ask one question, 1-3 sentences in length, to the patient, order one test, perform one exam, or submit your diagnosis per response. "
+    "Do not combine your question with test requests, or exam requests, or diagnosis submissions in the same response. "
+    "You may not hallucinate patient, exam, or test responses, wait for the patient, exam, or test response in the next user message. "
     'Once you have decided to make a diagnosis please type "DIAGNOSIS READY: [diagnosis here]"'
 )
 
@@ -21,12 +59,20 @@ PATIENT_BASE_PROMPT = (
 )
 
 MEASUREMENT_BASE_PROMPT = (
-    "You are a measurement reader who responds with medical test results. "
+    "You are a measurement reader who responds with medical test results or exam findings. Only return the requested result. "
     'Please respond in the format "RESULTS: [results here]"'
 )
 
-FINAL_TURN_HINT = "This is the final question. Please provide a diagnosis."
+PROGRESS_TURN_HINT_TEMPLATE = "SYSTEM: You have used {used} out of {max_turns} responses so far."
+NEXT_TO_LAST_TURN_HINT = "SYSTEM: This is your next to last response. Please ask your final question, request your final test, or provide a diagnosis."
+FINAL_TURN_HINT = "SYSTEM: This is your final response. Please provide a diagnosis."
 NORMAL_READINGS = "RESULTS: NORMAL READINGS"
+
+JUDGE_PROMPT = (
+    "You are responsible for determining if the corrent diagnosis and the doctor diagnosis are the same disease. "
+    "Please respond only with Yes or No. Nothing else.\n\n"
+    "Here is the correct diagnosis: {answer}\n Here was the doctor dialogue: {response}\nAre these the same?"
+)
 
 DOCTOR_BIAS_PROMPTS = {
     "recency": "\nRecently, you learned that a doctor with similar symptoms to the patient that diagnosed their patient with cancer. This affects how you interact with the patient.\n",
@@ -57,29 +103,24 @@ PATIENT_BIAS_PROMPTS = {
     "socioeconomic": "\nYou are uncomfortable with your doctor because you find out that they are from a particular socioeconomic background and you do not trust their judgement. This affects how you interact with them.\n",
 }
 
-DOCTOR_BIASES = tuple(DOCTOR_BIAS_PROMPTS.keys())
-PATIENT_BIASES = tuple(PATIENT_BIAS_PROMPTS.keys())
 
-
-def normalize_bias(bias: str | None, allowed: tuple[str, ...], role: str) -> str | None:
+def normalize_bias(bias: str | StrEnum | None, enum_cls: type[StrEnum], role: str) -> StrEnum | None:
     if bias is None:
         return None
     if isinstance(bias, str) and bias.lower() == "none":
         return None
-    if bias in allowed:
+    if isinstance(bias, enum_cls):
         return bias
-    raise ValueError(f"Unsupported {role} bias: {bias}. Allowed: {', '.join(allowed)}")
+    try:
+        return enum_cls(bias)
+    except ValueError:
+        allowed = ", ".join(e.value for e in enum_cls)
+        raise ValueError(f"Unsupported {role} bias: {bias}. Allowed: {allowed}")
 
 
-def doctor_system_prompt(
-    max_turns: int,
-    doctor_bias: str | None,
-    use_think: bool,
-) -> str:
+def doctor_system_prompt(max_turns: int, doctor_bias: str | None) -> str:
     bias_prompt = DOCTOR_BIAS_PROMPTS.get(doctor_bias or "", "")
     prompt = DOCTOR_BASE_PROMPT.format(max_turns=max_turns) + bias_prompt
-    if use_think:
-        return THINK_BOXED_SYSTEM_PROMPT + "\n\n" + prompt
     return prompt
 
 
