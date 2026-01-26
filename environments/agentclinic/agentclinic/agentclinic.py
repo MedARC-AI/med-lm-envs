@@ -1,6 +1,7 @@
 """
 AgentClinic Environment
 """
+
 from __future__ import annotations
 
 import json
@@ -15,8 +16,8 @@ from medarc_verifiers.utils import default_judge_api_key, judge_sampling_args_an
 from openai import AsyncOpenAI
 from verifiers.utils.data_utils import extract_boxed_answer
 
-from .message_utils import extract_last_assistant_text
-from .prompts import (
+from agentclinic.message_utils import extract_last_assistant_text
+from agentclinic.prompts import (
     DOCTOR_BIASES,
     FINAL_TURN_HINT,
     NORMAL_READINGS,
@@ -50,26 +51,16 @@ def _detect_dataset_type(cases: List[Dict[str, Any]]) -> str:
 
 
 def _resolve_dataset_path(dataset_path: Optional[str]) -> str:
-    if dataset_path:
-        path = Path(dataset_path)
-        if path.is_absolute() and path.exists():
-            return str(path)
-        cwd_path = Path(os.getcwd()) / dataset_path
-        if cwd_path.exists():
-            return str(cwd_path)
-        module_path = Path(__file__).resolve().parent / dataset_path
-        if module_path.exists():
-            return str(module_path)
-        raise FileNotFoundError(
-            f"Dataset not found: {dataset_path}\nTried: {cwd_path}, {module_path}"
-        )
-    default_path = Path(__file__).resolve().parent / "agentclinic_medqa_extended.jsonl"
-    if not default_path.exists():
-        raise FileNotFoundError(
-            f"Default MedQA dataset not found: {default_path}\n"
-            "Pass dataset_path parameter via --env-args to specify a different dataset."
-        )
-    return str(default_path)
+    module_dir = Path(__file__).resolve().parent
+    package_dir = module_dir.parent  # environments/agentclinic/
+    filename = dataset_path or "agentclinic_medqa_extended.jsonl"
+
+    for base in [Path.cwd(), module_dir, package_dir]:
+        candidate = base / filename if not Path(filename).is_absolute() else Path(filename)
+        if candidate.exists():
+            return str(candidate)
+
+    raise FileNotFoundError(f"Dataset not found: {filename}")
 
 
 def _has_diagnosis_ready(text: str) -> bool:
