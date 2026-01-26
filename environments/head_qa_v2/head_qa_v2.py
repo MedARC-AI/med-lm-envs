@@ -139,7 +139,7 @@ def cot_prompt(example: dict[str, Any]) -> dict[str, Any]:
 def accuracy(completion: Any, answer: str, parser: vf.Parser, info: dict[str, Any] | None = None) -> float:
     parsed = parser.parse_answer(completion) or ""
     answer_text = info.get("answer_text") if info else None
-    is_correct = multiple_choice_accuracy(llm_answer=parsed, answer_letter=answer, answer_text=answer_text)
+    is_correct = multiple_choice_accuracy(llm_answer=parsed, answer_letter=answer, answer_text=answer_text, info=info)
     return 1.0 if is_correct else 0.0
 
 

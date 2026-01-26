@@ -198,3 +198,75 @@ export MEDARC_DISABLE_TOKEN_TRACKING=true
 - Model tokens include all inference API calls
 - Judge tokens include all LLM-as-judge calls via `judge()` method (e.g., FactScore: 6-20 verification calls per example)
 - **Note**: Some judge implementations (e.g., FactScore claim extraction) make additional API calls (claim extraction) that are currently not tracked not part of judge() calls or get stored in state["responses"]. These represent a small overhead (~10-20% of total judge tokens) and are present in existing implementations like MedRedQA, keep in mind when calculating.
+
+## MCQ Answer Analysis
+
+Post-hoc analysis of MCQ benchmark results. Extracts model answers using the same parsing pipeline as evaluation, generates confusion matrices, and computes cross-rollout consistency metrics.
+
+### Usage
+
+```bash
+# Single model
+python scripts/mcq_answer_analysis.py \
+  --logs-dir /path/to/model_results \
+  --output-dir ./analysis_output \
+  --model model-name
+
+# All models
+python scripts/mcq_answer_analysis.py \
+  --logs-dir /path/to/all_models \
+  --output-dir ./analysis_output \
+  --all-models
+
+# Specific benchmark only
+python scripts/mcq_answer_analysis.py \
+  --logs-dir /path/to/all_models \
+  --output-dir ./analysis_output \
+  --all-models \
+  --benchmark medqa
+```
+
+### Output Files
+
+| File | Description |
+|------|-------------|
+| `{model}_{benchmark}.csv` | Per-example analysis with parsed answers |
+| `{model}_{benchmark}_confusion.csv` | Confusion matrix (correct → predicted) |
+| `{model}_{benchmark}_rollouts.csv` | Cross-rollout comparison (if multiple rollouts) |
+| `{model}_summary.json` | Aggregate statistics per benchmark |
+| `{model}_benchmark_metrics.csv` | Summary metrics table |
+| `all_models_metrics.csv` | Cross-model comparison (with `--all-models`) |
+
+### Metrics
+
+- **Accuracy**: Standard correctness rate
+- **Parsing success rate**: % of completions with extracted answer
+- **Variation rate**: % of questions with different answers across rollouts
+- **Semantic consistency**: Among varied answers, % with same answer text (different letter, same content)
+- **Positional bias**: Per-position selection rate vs ground truth distribution
+
+### Model Parsed Answer Logging
+
+New evaluations automatically log parsed answers to `info` dict in `results.jsonl`:
+
+```json
+{
+  "info": {
+    "model_parsed_answer": "B",
+    "parsing_method": "anchored_token"
+  }
+}
+```
+
+This enables exact reproducibility in post-hoc analysis. For older results without logging, the analysis script applies the full parsing pipeline (environment-specific XML/boxed extraction → MCQ answer parsing).
+
+To enable logging in custom environments, pass `info=info` to `multiple_choice_accuracy()`:
+
+```python
+is_correct = multiple_choice_accuracy(
+    llm_answer=parsed,
+    answer_letter=answer,
+    answer_text=answer_text,
+    info=info  # Enables parsed answer logging
+)
+```

@@ -32,7 +32,7 @@ def accuracy(completion, answer: str, parser: vf.Parser, info: dict | None = Non
     """Reward based on shared multiple-choice accuracy grading."""
     parsed = parser.parse_answer(completion) or ""
     answer_text = info.get("answer_text", None) if info else None
-    is_correct = multiple_choice_accuracy(llm_answer=parsed, answer_letter=answer, answer_text=answer_text)
+    is_correct = multiple_choice_accuracy(llm_answer=parsed, answer_letter=answer, answer_text=answer_text, info=info)
     return 1.0 if is_correct else 0.0
 
 

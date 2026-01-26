@@ -289,7 +289,7 @@ def load_environment(
         completion_text = completion or ""
         parsed = parser.parse_answer(completion) or completion_text
         answer_text = (info or {}).get("answer_text", "")
-        return multiple_choice_accuracy(llm_answer=parsed, answer_letter=answer, answer_text=answer_text)
+        return multiple_choice_accuracy(llm_answer=parsed, answer_letter=answer, answer_text=answer_text, info=info)
 
     def combined_reward(parser, completion, answer, **kwargs) -> float:
         """Gate explanation scoring on MCQ correctness."""
@@ -322,7 +322,7 @@ def load_environment(
             model_rational = getattr(parsed, "explanation", None)
 
             is_correct = multiple_choice_accuracy(
-                llm_answer=model_answer, answer_letter=answer, answer_text=answer_text
+                llm_answer=model_answer, answer_letter=answer, answer_text=answer_text, info=info
             )
 
             if not is_correct:

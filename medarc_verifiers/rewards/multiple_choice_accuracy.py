@@ -31,6 +31,9 @@ class MCQAccuracyResult:
     correct_answer: Optional[str] = None
     """The correct answer for reference, if available."""
 
+    parsed_answer: Optional[str] = None
+    """Parsed answer token (letter/number) extracted from the model output, if available."""
+
 
 def _nfkc_casefold(text: str) -> str:
     """Unicode normalize + casefold for robust text comparison."""
@@ -213,6 +216,7 @@ def multiple_choice_accuracy(
     accept_answer_text: bool = True,
     strip_tex: bool = True,
     return_details: bool = False,
+    info: Optional[dict] = None,
 ) -> bool | MCQAccuracyResult:
     """
     Grade a multiple-choice answer with layered strategies:
@@ -230,26 +234,50 @@ def multiple_choice_accuracy(
         accept_answer_text: Whether to fall back to text matching
         strip_tex: Whether to strip LaTeX formatting
         return_details: If True, return MCQAccuracyResult dataclass instead of bool
-
     Returns:
         bool (if return_details=False) or MCQAccuracyResult (if return_details=True)
     """
 
     def _result(
-        is_correct: bool, method: str, predicted: str | None, actual: str | None, return_details: bool
+        is_correct: bool,
+        method: str,
+        matched: str | None,
+        actual: str | None,
+        return_details: bool,
+        parsed: str | None = None,
+        log_method: str | None = None,
     ) -> bool | MCQAccuracyResult:
-        """Helper to format return value."""
+        """Helper to format return value.
+
+        Args:
+            is_correct: Whether the answer was graded as correct
+            method: The parsing method for MCQAccuracyResult (original behavior)
+            matched: The answer that matched correctly (None if incorrect)
+            actual: The correct answer letter
+            return_details: Whether to return MCQAccuracyResult or bool
+            parsed: What the model actually said (regardless of correctness)
+            log_method: The actual parsing method for info dict logging (defaults to method)
+        """
+        # Log parsed answer to info dict if provided
+        if info is not None:
+            info["model_parsed_answer"] = parsed
+            info["parsing_method"] = log_method if log_method is not None else method
+
         if not return_details:
             return is_correct
-        return MCQAccuracyResult(
+
+        result = MCQAccuracyResult(
             is_correct=is_correct,
             method=method,
-            matched_answer=predicted,
+            matched_answer=matched,
             correct_answer=actual,
+            parsed_answer=parsed,
         )
 
+        return result
+
     if not llm_answer:
-        return _result(False, "none", None, None, return_details)
+        return _result(False, "none", None, None, return_details, parsed=None)
 
     # Normalize the response
     llm_answer = _remove_think_tags(llm_answer)
@@ -269,19 +297,28 @@ def multiple_choice_accuracy(
         raise ValueError(f"Invalid answer_letter '{answer_letter=}'. Must be a single letter or digit string.")
 
     explicit_choice_found = False
+    model_predicted = None  # Track what the model actually said
+    parse_method = "none"
 
     # Strategy 1: Only answer letter anywhere (without anchoring)
-    if answer_letter == _norm_letter(llm_answer):
-        return _result(True, "direct_answer", llm_answer, answer_letter, return_details)
+    normalized_llm = _norm_letter(llm_answer)
+    if normalized_llm and len(llm_answer.strip()) <= 3:
+        model_predicted = normalized_llm
+        parse_method = "direct_answer"
+        if normalized_llm == answer_letter:
+            return _result(True, "direct_answer", llm_answer, answer_letter, return_details, parsed=normalized_llm)
 
     # Strategy 2: Accept leading option token like "B. answer ..."
     leading_match = LEADING_OPTION_PATTERN.match(llm_answer_original)
     if leading_match and answer_letter:
         predicted = _norm_letter(leading_match.group(1))
+        if predicted and model_predicted is None:
+            model_predicted = predicted
+            parse_method = "anchored_token"
         if _token_kind_matches_answer_letter(predicted, answer_letter):
             explicit_choice_found = True
         if predicted == answer_letter:
-            return _result(True, "anchored_token", predicted, answer_letter, return_details)
+            return _result(True, "anchored_token", predicted, answer_letter, return_details, parsed=predicted)
 
     # Strategy 3: Anchored token (prefix matches first, fallback to generic anchors)
     prefix_matches = []
@@ -290,7 +327,7 @@ def multiple_choice_accuracy(
         if prefix_norm:
             flexible_prefix = re.escape(prefix_norm).replace(r"\ ", r"\s+")
             prefix_pattern = re.compile(
-                rf"{flexible_prefix}\s*[:\-–—]?\s*(?:is\s*)?(?P<neg>not\s+|isn['’]t\s+)?\(?\s*(?P<opt>[A-Za-z]|\d{{1,2}})\s*[\)\.:]?(?![\w+\-/])",
+                rf"{flexible_prefix}\s*[:\-–—]?\s*(?:is\s*)?(?P<neg>not\s+|isn['']t\s+)?\(?\s*(?P<opt>[A-Za-z]|\d{{1,2}})\s*[\)\.:]?(?![\w+\-/])",
                 re.IGNORECASE,
             )
             prefix_matches = list(prefix_pattern.finditer(llm_answer))
@@ -299,10 +336,13 @@ def multiple_choice_accuracy(
     if anchored_matches and answer_letter:
         last_match = anchored_matches[-1]
         predicted = _norm_letter(last_match.group("opt"))
+        if predicted and last_match.group("neg") is None:
+            model_predicted = predicted
+            parse_method = "anchored_token"
         if last_match.group("neg") is None and _token_kind_matches_answer_letter(predicted, answer_letter):
             explicit_choice_found = True
         if predicted == answer_letter and last_match.group("neg") is None:
-            return _result(True, "anchored_token", predicted, answer_letter, return_details)
+            return _result(True, "anchored_token", predicted, answer_letter, return_details, parsed=predicted)
 
     # Strategy 4: Last token in the answer tail, ignore negative contexts like "C is incorrect",
     if not explicit_choice_found and answer_letter:
@@ -318,8 +358,12 @@ def multiple_choice_accuracy(
                     continue
                 if _negative_after_option(tail, token_match):
                     continue
+                if model_predicted is None:
+                    model_predicted = predicted
+                    parse_method = "last_token"
                 if predicted == answer_letter:
-                    return _result(True, "last_token", predicted, answer_letter, return_details)
+                    return _result(True, "last_token", predicted, answer_letter, return_details, parsed=predicted)
+                break  # Take the first valid token we find
 
     # Strategy 5: Exact answer text match if there's no explicit choice found
     # Only search at beginning and end to avoid matching reasoning in the middle
@@ -343,11 +387,11 @@ def multiple_choice_accuracy(
         # Check beginning first
         match = pattern.search(beginning_region)
         if match and not _negated_near(beginning_region, match):
-            return _result(True, "answer_text", beginning_region, answer_text, return_details)
+            return _result(True, "answer_text", beginning_region, answer_text, return_details, parsed=model_predicted)
 
         # Then check end (after reasoning)
         match = pattern.search(end_region)
         if match and not _negated_near(end_region, match):
-            return _result(True, "answer_text", end_region, answer_text, return_details)
+            return _result(True, "answer_text", end_region, answer_text, return_details, parsed=model_predicted)
 
-    return _result(False, "none", None, None, return_details)
+    return _result(False, "none", None, None, return_details, parsed=model_predicted, log_method=parse_method)

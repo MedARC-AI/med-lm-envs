@@ -465,7 +465,7 @@ def accuracy(completion: Any, answer: str, parser: vf.Parser, info: dict | None 
     parsed = parser.parse_answer(completion) or ""
     answer_text = info.get("correct_answer_text", None) if info else None
     is_correct = multiple_choice_accuracy(
-        llm_answer=parsed, answer_letter=answer, answer_text=answer_text, prefix="The correct answer is"
+        llm_answer=parsed, answer_letter=answer, answer_text=answer_text, prefix="The correct answer is", info=info
     )
     return 1.0 if is_correct else 0.0
 

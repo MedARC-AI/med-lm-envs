@@ -194,7 +194,7 @@ def load_environment(
     def accuracy(completion, answer: str, parser: vf.Parser, info: dict | None = None, **kwargs) -> float:
         parsed = parser.parse_answer(completion) or ""
         answer_text = info.get("answer_text", None) if info else None
-        is_correct = multiple_choice_accuracy(llm_answer=parsed, answer_letter=answer, answer_text=answer_text)
+        is_correct = multiple_choice_accuracy(llm_answer=parsed, answer_letter=answer, answer_text=answer_text, info=info)
         return 1.0 if is_correct else 0.0
 
     rubric = vf.Rubric(funcs=[accuracy], weights=[1.0], parser=parser)
