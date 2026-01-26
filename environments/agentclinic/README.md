@@ -29,13 +29,15 @@ uv run --active -m verifiers.scripts.eval \
   -s \
   --env-args '{
     "dataset_path": "DATASET.jsonl",
+    "dataset_type": "medqa",
+    "task_mode": "free_turn",
     "patient_model": "MODEL",
     "patient_base_url": "URL",
     "patient_api_key": "KEY",
     "measurement_model": "MODEL",
     "measurement_base_url": "URL",
-    "moderator_model": "MODEL",
-    "moderator_base_url": "URL"
+    "judge_model": "MODEL",
+    "judge_base_url": "URL"
   }'
 ```
 
@@ -99,9 +101,9 @@ uv run --active -m verifiers.scripts.eval \
     "measurement_model": "gpt-4o-mini",
     "measurement_base_url": "https://api.openai.com/v1",
     "measurement_api_key": "'$OPENAI_API_KEY'",
-    "moderator_model": "gpt-4o-mini",
-    "moderator_base_url": "https://api.openai.com/v1",
-    "moderator_api_key": "'$OPENAI_API_KEY'"
+    "judge_model": "gpt-4o-mini",
+    "judge_base_url": "https://api.openai.com/v1",
+    "judge_api_key": "'$OPENAI_API_KEY'"
   }'
 ```
 
@@ -115,11 +117,18 @@ Each agent (patient, measurement) can be configured via `--env-args`:
 
 - **MedQA Extended** (214 cases): `agentclinic_medqa_extended.jsonl`
 - **NEJM Extended** (120 cases): `agentclinic_nejm_extended.jsonl`
+  - Text-only in this environment; `image_url` is passed as plain text.
 
 ### Other Options
 
+- `dataset_type`: `medqa` or `nejm` (auto-detect if omitted)
+- `task_mode`: `free_turn` (default) or `oracle`
 - `max_turns`: Maximum conversation turns (default: 20)
 - `use_think`: Enable chain-of-thought prompting (default: false)
+- `patient_temperature` / `measurement_temperature`
+- `aux_max_tokens`: Max tokens for patient/measurement agents
+- `doctor_bias` / `patient_bias`: Cognitive bias injection (validated)
+- `judge_timeout_s`: Judge request timeout in seconds
 
 
 ### Agent Roles
@@ -127,5 +136,4 @@ Each agent (patient, measurement) can be configured via `--env-args`:
 - **Doctor** (evaluated model): Asks questions, requests tests (e.g., "REQUEST TEST: MRI_Brain_Spine"), makes diagnosis
 - **Patient** (auxiliary LLM): Simulates realistic patient responses based on case symptoms
 - **Measurement** (auxiliary LLM): Returns test results from scenario data when requested
-- **Moderator** (auxiliary LLM): Evaluates diagnosis accuracy using JudgeRubric
-
+- **Judge** (auxiliary LLM): Evaluates diagnosis accuracy using the canonical AgentClinic moderator prompt
