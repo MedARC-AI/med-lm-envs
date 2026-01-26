@@ -870,6 +870,19 @@ class CaseReportBenchTask(str, Enum):
     ALL = "all"
 
 
+class CaseReportBenchMethod(str, Enum):
+    """Data integration methods from the paper."""
+    UCP = "UCP"  # Uniform Category-Specific Prompting
+    UGP = "UGP"  # Unified Global Prompting
+    FCSP = "FCSP"  # Filtered Category-Specific Prompting
+
+
+class CaseReportBenchPrompting(str, Enum):
+    """Prompting styles from the paper."""
+    FS = "FS"  # Few-Shot
+    ZS = "ZS"  # Zero-Shot
+
+
 def _flatten_to_strings(obj: Any) -> list[str]:
     """Flatten any nested JSON structure into a list of strings.
     
@@ -905,8 +918,8 @@ def _normalize_items(items: Iterable[str]) -> list[str]:
 
 def load_environment(
     task: str | CaseReportBenchTask = CaseReportBenchTask.ALL,
-    method: str = "UCP",
-    prompting: str = "FS",
+    method: str | CaseReportBenchMethod = CaseReportBenchMethod.UCP,
+    prompting: str | CaseReportBenchPrompting = CaseReportBenchPrompting.FS,
     max_examples: int = -1,
     **kwargs,
 ) -> vf.Environment:
@@ -927,13 +940,20 @@ def load_environment(
         A verifiers Environment configured for CaseReportBench evaluation.
     """
     
-    method_norm = str(method).strip().upper()
-    prompting_norm = str(prompting).strip().upper()
-    if method_norm not in {"UCP", "UGP", "FCSP"}:
-        raise ValueError("Invalid method. Choose 'UCP', 'UGP', or 'FCSP'.")
-    if prompting_norm not in {"FS", "ZS"}:
-        raise ValueError("Invalid prompting. Choose 'FS' or 'ZS'.")
-    if method_norm == "FCSP":
+    # Validation via Enum conversion
+    try:
+        method_enum = CaseReportBenchMethod(method.upper() if isinstance(method, str) else method)
+    except ValueError:
+        valid = [e.value for e in CaseReportBenchMethod]
+        raise ValueError(f"Invalid method '{method}'. Must be one of {valid}")
+
+    try:
+        prompting_enum = CaseReportBenchPrompting(prompting.upper() if isinstance(prompting, str) else prompting)
+    except ValueError:
+        valid = [e.value for e in CaseReportBenchPrompting]
+        raise ValueError(f"Invalid prompting '{prompting}'. Must be one of {valid}")
+
+    if method_enum == CaseReportBenchMethod.FCSP:
         raise NotImplementedError(
             "FCSP requires subheading/section segmentation (paper §4.1/§4.2.1). "
             "The Hugging Face dataset used here provides only a flat `text` field, "
@@ -949,7 +969,7 @@ def load_environment(
     # Determine which tasks to load
     task_enum = CaseReportBenchTask(task) if isinstance(task, str) else task
     if task_enum == CaseReportBenchTask.ALL:
-        tasks_to_load = [t for t in CaseReportBenchTask if t != CaseReportBenchTask.ALL]
+        tasks_to_load = [t for t in CaseReportBenchTask if t not in {CaseReportBenchTask.ALL}]
     else:
         tasks_to_load = [task_enum]
     
@@ -961,18 +981,18 @@ def load_environment(
             continue
         pmcid = row.get("pmcid")
         
-        if method_norm == "UGP":
+        if method_enum == CaseReportBenchMethod.UGP:
             # One example per case: answer is a dict keyed by category
             tasks = [t.value for t in tasks_to_load]
             answer_obj = _build_ugp_answer_obj(row, tasks)
 
-            ugp_prompt = _build_ugp_instructions(tasks, prompting=prompting_norm)
-            question = ugp_prompt.format(text=text)
+            ugp_prompt = _build_ugp_instructions(tasks, prompting=prompting_enum.value)
+            question = ugp_prompt.replace("{text}", text)
             examples.append(
                 {
                     "question": question,
                     "answer": json.dumps(answer_obj, ensure_ascii=False),
-                    "info": {"text": text, "pmcid": pmcid, "method": "UGP", "prompting": prompting_norm},
+                    "info": {"text": text, "pmcid": pmcid, "method": method_enum.value, "prompting": prompting_enum.value},
                 }
             )
         else:
@@ -983,12 +1003,12 @@ def load_environment(
                     gt_list = []
                 gt_items = _normalize_items(_flatten_to_strings(gt_list))
 
-                question = _build_ucp_question(text=text, task=t.value, prompting=prompting_norm)
+                question = _build_ucp_question(text=text, task=t.value, prompting=prompting_enum.value)
                 examples.append(
                     {
                         "question": question,
                         "answer": json.dumps(gt_items, ensure_ascii=False),
-                        "info": {"text": text, "pmcid": pmcid, "task": t.value, "method": "UCP", "prompting": prompting_norm},
+                        "info": {"text": text, "pmcid": pmcid, "task": t.value, "method": method_enum.value, "prompting": prompting_enum.value},
                     }
                 )
     
@@ -1001,8 +1021,8 @@ def load_environment(
     # Parser for JSON output
     # - UCP: accept common output key variants
     # - UGP: parse full object and read category keys strictly
-    if method_norm == "UGP":
-        ugp_keys = [t.value for t in tasks_to_load] if tasks_to_load else list(PROMPTS_FS.keys())
+    if method_enum == CaseReportBenchMethod.UGP:
+        ugp_keys = [t.value for t in tasks_to_load] if tasks_to_load else list(COMPONENTS.keys())
         parser = JSONParser(fields=ugp_keys, answer_field=ugp_keys[0] if ugp_keys else "answer")
     else:
         parser = JSONParser(fields=[("extractions", "findings", "output")], answer_field="extractions")
@@ -1046,7 +1066,7 @@ def load_environment(
         This is the paper's signature metric for fuzzy clinical match.
         Replicates compute_normalized_token_set_ratio from eval_metrics.py.
         """
-        if method_norm == "UGP":
+        if method_enum == CaseReportBenchMethod.UGP:
             pred_obj = _parse_obj(completion)
             gt_obj = json.loads(answer)
             scores = []
@@ -1062,7 +1082,7 @@ def load_environment(
 
     def bleu1_reward(parser, completion, answer, **kwargs) -> float:
         """BLEU-1: 1-gram precision."""
-        if method_norm == "UGP":
+        if method_enum == CaseReportBenchMethod.UGP:
             pred_obj = _parse_obj(completion)
             gt_obj = json.loads(answer)
             scores = []
@@ -1078,7 +1098,7 @@ def load_environment(
 
     def bleu4_reward(parser, completion, answer, **kwargs) -> float:
         """BLEU-4: 4-gram precision."""
-        if method_norm == "UGP":
+        if method_enum == CaseReportBenchMethod.UGP:
             pred_obj = _parse_obj(completion)
             gt_obj = json.loads(answer)
             scores = []
@@ -1094,7 +1114,7 @@ def load_environment(
 
     def rougeL_reward(parser, completion, answer, **kwargs) -> float:
         """ROUGE-L: Longest Common Subsequence overlap."""
-        if method_norm == "UGP":
+        if method_enum == CaseReportBenchMethod.UGP:
             pred_obj = _parse_obj(completion)
             gt_obj = json.loads(answer)
             scores = []
@@ -1113,7 +1133,7 @@ def load_environment(
         
         Returns 0.0 if omission occurred, 1.0 otherwise.
         """
-        if method_norm == "UGP":
+        if method_enum == CaseReportBenchMethod.UGP:
             pred_obj = _parse_obj(completion)
             gt_obj = json.loads(answer)
             scores = []
@@ -1138,7 +1158,7 @@ def load_environment(
         
         Returns 0.0 if hallucination occurred, 1.0 otherwise.
         """
-        if method_norm == "UGP":
+        if method_enum == CaseReportBenchMethod.UGP:
             pred_obj = _parse_obj(completion)
             gt_obj = json.loads(answer)
             scores = []
