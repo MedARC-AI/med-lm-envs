@@ -14,9 +14,9 @@ Evaluation environment for the MEDMCQA dataset.
 
 ### Task
 - **Type:** Single-turn
-- **Parser:** `Parser` (for standard MCQA) or `ThinkParser` (if using reasoning mode) with `extract_boxed_answer` for strict letter-in-`\boxed{}` format parsing
-- **Rubric overview:** Binary scoring based on correctly boxed letter choice and optional think tag formatting
-- **Reward function:** `exact_match_reward` (1.0 if predicted letter matches correct answer, else 0.0)
+- **Parser:** `Parser` (standard) or `ThinkParser` (if using reasoning mode) depending on `use_think`
+- **Rubric overview:** Binary scoring (1.0 / 0.0), based on correct letter or answer text match.  
+- **Reward function:** `accuracy` — returns 1.0 if the predicted answer matches, else 0.0.
 
 ### Model Input Format
 Each example is formatted as a single-turn user message: 
@@ -52,6 +52,11 @@ uv run vf-eval \
   med_mcqa
 ```
 Replace `OPENAI_API_KEY` with your actual API key.
+
+### Authors
+This environment has been put together by:
+
+Ratna Sagari Grandhi - ([@sagarigrandhi](https://github.com/sagarigrandhi))
 
 ### Credits 
 Dataset:

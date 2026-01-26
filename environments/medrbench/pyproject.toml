@@ -1,0 +1,30 @@
+[project]
+name = "medrbench"
+description = "MedRBench evaluation environment for medical reasoning benchmarks"
+readme = "README.md"
+version = "0.1.0"
+requires-python = ">=3.11"
+authors = [
+    { name = "Hunar Batra", email = "i@hunarbatra.com" },
+]
+dependencies = [
+    "verifiers>=0.1.5.post0",
+    "medarc_verifiers>=0.1.0",
+    "requests>=2.28.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.prime.environment]
+loader = "medrbench:load_environment"
+display_name = "MedRBench"
+visibility = "PUBLIC"
+tags = ["medical", "diagnosis", "treatment", "rare-disease", "llm-judge", "single-turn", "multi-turn", "eval"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+medarc_verifiers = { git = "https://github.com/MedARC-AI/med-lm-envs" }

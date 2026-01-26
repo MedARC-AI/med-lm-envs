@@ -1,0 +1,26 @@
+[project]
+name = "head-qa-v2"
+description = "HEAD-QA v2 environment"
+readme = "README.md"
+tags = ["medical", "single-turn", "multiple-choice", "eval"]
+version = "0.1.0"
+requires-python = ">=3.10"
+authors = [
+    { name = "Ratna Sagari Grandhi", email = "sagari.grandhi@gmail.com" },
+]
+dependencies = [
+    "verifiers>=0.1.5.post0",
+    "Pillow",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+medarc_verifiers = { git = "https://github.com/MedARC-AI/med-lm-envs" }
+
+[tool.prime.environment]
+loader = "head_qa_v2:load_environment"
+display_name = "HEAD-QA v2"
+visibility = "PUBLIC"

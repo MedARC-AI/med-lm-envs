@@ -4,9 +4,13 @@ description = "Single-turn medical MCQ"
 tags = ["medical", "clinical", "single-turn", "multiple-choice", "evaluation"]
 version = "0.1.0"
 requires-python = ">=3.11"
+authors = [
+    { name = "Robert Scholz", email = "robert.scholz@maxplanckschools.de" },
+]
 dependencies = [
     "verifiers>=0.1.3.post0",
-    "datasets>= 4.0.0"
+    "datasets>= 4.0.0",
+    "medarc_verifiers>=0.1.0",
 ]
 
 [project.optional-dependencies]
@@ -21,3 +25,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build]
 include = ["pubmedqa.py"]
+
+[tool.uv.sources]
+medarc_verifiers = { git = "https://github.com/MedARC-AI/med-lm-envs" }

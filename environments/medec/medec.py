@@ -6,10 +6,13 @@ import bleurt.score
 import numpy as np
 import verifiers as vf
 from datasets import load_dataset
+from datasets.utils.logging import disable_progress_bar
 from openai import AsyncOpenAI
 from rouge import Rouge
 
 from medarc_verifiers.utils import download_file, medarc_cache_dir
+
+disable_progress_bar()  # suppress datasets progress indicators
 
 
 def extract_xml_from_string(text: str) -> str:

@@ -1,0 +1,8 @@
+- id: med_halt
+  module: med_halt
+  rollouts_per_example: 1
+  num_examples: -1
+  verbose: false
+  matrix:
+    question_type: [reasoning_fct, reasoning_nota]
+  matrix_id_format: "{base}-{question_type}"

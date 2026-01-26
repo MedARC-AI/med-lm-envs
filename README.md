@@ -100,42 +100,107 @@ Once your tooling is set up you can install MedARC-maintained environments direc
   results = env.evaluate(model_client, "gpt-4.1-mini", num_examples=5)
   ```
 
-## medarc-eval CLI command
+## medarc-eval CLI
 
-`medarc-eval` wraps the upstream `vf-eval` flow and adds environment-specific flags generated from each environment's `load_environment` signature to the CLI instead of requiring a json blob via `--env-args`.
+`medarc-eval` wraps the upstream `vf-eval` flow, adding environment-specific flags and batch orchestration. See [full documentation](docs/medarc-eval.md).
 
-### Quick start
+| Command | Description |
+|---------|-------------|
+| [`medarc-eval <ENV>`](docs/medarc-eval-single-run.md) | Run a single benchmark with auto-discovered environment flags |
+| [`medarc-eval bench`](docs/medarc-eval-bench.md) | Run multiple benchmarks from a YAML config with resume support |
+| [`medarc-eval process`](docs/medarc-eval-process.md) | Convert raw outputs to parquet for analysis |
+| [`medarc-eval winrate`](docs/medarc-eval-winrate.md) | Compute HELM-style win rates across models |
 
-```bash
-uv run medarc-eval medqa -m gpt-4.1-mini -n 5
-```
-
-### Discover environment flags
-
-```bash
-uv run medarc-eval medbullets --help
-```
-
-### Mix explicit flags with JSON
+### Quick Start
 
 ```bash
-uv run medarc-eval medbullets --num-options 4 --env-args '{"shuffle": true}'
+# Run a single benchmark
+uv run medarc-eval medqa -m gpt-4.1-mini -n 25
+
+# Run batch evaluations from config
+uv run medarc-eval bench --config configs/job-gpt-oss-20b.yaml
+
+# Process results and compute win rates
+uv run medarc-eval process
+uv run medarc-eval winrate
 ```
 
-Explicit flags always override JSON input. For list parameters, repeat the flag to replace the default entirely:
+### Environment-Specific Flags
+
+Each environment's `load_environment()` parameters become CLI flags automatically:
 
 ```bash
-uv run medarc-eval longhealth --section cardio --section neuro
+# Discover available flags
+uv run medarc-eval longhealth --help
+
+# Use environment-specific options
+uv run medarc-eval longhealth --task task1 --shuffle-answers -m gpt-4.1-mini -n 10
 ```
 
-Use `--env-args` for complex structures (dicts, nested generics) that cannot be mapped to simple flags:
+For complex arguments (dicts, nested structures), use `--env-args`:
 
 ```bash
-uv run medarc-eval medagentbench --env-args '{"config": {"mode": "fast"}}'
+uv run medarc-eval careqa --env-args '{"split": "open", "judge_model": "gpt-4o"}'
 ```
 
-Print the detected environment schema:
+## Batch Evaluations
+
+Use `medarc-eval bench` to run multiple model × environment evaluations from a config file. See [full batch mode documentation](docs/medarc-eval-bench.md).
+
+```yaml
+name: gpt-oss-20b-med
+
+models:
+  gpt-oss-20b:
+    model: openai/gpt-oss-20b
+    api_base_url: http://localhost:8000/v1
+    sampling_args:
+      temperature: 1.0
+      reasoning_effort: medium
+
+jobs:
+  - model: gpt-oss-20b
+    env: [m_arc, medcalc_bench, medxpertqa]
+```
 
 ```bash
-uv run medarc-eval mmlu_pro_health --print-env-schema
+# Run the batch
+uv run medarc-eval bench --config configs/job-gpt-oss-20b.yaml
+
+# Preview without executing
+uv run medarc-eval bench --config configs/job-gpt-oss-20b.yaml --dry-run
 ```
+
+Batch mode supports automatic resume, job manifests, and matrix sweeps for parameter grids. See the [batch mode documentation](docs/medarc-eval-bench.md) for config file format, resume/restart options, and advanced features.
+
+### Matrix Sweeps
+
+Environment configs support matrix expansion for parameter grid runs:
+
+```yaml
+- id: medconceptsqa
+  module: medconceptsqa
+  num_examples: -1
+  env_args:
+    shuffle_answers: true
+  matrix:
+    difficulty: [easy, medium, hard]
+    shuffle_seed: [1618, 9331]
+  matrix_id_format: "{base}-{difficulty}-s{shuffle_seed}"
+```
+
+This expands into six variants (`medconceptsqa-base-easy-s1618`, …). See [batch mode docs](docs/medarc-eval-bench.md) for full details on matrix expansion, exclusions, and split config files.
+
+## Processing and Win Rates
+
+After running benchmarks, convert results to parquet and compute model comparisons:
+
+```bash
+# Process raw outputs to parquet
+uv run medarc-eval process
+
+# Compute HELM-style win rates
+uv run medarc-eval winrate
+```
+
+See [processing documentation](docs/medarc-eval-process.md) and [win rate documentation](docs/medarc-eval-winrate.md) for configuration options, HuggingFace integration, and output formats.
