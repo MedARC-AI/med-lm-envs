@@ -45,6 +45,7 @@ class ExecutorSettings(BaseModel):
     endpoints_path: Path | None = None
     default_api_key_var: str
     default_api_base_url: str
+    api_base_url_override: str | None = None
     log_level: str = "INFO"
     verbose: bool = False
     save_results: bool = True
@@ -130,20 +131,23 @@ def execute_jobs(
 
         try:
             endpoints = _load_endpoints_for_model(job.model, settings, cache=endpoints_cache)
-            resolved_model, client_config = build_client_config(
+            resolved_model, client_config, prime_sampling_overrides = build_client_config(
                 job.model,
                 endpoints=endpoints,
                 default_api_key_var=settings.default_api_key_var,
                 default_api_base_url=settings.default_api_base_url,
+                api_base_url_override=settings.api_base_url_override,
                 timeout_override=settings.timeout,
                 headers=job.model.headers,
             )
+            # Merge Prime Inference overrides with job sampling args (job args take precedence)
+            merged_sampling_args = {**prime_sampling_overrides, **job.sampling_args}
             eval_config = build_eval_config(
                 job_label=job.job_id,
                 model_cfg=job.model,
                 env_cfg=job.env,
                 env_args=job.env_args,
-                sampling_args=job.sampling_args,
+                sampling_args=merged_sampling_args,
                 cli_env_args=settings.cli_env_args,
                 cli_sampling_args=settings.cli_sampling_args,
                 resolved_model=resolved_model,

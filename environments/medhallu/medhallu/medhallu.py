@@ -1,9 +1,7 @@
 from enum import Enum
-import hashlib
-import random
 
 import verifiers as vf
-from datasets import load_dataset
+from datasets import load_dataset, concatenate_datasets
 from datasets.utils.logging import disable_progress_bar
 from verifiers.utils.data_utils import extract_boxed_answer
 
@@ -49,21 +47,10 @@ def reward_fn(
         return 0.0  # incorrect
 
 
-def _seeded_flip_is_factual(seed: int, row_id: str | int) -> bool:
-    """Deterministically choose factual vs hallucinated for a given row.
-
-    This is intentionally independent of `datasets.map` execution order.
-    """
-    payload = f"{seed}|{row_id}".encode("utf-8")
-    digest = hashlib.sha256(payload).digest()
-    return (digest[0] & 1) == 0
-
-
 def load_environment(
     subset: str = "pqa_labeled",
     difficulty: str | Difficulty = Difficulty.ALL,
     use_knowledge: bool = False,
-    flip_seed: int | None = 1618,
     unsure_reward: float = 0.01,
     **kwargs,
 ) -> vf.Environment:
@@ -74,7 +61,7 @@ def load_environment(
         subset: 'pqa_labeled' (1k high quality) or 'pqa_artificial' (9k generated).
         difficulty: Filter questions by difficulty level.
         use_knowledge: If True, includes the 'Knowledge' field in the prompt.
-        flip_seed: If set, makes the factual-vs-hallucinated flip deterministic per row.
+        unsure_reward: Reward given when the model outputs \boxed{2}.
     """
     dataset = load_dataset("UTAustin-AIHealth/MedHallu", subset, split="train")
 
@@ -85,18 +72,12 @@ def load_environment(
             load_from_cache_file=False,
         )
 
-    rand = random.Random() if flip_seed is None else None
-
-    def _map_fn(ex, idx: int):
+    def _map_fn(ex, idx: int, is_factual: bool):
         """
         Transforms a dataset row into an environment prompt.
-        Randomly flips between showing the Factual Answer (Target 0)
-        or Hallucinated Answer (Target 1).
+        When `is_factual` is True, uses Ground Truth (Target 0).
+        When False, uses Hallucinated Answer (Target 1).
         """
-        # randomly decide whether to show the factual or hallucinated answer
-        row_id = ex.get("id", idx)
-        is_factual = _seeded_flip_is_factual(flip_seed, row_id) if flip_seed is not None else rand.choice([True, False])
-
         if is_factual:
             # show Ground Truth -> expect '0'
             answer_text = ex["Ground Truth"]
@@ -123,13 +104,21 @@ def load_environment(
             },
         }
 
-    # apply mapping
-    processed_dataset = dataset.map(
-        _map_fn,
+    # duplicate dataset: one factual row + one hallucinated row per example
+    factual_dataset = dataset.map(
+        lambda ex, idx: _map_fn(ex, idx, True),
         with_indices=True,
         remove_columns=dataset.column_names,
         load_from_cache_file=False,
     )
+    hallucinated_dataset = dataset.map(
+        lambda ex, idx: _map_fn(ex, idx, False),
+        with_indices=True,
+        remove_columns=dataset.column_names,
+        load_from_cache_file=False,
+    )
+
+    processed_dataset = concatenate_datasets([factual_dataset, hallucinated_dataset])
 
     # Parser and Rubric
     parser = vf.Parser(extract_boxed_answer)

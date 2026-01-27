@@ -22,7 +22,8 @@ def test_normalize_judge_models():
         normalize_judge_models([""])
 
 
-def test_normalize_judge_endpoints(monkeypatch):
+def test_normalize_judge_endpoints(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("JUDGE_API_KEY", "secret")
     base_urls, api_keys = normalize_judge_endpoints(None, None, 2)
     assert base_urls == [None, None]
@@ -53,7 +54,7 @@ def test_multi_judge_rubric_injects_objects():
 
 
 @pytest.mark.asyncio
-async def test_judge_cache_namespacing(monkeypatch):
+async def test_judge_cache_namespacing(monkeypatch: pytest.MonkeyPatch):
     install_cache_patch()
     monkeypatch.setattr("medarc_verifiers.utils.token_tracker.TOKEN_TRACKING_ENABLED", False, raising=False)
 
@@ -85,7 +86,7 @@ async def test_judge_cache_namespacing(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_judge_cache_concurrent_writes(monkeypatch):
+async def test_judge_cache_concurrent_writes(monkeypatch: pytest.MonkeyPatch):
     install_cache_patch()
     monkeypatch.setattr("medarc_verifiers.utils.token_tracker.TOKEN_TRACKING_ENABLED", False, raising=False)
 
@@ -103,8 +104,12 @@ async def test_judge_cache_concurrent_writes(monkeypatch):
             self.base_url = base_url
 
     state = {}
-    rubric_a = JudgeRubric(judge_client=DummyClient("https://api.openai.com/v1"), judge_model="gpt-4o", judge_prompt="{question}")
-    rubric_b = JudgeRubric(judge_client=DummyClient("https://api.anthropic.com/v1"), judge_model="claude-4.5", judge_prompt="{question}")
+    rubric_a = JudgeRubric(
+        judge_client=DummyClient("https://api.openai.com/v1"), judge_model="gpt-4o", judge_prompt="{question}"
+    )
+    rubric_b = JudgeRubric(
+        judge_client=DummyClient("https://api.anthropic.com/v1"), judge_model="claude-4.5", judge_prompt="{question}"
+    )
 
     results = await asyncio.gather(
         rubric_a.judge("test prompt", "", "", state),

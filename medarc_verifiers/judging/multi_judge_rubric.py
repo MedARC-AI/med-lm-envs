@@ -7,6 +7,9 @@ from medarc_verifiers.judging.multi_judge import JudgeResult, MultiJudge
 
 
 class MultiJudgeRubric(vf.Rubric):
+    def add_class_object(self, name: str, obj) -> None:
+        self.class_objects[name] = obj
+
     def __init__(
         self,
         multi_judge: MultiJudge,

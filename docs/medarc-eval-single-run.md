@@ -55,6 +55,19 @@ medarc-eval medqa -m gpt-4.1-mini -n 25 --dry-run
 | `--save-every N` | Save checkpoint every N rollouts |
 | `-v`, `--verbose` | Enable debug logging |
 
+### Prime Inference
+
+| Flag | Description |
+|------|-------------|
+| `--include-usage` / `--no-include-usage` | Enable/disable usage reporting (auto-detected for Prime Inference) |
+
+When using Prime Inference (`https://api.pinference.ai/api/v1`), the CLI automatically:
+- Uses `PRIME_API_KEY` for authentication (if set)
+- Adds `X-Prime-Team-ID` header if `PRIME_TEAM_ID` env var is set
+- Enables usage reporting in API requests
+
+Optionally set `MEDARC_INCLUDE_USAGE=true` to enable usage reporting for non-Prime endpoints instead of using `--include-usage`.
+
 ## Environment-Specific Options
 
 Each benchmark has its own options based on its `load_environment()` function. These appear automatically when you run `--help`:

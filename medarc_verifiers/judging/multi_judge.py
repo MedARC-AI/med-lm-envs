@@ -79,9 +79,7 @@ class MultiJudge:
         self.judge_ids: list[str] = []
 
         for model, base_url, api_key in zip(judge_models, judge_base_urls, judge_api_keys):
-            sampling_args, default_headers = judge_sampling_args_and_headers(
-                model, base_url, timeout=judge_timeout
-            )
+            sampling_args, default_headers = judge_sampling_args_and_headers(model, base_url, timeout=judge_timeout)
             judge_client = AsyncOpenAI(base_url=base_url, api_key=api_key, default_headers=default_headers)
             rubric = vf.JudgeRubric(
                 parser=completion_parser,
