@@ -1,5 +1,6 @@
 import re
 from enum import Enum
+from types import SimpleNamespace
 from typing import Optional
 
 import verifiers as vf
@@ -7,6 +8,7 @@ from datasets import load_dataset
 from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric, JudgeResult
 from medarc_verifiers.parsers.xml_parser import XMLParser
 from medarc_verifiers.rewards.multiple_choice_accuracy import multiple_choice_accuracy
+from medarc_verifiers.parsers import get_parsed_field
 from medarc_verifiers.utils.randomize_multiple_choice import randomize_multiple_choice
 from verifiers.types import Info, State
 from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, extract_boxed_answer
@@ -39,41 +41,57 @@ def accuracy(completion, answer: str, parser: vf.Parser, info: dict | None = Non
 # --- Open-Ended Helpers ---
 
 
-JUDGE_TEMPLATE = """You are grading an AI assistant's answer to a medical/science exam questions.
-
+JUDGE_TEMPLATE = """You are grading an AI assistant's answer to a medical/science exam question using a multi-axis rubric.
 Input:
 - <question>: The exam question.
-- <reference_answer>: The correct answer.
+- <reference_answer>: The reference answer.
 - <assistant_answer>: The AI's response to grade.
 
-Task: Determine if the assistant's answer is correct or incorrect by comparing it to the reference answer and output your grade in <grade>...</grade> tags.
+Task:
+Evaluate the assistant's answer on four Boolean dimensions and output your assessment in the specified format.
 
 Grading Rules:
-- Assume the reference answer is correct and reflects the expected exam solution.
+- Assume the reference answer is a correct but often incomplete exam solution.
 - Focus on factual content and meaning, not style, length, or confidence.
 
-Correct if the assistant's answer conveys the same essential fact(s) as the reference, including:
-- Synonyms, acronyms (expanded or abbreviated), or rephrasing with equivalent meaning
-- Slightly more general/specific phrasing that captures the key concept
-- Shorter or longer answers that express the tested fact without contradictions
-- Additional supporting details that don't contradict the reference
+Rubric:
 
-Incorrect if any of these apply:
-- Different main concept, mechanism, structure, or relationship
-- Contradicts the reference on key points (wrong organ, drug, effect, process, etc.)
-- Contains clearly incorrect information
-- Too vague/incomplete to match the reference
-- Merely repeats question words without the core information from the reference
+1. Semantically Correct (true/false)
+- True if the assistant expresses the same core claim(s) as the reference.
+- Allow synonyms, paraphrasing, acronyms, and reasonable generalizations that still unambiguously answer the question correctly.
+- False if the main concept/mechanism/entity/relationship differs or if the answer is too vague to establish the reference's core claim(s).
 
-Be strict: clear mismatches on main concepts or incorrect claims = Incorrect.
+2. Matches Details (true/false)
+- True if the assistant includes all question-critical details needed to uniquely match the reference answer. Ignore extra illustrative or optional context in the reference.
+- False if any required specifics or details from the reference are missing, overgeneralized where precision matters, or incorrect.
+- Constraint: If Semantically Correct is false, Matches Details must be false.
+
+3. Substantive Addition (true/false)
+- True if the assistant introduces factual claim(s) that could meaningfully alter correctness assessment: tangential or off-topic content, claims or details beyond the question's scope, or alternative explanations/approaches not consistent with the reference.
+- False for definitions, brief clarifying context, stylistic elaboration, standard supporting details directly tied to the reference answer, or added specificity that elaborates the same core answer rather than introducing new topics.
+- False if the reference answer is incomplete relative to what the question explicitly asks and the assistant provides additional content to fully address the question's stated requirements.
+
+4. Critical Error (true/false)
+- True if the assistant states any factual claim that is clearly false relative to the reference and/or standard domain knowledge, or gives unsafe medical guidance.
+- False if no clearly incorrect, contradictory, unsafe, or fabricated factual claims are present.
+- Note: Missing information alone is not a critical error (it affects Matches Details).
+- Note: Critical Error and Substantive Additions are independent; an incorrect added claim may make both true.
 
 <question>{question}</question>
 <reference_answer>{answer}</reference_answer>
 <assistant_answer>{response}</assistant_answer>
 
-Briefly explain whether the assistant's answer matches or conflicts with the reference. Then output your grade as:
+Instructions:
+- Briefly compare assistant vs reference for each rubric dimension.
+- Output in this exact format:
 
-<grade>[Correct or Incorrect]</grade>
+<analysis>
+[Brief dimension-by-dimension analysis]
+</analysis>
+<semantically_correct>[true/false]</semantically_correct>
+<matches_details>[true/false]</matches_details>
+<substantive_addition>[true/false]</substantive_addition>
+<critical_error>[true/false]</critical_error>
 """.strip()
 
 
@@ -84,6 +102,25 @@ def extract_answer_section(completion_text: str) -> str:
     if "<think>" in completion_text and "</think>" in completion_text:
         return re.sub(r".*?</think>", "", completion_text, flags=re.DOTALL).strip()
     return completion_text.strip()
+
+
+def parse_rubric_scores(ns: SimpleNamespace, name: str, invert: bool = False) -> int:
+    raw = get_parsed_field(ns, name, None)
+    grade = False
+    if raw is None:
+        return 0
+
+    if isinstance(raw, bool):
+        grade = raw
+
+    if isinstance(raw, str):
+        val = raw.strip().lower()
+        grade = "true" in val and "false" not in val
+
+    if invert:
+        return 0 if grade else 1
+    else:
+        return 1 if grade else 0
 
 
 def load_environment(
@@ -206,7 +243,9 @@ def _load_open_ended_environment(
         "Instructions: The following text is a medical question. Answer it in the most factual, concise, and informative way possible."
     )
 
-    judge_parser = XMLParser(fields=["grade"], answer_field="grade")
+    judge_parser = XMLParser(
+        fields=["semantically_correct", "matches_details", "substantive_addition", "critical_error"]
+    )
     multi_judge = MultiJudge.from_env_args(
         judge_model=judge_model,
         judge_base_url=judge_base_url,
@@ -222,23 +261,40 @@ def _load_open_ended_environment(
         judge_prompt = JUDGE_TEMPLATE.format(question=info.get("question", ""), answer=answer, response=response)
         judge_results: list[JudgeResult] = await rubric.judge(judge_prompt, "", "", state)
         judge_entries = []
-        scores = []
+        scores: list[float | None] = []
         for result in judge_results:
             entry_error = result.error
+            rubric_scores = None
             try:
-                grade = judge_parser.parse_answer(result.raw).strip().lower()
+                rubric_scores = judge_parser.parse(result.raw)
             except AttributeError:
                 result = await rubric.rerun_judge(result, judge_prompt, "", "", state)
-                grade = judge_parser.parse_answer(result.raw).strip().lower()
                 entry_error = result.error
+                rubric_scores = judge_parser.parse(result.raw)
 
-            score = 1.0 if "correct" in grade and "incorrect" not in grade else 0.0 if grade else None
+            if rubric_scores is None:
+                score = None
+                semantically_correct = None
+                matches_details = None
+                substantive_addition = None
+                critical_error = None
+            else:
+                semantically_correct = parse_rubric_scores(rubric_scores, "semantically_correct")
+                matches_details = parse_rubric_scores(rubric_scores, "matches_details")
+                substantive_addition = parse_rubric_scores(rubric_scores, "substantive_addition", invert=True)
+                critical_error = parse_rubric_scores(rubric_scores, "critical_error", invert=True)
+                score = (semantically_correct + matches_details + substantive_addition + critical_error) / 4.0
+
             scores.append(score)
             judge_entries.append(
                 {
                     "model": result.model,
                     "raw": result.raw,
                     "error": entry_error,
+                    "semantically_correct": semantically_correct,
+                    "matches_details": matches_details,
+                    "substantive_addition": substantive_addition,
+                    "critical_error": critical_error,
                     "score": score,
                 }
             )
