@@ -10,7 +10,7 @@ import verifiers as vf
 from datasets import Dataset, concatenate_datasets
 from datasets.utils.logging import disable_progress_bar
 from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric
-from medarc_verifiers.utils import download_file, judge_sampling_args_and_headers
+from medarc_verifiers.utils import default_judge_api_key, download_file, judge_sampling_args_and_headers
 from openai import AsyncOpenAI
 from verifiers.types import Info, Messages, State
 
@@ -547,6 +547,7 @@ def load_environment(
 
     rubric.add_reward_func(judge_rubric_reward, weight=1.0)
 
+    patient_agent_api_key = default_judge_api_key(patient_agent_base_url) if patient_agent_api_key is None else patient_agent_api_key
     _, patient_default_headers = judge_sampling_args_and_headers(patient_agent_model, patient_agent_base_url)
     patient_agent_client = AsyncOpenAI(
         base_url=patient_agent_base_url,
