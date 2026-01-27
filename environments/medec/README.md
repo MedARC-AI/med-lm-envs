@@ -34,7 +34,7 @@ A benchmark for medical error detection, extraction, and correction in clinical 
 The environment supports two distinct evaluation modes, controlled by the `eval_method` argument:
 
 * **`"judge"` (Default Mode)**
-  Uses a **multi-part rubric** where the primary score is derived from a robust *LLM-as-a-Judge* evaluation using a No Free Labels judge rubric.
+  Uses a **multi-part rubric** where the primary score is derived from a robust *LLM-as-a-Judge* evaluation using a No Free Labels inspired multi-axis judge rubric.
 
 * **`"metrics"` (Replication Mode)**
 

@@ -6,6 +6,7 @@ import numpy as np
 import verifiers as vf
 from datasets import load_dataset
 from datasets.utils.logging import disable_progress_bar
+from medarc_verifiers.parsers import get_parsed_field
 from medarc_verifiers.parsers.xml_parser import XMLParser
 from medarc_verifiers.utils import (
     default_judge_api_key,
@@ -45,42 +46,77 @@ Input:
 - <reference_answer>: The original missing sentence and the correct answer.
 - <assistant_answer>: The AI's filled in sentence and the response to grade.
 
-Task: Determine if the assistant's answer is correct or incorrect by comparing it to the reference answer and output your grade in <grade>...</grade> tags.
+Task:
+Evaluate the assistant's answer on four Boolean dimensions and output your assessment in the specified format.
 
 Grading Rules:
 - Assume the reference answer is correct and reflects the expected exam solution.
 - Focus on factual content and meaning, not style, length, or confidence.
 
-Correct if the assistant's answer conveys the same essential fact(s) as the reference, including:
-- Synonyms, acronyms (expanded or abbreviated), or rephrasing with equivalent meaning
-- Slightly more general/specific phrasing that captures the key concept
-- Shorter or longer answers that express the tested fact without contradictions
-- Additional supporting details that don't contradict the reference
+Rubric:
 
-Incorrect if any of these apply:
-- Different main concept, mechanism, structure, or relationship
-- Contradicts the reference on key points (wrong organ, drug, effect, process, etc.)
-- Contains clearly incorrect information
-- Too vague/incomplete to match the reference
+1. Semantically Correct (true/false)
+- True if the assistant expresses the same core claim(s) as the reference.
+- Allow synonyms, paraphrasing, acronyms, and reasonable generalizations that still unambiguously answer the question correctly.
+- False if the main concept/mechanism/entity/relationship differs or if the answer is too vague to establish the reference's core claim(s).
 
-Be strict: clear mismatches on main concepts or incorrect claims = Incorrect.
+2. Matches Details (true/false)
+- True if the assistant includes all question-critical details needed to uniquely match the reference answer. Ignore extra illustrative or optional context in the reference.
+- False if any required specifics or details from the reference are missing, overgeneralized where precision matters, or incorrect.
+- Constraint: If Semantically Correct is false, Matches Details must be false.
+
+3. Substantive Addition (true/false)
+- True if the assistant introduces factual claim(s) that could meaningfully alter correctness assessment: tangential or off-topic content, claims or details beyond the question's scope, or alternative explanations/approaches not consistent with the reference.
+- False for definitions, brief clarifying context, stylistic elaboration, standard supporting details directly tied to the reference answer, or added specificity that elaborates the same core answer rather than introducing new topics.
+- False if the reference answer is incomplete relative to what the question explicitly asks and the assistant provides additional content to fully address the question's stated requirements.
+
+4. Critical Error (true/false)
+- True if the assistant states any factual claim that is clearly false relative to the reference and/or standard domain knowledge, or gives unsafe medical guidance.
+- False if no clearly incorrect, contradictory, unsafe, or fabricated factual claims are present.
+- Note: Missing information alone is not a critical error (it affects Matches Details).
+- Note: Critical Error and Substantive Additions are independent; an incorrect added claim may make both true.
 
 <context>
 {question}
 </context>
-
 <reference_answer>
 {answer}
 </reference_answer>
-
 <assistant_answer>
 {response}
 </assistant_answer>
 
-Briefly explain whether the assistant's answer matches or conflicts with the reference. Then output your grade as:
+Instructions:
+- Briefly compare assistant vs reference for each rubric dimension.
+- Output in this exact format:
 
-<grade>[Correct or Incorrect]</grade>
+<analysis>
+[Brief dimension-by-dimension analysis]
+</analysis>
+<semantically_correct>[true/false]</semantically_correct>
+<matches_details>[true/false]</matches_details>
+<substantive_addition>[true/false]</substantive_addition>
+<critical_error>[true/false]</critical_error>
 """.strip()
+
+
+def parse_rubric_scores(ns, name: str, invert: bool = False) -> int:
+    raw = get_parsed_field(ns, name, None)
+    grade = False
+    if raw is None:
+        return 0
+
+    if isinstance(raw, bool):
+        grade = raw
+
+    if isinstance(raw, str):
+        val = raw.strip().lower()
+        grade = "true" in val and "false" not in val
+
+    if invert:
+        return 0 if grade else 1
+    else:
+        return 1 if grade else 0
 
 
 def delete_from_text(text, target_idx):
@@ -124,7 +160,9 @@ def load_environment(
     train_dataset = load_dataset("sauravlmx/MEDEC-MS", split="train")
 
     parser = XMLParser(fields=["error_id", "incorrect_sentence", "correction"])
-    judge_parser = XMLParser(fields=["grade"], answer_field="grade")
+    judge_parser = XMLParser(
+        fields=["semantically_correct", "matches_details", "substantive_addition", "critical_error"]
+    )
 
     def error_flag(parser: XMLParser, completion: Messages, info: Info, **kwargs) -> float:
         parsed = parser.parse(completion)
@@ -145,6 +183,7 @@ def load_environment(
     judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=default_headers)
 
     judge_rubric = vf.JudgeRubric(
+        parser=judge_parser,
         parallelize_scoring=True,
         judge_client=judge_client,
         judge_model=judge_model,
@@ -211,19 +250,29 @@ def load_environment(
         try:
             try:
                 judge_raw = await judge_rubric.judge(judge_prompt, prediction, ground_truth, state)
-                grade = judge_parser.parse_answer(judge_raw)
+                rubric_scores = judge_parser.parse(judge_raw)
             except AttributeError:
                 judge_raw = await judge_rubric.judge(judge_prompt, prediction, ground_truth, state)
-                grade = judge_parser.parse_answer(judge_raw)
+                rubric_scores = judge_parser.parse(judge_raw)
+
+            semantically_correct = parse_rubric_scores(rubric_scores, "semantically_correct")
+            matches_details = parse_rubric_scores(rubric_scores, "matches_details")
+            substantive_addition = parse_rubric_scores(rubric_scores, "substantive_addition", invert=True)
+            critical_error = parse_rubric_scores(rubric_scores, "critical_error", invert=True)
+
+            score = semantically_correct + matches_details + substantive_addition + critical_error
 
             info.setdefault("judge_feedback", []).append(
                 {
-                    "grade": grade,
+                    "semantically_correct": semantically_correct,
+                    "matches_details": matches_details,
+                    "substantive_addition": substantive_addition,
+                    "critical_error": critical_error,
                     "raw_judge": str(judge_raw),
                 }
             )
 
-            return 1.0 if "correct" in grade.lower() and "incorrect" not in grade.lower() else 0.0
+            return score / 4.0
         except Exception as e:
             print(f"Judge call failed for correction: {e}")
             return 0.0
@@ -284,13 +333,13 @@ def load_environment(
     final_rubric = vf.Rubric(parser=parser)
 
     if eval_method == EvalMethod.JUDGE:
-        final_rubric.add_reward_func(error_flag, weight=1 / 3)
-        final_rubric.add_reward_func(error_sentence, weight=1 / 3)
-        final_rubric.add_reward_func(error_correction, weight=1 / 3)
+        final_rubric.add_reward_func(error_flag, weight=1 / 4)
+        final_rubric.add_reward_func(error_sentence, weight=1 / 4)
+        final_rubric.add_reward_func(error_correction, weight=1 / 2)
     elif eval_method == EvalMethod.BOTH:
-        final_rubric.add_reward_func(error_flag, weight=1 / 3)
-        final_rubric.add_reward_func(error_sentence, weight=1 / 3)
-        final_rubric.add_reward_func(error_correction, weight=1 / 3)
+        final_rubric.add_reward_func(error_flag, weight=1 / 4)
+        final_rubric.add_reward_func(error_sentence, weight=1 / 4)
+        final_rubric.add_reward_func(error_correction, weight=1 / 2)
         final_rubric.add_reward_func(rouge_score, weight=0)
         final_rubric.add_reward_func(bertscore, weight=0)
         final_rubric.add_reward_func(bleurt, weight=0)
