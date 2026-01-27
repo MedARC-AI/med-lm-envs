@@ -70,6 +70,7 @@ Rubric:
 3. Substantive Addition (true/false)
 - True if the assistant introduces factual claim(s) that could meaningfully alter correctness assessment: tangential or off-topic content, claims or details beyond the question's scope, or alternative explanations/approaches not consistent with the reference.
 - False for definitions, brief clarifying context, stylistic elaboration, standard supporting details directly tied to the reference answer, or added specificity that elaborates the same core answer rather than introducing new topics.
+- False if the reference answer is incomplete relative to what the question explicitly asks and the assistant provides additional content to fully address the question's stated requirements.
 
 4. Critical Error (true/false)
 - True if the assistant states any factual claim that is clearly false relative to the reference and/or standard domain knowledge, or gives unsafe medical guidance.
