@@ -48,7 +48,7 @@ Notes:
 
 | Arg | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
-| `cache_dir` | str \| Path \| None | `~/.cache/mtsamples_procedures` | Local directory to cache downloaded datasets. Can also be set via `MTSAMPLES_PROCEDURES_CACHE_DIR` environment variable. |
+| `cache_dir` | str \| Path \| None | `~/.cache/medarc/mtsamples_procedures` | Local directory to cache downloaded datasets. Can also be set via `MTSAMPLES_PROCEDURES_CACHE_DIR` environment variable. |
 | `use_think` | bool | `False` | Whether to use chain-of-thought prompting with `<think>...</think>` tags |
 | `judge_model` | str \| list[str] | `"gpt-4o-mini"` | Model identifier(s) for the LLM judge evaluating procedural plans |
 | `judge_base_url` | str \| list[str] \| None | `None` | Custom API base URL(s) for judge model (defaults to OpenAI API) |

@@ -1,5 +1,5 @@
+import json
 import os
-import requests
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -9,6 +9,7 @@ from datasets import Dataset
 from datasets.utils.logging import disable_progress_bar
 from medarc_verifiers.parsers import JSONParser
 from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric
+from medarc_verifiers.utils import download_file, medarc_cache_dir
 from verifiers.types import Info, Messages, State
 
 from mtsamples_replicate.judge_prompts import JUDGE_OUTPUT_JSON, JUDGE_TEMPLATE
@@ -35,8 +36,7 @@ def _resolve_cache_dir(cache_dir: Path | str | None) -> Path:
         env_override = os.getenv("MTSAMPLES_replicate_CACHE_DIR")
         if env_override:
             return Path(env_override)
-        return Path.home() / ".cache" / "mtsamples_replicate"
-    return Path(cache_dir)
+    return medarc_cache_dir(cache_dir) / "mtsamples_replicate"
 
 
 def _extract_sections(text: str) -> tuple[str | None, str | None, str | None]:
@@ -83,9 +83,8 @@ def _download_txt_files(cache_path: Path) -> list[Path]:
     if len(existing_files) > 0:
         return existing_files
 
-    response = requests.get(API_URL)
-    response.raise_for_status()
-    files_data = response.json()
+    files_json = download_file(API_URL, cache_path / "files.json")
+    files_data = json.loads(files_json.read_text(encoding="utf-8"))
 
     downloaded_files = []
     for file_info in files_data:
@@ -94,9 +93,7 @@ def _download_txt_files(cache_path: Path) -> list[Path]:
             file_url = f"{BASE_URL}/{encoded_name}"
             dest_path = txt_dir / file_info["name"]
 
-            file_response = requests.get(file_url)
-            file_response.raise_for_status()
-            dest_path.write_text(file_response.text, encoding="utf-8")
+            download_file(file_url, dest_path)
             downloaded_files.append(dest_path)
 
     return downloaded_files
