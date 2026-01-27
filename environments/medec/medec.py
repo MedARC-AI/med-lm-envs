@@ -1,39 +1,140 @@
 import os
 import zipfile
+from enum import Enum
 
-import bert_score
-import bleurt.score
 import numpy as np
 import verifiers as vf
 from datasets import load_dataset
 from datasets.utils.logging import disable_progress_bar
+from medarc_verifiers.parsers import get_parsed_field
+from medarc_verifiers.parsers.xml_parser import XMLParser
+from medarc_verifiers.utils import (
+    default_judge_api_key,
+    download_file,
+    judge_sampling_args_and_headers,
+    medarc_cache_dir,
+)
 from openai import AsyncOpenAI
-from rouge import Rouge
-
-from medarc_verifiers.utils import download_file, medarc_cache_dir
+from verifiers.types import Info, Messages, State
 
 disable_progress_bar()  # suppress datasets progress indicators
 
 
-def extract_xml_from_string(text: str) -> str:
-    """Extracts XML content from a string."""
-    import re
+class EvalMethod(str, Enum):
+    JUDGE = "judge"
+    METRICS = "metrics"
+    BOTH = "both"
 
-    match = re.search(r"<error_flag>.*</corrected_sentence>|<error_flag>0</error_flag>", text, re.DOTALL)
-    if match:
-        return match.group(0)
-    return ""
+
+SYSTEM_PROMPT = """\
+Analyze the patient medical narrative and return the following XML:
+<error_id>[CORRECT or sentence id]</error_id>
+<incorrect_sentence>[incorrect sentence or N/A]</incorrect_sentence>
+<correction>[corrected sentence or N/A]</correction>
+""".strip()
+
+USER_PROMPT = """The following is a medical narrative about a patient. You are a skilled medical doctor reviewing the clinical text. The text is either correct or contains one error. The text has one sentence per line. Each line starts with the sentence ID followed by the sentence to check. Check every sentence of the text. If the text is correct return the following output: <error_id>CORRECT</error_id>. If the text has a medical error related to treatment, management, cause, or diagnosis, return the sentence id of the sentence containing the error: <error_id>[sentence id]</error_id>, followed by the incorrect sentence text <incorrect_sentence>[incorrect sentence or N/A]</incorrect_sentence> and a corrected version of the sentence <correction>[corrected sentence or N/A]</correction>. Finding and correcting the error requires medical knowledge and reasoning.
+Medical Narrative:
+{question}
+""".strip()
+
+JUDGE_PROMPT = """\
+You are grading an AI assistant's answer to a medical/science exam question where the assistant must fill in a missing sentence in a medical narrative.
+
+Input:
+- <context>: The medical narrative with one sentence removed. Each line is numbered with the missing sentence blank.
+- <reference_answer>: The original missing sentence and the correct answer.
+- <assistant_answer>: The AI's filled in sentence and the response to grade.
+
+Task:
+Evaluate the assistant's answer on four Boolean dimensions and output your assessment in the specified format.
+
+Grading Rules:
+- Assume the reference answer is correct and reflects the expected exam solution.
+- Focus on factual content and meaning, not style, length, or confidence.
+
+Rubric:
+
+1. Semantically Correct (true/false)
+- True if the assistant expresses the same core claim(s) as the reference.
+- Allow synonyms, paraphrasing, acronyms, and reasonable generalizations that still unambiguously answer the question correctly.
+- False if the main concept/mechanism/entity/relationship differs or if the answer is too vague to establish the reference's core claim(s).
+
+2. Matches Details (true/false)
+- True if the assistant includes all question-critical details needed to uniquely match the reference answer. Ignore extra illustrative or optional context in the reference.
+- False if any required specifics or details from the reference are missing, overgeneralized where precision matters, or incorrect.
+- Constraint: If Semantically Correct is false, Matches Details must be false.
+
+3. Substantive Addition (true/false)
+- True if the assistant introduces factual claim(s) that could meaningfully alter correctness assessment: tangential or off-topic content, claims or details beyond the question's scope, or alternative explanations/approaches not consistent with the reference.
+- False for definitions, brief clarifying context, stylistic elaboration, standard supporting details directly tied to the reference answer, or added specificity that elaborates the same core answer rather than introducing new topics.
+- False if the reference answer is incomplete relative to what the question explicitly asks and the assistant provides additional content to fully address the question's stated requirements.
+
+4. Critical Error (true/false)
+- True if the assistant states any factual claim that is clearly false relative to the reference and/or standard domain knowledge, or gives unsafe medical guidance.
+- False if no clearly incorrect, contradictory, unsafe, or fabricated factual claims are present.
+- Note: Missing information alone is not a critical error (it affects Matches Details).
+- Note: Critical Error and Substantive Additions are independent; an incorrect added claim may make both true.
+
+<context>
+{question}
+</context>
+<reference_answer>
+{answer}
+</reference_answer>
+<assistant_answer>
+{response}
+</assistant_answer>
+
+Instructions:
+- Briefly compare assistant vs reference for each rubric dimension.
+- Output in this exact format:
+
+<analysis>
+[Brief dimension-by-dimension analysis]
+</analysis>
+<semantically_correct>[true/false]</semantically_correct>
+<matches_details>[true/false]</matches_details>
+<substantive_addition>[true/false]</substantive_addition>
+<critical_error>[true/false]</critical_error>
+""".strip()
+
+
+def parse_rubric_scores(ns, name: str, invert: bool = False) -> int:
+    raw = get_parsed_field(ns, name, None)
+    grade = False
+    if raw is None:
+        return 0
+
+    if isinstance(raw, bool):
+        grade = raw
+
+    if isinstance(raw, str):
+        val = raw.strip().lower()
+        grade = "true" in val and "false" not in val
+
+    if invert:
+        return 0 if grade else 1
+    else:
+        return 1 if grade else 0
+
+
+def delete_from_text(text, target_idx):
+    target_idx = str(target_idx)
+    out_lines = []
+    for line in text.splitlines(True):  # keep newline chars
+        parts = line.lstrip().split(maxsplit=1)
+        if parts and parts[0] == target_idx:
+            continue
+        out_lines.append(line)
+    return "".join(out_lines)
 
 
 def load_environment(
-    repo_id: str = "sauravlmx/MEDEC-MS",
-    test_split: str = "test_ms",
     judge_model: str = "gpt-4o-mini",
     judge_base_url: str | None = None,
     judge_api_key: str | None = None,
-    num_few_shot: int = 0,
-    use_think: bool = False,
-    eval_method: str = "judge",  # "judge" (default), "metrics, or "judge-only"
+    eval_method: str | EvalMethod = EvalMethod.JUDGE,
     device: str | None = None,
 ) -> vf.Environment:
     """
@@ -53,72 +154,49 @@ def load_environment(
         gpu_id = device.split(":")[-1]
         os.environ["CUDA_VISIBLE_DEVICES"] = gpu_id
 
-    try:
-        print(f"Loading dataset from Hub repo: {repo_id}, split: {test_split}")
-        dataset = load_dataset(repo_id, split=test_split)
-        train_dataset = load_dataset(repo_id, split="train_ms")
-    except Exception as e:
-        raise ValueError(f"Could not load split '{test_split}' from repo '{repo_id}'. Error: {e}")
+    eval_method = EvalMethod(eval_method) if isinstance(eval_method, str) else eval_method
 
-    zero_shot_prompt = """The following is a medical narrative about a patient. You are a skilled medical doctor reviewing the clinical text. The text is either correct or contains one error. The text has one sentence per line. Each line starts with the sentence ID, followed by a pipe character then the sentence to check. Check every sentence of the text. If the text is correct return the following output: <error_flag>0</error_flag>. If the text has a medical error related to treatment, management, cause, or diagnosis, return the sentence id of the sentence containing the error, followed by a space, and then a corrected version of the sentence in the following XML format:
-<error_flag>1</error_flag>
-<error_sentence>[The full sentence containing the error]</error_sentence>
-<corrected_sentence>[Your corrected version of the sentence]</corrected_sentence>
-Finding and correcting the error requires medical knowledge and reasoning."""
+    dataset = load_dataset("sauravlmx/MEDEC-MS", split="test_ms")
+    train_dataset = load_dataset("sauravlmx/MEDEC-MS", split="train")
 
-    few_shot_examples = []
-    if num_few_shot > 0 and train_dataset:
-        few_shot_dataset = train_dataset.shuffle(seed=42).select(range(num_few_shot))
-        for example in few_shot_dataset:
-            question = example["Text"]
-            if int(example["Error Flag"]) == 1:
-                answer = f"""<error_flag>1</error_flag>
-<error_sentence>{example["Error Sentence"]}</error_sentence>
-<corrected_sentence>{example["Corrected Sentence"]}</corrected_sentence>"""
-            else:
-                answer = "<error_flag>0</error_flag>"
-            few_shot_examples.append({"role": "user", "content": question})
-            few_shot_examples.append({"role": "assistant", "content": answer})
+    parser = XMLParser(fields=["error_id", "incorrect_sentence", "correction"])
+    judge_parser = XMLParser(
+        fields=["semantically_correct", "matches_details", "substantive_addition", "critical_error"]
+    )
 
-    if use_think:
-        system_prompt = (
-            "Think step-by-step inside <think>...</think> tags. Then, provide your final answer in the specified XML format."
-            + "\n\n"
-            + zero_shot_prompt
-        )
-        parser = vf.ThinkParser(extract_fn=extract_xml_from_string)
-    else:
-        system_prompt = zero_shot_prompt
-        parser = vf.XMLParser(fields=["error_flag", "error_sentence", "corrected_sentence"])
-
-    def get_final_content(completion) -> str | None:
-        if isinstance(completion, list) and completion:
-            last_message = completion[-1]
-            if isinstance(last_message, dict):
-                content = last_message.get("content")
-                if isinstance(content, str):
-                    return content
-        elif isinstance(completion, str):
-            return completion
-        return None
-
-    def flag_accuracy(parser, completion, info, **kwargs) -> float:
-        final_content = get_final_content(completion)
-        if final_content is None:
-            return 0.0
-        parsed = parser.parse(final_content)
-        predicted_flag = getattr(parsed, "error_flag", None)
-        ground_truth_flag = info.get("error_flag")
-        if predicted_flag is None:
+    def error_flag(parser: XMLParser, completion: Messages, info: Info, **kwargs) -> float:
+        parsed = parser.parse(completion)
+        if parsed is None:
             return 0.0
         try:
-            return 1.0 if int(predicted_flag) == ground_truth_flag else 0.0
+            predicted = getattr(parsed, "error_id", None)
+            ground_truth = int(info.get("error_id"))
+            if ground_truth == -1:
+                return "correct" in str(predicted).lower()
+            else:
+                return 1.0 if int(predicted) == ground_truth else 0.0
         except (ValueError, TypeError):
             return 0.0
 
-    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=judge_api_key)
-    rouge = Rouge()
-    if eval_method is not None and eval_method != "judge-only":
+    api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
+    sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
+    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=default_headers)
+
+    judge_rubric = vf.JudgeRubric(
+        parser=judge_parser,
+        parallelize_scoring=True,
+        judge_client=judge_client,
+        judge_model=judge_model,
+        judge_prompt="{question}",
+        judge_sampling_args=sampling_args,
+    )
+
+    if eval_method in (EvalMethod.METRICS, EvalMethod.BOTH):
+        import bert_score
+        import bleurt.score as bleurt_score
+        from rouge import Rouge
+
+        rouge_model = Rouge()
         bleurt_checkpoint = medarc_cache_dir() / "medec" / "bleurt-20"
         if not bleurt_checkpoint.exists():
             print("Downloading BLEURT-20 checkpoint...")
@@ -129,194 +207,171 @@ Finding and correcting the error requires medical knowledge and reasoning."""
                 zip_ref.extractall(bleurt_checkpoint.parent)
             zip_path.unlink()
             print("BLEURT-20 checkpoint downloaded and extracted.")
-        bleurt_scorer = bleurt.score.BleurtScorer(str(bleurt_checkpoint))
+        bleurt_scorer = bleurt_score.BleurtScorer(str(bleurt_checkpoint))
     else:
+        rouge_model = None
         bleurt_scorer = None
 
-    EXTRACTION_JUDGE_TEMPLATE = """Your job is to evaluate if a predicted sentence is semantically equivalent to a ground truth sentence from a clinical note.
-
-Consider these guidelines:
-- Minor wording differences are acceptable if the core meaning is preserved.
-- The predicted sentence can be a substring or superset of the ground truth as long as it correctly isolates the error.
-
-Context Clinical Note:
-{context}
-
-Ground Truth Error Sentence:
-{answer}
-
-Predicted Error Sentence:
-{response}
-
-Is the predicted sentence semantically equivalent to the ground truth sentence?
-Respond with either "EQUIVALENT" or "NOT_EQUIVALENT".
-""".strip()
-
-    CORRECTION_JUDGE_TEMPLATE = """Your job is to evaluate if a predicted correction for a medical error is medically equivalent to a ground truth correction.
-
-Context Clinical Note:
-{context}
-
-Sentence with Error:
-{error_sentence}
-
-Ground Truth Corrected Sentence:
-{answer}
-
-Predicted Corrected Sentence:
-{response}
-
-Is the predicted correction medically equivalent to the ground truth correction?
-Respond with either "EQUIVALENT" or "NOT_EQUIVALENT".
-""".strip()
-
-    async def extraction_similarity(parser, completion, info, **kwargs) -> float:
-        final_content = get_final_content(completion)
-        if final_content is None:
+    def error_sentence(parser: XMLParser, completion: Messages, info: Info, **kwargs) -> float:
+        parsed = parser.parse(completion)
+        if parsed is None:
             return 0.0
-        parsed = parser.parse(final_content)
-        predicted_sentence = getattr(parsed, "error_sentence", "") or ""
+
+        if error_flag(parser, completion, info, **kwargs) == 0:
+            return 0.0  # Incorrect error sentence ID'd, so score is 0
+
+        if int(info.get("error_id")) == -1:
+            return 1.0  # No error to extract, so score is 1
+
+        predicted_sentence = getattr(parsed, "incorrect_sentence", "") or ""
         ground_truth_sentence = info.get("error_sentence", "") or ""
-        ground_truth_flag = info.get("error_flag")
 
-        if ground_truth_flag == 0:
-            return 1.0 if not predicted_sentence else 0.0
-        if not predicted_sentence:
+        return predicted_sentence.strip() in ground_truth_sentence.strip()
+
+    async def error_correction(parser: XMLParser, completion: Messages, info: Info, state: State, **kwargs) -> float:
+        parsed = parser.parse(completion)
+        if parsed is None:
             return 0.0
 
-        judge_prompt = EXTRACTION_JUDGE_TEMPLATE.format(
-            context=info.get("text", ""),
-            answer=ground_truth_sentence,
-            response=predicted_sentence,
+        if error_flag(parser, completion, info, **kwargs) == 0:
+            return 0.0  # Incorrect error sentence ID'd, so score is 0
+
+        if int(info.get("error_id")) == -1:
+            return 1.0  # No error to extract, so score is 1
+
+        prediction = getattr(parsed, "correction", "") or ""
+        ground_truth = info.get("corrected_sentence", "") or ""
+
+        judge_prompt = JUDGE_PROMPT.format(
+            question=delete_from_text(info.get("text", ""), info.get("error_id")),
+            answer=ground_truth,
+            response=prediction,
         )
         try:
-            response = await judge_client.chat.completions.create(
-                model=judge_model,
-                messages=[{"role": "user", "content": judge_prompt}],
-                temperature=0,
+            try:
+                judge_raw = await judge_rubric.judge(judge_prompt, prediction, ground_truth, state)
+                rubric_scores = judge_parser.parse(judge_raw)
+            except AttributeError:
+                judge_raw = await judge_rubric.judge(judge_prompt, prediction, ground_truth, state)
+                rubric_scores = judge_parser.parse(judge_raw)
+
+            semantically_correct = parse_rubric_scores(rubric_scores, "semantically_correct")
+            matches_details = parse_rubric_scores(rubric_scores, "matches_details")
+            substantive_addition = parse_rubric_scores(rubric_scores, "substantive_addition", invert=True)
+            critical_error = parse_rubric_scores(rubric_scores, "critical_error", invert=True)
+
+            score = semantically_correct + matches_details + substantive_addition + critical_error
+
+            info.setdefault("judge_feedback", []).append(
+                {
+                    "semantically_correct": semantically_correct,
+                    "matches_details": matches_details,
+                    "substantive_addition": substantive_addition,
+                    "critical_error": critical_error,
+                    "raw_judge": str(judge_raw),
+                }
             )
-            judge_response = response.choices[0].message.content or ""
-            return 1.0 if "EQUIVALENT" in judge_response.upper() else 0.0
-        except Exception as e:
-            print(f"Judge call failed for extraction: {e}")
-            return 0.0
 
-    async def correction_equivalence(parser, completion, info, **kwargs) -> float:
-        final_content = get_final_content(completion)
-        if final_content is None:
-            return 0.0
-        parsed = parser.parse(final_content)
-        predicted_correction = getattr(parsed, "corrected_sentence", "") or ""
-        ground_truth_correction = info.get("corrected_sentence", "") or ""
-        ground_truth_flag = info.get("error_flag")
-
-        if ground_truth_flag == 0:
-            return 1.0 if not predicted_correction else 0.0
-        if not predicted_correction:
-            return 0.0
-
-        judge_prompt = CORRECTION_JUDGE_TEMPLATE.format(
-            context=info.get("text", ""),
-            error_sentence=info.get("error_sentence", ""),
-            answer=ground_truth_correction,
-            response=predicted_correction,
-        )
-        try:
-            response = await judge_client.chat.completions.create(
-                model=judge_model,
-                messages=[{"role": "user", "content": judge_prompt}],
-                temperature=0,
-            )
-            judge_response = response.choices[0].message.content or ""
-            return 1.0 if "EQUIVALENT" in judge_response.upper() else 0.0
+            return score / 4.0
         except Exception as e:
             print(f"Judge call failed for correction: {e}")
             return 0.0
 
-    def get_nlg_eval_data(reference, prediction):
-        if reference == "NA" or prediction == "NA":
-            return None, None
-        return [reference], [prediction]
-
-    def rouge_reward(parser, completion, info, **kwargs) -> float:
-        final_content = get_final_content(completion)
-        if final_content is None:
+    def rouge_score(parser: XMLParser, completion: Messages, info: Info, **kwargs) -> float:
+        parsed = parser.parse(completion)
+        if parsed is None:
             return 0.0
-        parsed = parser.parse(final_content)
-        predicted_correction = getattr(parsed, "corrected_sentence", "NA") or "NA"
-        ground_truth_correction = info.get("corrected_sentence", "NA") or "NA"
-        refs, preds = get_nlg_eval_data(ground_truth_correction, predicted_correction)
-        if not refs:
-            return 1.0 if ground_truth_correction == predicted_correction else 0.0
-        scores = rouge.get_scores(preds, refs)
+
+        if error_flag(parser, completion, info, **kwargs) == 0:
+            return 0.0  # Incorrect error sentence ID'd, so score is 0
+
+        if int(info.get("error_id")) == -1:
+            return 1.0  # No error to extract, so score is 1
+
+        prediction = getattr(parsed, "correction", "") or ""
+        ground_truth = info.get("corrected_sentence", "") or ""
+
+        scores = rouge_model.get_scores([prediction], [ground_truth])
         return scores[0]["rouge-1"]["f"]
 
-    def bertscore_reward(parser, completion, info, **kwargs) -> float:
-        final_content = get_final_content(completion)
-        if final_content is None:
+    def bertscore(parser: XMLParser, completion: Messages, info: Info, **kwargs) -> float:
+        parsed = parser.parse(completion)
+        if parsed is None:
             return 0.0
-        parsed = parser.parse(final_content)
-        predicted_correction = getattr(parsed, "corrected_sentence", "NA") or "NA"
-        ground_truth_correction = info.get("corrected_sentence", "NA") or "NA"
-        refs, preds = get_nlg_eval_data(ground_truth_correction, predicted_correction)
-        if not refs:
-            return 1.0 if ground_truth_correction == predicted_correction else 0.0
-        _, _, f1 = bert_score.score(preds, refs, lang="en", model_type="microsoft/deberta-xlarge-mnli", device=device)
+
+        if error_flag(parser, completion, info, **kwargs) == 0:
+            return 0.0  # Incorrect error sentence ID'd, so score is 0
+
+        if int(info.get("error_id")) == -1:
+            return 1.0  # No error to extract, so score is 1
+
+        prediction = getattr(parsed, "correction", "") or ""
+        ground_truth = info.get("corrected_sentence", "") or ""
+
+        _, _, f1 = bert_score.score(
+            [prediction], [ground_truth], lang="en", model_type="microsoft/deberta-xlarge-mnli", device=device
+        )
         return f1.mean().item()
 
-    def bleurt_reward(parser, completion, info, **kwargs) -> float:
-        final_content = get_final_content(completion)
-        if final_content is None:
+    def bleurt(parser: XMLParser, completion: Messages, info: Info, **kwargs) -> float:
+        parsed = parser.parse(completion)
+        if parsed is None:
             return 0.0
-        parsed = parser.parse(final_content)
-        predicted_correction = getattr(parsed, "corrected_sentence", "NA") or "NA"
-        ground_truth_correction = info.get("corrected_sentence", "NA") or "NA"
-        refs, preds = get_nlg_eval_data(ground_truth_correction, predicted_correction)
-        if not refs:
-            return 1.0 if ground_truth_correction == predicted_correction else 0.0
-        scores = bleurt_scorer.score(references=refs, candidates=preds)
+
+        if error_flag(parser, completion, info, **kwargs) == 0:
+            return 0.0  # Incorrect error sentence ID'd, so score is 0
+
+        if int(info.get("error_id")) == -1:
+            return 1.0  # No error to extract, so score is 1
+
+        prediction = getattr(parsed, "correction", "") or ""
+        ground_truth = info.get("corrected_sentence", "") or ""
+
+        scores = bleurt_scorer.score(references=[ground_truth], candidates=[prediction])
         return np.mean(scores)
 
     final_rubric = vf.Rubric(parser=parser)
-    if eval_method == "judge":
-        final_rubric.add_reward_func(flag_accuracy, weight=0.2)
-        final_rubric.add_reward_func(extraction_similarity, weight=0.4)
-        final_rubric.add_reward_func(correction_equivalence, weight=0.4)
-        final_rubric.add_reward_func(rouge_reward, weight=0)
-        final_rubric.add_reward_func(bertscore_reward, weight=0)
-        final_rubric.add_reward_func(bleurt_reward, weight=0)
-    elif eval_method == "metrics":
+
+    if eval_method == EvalMethod.JUDGE:
+        final_rubric.add_reward_func(error_flag, weight=1 / 4)
+        final_rubric.add_reward_func(error_sentence, weight=1 / 4)
+        final_rubric.add_reward_func(error_correction, weight=1 / 2)
+    elif eval_method == EvalMethod.BOTH:
+        final_rubric.add_reward_func(error_flag, weight=1 / 4)
+        final_rubric.add_reward_func(error_sentence, weight=1 / 4)
+        final_rubric.add_reward_func(error_correction, weight=1 / 2)
+        final_rubric.add_reward_func(rouge_score, weight=0)
+        final_rubric.add_reward_func(bertscore, weight=0)
+        final_rubric.add_reward_func(bleurt, weight=0)
+    elif eval_method == EvalMethod.METRICS:
         # This mode is for pure replication of the paper's evaluation method.
-        final_rubric.add_reward_func(flag_accuracy, weight=0.2)
-        final_rubric.add_reward_func(rouge_reward, weight=0.8 / 3)
-        final_rubric.add_reward_func(bertscore_reward, weight=0.8 / 3)
-        final_rubric.add_reward_func(bleurt_reward, weight=0.8 / 3)
-    elif eval_method == "judge-only":
-        final_rubric.add_reward_func(flag_accuracy, weight=0.2)
-        final_rubric.add_reward_func(extraction_similarity, weight=0.4)
-        final_rubric.add_reward_func(correction_equivalence, weight=0.4)
+        final_rubric.add_reward_func(error_flag, weight=1 / 3)
+        final_rubric.add_reward_func(error_sentence, weight=1 / 3)
+        final_rubric.add_reward_func(rouge_score, weight=1 / 6)
+        final_rubric.add_reward_func(bertscore, weight=1 / 6)
+        final_rubric.add_reward_func(bleurt, weight=1 / 6)
     else:
-        raise ValueError("eval_method must be one of 'judge', 'metrics', or 'judge-only'")
+        raise ValueError("eval_method must be one of 'judge', 'metrics', or 'both'.")
 
     def preprocess_example(example: dict) -> dict:
         return {
-            "question": example["Text"],
+            "question": USER_PROMPT.format(question=example["Sentences"]),
             "info": {
-                "text": example["Text"],
-                "error_flag": int(example["Error Flag"]),
+                "sentences": example["Sentences"],
+                "error_id": int(example["Error Sentence ID"]),
                 "error_sentence": example["Error Sentence"],
                 "corrected_sentence": example["Corrected Sentence"],
             },
-            "answer": "",
+            "answer": example["Corrected Sentence"],
         }
 
-    processed_dataset = dataset.map(preprocess_example, remove_columns=dataset.column_names)
+    dataset = dataset.map(preprocess_example, remove_columns=dataset.column_names)
+    train_dataset = train_dataset.map(preprocess_example, remove_columns=train_dataset.column_names)
 
     return vf.SingleTurnEnv(
         dataset=train_dataset,
-        eval_dataset=processed_dataset,
-        system_prompt=system_prompt,
-        few_shot=few_shot_examples,
+        eval_dataset=dataset,
         parser=parser,
         rubric=final_rubric,
+        system_prompt=SYSTEM_PROMPT,
     )

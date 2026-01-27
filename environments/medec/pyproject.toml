@@ -9,6 +9,10 @@ dependencies = [
     "datasets",
     "openai>=1.3.0",
     "numpy",
+]
+
+[dependency-groups]
+metrics = [
     "rouge",
     "bert-score",
     "bleurt @ git+https://github.com/google-research/bleurt.git"

@@ -26,7 +26,7 @@ A benchmark for medical error detection, extraction, and correction in clinical 
 
 **Type:** `single-turn`
 **Parser:** `vf.XMLParser`
-**Fields:** `error_flag`, `error_sentence`, `corrected_sentence`
+**Fields:** `error_id`, `incorrect_sentence`, `correction`
 
 
 ## Rubric Overview
@@ -34,27 +34,29 @@ A benchmark for medical error detection, extraction, and correction in clinical 
 The environment supports two distinct evaluation modes, controlled by the `eval_method` argument:
 
 * **`"judge"` (Default Mode)**
-  Uses a **multi-part rubric** where the primary score is derived from a robust *LLM-as-a-Judge* evaluation.
-
-  * Also calculates ROUGE, BERTScore, and BLEURT for reference.
-  * These are assigned `weight=0` and **do not affect the primary score**.
-  * Recommended for **semantically nuanced evaluation**.
+  Uses a **multi-part rubric** where the primary score is derived from a robust *LLM-as-a-Judge* evaluation using a No Free Labels inspired multi-axis judge rubric.
 
 * **`"metrics"` (Replication Mode)**
 
   * Designed for **direct replication** of the paper's results.
-  * Disables the LLM-as-a-Judge.
+  * Disables the LLM-as-a-Judge and calculates ROUGE, BERTScore, and BLEURT.
   * Primary score = **weighted average** of `flag_accuracy` and the paper’s original metrics.
+
+* **`"both"` (Combined Mode)**
+  * Computes both the LLM-as-a-Judge score and the ROUGE, BERTScore, and BLEURT replication metrics.
+    * These are assigned `weight=0` and **do not affect the primary score**.
+  * Recommended for **semantically nuanced evaluation**.
+  * Useful for **comprehensive analysis**.
 
 
 ## Quickstart
 
 ### 1. Export API Key
 
-The default judge and model under evaluation is **DeepSeek Chat**, which expects the `DEEPSEEK_API_KEY` environment variable.
+The default judge model is **GPT-4o-mini**, which expects the `OPENAI_API_KEY` environment variable.
 
 ```bash
-export DEEPSEEK_API_KEY="your-deepseek-api-key"
+export OPENAI_API_KEY="your-openai-api-key"
 ```
 
 ### 2. Run Evaluation (Default Judge Mode)
@@ -62,7 +64,7 @@ export DEEPSEEK_API_KEY="your-deepseek-api-key"
 Run an evaluation on **10 examples** from the `test_ms` split using the **LLM-as-a-Judge** for scoring.
 
 ```bash
-uv run vf-eval medec -m deepseek-chat -n 10 -s
+uv run vf-eval medec -m gpt-4o-mini -n 10 -s
 ```
 
 ### 3. Run Evaluation (Paper Replication Mode)
@@ -70,15 +72,15 @@ uv run vf-eval medec -m deepseek-chat -n 10 -s
 To replicate the paper’s scoring methodology, explicitly set the evaluation mode to `"metrics"`.
 
 ```bash
-uv run vf-eval medec -m deepseek-chat -a '{"eval_method": "metrics"}' -n 10 -s
+uv run vf-eval medec -m gpt-4o-mini -a '{"eval_method": "metrics"}' -n 10 -s
 ```
 
 ### 4. Evaluate a Different Model (e.g., Anthropic)
 
-To evaluate an **Anthropic model** while using the default DeepSeek judge:
+To evaluate an **Anthropic model** while using the default OpenAI judge:
 
 ```bash
-export DEEPSEEK_API_KEY="your-deepseek-api-key"
+export OPENAI_API_KEY="your-openai-api-key"
 export ANTHROPIC_API_KEY="your-anthropic-api-key"
 
 uv run vf-eval medec \
@@ -91,28 +93,45 @@ uv run vf-eval medec \
 
 ## Environment Arguments
 
-| Argument         | Type | Default                         | Description                                                                      |
-| ---------------- | ---- | ------------------------------- | -------------------------------------------------------------------------------- |
-| `repo_id`        | str  | `"sauravlmx/MEDEC-MS"`          | Hugging Face Hub repository ID for the dataset.                                  |
-| `split`          | str  | `"test_ms"`                     | Dataset split to use (`train_ms`, `validation_ms`, `test_ms`).                   |
-| `eval_method`    | str  | `"judge"`                       | Evaluation mode (`"judge"` or `"metrics"`).                                      |
-| `judge_model`    | str  | `"deepseek-chat"`               | Model used for judge-based scoring (in `"judge"` mode).                          |
-| `judge_base_url` | str  | `"https://api.deepseek.com/v1"` | API endpoint for the judge model.                                                |
-| `judge_api_key`  | str  | `None`                          | API key for the judge model (defaults to `DEEPSEEK_API_KEY`).                    |
-| `device`         | str  | `None`                          | Device to use for metrics (`cpu`, `cuda:0`, etc.). Defaults to GPU if available. |
+| Argument         | Type | Default         | Description                                                                      |
+| ---------------- | ---- | --------------- | -------------------------------------------------------------------------------- |
+| `judge_model`    | str  | `"gpt-4o-mini"` | Model used for judge-based scoring (in `"judge"` or `"both"` mode).              |
+| `judge_base_url` | str  | `None`          | API endpoint for the judge model (defaults to OpenAI API).                       |
+| `judge_api_key`  | str  | `None`          | API key for the judge model (defaults to `OPENAI_API_KEY`).                      |
+| `eval_method`    | str  | `"judge"`       | Evaluation mode (`"judge"`, `"metrics"`, or `"both"`).                           |
+| `device`         | str  | `None`          | Device to use for metrics (`cpu`, `cuda:0`, etc.). Defaults to GPU if available. |
 
 
-## Metrics (in Default `"Judge"` Mode)
+## Metrics
 
-When `eval_method="judge"`, the following metrics are calculated.
-The **primary reward score** is the weighted sum of the first three metrics.
+### Judge Mode (`eval_method="judge"`)
 
-| Metric                   | Weight | Meaning                                                                     |
-| ------------------------ | ------ | --------------------------------------------------------------------------- |
-| `flag_accuracy`          | 0.2    | 1.0 if predicted `error_flag` matches ground truth; else 0.0.               |
-| `extraction_similarity`  | 0.4    | 1.0 if LLM judge deems `error_sentence` semantically equivalent; else 0.0.  |
-| `correction_equivalence` | 0.4    | 1.0 if LLM judge deems `corrected_sentence` medically equivalent; else 0.0. |
-| `rouge_reward`           | 0      | ROUGE-1 F1 score (for analysis only).                                       |
-| `bertscore_reward`       | 0      | BERTScore F1 (for analysis only).                                           |
-| `bleurt_reward`          | 0      | BLEURT score (for analysis only).                                           |
-| `reward`                 | N/A    | Final weighted sum of non-zero weight metrics (0.0–1.0).                    |
+The **primary reward score** is the weighted sum of three metrics:
+
+| Metric             | Weight | Meaning                                                                     |
+| ------------------ | ------ | --------------------------------------------------------------------------- |
+| `error_flag`       | 1/3    | 1.0 if predicted `error_id` matches ground truth; else 0.0.                 |
+| `error_sentence`   | 1/3    | 1.0 if predicted `incorrect_sentence` matches ground truth; else 0.0.       |
+| `error_correction` | 1/3    | 1.0 if LLM judge deems `correction` medically equivalent; else 0.0.         |
+
+### Metrics Mode (`eval_method="metrics"`)
+
+For replicating the paper's evaluation methodology:
+
+| Metric           | Weight | Meaning                                                               |
+| ---------------- | ------ | --------------------------------------------------------------------- |
+| `error_flag`     | 1/3    | 1.0 if predicted `error_id` matches ground truth; else 0.0.           |
+| `error_sentence` | 1/3    | 1.0 if predicted `incorrect_sentence` matches ground truth; else 0.0. |
+| `rouge_score`    | 1/6    | ROUGE-1 F1 score.                                                     |
+| `bertscore`      | 1/6    | BERTScore F1.                                                         |
+| `bleurt`         | 1/6    | BLEURT score.                                                         |
+
+### Both Mode (`eval_method="both"`)
+
+Same as Judge mode, plus paper's evaluation metrics with weight 0 (for analysis only):
+
+| Metric        | Weight | Meaning                       |
+| ------------- | ------ | ----------------------------- |
+| `rouge_score` | 0      | ROUGE-1 F1 score.             |
+| `bertscore`   | 0      | BERTScore F1.                 |
+| `bleurt`      | 0      | BLEURT score.                 |
