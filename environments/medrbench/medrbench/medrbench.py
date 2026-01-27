@@ -10,7 +10,7 @@ import verifiers as vf
 from datasets import Dataset, concatenate_datasets
 from datasets.utils.logging import disable_progress_bar
 from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric
-from medarc_verifiers.utils import default_judge_api_key, download_file, judge_sampling_args_and_headers
+from medarc_verifiers.utils import download_file, judge_sampling_args_and_headers
 from openai import AsyncOpenAI
 from verifiers.types import Info, Messages, State
 
@@ -253,6 +253,18 @@ def _parse_judge_result(judge_response: str) -> bool:
     return "correct" in judge_response.lower()
 
 
+_PATIENT_PREFIX_RE = re.compile(r"(?is)^\s*(\*\*)?\s*patient\s*:\s*")
+
+
+def _ensure_patient_prefix(text: str) -> str:
+    normalized = (text or "").strip()
+    if not normalized:
+        return "Patient:"
+    if _PATIENT_PREFIX_RE.search(normalized):
+        return normalized
+    return f"Patient: {normalized}"
+
+
 def _normalize_openai_chat_args(args: dict[str, Any]) -> dict[str, Any]:
     """Normalize AsyncOpenAI chat.completions.create args across client versions."""
     normalized = dict(args)
@@ -293,6 +305,7 @@ async def _get_patient_agent_response(
     except Exception:
         content = "There is no relevant ancillary test information available for this request."
 
+    content = _ensure_patient_prefix(content)
     if cache is not None:
         cache[cache_key] = content
     return content
