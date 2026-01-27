@@ -78,7 +78,6 @@ uv run vf-eval medexqa \
 | `judge_model`          | str \| list[str]       | `gpt-4o-mini`  | Judge model name(s). |
 | `judge_base_url`       | str \| list[str] \| None | `None`       | Judge API base URL(s). |
 | `judge_api_key`        | str \| list[str] \| None | `None`       | Judge API key(s) (falls back to `JUDGE_API_KEY` or `OPENAI_API_KEY`). |
-| `judge_timeout`        | int \| None            | `300`          | Timeout in seconds for judge calls. |
 | `seed`                 | int \| None            | `None`         | When multiple specialties are selected, shuffles the combined eval set with this seed. |
 
 ### Metrics

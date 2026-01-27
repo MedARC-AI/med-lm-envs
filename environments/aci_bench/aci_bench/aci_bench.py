@@ -97,7 +97,6 @@ def load_environment(
     judge_model: str | list[str] = "gpt-5-mini",
     judge_base_url: str | list[str] | None = None,
     judge_api_key: str | list[str] | None = None,
-    judge_timeout: int | None = 300,
     system_prompt: str | None = None,
     **kwargs: Any,
 ) -> vf.Environment:
@@ -135,7 +134,6 @@ def load_environment(
         judge_base_url=judge_base_url,
         judge_api_key=judge_api_key,
         judge_prompt="{question}",
-        judge_timeout=judge_timeout,
         completion_parser=parser,
     )
     rubric = MultiJudgeRubric(multi_judge, parser=parser)

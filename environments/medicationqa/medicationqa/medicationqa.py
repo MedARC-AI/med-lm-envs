@@ -119,7 +119,6 @@ def load_environment(
     judge_model: str | list[str] = "gpt-4o-mini",
     judge_base_url: str | list[str] | None = None,
     judge_api_key: str | list[str] | None = None,
-    judge_timeout: int | None = 300,
     **kwargs: Any,
 ) -> vf.SingleTurnEnv:
     """Load the MedicationQA (MedInfo 2019) evaluation environment.
@@ -137,7 +136,6 @@ def load_environment(
         judge_base_url: Optional base URL(s) for a non-OpenAI-compatible endpoint (e.g. Ollama).
         judge_api_key: API key(s) for the judge model(s). Falls back to common env vars (e.g.,
             `OPENAI_API_KEY`, `JUDGE_API_KEY`) when omitted.
-        judge_timeout: Timeout in seconds for judge calls.
         **kwargs: Additional arguments forwarded to `vf.SingleTurnEnv`.
 
     Returns:
@@ -151,7 +149,6 @@ def load_environment(
         judge_base_url=judge_base_url,
         judge_api_key=judge_api_key,
         judge_prompt="{question}",
-        judge_timeout=judge_timeout,
     )
     rubric = MultiJudgeRubric(multi_judge)
 

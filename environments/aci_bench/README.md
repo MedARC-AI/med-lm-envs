@@ -79,7 +79,6 @@ Notes:
 | `judge_model`        | str \| list[str]  | `gpt-5-mini` | Model identifier(s) for the LLM judge |
 | `judge_base_url`     | str \| list[str]  | `None` | Custom API base URL(s) for judge model (defaults to OpenAI API) |
 | `judge_api_key`      | str \| list[str]  | `None` | API key(s) for judge model. Falls back to `JUDGE_API_KEY` environment variable if not provided |
-| `judge_timeout`      | int \| None | `300` | Timeout in seconds for judge calls |
 
 
 #### Notes

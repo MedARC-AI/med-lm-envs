@@ -87,7 +87,6 @@ def load_environment(
     judge_model: str | list[str] = "gpt-5-mini",
     judge_base_url: str | list[str] | None = None,
     judge_api_key: str | list[str] | None = None,
-    judge_timeout: int | None = 300,
 ) -> vf.Environment:
     """
     PubHealthBench evaluation environment.
@@ -109,7 +108,6 @@ def load_environment(
         judge_model: Model(s) for LLM-as-judge evaluation (freeform only).
         judge_base_url: Base URL(s) for judge API (freeform only).
         judge_api_key: API key(s) for judge (freeform only).
-        judge_timeout: Timeout in seconds for judge calls (freeform only).
 
     Returns:
         A vf.Environment configured for PubHealthBench evaluation.
@@ -127,7 +125,6 @@ def load_environment(
             judge_model=judge_model,
             judge_base_url=judge_base_url,
             judge_api_key=judge_api_key,
-            judge_timeout=judge_timeout,
         )
     else:
         return _load_mcq_environment(
@@ -222,7 +219,6 @@ def _load_freeform_environment(
     judge_model: str | list[str],
     judge_base_url: str | list[str] | None,
     judge_api_key: str | list[str] | None,
-    judge_timeout: int | None,
 ) -> vf.Environment:
     """Load PubHealthBench freeform environment with LLM-as-judge evaluation."""
     ds = load_dataset("Joshua-Harris/PubHealthBench")
@@ -257,7 +253,6 @@ def _load_freeform_environment(
         judge_base_url=judge_base_url,
         judge_api_key=judge_api_key,
         judge_prompt="{question}",
-        judge_timeout=judge_timeout,
     )
     rubric = MultiJudgeRubric(multi_judge)
 

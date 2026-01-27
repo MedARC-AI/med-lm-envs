@@ -48,7 +48,6 @@ Document any supported environment arguments and their meaning:
 | `judge_model` | str \| list[str] | `"gpt-4o-mini"` | Model identifier(s) for the LLM judge evaluating summaries |
 | `judge_base_url` | str \| list[str] \| None | `None` | Custom API base URL(s) for judge model (defaults to OpenAI API) |
 | `judge_api_key` | str \| list[str] \| None | `None` | API key(s) for judge model. Falls back to `JUDGE_API_KEY` environment variable if not provided |
-| `judge_timeout` | int \| None | `300` | Timeout in seconds for judge calls |
 
 ### Results Dataset Structure
 #### Core Evaluation Fields

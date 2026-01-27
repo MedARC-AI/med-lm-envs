@@ -61,7 +61,6 @@ uv run vf-eval medicationqa \
 | `judge_model` | `str \| list[str]` | `"gpt-4o-mini"` | Model identifier(s) for the LLM judge(s). |
 | `judge_base_url` | `str \| list[str] \| None` | `None` | Custom API base URL(s) (e.g. for Ollama or local models). |
 | `judge_api_key` | `str \| list[str] \| None` | `None` | API key(s) for the judge model(s) (falls back to `JUDGE_API_KEY`). |
-| `judge_timeout` | `int \| None` | `300` | Timeout in seconds for judge calls. |
 
 ---
 

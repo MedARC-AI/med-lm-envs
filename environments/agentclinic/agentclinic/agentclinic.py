@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 import verifiers as vf
 from datasets import Dataset
+from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric
 from medarc_verifiers.utils import default_judge_api_key, judge_sampling_args_and_headers
 from openai import AsyncOpenAI
 
@@ -392,9 +393,9 @@ def load_environment(
     measurement_model: str = "gpt-5-mini",
     measurement_base_url: Optional[str] = None,
     measurement_api_key: Optional[str] = None,
-    judge_model: str = "gpt-5-mini",
-    judge_base_url: Optional[str] = None,
-    judge_api_key: Optional[str] = None,
+    judge_model: str | list[str] = "gpt-5-mini",
+    judge_base_url: str | list[str] | None = None,
+    judge_api_key: str | list[str] | None = None,
     patient_reasoning_effort: str | None = None,
     measurement_reasoning_effort: str | None = None,
     patient_temperature: float | None = None,
@@ -440,10 +441,9 @@ def load_environment(
 
     dataset = Dataset.from_list(records)
 
-    api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
-    judge_sampling_args, judge_default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
-
-    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=judge_default_headers)
+    primary_judge_base_url = judge_base_url[0] if isinstance(judge_base_url, list) else judge_base_url
+    primary_judge_api_key = judge_api_key[0] if isinstance(judge_api_key, list) else judge_api_key
+    api_key = default_judge_api_key(primary_judge_base_url) if primary_judge_api_key is None else primary_judge_api_key
 
     # Default helper agents to the judge credentials for convenience (MedRBench pattern),
     # but still fall back to OPENAI_API_KEY for backwards compatibility.
@@ -474,13 +474,14 @@ def load_environment(
     # post-processed "diagnosis-only" string.
     parser = vf.Parser(extract_fn=lambda text: (text or "").strip())
 
-    rubric = vf.JudgeRubric(
-        judge_client=judge_client,
+    multi_judge = MultiJudge.from_env_args(
         judge_model=judge_model,
+        judge_base_url=judge_base_url,
+        judge_api_key=judge_api_key,
         judge_prompt="{question}",
-        parser=parser,
-        judge_sampling_args=judge_sampling_args,
+        completion_parser=parser,
     )
+    rubric = MultiJudgeRubric(multi_judge, parser=parser)
 
     async def diagnosis_reward_func(completion: vf.Messages, info: vf.Info, state: vf.State, **_kwargs: Any) -> float:
         info.setdefault("turns_used", _turn_count(state))
@@ -489,11 +490,30 @@ def load_environment(
         gold = str(info.get("reference_response") or info.get("gold") or "")
         response = parser.parse_answer(completion) or ""
 
-        judge_text = await rubric.judge(JUDGE_PROMPT.format(answer=gold, response=response), completion, "", state)
-        judge_text = judge_text.lower().strip()
-        is_correct = "yes" in judge_text and "no" not in judge_text
-        info.setdefault("judge_feedback", []).append({"raw_judge": judge_text, "is_correct": is_correct})
-        return 1.0 if is_correct else 0.0
+        judge_prompt = JUDGE_PROMPT.format(answer=gold, response=response)
+        judge_results = await rubric.judge(judge_prompt, completion, "", state)
+        judge_entries = []
+        scores = []
+        for result in judge_results:
+            judge_text = (result.raw or "").lower().strip()
+            is_correct = "yes" in judge_text and "no" not in judge_text
+            score = 1.0 if is_correct else 0.0
+            if result.raw is None:
+                score = None
+            scores.append(score)
+            judge_entries.append(
+                {
+                    "model": result.model,
+                    "raw": result.raw,
+                    "error": result.error,
+                    "is_correct": is_correct,
+                    "score": score,
+                }
+            )
+
+        aggregated = rubric.multi_judge.mean(scores)
+        info.setdefault("judge_feedback", []).append({"judges": judge_entries, "score": aggregated})
+        return aggregated
 
     rubric.add_reward_func(diagnosis_reward_func, weight=1.0)
 

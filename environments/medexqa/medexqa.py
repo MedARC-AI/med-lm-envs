@@ -170,7 +170,6 @@ def load_environment(
     judge_model: str | list[str] = "gpt-4o-mini",
     judge_base_url: str | list[str] | None = None,
     judge_api_key: str | list[str] | None = None,
-    judge_timeout: int | None = 300,
     **kwargs,
 ) -> vf.Environment:
     """
@@ -320,7 +319,6 @@ def load_environment(
             judge_base_url=judge_base_url,
             judge_api_key=judge_api_key,
             judge_prompt="{question}",
-            judge_timeout=judge_timeout,
             completion_parser=parser,
         )
         judge_parser = XMLParser(fields=["grade"], answer_field="grade")

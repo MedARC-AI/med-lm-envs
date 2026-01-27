@@ -9,6 +9,7 @@ from typing import Any
 import verifiers as vf
 from datasets import Dataset, concatenate_datasets
 from datasets.utils.logging import disable_progress_bar
+from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric
 from medarc_verifiers.utils import default_judge_api_key, download_file, judge_sampling_args_and_headers
 from openai import AsyncOpenAI
 from verifiers.types import Info, Messages, State
@@ -409,9 +410,9 @@ def load_environment(
     cache_dir: Path | str | None = None,
     task: str | Task = Task.ORACLE,
     max_turns: int = 5,
-    judge_model: str = "gpt-5-mini",
-    judge_base_url: str | None = None,
-    judge_api_key: str | None = None,
+    judge_model: str | list[str] = "gpt-5-mini",
+    judge_base_url: str | list[str] | None = None,
+    judge_api_key: str | list[str] | None = None,
     patient_agent_model: str = "gpt-5-mini",
     patient_agent_base_url: str | None = None,
     patient_agent_api_key: str | None = None,
@@ -433,9 +434,9 @@ def load_environment(
             or MEDRBENCH_CACHE_DIR env var)
         task: Diagnosis task mode - "oracle", "1turn", or "free_turn"
         max_turns: Max model calls for free-turn diagnosis
-        judge_model: Model to use for LLM-as-judge evaluation (default: gpt-4o as in original)
-        judge_base_url: Custom API base URL for judge model
-        judge_api_key: API key for judge model
+        judge_model: Model(s) to use for LLM-as-judge evaluation (default: gpt-4o as in original)
+        judge_base_url: Custom API base URL(s) for judge model(s)
+        judge_api_key: API key(s) for judge model(s)
         patient_agent_model: Model for the patient agent in interactive modes
         patient_agent_base_url: Custom API base URL for patient agent
         patient_agent_api_key: API key for patient agent
@@ -485,16 +486,14 @@ def load_environment(
         parser = vf.Parser(extract_fn=_extract_conclusion)
 
     # Setup judge
-    api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
-    sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
-
-    judge_rubric = vf.JudgeRubric(
-        judge_client=AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=default_headers),
+    multi_judge = MultiJudge.from_env_args(
         judge_model=judge_model,
+        judge_base_url=judge_base_url,
+        judge_api_key=judge_api_key,
         judge_prompt="{question}",
-        parser=parser,
-        judge_sampling_args=sampling_args,
+        completion_parser=parser,
     )
+    rubric = MultiJudgeRubric(multi_judge, parser=parser)
 
     async def judge_rubric_reward(completion: Messages, info: Info, state: State, **kwargs: Any) -> float:
         """Evaluate model completion using LLM judge with original MedRBench prompts."""
@@ -518,31 +517,43 @@ def load_environment(
                 gt_diagnose=gold_response,
             )
 
-        try:
-            judge_raw = await judge_rubric.judge(judge_prompt, completion, gold_response, state)
-            is_correct = _parse_judge_result(str(judge_raw))
-        except Exception:
-            is_correct = False
-            judge_raw = "Error during judge evaluation"
+        judge_results = await rubric.judge(judge_prompt, completion, gold_response, state)
+        judge_entries = []
+        scores = []
+        for result in judge_results:
+            judge_raw = result.raw or ""
+            is_correct = _parse_judge_result(str(judge_raw)) if result.raw is not None else False
+            score = 1.0 if is_correct else 0.0
+            if result.raw is None:
+                score = None
+            scores.append(score)
+            judge_entries.append(
+                {
+                    "model": result.model,
+                    "raw": result.raw,
+                    "error": result.error,
+                    "is_correct": is_correct,
+                    "score": score,
+                }
+            )
 
-        # Store judge feedback in info
+        aggregated = rubric.multi_judge.mean(scores)
         info.setdefault("judge_feedback", []).append(
             {
-                "is_correct": is_correct,
-                "raw_judge": judge_raw,
+                "judges": judge_entries,
+                "score": aggregated,
             }
         )
 
-        return 1.0 if is_correct else 0.0
+        return aggregated
 
-    judge_rubric.add_reward_func(judge_rubric_reward, weight=1.0)
+    rubric.add_reward_func(judge_rubric_reward, weight=1.0)
 
-    patient_agent_base_url = judge_base_url if patient_agent_base_url is None else patient_agent_base_url
-    patient_agent_api_key = api_key if patient_agent_api_key is None else patient_agent_api_key
+    _, patient_default_headers = judge_sampling_args_and_headers(patient_agent_model, patient_agent_base_url)
     patient_agent_client = AsyncOpenAI(
         base_url=patient_agent_base_url,
         api_key=patient_agent_api_key,
-        default_headers=default_headers,
+        default_headers=patient_default_headers,
     )
 
     env_kwargs = dict(kwargs)
@@ -552,7 +563,7 @@ def load_environment(
         return vf.SingleTurnEnv(
             eval_dataset=dataset,
             system_prompt=system_prompt,
-            rubric=judge_rubric,
+            rubric=rubric,
             parser=parser,
             **env_kwargs,
         )
@@ -560,7 +571,7 @@ def load_environment(
         return MedRBenchOneTurnEnv(
             eval_dataset=dataset,
             system_prompt=system_prompt,
-            rubric=judge_rubric,
+            rubric=rubric,
             parser=parser,
             patient_agent_client=patient_agent_client,
             patient_agent_model=patient_agent_model,
@@ -569,7 +580,7 @@ def load_environment(
     return MedRBenchFreeTurnEnv(
         eval_dataset=dataset,
         system_prompt=system_prompt,
-        rubric=judge_rubric,
+        rubric=rubric,
         parser=parser,
         patient_agent_client=patient_agent_client,
         patient_agent_model=patient_agent_model,

@@ -13,7 +13,7 @@
 
 ### Task
 - **Type**: Single-Turn
-- **Rubric overview**: JudgeRubric (LLM-as-a-Judge evaluation adapted from HELM's MTSamples Procedures Annotator)
+- **Rubric overview**: MultiJudgeRubric (LLM-as-a-Judge evaluation adapted from HELM's MTSamples Procedures Annotator)
 - **Task description**: Given patient notes (procedure note with PLAN/SUMMARY/FINDINGS sections removed), generate a reasonable treatment plan
 - **Prompt**: "Here are information about a patient, return a reasonable treatment plan for the patient."
 - **Evaluation dimensions**:
@@ -50,9 +50,9 @@ Notes:
 | --- | ---- | ------- | ----------- |
 | `cache_dir` | str \| Path \| None | `~/.cache/mtsamples_procedures` | Local directory to cache downloaded datasets. Can also be set via `MTSAMPLES_PROCEDURES_CACHE_DIR` environment variable. |
 | `use_think` | bool | `False` | Whether to use chain-of-thought prompting with `<think>...</think>` tags |
-| `judge_model` | str | `"gpt-4o-mini"` | Model identifier for the LLM judge evaluating procedural plans |
-| `judge_base_url` | str \| None | `None` | Custom API base URL for judge model (defaults to OpenAI API) |
-| `judge_api_key` | str \| None | `None` | API key for judge model. Falls back to `JUDGE_API_KEY` environment variable if not provided |
+| `judge_model` | str \| list[str] | `"gpt-4o-mini"` | Model identifier(s) for the LLM judge evaluating procedural plans |
+| `judge_base_url` | str \| list[str] \| None | `None` | Custom API base URL(s) for judge model (defaults to OpenAI API) |
+| `judge_api_key` | str \| list[str] \| None | `None` | API key(s) for judge model. Falls back to `JUDGE_API_KEY` environment variable if not provided |
 
 ### Results Dataset Structure
 #### Core Evaluation Fields

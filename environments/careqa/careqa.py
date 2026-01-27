@@ -96,7 +96,6 @@ def load_environment(
     judge_model: str | list[str] = "gpt-4o-mini",
     judge_base_url: str | list[str] | None = None,
     judge_api_key: str | list[str] | None = None,
-    judge_timeout: int | None = 300,
     **kwargs,
 ) -> vf.Environment:
     """
@@ -110,7 +109,6 @@ def load_environment(
         judge_model: Model(s) to use for LLM-as-judge evaluation (Open-ended mode only).
         judge_base_url: Base URL(s) for judge API (Open-ended mode only).
         judge_api_key: API key(s) for judge (Open-ended mode only).
-        judge_timeout: Timeout in seconds for judge calls (Open-ended mode only).
 
     Returns:
         A vf.Environment configured for the selected mode.
@@ -128,7 +126,6 @@ def load_environment(
             judge_model=judge_model,
             judge_base_url=judge_base_url,
             judge_api_key=judge_api_key,
-            judge_timeout=judge_timeout,
         )
     else:
         raise ValueError(f"Invalid mode: {split}")
@@ -189,7 +186,6 @@ def _load_open_ended_environment(
     judge_model: str | list[str],
     judge_base_url: str | list[str] | None,
     judge_api_key: str | list[str] | None,
-    judge_timeout: int | None,
 ) -> vf.Environment:
     """Load CareQA open-ended environment with LLM-as-judge evaluation."""
     eval_dataset = load_dataset("HPAI-BSC/CareQA", "CareQA_en_open", split="test")
@@ -215,7 +211,6 @@ def _load_open_ended_environment(
         judge_model=judge_model,
         judge_base_url=judge_base_url,
         judge_api_key=judge_api_key,
-        judge_timeout=judge_timeout,
     )
     rubric = MultiJudgeRubric(multi_judge)
 
