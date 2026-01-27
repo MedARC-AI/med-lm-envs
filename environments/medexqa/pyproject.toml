@@ -11,11 +11,15 @@ dependencies = [
     "datasets>=4.0.0",
     "verifiers>=0.1.2.post0",
     "pandas>=2.0.0",
+    "medarc_verifiers>=0.1.0",
+]
+
+[dependency-groups]
+metrics = [
     "evaluate>=0.4.0",
     "rouge-score>=0.1.2",
     "sacrebleu>=2.4.0",
     "bert-score>=0.3.13",
-    "medarc_verifiers>=0.1.0",
 ]
 
 [build-system]
