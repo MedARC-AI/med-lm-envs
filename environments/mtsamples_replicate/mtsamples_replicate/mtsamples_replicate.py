@@ -9,6 +9,7 @@ from datasets import Dataset
 from datasets.utils.logging import disable_progress_bar
 from medarc_verifiers.parsers import JSONParser
 from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric
+from medarc_verifiers.rewards import normalize_helm_reward
 from medarc_verifiers.utils import download_file, medarc_cache_dir
 from verifiers.types import Info, Messages, State
 
@@ -210,7 +211,7 @@ def load_environment(
                     dimension: {"score": None, "explanation": None, "raw": None} for dimension in JUDGE_DIMENSIONS
                 }
 
-            normalized = _compute_normalized_reward(parsed)
+            normalized = normalize_helm_reward(parsed, dimensions=JUDGE_DIMENSIONS)
             score = normalized if result.raw is not None else None
             scores.append(score)
             judge_entries.append(
@@ -252,35 +253,3 @@ def _extract_completion_text(completion: Messages) -> str:
         if isinstance(last_msg, dict):
             return str(last_msg.get("content", ""))
     return str(completion)
-
-
-def _coerce_score(value: Any) -> float | None:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        cleaned = value.strip()
-        if not cleaned:
-            return None
-        try:
-            return float(cleaned)
-        except ValueError:
-            return None
-    return None
-
-
-def _compute_normalized_reward(scores: dict[str, dict[str, Any]]) -> float:
-    total_dims = len(JUDGE_DIMENSIONS)
-    if total_dims == 0:
-        return 0.0
-
-    accumulated = 0.0
-    for dimension in JUDGE_DIMENSIONS:
-        score = _coerce_score(scores.get(dimension, {}).get("score"))
-        if score is None:
-            continue
-        clamped = max(0.0, min(5.0, score))
-        accumulated += clamped / 5.0
-
-    return max(0.0, min(1.0, accumulated / total_dims))

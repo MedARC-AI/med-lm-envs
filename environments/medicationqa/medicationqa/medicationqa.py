@@ -11,6 +11,7 @@ from medarc_verifiers.utils import (
     download_file,
     medarc_cache_dir,
 )
+from medarc_verifiers.rewards import normalize_helm_reward
 from verifiers.types import Info, Messages, State
 
 from medicationqa.judge_prompts import JUDGE_OUTPUT_JSON, JUDGE_TEMPLATE
@@ -71,47 +72,6 @@ def _extract_completion_text(completion: Messages) -> str:
         if isinstance(last_msg, dict):
             return str(last_msg.get("content", ""))
     return str(completion)
-
-
-def _coerce_score(value: Any) -> float | None:
-    """Best-effort conversion of a score value to a float in Python, or `None` if not possible."""
-
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        value = value.strip()
-        if not value:
-            return None
-        try:
-            return float(value)
-        except ValueError:
-            return None
-    return None
-
-
-def _compute_normalized_reward(scores: dict[str, dict[str, Any]]) -> float:
-    """Normalize per-dimension judge scores to a single value in [0.0, 1.0].
-
-    Each dimension is expected to be on a 1–5 scale. Scores are clamped to
-    [0, 5], divided by 5 to map to [0, 1], and then averaged across the
-    dimensions listed in `JUDGE_DIMENSIONS`.
-    """
-
-    total_dims = len(JUDGE_DIMENSIONS)
-    if total_dims == 0:
-        return 0.0
-
-    accumulated = 0.0
-    for dimension in JUDGE_DIMENSIONS:
-        score = _coerce_score(scores.get(dimension, {}).get("score"))
-        if score is None:
-            continue
-        clamped = max(0.0, min(5.0, score))
-        accumulated += clamped / 5.0
-
-    return max(0.0, min(1.0, accumulated / total_dims))
 
 
 def load_environment(
@@ -187,7 +147,7 @@ def load_environment(
             if parsed is None:
                 parsed = {dim: {"score": None, "explanation": None, "raw": None} for dim in JUDGE_DIMENSIONS}
 
-            normalized = _compute_normalized_reward(parsed)
+            normalized = normalize_helm_reward(parsed, dimensions=JUDGE_DIMENSIONS)
             score = normalized if result.raw is not None else None
             scores.append(score)
             judge_entries.append(

@@ -7,6 +7,7 @@ from aci_bench.judge_prompts import JUDGE_DIMENSIONS, JUDGE_OUTPUT_JSON, JUDGE_T
 from medarc_verifiers.parsers import JSONParser
 from medarc_verifiers.prompts import XML_SYSTEM_PROMPT, AnswerFormat
 from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric
+from medarc_verifiers.rewards import normalize_helm_reward
 from verifiers.types import Info, Messages, State
 from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
@@ -35,46 +36,6 @@ def _to_vf_format(dataset: Dataset) -> Dataset:
             },
         }
     )
-
-
-def _coerce_score(value: Any) -> float | None:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        value = value.strip()
-        if not value:
-            return None
-        try:
-            return float(value)
-        except ValueError:
-            return None
-    return None
-
-
-def _compute_normalized_reward(
-    scores: dict[str, dict[str, Any]],
-    min_score: float | None = None,
-    max_score: float | None = None,
-) -> float:
-    """Accumulate per-dimension judge scores normalized from [min_score, max_score] to [0.0, 1.0]"""
-    min_score = min_score if min_score is not None else 1
-    max_score = max_score if max_score is not None else 5
-
-    total_dims = len(JUDGE_DIMENSIONS)
-    if total_dims == 0:
-        return 0.0
-
-    accumulated = 0.0
-    for dimension in JUDGE_DIMENSIONS:
-        score = _coerce_score(scores.get(dimension, {}).get("score"))
-        if score is None:
-            continue
-        clamped = max(0.0, min(max_score, score))
-        accumulated += clamped / max_score
-
-    return max(0.0, min(min_score, accumulated / total_dims))
 
 
 def _extract_completion_text(completion: Messages, parser: vf.Parser) -> str:
@@ -170,7 +131,7 @@ def load_environment(
             if parsed is None:
                 parsed = {dimension: {"score": None, "explanation": None} for dimension in JUDGE_DIMENSIONS}
 
-            normalized = _compute_normalized_reward(parsed)
+            normalized = normalize_helm_reward(parsed, dimensions=JUDGE_DIMENSIONS)
             score = normalized if result.raw is not None else None
             scores.append(score)
             judge_entries.append(
