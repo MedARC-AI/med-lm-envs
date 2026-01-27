@@ -253,29 +253,13 @@ def _parse_judge_result(judge_response: str) -> bool:
     return "correct" in judge_response.lower()
 
 
-_PATIENT_PREFIX_RE = re.compile(r"(?is)^\s*(\*\*)?\s*patient\s*:\s*")
-
-
-def _ensure_patient_prefix(text: str) -> str:
-    normalized = (text or "").strip()
-    if not normalized:
-        return "Patient:"
-    if _PATIENT_PREFIX_RE.search(normalized):
-        return normalized
-    return f"Patient: {normalized}"
-
-
-def _normalize_openai_chat_args(args: dict[str, Any]) -> dict[str, Any]:
-    """Normalize AsyncOpenAI chat.completions.create args across client versions."""
-    normalized = dict(args)
-    if "max_tokens" in normalized:
-        if normalized["max_tokens"] is None:
-            normalized.pop("max_tokens")
-        else:
-            normalized["max_completion_tokens"] = normalized.pop("max_tokens")
-    if "max_completion_tokens" in normalized and normalized["max_completion_tokens"] is None:
-        normalized.pop("max_completion_tokens")
-    return {k: v for k, v in normalized.items() if v is not None}
+def _turn_count(state: State) -> int:
+    if isinstance(state.get("trajectory"), list):
+        return len(state["trajectory"])
+    try:
+        return int(state.get("turn", 0) or 0)
+    except Exception:
+        return 0
 
 
 async def _get_patient_agent_response(
@@ -305,7 +289,6 @@ async def _get_patient_agent_response(
     except Exception:
         content = "There is no relevant ancillary test information available for this request."
 
-    content = _ensure_patient_prefix(content)
     if cache is not None:
         cache[cache_key] = content
     return content
@@ -335,23 +318,22 @@ class MedRBenchFreeTurnEnv(vf.MultiTurnEnv):
         state["patient_agent_cache"] = {}
         return state
 
-    async def is_completed(self, messages: Messages, state: State, **kwargs: Any) -> bool:
-        # verifiers<stop-decorator> uses the legacy is_completed() override pattern.
-        if await super().is_completed(messages, state, **kwargs):
-            return True
+    @vf.stop(priority=-10)  # Run after core MultiTurnEnv stop conditions.
+    async def no_more_additional_info_required(self, state: State, **kwargs: Any) -> bool:
         # Don't early-stop before the first model response; prompts may contain
         # the words "not required" in instructions.
-        if int(state.get("turn", 0) or 0) == 0:
+        if len(state.get("trajectory", []) or []) == 0:
             return False
-        last_text = _extract_last_assistant_text(messages)
+        last_completion = state["trajectory"][-1]["completion"]
+        last_text = _extract_last_assistant_text(last_completion)
         additional_info = _extract_additional_info_required(last_text)
         return "not required" in additional_info.lower()
 
-    async def env_response(self, messages: Messages, state: State, **kwargs: Any) -> tuple[Messages, State]:
+    async def env_response(self, messages: Messages, state: State, **kwargs: Any) -> Messages:
         last_text = _extract_last_assistant_text(messages)
         additional_info_required = _extract_additional_info_required(last_text)
         if "not required" in additional_info_required.lower():
-            return [], state
+            return []
 
         case_without_tests = str(state.get("case_without_tests") or "")
         ancillary_tests = str(state.get("ancillary_tests") or "")
@@ -366,12 +348,13 @@ class MedRBenchFreeTurnEnv(vf.MultiTurnEnv):
         )
 
         response_content = MULTI_TURN_FOLLOWING_TURN_PROMPT.format(additional_information=patient_agent_response)
-        if state.get("turn", 0) == self.max_turns - 1:
+        used = len(state.get("trajectory", []) or [])
+        if used == self.max_turns - 1:
             response_content = (
                 "In the next turn, you cannot ask any additional infomation and must make a final diagnoisis.\n"
                 + response_content
             )
-        return [{"role": "user", "content": response_content}], state
+        return [{"role": "user", "content": response_content}]
 
 
 class MedRBenchOneTurnEnv(vf.MultiTurnEnv):
@@ -397,7 +380,7 @@ class MedRBenchOneTurnEnv(vf.MultiTurnEnv):
         state["patient_agent_cache"] = {}
         return state
 
-    async def env_response(self, messages: Messages, state: State, **kwargs: Any) -> tuple[Messages, State]:
+    async def env_response(self, messages: Messages, state: State, **kwargs: Any) -> Messages:
         last_text = _extract_last_assistant_text(messages)
         additional_info_required = _extract_additional_info_required(last_text)
 
@@ -414,7 +397,7 @@ class MedRBenchOneTurnEnv(vf.MultiTurnEnv):
         )
 
         response_content = SINGLE_TURN_FINAL_TURN_PROMPT.format(additional_information=patient_agent_response)
-        return [{"role": "user", "content": response_content}], state
+        return [{"role": "user", "content": response_content}]
 
 
 def load_environment(
@@ -513,9 +496,11 @@ def load_environment(
         gold_response = str(info.get("reference_response") or "")
         extracted_answer = parser.parse_answer(completion) or ""
 
-        task_name = state.get("task") or info.get("task_type") or "medrbench-diagnosis"
+        task_name = str(state.get("task") or info.get("task_type") or "medrbench-diagnosis")
+        if task_name.startswith("medrbench-diagnosis-free_turn"):
+            info.setdefault("turns_used", _turn_count(state))
 
-        if str(task_name).startswith("medrbench-treatment"):
+        if task_name.startswith("medrbench-treatment"):
             # Use original MedRBench treatment judge prompt
             # Note: original prompt expects additional_info for web search results,
             # we removed it as we don't use web search in this implementation which requires BING search API.

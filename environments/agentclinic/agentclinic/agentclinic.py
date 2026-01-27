@@ -74,14 +74,7 @@ def _build_initial_question(objective: str) -> str:
 
 
 def _turn_count(state: vf.State) -> int:
-    # `verifiers==0.1.7.post0` uses `state["turn"]` (incremented after each model call).
-    # Newer verifiers versions may use `state["trajectory"]`; support both to avoid subtle bugs.
-    if isinstance(state.get("trajectory"), list):
-        return len(state["trajectory"])
-    try:
-        return int(state.get("turn", 0) or 0)
-    except Exception:
-        return 0
+    return len(state.get("trajectory", []) or [])
 
 
 _PATIENT_PREFIX_RE = re.compile(r"(?is)^\s*(\*\*)?\s*patient\s*:\s*")
@@ -328,15 +321,15 @@ class AgentClinicEnv(vf.MultiTurnEnv):
         state.setdefault("num_exams_requested", 0)
         return state
 
-    async def is_completed(self, messages: vf.Messages, state: vf.State, **kwargs: Any) -> bool:
-        if await super().is_completed(messages, state, **kwargs):
-            return True
-        if _turn_count(state) == 0:
+    @vf.stop(priority=-10)  # Run after core MultiTurnEnv stop conditions.
+    async def diagnosis_ready(self, state: vf.State, **kwargs: Any) -> bool:
+        if len(state.get("trajectory", []) or []) == 0:
             return False
-        last_text = extract_last_assistant_text(messages)
+        last_completion = state["trajectory"][-1]["completion"]
+        last_text = extract_last_assistant_text(last_completion)
         return "DIAGNOSIS READY" in (last_text or "").upper()
 
-    async def env_response(self, messages: vf.Messages, state: vf.State, **kwargs: Any):
+    async def env_response(self, messages: vf.Messages, state: vf.State, **kwargs: Any) -> vf.Messages:
         patient_agent: PatientAgent = state["_patient_agent"]
         measurement_agent: MeasurementAgent = state["_measurement_agent"]
 
@@ -377,7 +370,7 @@ class AgentClinicEnv(vf.MultiTurnEnv):
         else:
             content = response_text
 
-        return ([{"role": "user", "content": content}], state)
+        return [{"role": "user", "content": content}]
 
 
 def load_environment(
