@@ -37,16 +37,23 @@ def normalize_judge_endpoints(
     n_judges: int,
 ) -> tuple[list[str | None], list[str | None]]:
     if isinstance(judge_base_url, list):
-        if len(judge_base_url) != n_judges:
+        # Accept len==1 as "broadcast to all judges" (common when CLI uses append semantics).
+        if len(judge_base_url) == 1 and n_judges > 1:
+            base_urls = [judge_base_url[0] for _ in range(n_judges)]
+        elif len(judge_base_url) == n_judges:
+            base_urls = [url for url in judge_base_url]
+        else:
             raise ValueError("judge_base_url list length must match judge_model list length.")
-        base_urls = [url for url in judge_base_url]
     else:
         base_urls = [judge_base_url for _ in range(n_judges)]
 
     if isinstance(judge_api_key, list):
-        if len(judge_api_key) != n_judges:
+        if len(judge_api_key) == 1 and n_judges > 1:
+            api_keys = [judge_api_key[0] for _ in range(n_judges)]
+        elif len(judge_api_key) == n_judges:
+            api_keys = [key for key in judge_api_key]
+        else:
             raise ValueError("judge_api_key list length must match judge_model list length.")
-        api_keys = [key for key in judge_api_key]
     else:
         api_keys = [judge_api_key for _ in range(n_judges)]
 

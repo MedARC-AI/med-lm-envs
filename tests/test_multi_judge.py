@@ -33,10 +33,17 @@ def test_normalize_judge_endpoints(monkeypatch: pytest.MonkeyPatch):
     assert base_urls == ["https://api.openai.com/v1"] * 3
     assert len(api_keys) == 3
 
+    base_urls, api_keys = normalize_judge_endpoints(["a"], None, 2)
+    assert base_urls == ["a", "a"]
+    assert api_keys == ["secret", "secret"]
+
+    base_urls, api_keys = normalize_judge_endpoints(None, ["k1"], 2)
+    assert base_urls == [None, None]
+    assert api_keys == ["k1", "k1"]
     with pytest.raises(ValueError):
-        normalize_judge_endpoints(["a"], None, 2)
+        normalize_judge_endpoints(["a", "b"], None, 3)
     with pytest.raises(ValueError):
-        normalize_judge_endpoints(None, ["k1"], 2)
+        normalize_judge_endpoints(None, ["k1", "k2"], 3)
 
 
 def test_aggregation_mean():
