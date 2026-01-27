@@ -1,0 +1,30 @@
+[project]
+name = "medhallu"
+description = "Medical hallucination detection benchmark"
+tags = ["hallucination-detection", "medical", "classification", "eval"]
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "verifiers>=0.1.4",
+]
+
+[dependency-groups]
+postprocess = [
+    "scikit-learn>=1.2.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["medhallu.py", "pyproject.toml"]
+
+[tool.prime.environment]
+loader = "medhallu:load_environment"
+display_name = "MedHallu"
+visibility = "PUBLIC"
+
+[tool.verifiers.eval]
+num_examples = 5
+rollouts_per_example = 3

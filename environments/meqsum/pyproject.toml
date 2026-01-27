@@ -1,0 +1,31 @@
+[project]
+name = "meqsum"
+description = "Consumer health question summarization evaluation environment"
+tags = ["medical", "nlp", "summarization", "single-turn", "llm-judge", "nlg-metrics"]
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "verifiers>=0.1.4",
+    "datasets",
+    "medarc_verifiers>=0.1.0"
+]
+
+[project.optional-dependencies]
+metrics = [
+    "evaluate",
+    "bert_score",
+    "rouge_score",
+    "sacrebleu",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+medarc_verifiers = { git = "https://github.com/MedARC-AI/med-lm-envs" }
+
+[tool.prime.environment]
+loader = "meqsum:load_environment"
+display_name = "MeQSum"
+visibility = "PUBLIC"
