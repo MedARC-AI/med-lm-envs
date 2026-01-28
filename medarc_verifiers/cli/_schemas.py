@@ -29,7 +29,10 @@ class ModelConfigSchema(BaseModel):
 
     resume_tolerant_fields: ClassVar[set[str]] = frozenset(
         {
+            "api_key_var",
             "api_base_url",
+            "endpoints_path",
+            "headers",
             "timeout",
             "max_connections",
             "max_keepalive_connections",

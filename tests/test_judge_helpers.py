@@ -146,6 +146,7 @@ def test_default_judge_api_key_prefers_pinference_judge_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("JUDGE_API_KEY", "secret-key")
+    monkeypatch.setenv("PRIME_API_KEY", "prime-key")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     assert default_judge_api_key(base_url=PRIME_INFERENCE_URL) == "secret-key"
