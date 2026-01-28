@@ -83,6 +83,38 @@ def test_compute_winrates_two_datasets(tmp_path: Path) -> None:
     assert model_c["avg_reward_per_dataset"]["dataset_two"] == pytest.approx(0.3)
 
 
+def test_compute_winrates_exclude_datasets(tmp_path: Path) -> None:
+    ds_one = tmp_path / "dataset_one.parquet"
+    _write_dataset(
+        ds_one,
+        [
+            {"example_id": "q1", "model_id": "model_a", "reward": 1.0},
+            {"example_id": "q1", "model_id": "model_b", "reward": 0.0},
+        ],
+    )
+    ds_two = tmp_path / "dataset_two.parquet"
+    _write_dataset(
+        ds_two,
+        [
+            {"example_id": "q1", "model_id": "model_a", "reward": 0.2},
+            {"example_id": "q1", "model_id": "model_c", "reward": 0.1},
+        ],
+    )
+
+    cfg = winrate.WinrateConfig(exclude_datasets=("dataset_two",))
+    result = winrate.compute_winrates(
+        [
+            ("dataset_one", ds_one),
+            ("dataset_two", ds_two),
+        ],
+        cfg,
+    )
+    payload = winrate.to_json(result)
+
+    assert set(payload["datasets"]) == {"dataset_one"}
+    assert set(payload["models"]) == {"model_a", "model_b"}
+
+
 def test_read_dataset_lazy_supports_model_id(tmp_path: Path) -> None:
     dataset = tmp_path / "model_id.parquet"
     df = pl.DataFrame(

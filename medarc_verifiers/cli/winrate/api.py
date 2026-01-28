@@ -14,6 +14,8 @@ from typing import Any, Iterable, Mapping, Sequence
 import polars as pl
 from polars import DataFrame as PLDataFrame, LazyFrame as PLLazyFrame
 
+from medarc_verifiers.cli.process.rollout import derive_base_env_id
+
 logger = logging.getLogger(__name__)
 
 MODEL_COL = "model_id"
@@ -32,6 +34,7 @@ class WinrateConfig:
     weight_cap: int = 0
     include_models: tuple[str, ...] = ()
     exclude_models: tuple[str, ...] = ()
+    exclude_datasets: tuple[str, ...] = ()
     partial_datasets: str = "strict"  # "strict" or "include"
 
 
@@ -228,6 +231,15 @@ def compute_winrates(
 ) -> ModelCentricResult:
     """Compute win rates for a list of datasets."""
     cfg = config or WinrateConfig()
+    dataset_exclude_set = _normalize_dataset_ids(cfg.exclude_datasets)
+    if dataset_exclude_set:
+        datasets = tuple(
+            (name, path)
+            for name, path in datasets
+            if not _dataset_is_excluded(str(name), dataset_exclude_set)
+        )
+        if not datasets:
+            _raise_user_error("No datasets remain after applying dataset exclusions.")
     include_set = _normalize_model_ids(cfg.include_models)
     exclude_set = _normalize_model_ids(cfg.exclude_models)
     target_models = sorted(include_set - exclude_set) if include_set else []
@@ -551,6 +563,18 @@ def _models_present(df_avg: pl.DataFrame) -> list[str]:
 
 def _normalize_model_ids(values: Sequence[str] | None) -> set[str]:
     return {str(value).strip() for value in values or [] if str(value).strip()}
+
+
+def _normalize_dataset_ids(values: Sequence[str] | None) -> set[str]:
+    return {str(value).strip().lower() for value in values or [] if str(value).strip()}
+
+
+def _dataset_is_excluded(dataset_name: str, exclude_set: set[str]) -> bool:
+    normalized = dataset_name.strip().lower()
+    if normalized in exclude_set:
+        return True
+    base, _ = derive_base_env_id(dataset_name)
+    return base.strip().lower() in exclude_set if base else False
 
 
 def _filter_models(
