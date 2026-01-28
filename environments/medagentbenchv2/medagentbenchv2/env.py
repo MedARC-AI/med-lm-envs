@@ -10,7 +10,85 @@ from datasets import Dataset
 from datasets.utils.logging import disable_progress_bar
 import verifiers as vf
 from verifiers.utils.async_utils import maybe_await
-from verifiers.envs.environment import get_overlong_prompt_dummy_response
+
+def _get_overlong_prompt_dummy_response(message_type: Any) -> Any:
+    """
+    Return Verifiers' "overlong prompt" dummy model response.
+
+    Verifiers has moved this helper across modules between versions; keep this env importable
+    across that churn by resolving it lazily with a final local fallback.
+    """
+    for module_name in ("verifiers.utils.message_utils", "verifiers.envs.environment"):
+        try:
+            mod = __import__(module_name, fromlist=["get_overlong_prompt_dummy_response"])
+            fn = getattr(mod, "get_overlong_prompt_dummy_response", None)
+            if callable(fn):
+                return fn(message_type)
+        except Exception:  # noqa: BLE001
+            continue
+
+    # Last resort: build a minimal OpenAI-types response that matches what Verifiers expects.
+    try:
+        from openai.types.chat import ChatCompletion, ChatCompletionMessage
+        from openai.types.chat.chat_completion import Choice
+        from openai.types.completion import Completion
+        from openai.types.completion_choice import CompletionChoice
+
+        if message_type == "completion":
+            return Completion(
+                id="overlong-prompt",
+                created=0,
+                model="",
+                object="text_completion",
+                choices=[
+                    CompletionChoice(
+                        index=0,
+                        text="Prompt too long.",
+                        finish_reason="length",
+                    )
+                ],
+            )
+
+        return ChatCompletion(
+            id="overlong-prompt",
+            created=0,
+            model="",
+            object="chat.completion",
+            choices=[
+                Choice(
+                    index=0,
+                    message=ChatCompletionMessage(
+                        role="assistant",
+                        content="Prompt too long.",
+                    ),
+                    finish_reason="length",
+                )
+            ],
+        )
+    except Exception:  # noqa: BLE001
+        # Extremely defensive: keep rollouts terminating even if OpenAI types aren't available.
+        if message_type == "completion":
+            return {
+                "id": "overlong-prompt",
+                "created": 0,
+                "model": "",
+                "object": "text_completion",
+                "choices": [{"index": 0, "text": "Prompt too long.", "finish_reason": "length"}],
+            }
+        return {
+            "id": "overlong-prompt",
+            "created": 0,
+            "model": "",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Prompt too long."},
+                    "finish_reason": "length",
+                }
+            ],
+        }
+
 
 from . import graders
 from .tools import build_tool_list
@@ -137,7 +215,7 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
                         status,
                         exc,
                     )
-                    return get_overlong_prompt_dummy_response(resolved_message_type)
+                    return _get_overlong_prompt_dummy_response(resolved_message_type)
             raise
 
     def update_tool_args(
