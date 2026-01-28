@@ -1,0 +1,1802 @@
+[
+  {
+    "id": "task1_1",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S6315806. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S6315806"
+  },
+  {
+    "id": "task1_2",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S2703270. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S2703270"
+  },
+  {
+    "id": "task1_3",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S1521703. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S1521703"
+  },
+  {
+    "id": "task1_4",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S3195056. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S3195056"
+  },
+  {
+    "id": "task1_5",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S2197736. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S2197736"
+  },
+  {
+    "id": "task1_6",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S2450227. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S2450227"
+  },
+  {
+    "id": "task1_7",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S2111822. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S2111822"
+  },
+  {
+    "id": "task1_8",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S1023381. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S1023381"
+  },
+  {
+    "id": "task1_9",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S3070524. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S3070524"
+  },
+  {
+    "id": "task1_10",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S3032536. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S3032536"
+  },
+  {
+    "id": "task1_11",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S1733937. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S1733937"
+  },
+  {
+    "id": "task1_12",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S1152319. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S1152319"
+  },
+  {
+    "id": "task1_13",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S0658561. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S0658561"
+  },
+  {
+    "id": "task1_14",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S6222362. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S6222362"
+  },
+  {
+    "id": "task1_15",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S6541353. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S6541353"
+  },
+  {
+    "id": "task1_16",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S2748981. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S2748981"
+  },
+  {
+    "id": "task1_17",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S1876702. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S1876702"
+  },
+  {
+    "id": "task1_18",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S6537563. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S6537563"
+  },
+  {
+    "id": "task1_19",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S6531922. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S6531922"
+  },
+  {
+    "id": "task1_20",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S2016972. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S2016972"
+  },
+  {
+    "id": "task1_21",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S6309742. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S6309742"
+  },
+  {
+    "id": "task1_22",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S1478444. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S1478444"
+  },
+  {
+    "id": "task1_23",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S6329254. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S6329254"
+  },
+  {
+    "id": "task1_24",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S6500497. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S6500497"
+  },
+  {
+    "id": "task1_25",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S6550473. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S6550473"
+  },
+  {
+    "id": "task1_26",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S2823623. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S2823623"
+  },
+  {
+    "id": "task1_27",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S6540602. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S6540602"
+  },
+  {
+    "id": "task1_28",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S3114648. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S3114648"
+  },
+  {
+    "id": "task1_29",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S6227720. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S6227720"
+  },
+  {
+    "id": "task1_30",
+    "instruction": "Instruction: Find the date of the most recent CT Abdomen procedure for patient S0611496. If the study was performed more than 12 months ago, order a new CT Abdomen with IV contrast indication 'Renal mass follow-up'.",
+    "context": "The CPT codes for existing CT studies are IMGCT0491 or IMGIL0001. The CPT code for the new study is 74177.",
+    "eval_MRN": "S0611496"
+  },
+  {
+    "id": "task2_1",
+    "instruction": "Instruction: Verify that patient S6315806 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S6315806"
+  },
+  {
+    "id": "task2_2",
+    "instruction": "Instruction: Verify that patient S6537563 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S6537563"
+  },
+  {
+    "id": "task2_3",
+    "instruction": "Instruction: Verify that patient S0789363 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S0789363"
+  },
+  {
+    "id": "task2_4",
+    "instruction": "Instruction: Verify that patient S0611496 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S0611496"
+  },
+  {
+    "id": "task2_5",
+    "instruction": "Instruction: Verify that patient S6268253 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S6268253"
+  },
+  {
+    "id": "task2_6",
+    "instruction": "Instruction: Verify that patient S2704870 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S2704870"
+  },
+  {
+    "id": "task2_7",
+    "instruction": "Instruction: Verify that patient S6329254 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S6329254"
+  },
+  {
+    "id": "task2_8",
+    "instruction": "Instruction: Verify that patient S6265496 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S6265496"
+  },
+  {
+    "id": "task2_9",
+    "instruction": "Instruction: Verify that patient S6352985 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S6352985"
+  },
+  {
+    "id": "task2_10",
+    "instruction": "Instruction: Verify that patient S3032536 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S3032536"
+  },
+  {
+    "id": "task2_11",
+    "instruction": "Instruction: Verify that patient S1698248 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S1698248"
+  },
+  {
+    "id": "task2_12",
+    "instruction": "Instruction: Verify that patient S2863714 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S2863714"
+  },
+  {
+    "id": "task2_13",
+    "instruction": "Instruction: Verify that patient S6549951 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S6549951"
+  },
+  {
+    "id": "task2_14",
+    "instruction": "Instruction: Verify that patient S6539215 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S6539215"
+  },
+  {
+    "id": "task2_15",
+    "instruction": "Instruction: Verify that patient S0581164 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S0581164"
+  },
+  {
+    "id": "task2_16",
+    "instruction": "Instruction: Verify that patient S6538722 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S6538722"
+  },
+  {
+    "id": "task2_17",
+    "instruction": "Instruction: Verify that patient S6415739 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S6415739"
+  },
+  {
+    "id": "task2_18",
+    "instruction": "Instruction: Verify that patient S1311412 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S1311412"
+  },
+  {
+    "id": "task2_19",
+    "instruction": "Instruction: Verify that patient S2748981 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S2748981"
+  },
+  {
+    "id": "task2_20",
+    "instruction": "Instruction: Verify that patient S1733937 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S1733937"
+  },
+  {
+    "id": "task2_21",
+    "instruction": "Instruction: Verify that patient S3241217 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S3241217"
+  },
+  {
+    "id": "task2_22",
+    "instruction": "Instruction: Verify that patient S1521703 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S1521703"
+  },
+  {
+    "id": "task2_23",
+    "instruction": "Instruction: Verify that patient S1715871 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S1715871"
+  },
+  {
+    "id": "task2_24",
+    "instruction": "Instruction: Verify that patient S2199765 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S2199765"
+  },
+  {
+    "id": "task2_25",
+    "instruction": "Instruction: Verify that patient S2823623 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S2823623"
+  },
+  {
+    "id": "task2_26",
+    "instruction": "Instruction: Verify that patient S0869531 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S0869531"
+  },
+  {
+    "id": "task2_27",
+    "instruction": "Instruction: Verify that patient S6426560 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S6426560"
+  },
+  {
+    "id": "task2_28",
+    "instruction": "Instruction: Verify that patient S6307599 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S6307599"
+  },
+  {
+    "id": "task2_29",
+    "instruction": "Instruction: Verify that patient S2111822 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S2111822"
+  },
+  {
+    "id": "task2_30",
+    "instruction": "Instruction: Verify that patient S6227720 has exactly one active DVT prophylaxis order. If there are zero orders, create one. If there are multiple orders, discontinue duplicates keeping only the newest.",
+    "context": "The specific order is heparin 5000 units SC q8h prophylaxis. Ensure exactly one active order remains. For context, a duplicate order could be any anti-coagulant medication (for example, LMWH, DOAC, etc).",
+    "eval_MRN": "S6227720"
+  },
+  {
+    "id": "task3_1",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S6315806.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-11-07T22:47:00+00:00 now",
+    "eval_MRN": "S6315806"
+  },
+  {
+    "id": "task3_2",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S1353305.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-11-07T22:47:00+00:00 now",
+    "eval_MRN": "S1353305"
+  },
+  {
+    "id": "task3_3",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S6500497.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2020-05-12T11:42:00+00:00 now",
+    "eval_MRN": "S6500497"
+  },
+  {
+    "id": "task3_4",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S3084624.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-11-07T22:00:00+00:00 now",
+    "eval_MRN": "S3084624"
+  },
+  {
+    "id": "task3_5",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S2937751.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-11-13T12:00:00+00:00 now",
+    "eval_MRN": "S2937751"
+  },
+  {
+    "id": "task3_6",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S6538722.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-11-13T02:01:00+00:00 now",
+    "eval_MRN": "S6538722"
+  },
+  {
+    "id": "task3_7",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S2450227.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-11-09T22:00:00+00:00 now",
+    "eval_MRN": "S2450227"
+  },
+  {
+    "id": "task3_8",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S6550473.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-11-07T22:47:00+00:00 now",
+    "eval_MRN": "S6550473"
+  },
+  {
+    "id": "task3_9",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S2075210.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-02-08T22:00:00+00:00 now",
+    "eval_MRN": "S2075210"
+  },
+  {
+    "id": "task3_10",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S1374652.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-11-06T18:00:00+00:00 now",
+    "eval_MRN": "S1374652"
+  },
+  {
+    "id": "task3_11",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S3241217.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-07-07T20:00:00+00:00 now",
+    "eval_MRN": "S3241217"
+  },
+  {
+    "id": "task3_12",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S6549951.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-11-07T22:47:00+00:00 now",
+    "eval_MRN": "S6549951"
+  },
+  {
+    "id": "task3_13",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S1876702.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-11-07T22:47:00+00:00 now",
+    "eval_MRN": "S1876702"
+  },
+  {
+    "id": "task3_14",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S6227720.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-11-12T16:00:00+00:00 now",
+    "eval_MRN": "S6227720"
+  },
+  {
+    "id": "task3_15",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S6468480.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-11-07T22:47:00+00:00 now",
+    "eval_MRN": "S6468480"
+  },
+  {
+    "id": "task3_16",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S6352985.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-11-07T22:47:00+00:00 now",
+    "eval_MRN": "S6352985"
+  },
+  {
+    "id": "task3_17",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S6268253.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-11-07T22:47:00+00:00 now",
+    "eval_MRN": "S6268253"
+  },
+  {
+    "id": "task3_18",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S6312049.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2020-11-19T20:30:00+00:00 now",
+    "eval_MRN": "S6312049"
+  },
+  {
+    "id": "task3_19",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S6212774.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-08-15:00:00+00:00 now",
+    "eval_MRN": "S6212774"
+  },
+  {
+    "id": "task3_20",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S1891852.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-11-07T22:47:00+00:00 now",
+    "eval_MRN": "S1891852"
+  },
+  {
+    "id": "task3_21",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S6541609.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-10-25T14:00:00+00:00 now",
+    "eval_MRN": "S6541609"
+  },
+  {
+    "id": "task3_22",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S6200102.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-11-07T22:47:00+00:00 now",
+    "eval_MRN": "S6200102"
+  },
+  {
+    "id": "task3_23",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S1521703.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2022-11-20T14:30:00+00:00 now",
+    "eval_MRN": "S1521703"
+  },
+  {
+    "id": "task3_24",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S1579803.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2021-03-02T10:00:00+00:00 now",
+    "eval_MRN": "S1579803"
+  },
+  {
+    "id": "task3_25",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S0869531.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-05-14T18:40:00+00:00 now",
+    "eval_MRN": "S0869531"
+  },
+  {
+    "id": "task3_26",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S3213957.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-04-25T21:41:00+00:00 now",
+    "eval_MRN": "S3213957"
+  },
+  {
+    "id": "task3_27",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S2016972.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-11-11T23:07:00+00:00 now",
+    "eval_MRN": "S2016972"
+  },
+  {
+    "id": "task3_28",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S6484983.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2020-10-26T00:35:00+00:00 now",
+    "eval_MRN": "S6484983"
+  },
+  {
+    "id": "task3_29",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S3032536.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2023-11-07T22:47:00+00:00 now",
+    "eval_MRN": "S3032536"
+  },
+  {
+    "id": "task3_30",
+    "instruction": "Instruction: Calculate the average heart rate over the past 6 hours and the past 12 hours for patient S2161163.",
+    "context": "The code for heart rate is 'HEARTRATE'. It's 2021-11-11T18:47:00+00:00 now",
+    "eval_MRN": "S2161163"
+  },
+  {
+    "id": "task4_1",
+    "instruction": "Instruction: Check if patient S6315806 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-16T10:00:00+00:00 now.",
+    "eval_MRN": "S6315806"
+  },
+  {
+    "id": "task4_2",
+    "instruction": "Instruction: Check if patient S6192632 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2022-05-30T07:00:00+00:00 now.",
+    "eval_MRN": "S6192632"
+  },
+  {
+    "id": "task4_3",
+    "instruction": "Instruction: Check if patient S6549951 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S6549951"
+  },
+  {
+    "id": "task4_4",
+    "instruction": "Instruction: Check if patient S6200102 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S6200102"
+  },
+  {
+    "id": "task4_5",
+    "instruction": "Instruction: Check if patient S6468480 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S6468480"
+  },
+  {
+    "id": "task4_6",
+    "instruction": "Instruction: Check if patient S6484983 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S6484983"
+  },
+  {
+    "id": "task4_7",
+    "instruction": "Instruction: Check if patient S2450227 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S2450227"
+  },
+  {
+    "id": "task4_8",
+    "instruction": "Instruction: Check if patient S2075210 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S2075210"
+  },
+  {
+    "id": "task4_9",
+    "instruction": "Instruction: Check if patient S2197736 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S2197736"
+  },
+  {
+    "id": "task4_10",
+    "instruction": "Instruction: Check if patient S3114648 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S3114648"
+  },
+  {
+    "id": "task4_11",
+    "instruction": "Instruction: Check if patient S2380121 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S2380121"
+  },
+  {
+    "id": "task4_12",
+    "instruction": "Instruction: Check if patient S1754095 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S1754095"
+  },
+  {
+    "id": "task4_13",
+    "instruction": "Instruction: Check if patient S6534835 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S6534835"
+  },
+  {
+    "id": "task4_14",
+    "instruction": "Instruction: Check if patient S6545016 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S6545016"
+  },
+  {
+    "id": "task4_15",
+    "instruction": "Instruction: Check if patient S6541609 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S6541609"
+  },
+  {
+    "id": "task4_16",
+    "instruction": "Instruction: Check if patient S6537563 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S6537563"
+  },
+  {
+    "id": "task4_17",
+    "instruction": "Instruction: Check if patient S6531922 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S6531922"
+  },
+  {
+    "id": "task4_18",
+    "instruction": "Instruction: Check if patient S2937751 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S2937751"
+  },
+  {
+    "id": "task4_19",
+    "instruction": "Instruction: Check if patient S1986380 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S1986380"
+  },
+  {
+    "id": "task4_20",
+    "instruction": "Instruction: Check if patient S6538722 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S6538722"
+  },
+  {
+    "id": "task4_21",
+    "instruction": "Instruction: Check if patient S3241217 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S3241217"
+  },
+  {
+    "id": "task4_22",
+    "instruction": "Instruction: Check if patient S6312049 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S6312049"
+  },
+  {
+    "id": "task4_23",
+    "instruction": "Instruction: Check if patient S6539215 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S6539215"
+  },
+  {
+    "id": "task4_24",
+    "instruction": "Instruction: Check if patient S3213957 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S3213957"
+  },
+  {
+    "id": "task4_25",
+    "instruction": "Instruction: Check if patient S3084624 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S3084624"
+  },
+  {
+    "id": "task4_26",
+    "instruction": "Instruction: Check if patient S1736710 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S1736710"
+  },
+  {
+    "id": "task4_27",
+    "instruction": "Instruction: Check if patient S6540602 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S6540602"
+  },
+  {
+    "id": "task4_28",
+    "instruction": "Instruction: Check if patient S0547588 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S0547588"
+  },
+  {
+    "id": "task4_29",
+    "instruction": "Instruction: Check if patient S6541353 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S6541353"
+  },
+  {
+    "id": "task4_30",
+    "instruction": "Instruction: Check if patient S6530813 has a urinary catheter that has been in place for more than 48 hours without a documented removal order. If so, create a service request to remove the catheter.",
+    "context": "The procedure code for urinary catheter is 'NUR1373'. It's 2023-11-11T09:00:00+00:00 now.",
+    "eval_MRN": "S6530813"
+  },
+  {
+    "id": "task5_1",
+    "instruction": "Instruction: Confirm patient S6315806 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S6315806"
+  },
+  {
+    "id": "task5_2",
+    "instruction": "Instruction: Confirm patient S2119664 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S2119664"
+  },
+  {
+    "id": "task5_3",
+    "instruction": "Instruction: Confirm patient S6268253 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S6268253"
+  },
+  {
+    "id": "task5_4",
+    "instruction": "Instruction: Confirm patient S2748981 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S2748981"
+  },
+  {
+    "id": "task5_5",
+    "instruction": "Instruction: Confirm patient S1478444 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S1478444"
+  },
+  {
+    "id": "task5_6",
+    "instruction": "Instruction: Confirm patient S6547257 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S6547257"
+  },
+  {
+    "id": "task5_7",
+    "instruction": "Instruction: Confirm patient S1733937 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S1733937"
+  },
+  {
+    "id": "task5_8",
+    "instruction": "Instruction: Confirm patient S6192632 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S6192632"
+  },
+  {
+    "id": "task5_9",
+    "instruction": "Instruction: Confirm patient S6415739 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S6415739"
+  },
+  {
+    "id": "task5_10",
+    "instruction": "Instruction: Confirm patient S6312049 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S6312049"
+  },
+  {
+    "id": "task5_11",
+    "instruction": "Instruction: Confirm patient S0869531 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S0869531"
+  },
+  {
+    "id": "task5_12",
+    "instruction": "Instruction: Confirm patient S6550627 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S6550627"
+  },
+  {
+    "id": "task5_13",
+    "instruction": "Instruction: Confirm patient S1521703 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S1521703"
+  },
+  {
+    "id": "task5_14",
+    "instruction": "Instruction: Confirm patient S2874099 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S2874099"
+  },
+  {
+    "id": "task5_15",
+    "instruction": "Instruction: Confirm patient S6537563 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S6537563"
+  },
+  {
+    "id": "task5_16",
+    "instruction": "Instruction: Confirm patient S1777769 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S1777769"
+  },
+  {
+    "id": "task5_17",
+    "instruction": "Instruction: Confirm patient S6426560 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S6426560"
+  },
+  {
+    "id": "task5_18",
+    "instruction": "Instruction: Confirm patient S0581164 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S0581164"
+  },
+  {
+    "id": "task5_19",
+    "instruction": "Instruction: Confirm patient S6352985 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S6352985"
+  },
+  {
+    "id": "task5_20",
+    "instruction": "Instruction: Confirm patient S6545016 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S6545016"
+  },
+  {
+    "id": "task5_21",
+    "instruction": "Instruction: Confirm patient S0611496 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S0611496"
+  },
+  {
+    "id": "task5_22",
+    "instruction": "Instruction: Confirm patient S6200102 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S6200102"
+  },
+  {
+    "id": "task5_23",
+    "instruction": "Instruction: Confirm patient S6521727 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S6521727"
+  },
+  {
+    "id": "task5_24",
+    "instruction": "Instruction: Confirm patient S2033286 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S2033286"
+  },
+  {
+    "id": "task5_25",
+    "instruction": "Instruction: Confirm patient S1986380 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S1986380"
+  },
+  {
+    "id": "task5_26",
+    "instruction": "Instruction: Confirm patient S6540602 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S6540602"
+  },
+  {
+    "id": "task5_27",
+    "instruction": "Instruction: Confirm patient S6227720 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S6227720"
+  },
+  {
+    "id": "task5_28",
+    "instruction": "Instruction: Confirm patient S6541609 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S6541609"
+  },
+  {
+    "id": "task5_29",
+    "instruction": "Instruction: Confirm patient S1796597 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S1796597"
+  },
+  {
+    "id": "task5_30",
+    "instruction": "Instruction: Confirm patient S6541353 has a malignant neoplasm of left kidney diagnosis. If true and the last CT Abdomen/Pelvis is more than 3 months old, order a new CT and referral to Interventional Radiology.",
+    "context": "The ICD-10 code for malignant neoplasm of left kidney is C64.2. The CPT code for CT Abdomen/Pelvis with IV contrast is 74177 (for oncologic follow-up). The CPT code for Interventional Radiology referral is CON417 with the request: 'Evaluate renal mass for biopsy or ablation.'",
+    "eval_MRN": "S6541353"
+  },
+  {
+    "id": "task6_1",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S6474456. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S6474456"
+  },
+  {
+    "id": "task6_2",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S3057899. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S3057899"
+  },
+  {
+    "id": "task6_3",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S1478444. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S1478444"
+  },
+  {
+    "id": "task6_4",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S6415739. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S6415739"
+  },
+  {
+    "id": "task6_5",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S6329254. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S6329254"
+  },
+  {
+    "id": "task6_6",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S6264184. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S6264184"
+  },
+  {
+    "id": "task6_7",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S2199765. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S2199765"
+  },
+  {
+    "id": "task6_8",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S2161163. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S2161163"
+  },
+  {
+    "id": "task6_9",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S2111822. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S2111822"
+  },
+  {
+    "id": "task6_10",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S1891852. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S1891852"
+  },
+  {
+    "id": "task6_11",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S6484983. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S6484983"
+  },
+  {
+    "id": "task6_12",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S6222362. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S6222362"
+  },
+  {
+    "id": "task6_13",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S3228213. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S3228213"
+  },
+  {
+    "id": "task6_14",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S1796597. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S1796597"
+  },
+  {
+    "id": "task6_15",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S1311412. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S1311412"
+  },
+  {
+    "id": "task6_16",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S6521727. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S6521727"
+  },
+  {
+    "id": "task6_17",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S1579803. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S1579803"
+  },
+  {
+    "id": "task6_18",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S6542579. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S6542579"
+  },
+  {
+    "id": "task6_19",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S2402518. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S2402518"
+  },
+  {
+    "id": "task6_20",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S0547588. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S0547588"
+  },
+  {
+    "id": "task6_21",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S3213957. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S3213957"
+  },
+  {
+    "id": "task6_22",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S6265496. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S6265496"
+  },
+  {
+    "id": "task6_23",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S1521703. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S1521703"
+  },
+  {
+    "id": "task6_24",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S3236936. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S3236936"
+  },
+  {
+    "id": "task6_25",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S0636132. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S0636132"
+  },
+  {
+    "id": "task6_26",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S6426560. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S6426560"
+  },
+  {
+    "id": "task6_27",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S6541609. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S6541609"
+  },
+  {
+    "id": "task6_28",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S6550627. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S6550627"
+  },
+  {
+    "id": "task6_29",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S6540602. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S6540602"
+  },
+  {
+    "id": "task6_30",
+    "instruction": "Instruction: Retrieve the most recent TSH and free T4 values for patient S6541353. Based on the results, take appropriate action according to the protocol.",
+    "context": "The code for TSH is 'TSH' and for free T4 is 'FT4'. Protocol: If TSH > 10 uIU/mL on two separate instances of lab values (separated by at least one month in date of lab collection), start levothyroxine 25 mcg PO daily and order repeat TSH/FT4 in 6 weeks. If TSH is 4.5\u201310 uIU/mL and free T4 is normal (0.8\u20131.8 ng/dL), order repeat TSH/FT4 in 3 months (no medication yet).",
+    "eval_MRN": "S6541353"
+  },
+  {
+    "id": "task7_1",
+    "instruction": "Instruction: Check the latest QTc interval for patient S6474456. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S6474456"
+  },
+  {
+    "id": "task7_2",
+    "instruction": "Instruction: Check the latest QTc interval for patient S3241217. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S3241217"
+  },
+  {
+    "id": "task7_3",
+    "instruction": "Instruction: Check the latest QTc interval for patient S6488980. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S6488980"
+  },
+  {
+    "id": "task7_4",
+    "instruction": "Instruction: Check the latest QTc interval for patient S6540602. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S6540602"
+  },
+  {
+    "id": "task7_5",
+    "instruction": "Instruction: Check the latest QTc interval for patient S2090974. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S2090974"
+  },
+  {
+    "id": "task7_6",
+    "instruction": "Instruction: Check the latest QTc interval for patient S1698248. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S1698248"
+  },
+  {
+    "id": "task7_7",
+    "instruction": "Instruction: Check the latest QTc interval for patient S2154941. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S2154941"
+  },
+  {
+    "id": "task7_8",
+    "instruction": "Instruction: Check the latest QTc interval for patient S6468480. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S6468480"
+  },
+  {
+    "id": "task7_9",
+    "instruction": "Instruction: Check the latest QTc interval for patient S0658561. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S0658561"
+  },
+  {
+    "id": "task7_10",
+    "instruction": "Instruction: Check the latest QTc interval for patient S6426560. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S6426560"
+  },
+  {
+    "id": "task7_11",
+    "instruction": "Instruction: Check the latest QTc interval for patient S6312049. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S6312049"
+  },
+  {
+    "id": "task7_12",
+    "instruction": "Instruction: Check the latest QTc interval for patient S0869531. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S0869531"
+  },
+  {
+    "id": "task7_13",
+    "instruction": "Instruction: Check the latest QTc interval for patient S3213957. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S3213957"
+  },
+  {
+    "id": "task7_14",
+    "instruction": "Instruction: Check the latest QTc interval for patient S6541609. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S6541609"
+  },
+  {
+    "id": "task7_15",
+    "instruction": "Instruction: Check the latest QTc interval for patient S2748981. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S2748981"
+  },
+  {
+    "id": "task7_16",
+    "instruction": "Instruction: Check the latest QTc interval for patient S6227720. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S6227720"
+  },
+  {
+    "id": "task7_17",
+    "instruction": "Instruction: Check the latest QTc interval for patient S2119664. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S2119664"
+  },
+  {
+    "id": "task7_18",
+    "instruction": "Instruction: Check the latest QTc interval for patient S3057899. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S3057899"
+  },
+  {
+    "id": "task7_19",
+    "instruction": "Instruction: Check the latest QTc interval for patient S6315806. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S6315806"
+  },
+  {
+    "id": "task7_20",
+    "instruction": "Instruction: Check the latest QTc interval for patient S6222362. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S6222362"
+  },
+  {
+    "id": "task7_21",
+    "instruction": "Instruction: Check the latest QTc interval for patient S0789363. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S0789363"
+  },
+  {
+    "id": "task7_22",
+    "instruction": "Instruction: Check the latest QTc interval for patient S0722219. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S0722219"
+  },
+  {
+    "id": "task7_23",
+    "instruction": "Instruction: Check the latest QTc interval for patient S6329254. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S6329254"
+  },
+  {
+    "id": "task7_24",
+    "instruction": "Instruction: Check the latest QTc interval for patient S3032536. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S3032536"
+  },
+  {
+    "id": "task7_25",
+    "instruction": "Instruction: Check the latest QTc interval for patient S1579803. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S1579803"
+  },
+  {
+    "id": "task7_26",
+    "instruction": "Instruction: Check the latest QTc interval for patient S6530532. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S6530532"
+  },
+  {
+    "id": "task7_27",
+    "instruction": "Instruction: Check the latest QTc interval for patient S6542579. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S6542579"
+  },
+  {
+    "id": "task7_28",
+    "instruction": "Instruction: Check the latest QTc interval for patient S1311412. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S1311412"
+  },
+  {
+    "id": "task7_29",
+    "instruction": "Instruction: Check the latest QTc interval for patient S1353305. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S1353305"
+  },
+  {
+    "id": "task7_30",
+    "instruction": "Instruction: Check the latest QTc interval for patient S3236936. If prolonged, discontinue QT-prolonging medications and order a follow-up ECG for 24 hours later.",
+    "context": "The code for QTc interval is 'QTCINTERVAL'. The threshold for prolonged QTc is > 500 ms. QT-prolonging medications to discontinue include text containing ondansetron, prochlorperazine and most antipsychotic medications. The SNOMED code for 12-lead ECG is 445118002. Order the ECG to be performed in 24 hours.",
+    "eval_MRN": "S3236936"
+  },
+  {
+    "id": "task8_1",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S6474456 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S6474456"
+  },
+  {
+    "id": "task8_2",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S6315806 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S6315806"
+  },
+  {
+    "id": "task8_3",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S6540602 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S6540602"
+  },
+  {
+    "id": "task8_4",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S6534835 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S6534835"
+  },
+  {
+    "id": "task8_5",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S1736710 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S1736710"
+  },
+  {
+    "id": "task8_6",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S3114648 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S3114648"
+  },
+  {
+    "id": "task8_7",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S1478444 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S1478444"
+  },
+  {
+    "id": "task8_8",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S6415739 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S6415739"
+  },
+  {
+    "id": "task8_9",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S1353305 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S1353305"
+  },
+  {
+    "id": "task8_10",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S6530813 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S6530813"
+  },
+  {
+    "id": "task8_11",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S2154941 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S2154941"
+  },
+  {
+    "id": "task8_12",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S2402518 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S2402518"
+  },
+  {
+    "id": "task8_13",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S6352985 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S6352985"
+  },
+  {
+    "id": "task8_14",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S1374652 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S1374652"
+  },
+  {
+    "id": "task8_15",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S6329254 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S6329254"
+  },
+  {
+    "id": "task8_16",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S6330912 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S6330912"
+  },
+  {
+    "id": "task8_17",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S6541353 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S6541353"
+  },
+  {
+    "id": "task8_18",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S6484983 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S6484983"
+  },
+  {
+    "id": "task8_19",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S6530532 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S6530532"
+  },
+  {
+    "id": "task8_20",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S3236936 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S3236936"
+  },
+  {
+    "id": "task8_21",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S3241217 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S3241217"
+  },
+  {
+    "id": "task8_22",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S1777769 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S1777769"
+  },
+  {
+    "id": "task8_23",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S6550627 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S6550627"
+  },
+  {
+    "id": "task8_24",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S2937751 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S2937751"
+  },
+  {
+    "id": "task8_25",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S2450227 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S2450227"
+  },
+  {
+    "id": "task8_26",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S1796597 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S1796597"
+  },
+  {
+    "id": "task8_27",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S1311412 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S1311412"
+  },
+  {
+    "id": "task8_28",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S6426560 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S6426560"
+  },
+  {
+    "id": "task8_29",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S6500497 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S6500497"
+  },
+  {
+    "id": "task8_30",
+    "instruction": "Instruction: Verify that every active opioid analgesic order for patient S1754095 has a matching naloxone prescription. If an opioid order is active without naloxone, create a naloxone order.",
+    "context": "Opioid medications to search for include hydromorphone, oxycodone, fentanyl, hydrocodone, morphine. The naloxone order is naloxone nasal spray 4 mg.",
+    "eval_MRN": "S1754095"
+  },
+  {
+    "id": "task9_1",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S6474456. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S6474456"
+  },
+  {
+    "id": "task9_2",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S6265496. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S6265496"
+  },
+  {
+    "id": "task9_3",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S6551923. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S6551923"
+  },
+  {
+    "id": "task9_4",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S3228213. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S3228213"
+  },
+  {
+    "id": "task9_5",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S0674240. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S0674240"
+  },
+  {
+    "id": "task9_6",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S6540602. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S6540602"
+  },
+  {
+    "id": "task9_7",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S1521703. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S1521703"
+  },
+  {
+    "id": "task9_8",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S0636132. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S0636132"
+  },
+  {
+    "id": "task9_9",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S1891852. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S1891852"
+  },
+  {
+    "id": "task9_10",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S1635224. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S1635224"
+  },
+  {
+    "id": "task9_11",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S3114648. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S3114648"
+  },
+  {
+    "id": "task9_12",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S6268253. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S6268253"
+  },
+  {
+    "id": "task9_13",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S1698248. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S1698248"
+  },
+  {
+    "id": "task9_14",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S3195056. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S3195056"
+  },
+  {
+    "id": "task9_15",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S6352985. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S6352985"
+  },
+  {
+    "id": "task9_16",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S1579803. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S1579803"
+  },
+  {
+    "id": "task9_17",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S1736710. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S1736710"
+  },
+  {
+    "id": "task9_18",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S3032536. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S3032536"
+  },
+  {
+    "id": "task9_19",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S6550473. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S6550473"
+  },
+  {
+    "id": "task9_20",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S2450227. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S2450227"
+  },
+  {
+    "id": "task9_21",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S3213957. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S3213957"
+  },
+  {
+    "id": "task9_22",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S1777769. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S1777769"
+  },
+  {
+    "id": "task9_23",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S0869531. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S0869531"
+  },
+  {
+    "id": "task9_24",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S6530532. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S6530532"
+  },
+  {
+    "id": "task9_25",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S0658561. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S0658561"
+  },
+  {
+    "id": "task9_26",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S1715871. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S1715871"
+  },
+  {
+    "id": "task9_27",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S2090974. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S2090974"
+  },
+  {
+    "id": "task9_28",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S1478444. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S1478444"
+  },
+  {
+    "id": "task9_29",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S6531922. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S6531922"
+  },
+  {
+    "id": "task9_30",
+    "instruction": "Instruction: Determine the date of the last influenza vaccine for patient S2380121. If it was administered more than 365 days ago, order a new influenza vaccine for today.",
+    "context": "It's 2024-01-09T00:00:00+00:00 now. The CPT code for influenza vaccine is 90686. The vaccine to order is influenza vaccine (quadrivalent, preservative-free, IM) for today.",
+    "eval_MRN": "S2380121"
+  },
+  {
+    "id": "task10_1",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S6474456. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S6474456"
+  },
+  {
+    "id": "task10_2",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S2119664. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S2119664"
+  },
+  {
+    "id": "task10_3",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S1876702. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S1876702"
+  },
+  {
+    "id": "task10_4",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S1986380. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S1986380"
+  },
+  {
+    "id": "task10_5",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S2197736. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S2197736"
+  },
+  {
+    "id": "task10_6",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S6309742. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S6309742"
+  },
+  {
+    "id": "task10_7",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S3057899. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S3057899"
+  },
+  {
+    "id": "task10_8",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S6537563. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S6537563"
+  },
+  {
+    "id": "task10_9",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S6268253. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S6268253"
+  },
+  {
+    "id": "task10_10",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S2450227. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S2450227"
+  },
+  {
+    "id": "task10_11",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S6315806. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S6315806"
+  },
+  {
+    "id": "task10_12",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S0547588. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S0547588"
+  },
+  {
+    "id": "task10_13",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S6549951. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S6549951"
+  },
+  {
+    "id": "task10_14",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S3213957. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S3213957"
+  },
+  {
+    "id": "task10_15",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S0658561. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S0658561"
+  },
+  {
+    "id": "task10_16",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S1374652. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S1374652"
+  },
+  {
+    "id": "task10_17",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S6538722. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S6538722"
+  },
+  {
+    "id": "task10_18",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S3032536. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S3032536"
+  },
+  {
+    "id": "task10_19",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S2199765. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S2199765"
+  },
+  {
+    "id": "task10_20",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S6551923. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S6551923"
+  },
+  {
+    "id": "task10_21",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S6488980. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S6488980"
+  },
+  {
+    "id": "task10_22",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S6540602. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S6540602"
+  },
+  {
+    "id": "task10_23",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S2863714. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S2863714"
+  },
+  {
+    "id": "task10_24",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S2874099. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S2874099"
+  },
+  {
+    "id": "task10_25",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S2704870. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S2704870"
+  },
+  {
+    "id": "task10_26",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S2161163. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S2161163"
+  },
+  {
+    "id": "task10_27",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S1635224. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S1635224"
+  },
+  {
+    "id": "task10_28",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S6329254. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S6329254"
+  },
+  {
+    "id": "task10_29",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S0636132. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S0636132"
+  },
+  {
+    "id": "task10_30",
+    "instruction": "Instruction: Review COVID-19 vaccination status for patient S6222362. Find the most recent COVID-19 vaccine and if the last dose was more than 12 months ago, order a COVID booster.",
+    "context": "It's 2023-11-07T12:00:00+00:00 now. The code for COVID-19 vaccine procedure is 'COVIDVACCINE' or MedicationRequest with text containing 'COVID-19 VAC'. The booster to order is a single-dose COVID vaccine (CPT 91320) today.",
+    "eval_MRN": "S6222362"
+  }
+]
