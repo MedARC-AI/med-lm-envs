@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -19,6 +20,29 @@ from medarc_verifiers.utils.pathing import project_root, to_project_relative
 MANIFEST_FILENAME = "run_manifest.json"
 PROJECT_ROOT = project_root()
 MANIFEST_VERSION = 2
+
+logger = logging.getLogger(__name__)
+
+
+class ManifestConflictError(ValueError):
+    """Raised when an existing manifest conflicts with the current config."""
+
+
+def _normalize_model_slug(value: str) -> str:
+    """Normalize model slugs for restart comparisons.
+
+    Some providers expose the same model under different namespaces (e.g.
+    `google/gemini-3-pro-preview` vs `gemini-3-pro-preview`). For now, we only
+    normalize Gemini model slugs by stripping a single leading namespace.
+    """
+    if not value:
+        return value
+    if "/" not in value:
+        return value
+    candidate = value.rsplit("/", 1)[-1]
+    if candidate.startswith("gemini-"):
+        return candidate
+    return value
 
 
 class ManifestJobEntry(BaseModel):
@@ -144,7 +168,71 @@ def _require_manifest_v2(payload: Mapping[str, Any], *, path: Path | None = None
 
 
 def _sanitize_model_payload(model_payload: Mapping[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in model_payload.items() if key not in ModelConfigSchema.resume_tolerant_fields}
+    sanitized = {key: value for key, value in model_payload.items() if key not in ModelConfigSchema.resume_tolerant_fields}
+
+    model_slug = sanitized.get("model")
+    if isinstance(model_slug, str):
+        sanitized["model"] = _normalize_model_slug(model_slug)
+
+    # Provider quirks: OpenAI-compatible endpoints vary widely in what they accept when
+    # we forward `sampling_args.extra_body`. Treat *all* of extra_body as resume-tolerant
+    # for the purposes of manifest conflict detection so users can switch providers
+    # without getting blocked by payload drift.
+    sampling_args = sanitized.get("sampling_args")
+    if isinstance(sampling_args, Mapping):
+        updated_sampling_args = dict(sampling_args)
+        updated_sampling_args.pop("extra_body", None)
+        if updated_sampling_args:
+            sanitized["sampling_args"] = updated_sampling_args
+        else:
+            sanitized.pop("sampling_args", None)
+
+    return sanitized
+
+
+def _sampling_extra_body(model_payload: Mapping[str, Any]) -> dict[str, Any] | None:
+    sampling_args = model_payload.get("sampling_args")
+    if not isinstance(sampling_args, Mapping):
+        return None
+    extra_body = sampling_args.get("extra_body")
+    if not isinstance(extra_body, Mapping):
+        return None
+    normalized = _normalize_payload(extra_body)
+    return normalized or None
+
+
+def _warn_extra_body_change(key: str, existing: Mapping[str, Any], payload: Mapping[str, Any]) -> None:
+    existing_extra = _sampling_extra_body(existing)
+    payload_extra = _sampling_extra_body(payload)
+    if existing_extra is None and payload_extra is None:
+        return
+    if compute_checksum(existing_extra or {}) == compute_checksum(payload_extra or {}):
+        return
+    logger.warning(
+        "Model '%s' sampling_args.extra_body changed; allowing restart, but providers may reject unknown fields.",
+        key,
+    )
+
+
+def _sampling_args_payload(model_payload: Mapping[str, Any]) -> dict[str, Any] | None:
+    sampling_args = model_payload.get("sampling_args")
+    if not isinstance(sampling_args, Mapping):
+        return None
+    normalized = _normalize_payload(sampling_args)
+    return normalized or None
+
+
+def _warn_sampling_args_change(key: str, existing: Mapping[str, Any], payload: Mapping[str, Any]) -> None:
+    existing_sampling = _sampling_args_payload(existing)
+    payload_sampling = _sampling_args_payload(payload)
+    if existing_sampling is None and payload_sampling is None:
+        return
+    if compute_checksum(existing_sampling or {}) == compute_checksum(payload_sampling or {}):
+        return
+    logger.warning(
+        "Model '%s' sampling_args changed; allowing restart, but providers may reject unsupported parameters.",
+        key,
+    )
 
 
 def _effective_sampling_args(entry: ManifestJobEntry, model_payload: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -247,11 +335,28 @@ def _merge_unique_model_payload(
     if allow_mismatch:
         container[key] = payload
         return
-    if _sanitize_model_payload(existing) == _sanitize_model_payload(payload):
+    sanitized_existing = _sanitize_model_payload(existing)
+    sanitized_payload = _sanitize_model_payload(payload)
+    if sanitized_existing == sanitized_payload:
+        _warn_extra_body_change(key, existing, payload)
         container[key] = payload
         return
-    msg = f"Conflicting model payload for '{key}'."
-    raise ValueError(msg)
+
+    stripped_existing = dict(sanitized_existing)
+    stripped_payload = dict(sanitized_payload)
+    stripped_existing.pop("sampling_args", None)
+    stripped_payload.pop("sampling_args", None)
+    if stripped_existing == stripped_payload:
+        _warn_sampling_args_change(key, existing, payload)
+        _warn_extra_body_change(key, existing, payload)
+        container[key] = payload
+        return
+
+    all_keys = set(sanitized_existing) | set(sanitized_payload)
+    diff_keys = sorted(key for key in all_keys if sanitized_existing.get(key) != sanitized_payload.get(key))
+    suffix = f" (conflicting keys: {', '.join(diff_keys)})" if diff_keys else ""
+    msg = f"Conflicting model payload for '{key}'{suffix}."
+    raise ManifestConflictError(msg)
 
 
 def _merge_unique_payload(

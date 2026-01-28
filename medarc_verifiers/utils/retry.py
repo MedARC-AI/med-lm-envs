@@ -95,6 +95,55 @@ def _extract_retry_delay(exc: BaseException) -> float | None:
     return None
 
 
+def _extract_error_type_code(exc: BaseException) -> tuple[str | None, str | None]:
+    """Extract provider error `type` and `code` when present.
+
+    This is primarily used for OpenAI-compatible errors where `exc.body` or
+    `exc.response` contains an `{"error": {"type": ..., "code": ...}}` payload.
+    """
+    body = getattr(exc, "body", None)
+    payload: Any = None
+
+    if isinstance(body, dict):
+        payload = body
+    elif isinstance(body, str):
+        try:
+            import json
+
+            payload = json.loads(body)
+        except Exception:
+            payload = None
+
+    if payload is None:
+        resp = getattr(exc, "response", None)
+        if resp is not None:
+            try:
+                payload = resp.json()
+            except Exception:
+                try:
+                    import json
+
+                    payload = json.loads(getattr(resp, "text", "") or "")
+                except Exception:
+                    payload = None
+
+    if isinstance(payload, list) and payload:
+        payload = payload[0]
+    if not isinstance(payload, dict):
+        # Very coarse fallback: try to detect policy_violation in message text.
+        text = str(exc)
+        if "policy_violation" in text:
+            return "policy_violation", None
+        return None, None
+
+    err = payload.get("error")
+    if not isinstance(err, dict):
+        return None, None
+    err_type = err.get("type")
+    err_code = err.get("code")
+    return (err_type if isinstance(err_type, str) else None, err_code if isinstance(err_code, str) else None)
+
+
 def should_retry_exception(exc: BaseException) -> tuple[bool, int | None, str | None, float | None]:
     """Identify retryable exceptions from model calls."""
     if isinstance(exc, AssertionError):
@@ -103,6 +152,10 @@ def should_retry_exception(exc: BaseException) -> tuple[bool, int | None, str | 
             return True, None, message, None
     status = _status_code(exc)
     retry_delay = _extract_retry_delay(exc) if status == 429 else None
+    if status == 403:
+        err_type, err_code = _extract_error_type_code(exc)
+        if err_type == "policy_violation":
+            return True, 403, f"HTTP 403 policy_violation: {err_code}", None
     if isinstance(exc, (BadRequestError, httpx.HTTPStatusError)):
         if status == 400:
             return True, 400, "HTTP 400 during model call", None
@@ -162,6 +215,9 @@ async def call_with_retries(
             result = await func()
         except Exception as exc:  # noqa: BLE001
             retry, code, reason, retry_delay = should_retry_exception(exc)
+            # 403 policy violations are not typically transient; allow only one extra attempt.
+            if retry and code == 403 and attempt >= 2:
+                retry = False
             if retry and attempt < attempts:
                 delay = (
                     retry_delay
