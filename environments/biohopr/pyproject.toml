@@ -5,9 +5,8 @@ tags = ["biohopr", "multi-hop", "biomedical", "question-answering", "retrieval-a
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
-    "verifiers>=0.1.6.post0",
-    "transformers>2.3.0",
-    "huggingface-hub>=1.1.2",
+    "verifiers>=0.1.9.post3",
+    "transformers>=5.0.0",
 ]
 
 [build-system]

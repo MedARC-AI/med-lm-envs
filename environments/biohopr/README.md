@@ -70,9 +70,6 @@ Summarize key metrics your rubric emits and how they’re interpreted.
 We recommend using infinity embed server for serving embeddings. This was the only server we found compatible with BioLORD embeddings. You may find them here: https://github.com/michaelfeil/infinity
 At the time of writing their server errors at the time of setup. Further instructions can be found here: https://github.com/michaelfeil/infinity/issues/649
 
-### Potential Installation Error
-If you are having trouble with install, running `uv pip install --prerelease=allow ./environments/biohopr/` should allow you to install newer versions of transformers that is compatible with this environment as well as the medarc verifiers environment. 
-
 ### Citation
 Dataset:
 ```bibtex

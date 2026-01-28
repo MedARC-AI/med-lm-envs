@@ -79,92 +79,51 @@ def test_metrics(ds,config,parser,related=True, num_examples=32):
     results = asyncio.run(results)
     return results
 
+def prepare_logs(results,name,metric_name='embedded_precision'):
+    reward_key = 'reward' if 'reward' in results else 'metrics'
+    reward_name = 'reward' if 'reward' in results else metric_name
+    rewards = results[reward_key]
+    if reward_key == 'metrics': rewards = rewards[reward_name]
+    avg_reward = sum(rewards) / len(rewards)
+    return [
+        {   
+            "name": name,
+            "results":[{
+                
+                "example": i,
+                reward_name: rewards[i],
+                "prompt": results['prompt'][i],
+                "completion": results['completion'][i],
+                "answers": results['info'][i]['answer'],
+            }
+            for i in range(len(rewards))
+            ]
+        }
+    ], len(rewards), avg_reward
+
 def test_metrics_vs_judge(ds, config, data_parser, num_examples=32):
     results = test_judge(ds, config, data_parser, num_examples=num_examples, related=True)
 
-    logs = [
-        {   
-            "name": "biohopr_judge_related",
-            "results":[{
-                
-                "example": i,
-                "reward": results.reward[i],
-                "prompt": results.prompt[i],
-                "completion": results.completion[i],
-                "answers": results.info[i]['answer'],
-            }
-            for i in range(len(results.reward))
-            ]
-        }
-    ]
+    logs,num_examples, avg_reward = prepare_logs(results, "biohopr_judge_related")
 
-    # Calculate and display summary stats
-    rewards = results.reward
-    avg_reward = sum(rewards) / len(rewards)
-    print(f"Related Judge Summary: {len(rewards)} examples, avg reward: {avg_reward:.3f}")
+    print(f"Related Judge Summary: {num_examples} examples, avg reward: {avg_reward:.3f}")
 
     results = test_judge(ds,config,data_parser,related=False, num_examples=num_examples)
 
-    logs += [
-        {   
-            "name": "biohopr_judge_unrelated",
-            "results":[{
-                
-                "example": i,
-                "reward": results.reward[i],
-                "prompt": results.prompt[i],
-                "completion": results.completion[i],
-                "answers": results.info[i]['answer'],
-            }
-            for i in range(len(results.reward))
-            ]
-        }
-    ]
+    log,num_examples, avg_reward = prepare_logs(results,"biohopr_judge_unrelated")
+    logs+=log
 
-    # Calculate and display summary stats
-    rewards = results.reward
-    avg_reward = sum(rewards) / len(rewards)
-    print(f"Unrelated Judge Summary: {len(rewards)} examples, avg reward: {avg_reward:.3f}")
+    print(f"Unrelated Judge Summary: {num_examples} examples, avg reward: {avg_reward:.3f}")
 
     metrics_results = test_metrics(ds,config,data_parser, related=True, num_examples=num_examples)
-    embedded_precisions = metrics_results.metrics['embedded_precision']
-    avg_embedded_precision = sum(embedded_precisions) / len(embedded_precisions)
-    print(f"Related Metrics Summary: {len(embedded_precisions)} examples, avg embedded precision: {avg_embedded_precision:.3f}")
-
-    logs += [
-        {
-            "name": "biohopr_metrics_related",
-            "results":[{
-                "example": i,
-                "embedded_precision": embedded_precisions[i],
-                "prompt": metrics_results.prompt[i],
-                "completion": metrics_results.completion[i],
-                "answers": metrics_results.info[i]['answer'],
-            }
-            for i in range(len(embedded_precisions))
-            ]
-        }
-    ]
+    log,num_examples,avg_embedded_precision = prepare_logs(metrics_results,"biohopr_metrics_related")
+    logs+=log
+    print(f"Related Metrics Summary: {num_examples} examples, avg embedded precision: {avg_embedded_precision:.3f}")
 
     metrics_results = test_metrics(ds,config,data_parser,related=False, num_examples=num_examples)
-    embedded_precisions = metrics_results.metrics['embedded_precision']
-    avg_embedded_precision = sum(embedded_precisions) / len(embedded_precisions)
-    print(f"Unrelated Metrics Summary: {len(embedded_precisions)} examples, avg embedded precision: {avg_embedded_precision:.3f}")
-
-    logs += [
-        {
-            "name": "biohopr_metrics_unrelated",
-            "results":[{
-                "example": i,
-                "embedded_precision": embedded_precisions[i],
-                "prompt": metrics_results.prompt[i],
-                "completion": metrics_results.completion[i],
-                "answers": metrics_results.info[i]['answer'],
-            }
-            for i in range(len(embedded_precisions))
-            ]
-        }
-    ]
+    log,num_examples,avg_embedded_precision = prepare_logs(metrics_results,"biohopr_metrics_unrelated")
+    logs+=log
+    print(f"Unrelated Metrics Summary: {num_examples} examples, avg embedded precision: {avg_embedded_precision:.3f}")
 
     # Save detailed logs to file
     os.makedirs('outputs', exist_ok=True)
@@ -217,8 +176,8 @@ def test_biolord_vs_bert(ds, config, data_parser, num_examples=32):
     results = env.evaluate(client, model='openai/gpt-oss-20b', num_examples=num_examples, max_concurrent=128)
     results = asyncio.run(results)
 
-    embedded_precisions_biolord = results.metrics['embedded_precision_biolord']
-    embedded_precisions_bert = results.metrics['embedded_precision_bert']
+    embedded_precisions_biolord = results['metrics']['embedded_precision_biolord']
+    embedded_precisions_bert = results['metrics']['embedded_precision_bert']
 
     avg_embedded_precision_biolord = sum(embedded_precisions_biolord) / len(embedded_precisions_biolord)
     avg_embedded_precision_bert = sum(embedded_precisions_bert) / len(embedded_precisions_bert)
@@ -235,9 +194,9 @@ def test_biolord_vs_bert(ds, config, data_parser, num_examples=32):
                 "example": i,
                 "embedded_precision_biolord": embedded_precisions_biolord[i],
                 "embedded_precision_bert": embedded_precisions_bert[i],
-                "prompt": results.prompt[i],
-                "completion": results.completion[i],
-                "answers": results.info[i]['answer'],
+                "prompt": results['prompt'][i],
+                "completion": results['completion'][i],
+                "answers": results['info'][i]['answer'],
             }
             for i in range(len(embedded_precisions_biolord)) if embedded_precisions_biolord[i] != embedded_precisions_bert[i]
             ]
@@ -300,8 +259,8 @@ def test_server_vs_local_embeddings(ds, config:RemoteModelConfig, data_parser:vf
     results = env.evaluate(client, model='openai/gpt-oss-20b', num_examples=num_examples, max_concurrent=128)
     results = asyncio.run(results)
 
-    embedded_precisions_local = results.metrics['embedded_precision_local']
-    embedded_precisions_server = results.metrics['embedded_precision_server']
+    embedded_precisions_local = results['metrics']['embedded_precision_local']
+    embedded_precisions_server = results['metrics']['embedded_precision_server']
 
     avg_embedded_precision_local = sum(embedded_precisions_local) / len(embedded_precisions_local)
     avg_embedded_precision_server = sum(embedded_precisions_server) / len(embedded_precisions_server)
@@ -311,6 +270,7 @@ def test_server_vs_local_embeddings(ds, config:RemoteModelConfig, data_parser:vf
 
     os.makedirs('outputs', exist_ok=True)
     output_file = f'outputs/biohopr_detailed_logs_server_vs_local_embeddings.jsonl'
+    # Should be empty logs as these should be equal
     with open(output_file, 'w') as f:
         log_entry = {
             "name": "biohopr_server_vs_local_embeddings",
@@ -318,9 +278,9 @@ def test_server_vs_local_embeddings(ds, config:RemoteModelConfig, data_parser:vf
                 "example": i,
                 "embedded_precision_local": embedded_precisions_local[i],
                 "embedded_precision_server": embedded_precisions_server[i],
-                "prompt": results.prompt[i],
-                "completion": results.completion[i],
-                "answers": results.info[i]['answer'],
+                "prompt": results['prompt'][i],
+                "completion": results['completion'][i],
+                "answers": results['info'][i]['answer'],
             }
             for i in range(len(embedded_precisions_local)) if embedded_precisions_local[i] != embedded_precisions_server[i]
             ]

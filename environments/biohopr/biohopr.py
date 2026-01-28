@@ -250,8 +250,9 @@ async def llm_as_a_judge_impl(
     answers = [answers[i] for i in top_n_indices]
 
     answer = ", ".join(answers)
+
     # Get judge response using the extracted answer
-    judge_response = await judge(prompt, completion, answer, state, **kwargs)
+    judge_response = await judge(prompt, completion, answer, state)
     
     # Parse judge response
     judge_response_clean = judge_response.strip().upper()
@@ -354,8 +355,9 @@ def _rubrics(eval_method:str,parser:vf.Parser, config: model_config) -> List[vf.
     rubrics,weights = [],[]
     if(eval_method in ['judge','judge-only']):
         rubrics += [vf.JudgeRubric(
-            funcs=[_rubric_f(config)],judge_client=config.judge_client, judge_model=config.judge_model, judge_prompt=JUDGE_TEMPLATE, parser=parser, weights = [1.0],
+            judge_client=config.judge_client, judge_model=config.judge_model, judge_prompt=JUDGE_TEMPLATE, parser=parser,
         )]
+        rubrics[-1].add_reward_func(_rubric_f(config),weight = 1.0)
     if(eval_method in ['metrics', 'judge']):
         weight = 1.0 if eval_method=='metrics' else 0.0
         rubrics += [vf.Rubric( funcs=[_rubric_f(config,use_judge=False)], weights=[weight], parser=parser)]
