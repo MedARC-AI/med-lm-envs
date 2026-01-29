@@ -464,57 +464,6 @@ def plot_multi_panel(
     print(f"Saved plot to {output_path} and {output_path.with_suffix('.pdf')}")
     plt.close()
 
-
-def create_example_plots(output_dir: Path):
-    """Create example plots with placeholder data."""
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Example: Training curves (accuracy)
-    # Replace with actual data from W&B or CSV
-    training_data = {
-        'medmcqa': {
-            'steps': [0, 25, 50, 75, 100, 125, 150],
-            'values': [0.59, 0.62, 0.65, 0.67, 0.68, 0.69, 0.70],
-            'std': [0.02, 0.02, 0.02, 0.01, 0.01, 0.01, 0.01],
-        },
-        'medcalc': {
-            'steps': [0, 25, 50, 75, 100, 125, 150],
-            'values': [0.42, 0.48, 0.52, 0.55, 0.57, 0.58, 0.59],
-            'std': [0.03, 0.03, 0.02, 0.02, 0.02, 0.02, 0.02],
-        },
-        'medcase': {
-            'steps': [0, 25, 50, 75, 100, 125, 150],
-            'values': [0.19, 0.22, 0.25, 0.27, 0.29, 0.30, 0.31],
-            'std': [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02],
-        },
-    }
-    
-    # Example: Reward curves
-    # Replace with actual data from W&B
-    reward_data = {
-        'medmcqa': {
-            'steps': list(range(0, 151, 5)),
-            'reward': [0.59, 0.60, 0.61, 0.62, 0.63, 0.64, 0.65, 0.65, 0.66, 0.66, 
-                      0.67, 0.67, 0.68, 0.68, 0.68, 0.69, 0.69, 0.69, 0.69, 0.70,
-                      0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70],
-            'reward_std': [0.03] * 31,
-        },
-        'medcalc': {
-            'steps': list(range(0, 151, 5)),
-            'reward': [0.42, 0.44, 0.46, 0.48, 0.49, 0.50, 0.51, 0.52, 0.53, 0.54,
-                      0.55, 0.55, 0.56, 0.56, 0.57, 0.57, 0.57, 0.58, 0.58, 0.58,
-                      0.58, 0.59, 0.59, 0.59, 0.59, 0.59, 0.59, 0.59, 0.59, 0.59, 0.59],
-            'reward_std': [0.04] * 31,
-        },
-        'medcase': {
-            'steps': list(range(0, 151, 5)),
-            'reward': [0.19, 0.20, 0.21, 0.22, 0.23, 0.24, 0.25, 0.25, 0.26, 0.26,
-                      0.27, 0.27, 0.28, 0.28, 0.29, 0.29, 0.29, 0.30, 0.30, 0.30,
-                      0.30, 0.30, 0.31, 0.31, 0.31, 0.31, 0.31, 0.31, 0.31, 0.31, 0.31],
-            'reward_std': [0.03] * 31,
-        },
-    }
-    
     # Individual plots
     plot_training_curves(
         training_data,
