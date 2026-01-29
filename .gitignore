@@ -1,5 +1,17 @@
 outputs/
 
+# Prime-RL (separate repo with trained models)
+prime-rl/
+
+# CSV data exports
+*.csv
+
+# Generated plots
+plots/
+
+# Eval results
+eval_results/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

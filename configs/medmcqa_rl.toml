@@ -1,0 +1,72 @@
+# MedMCQA RL Training Configuration
+# Medical multiple-choice QA (AIIMS & NEET PG entrance exams)
+
+inference_gpu_ids = [0, 1, 2, 3, 4, 5]
+trainer_gpu_ids = [6, 7]
+
+max_steps = 300
+seq_len = 1024 
+
+[wandb]
+project = "medmcqa-rl"
+name = "medmcqa-rl"
+
+[ckpt]
+# Checkpoint at the end of training
+
+[model]
+name = "Qwen/Qwen3-4B-Instruct-2507"
+
+[orchestrator]
+batch_size = 512  
+rollouts_per_example = 16
+
+[[orchestrator.env]]
+id = "med_mcqa"
+
+# Environment arguments
+[orchestrator.env.args]
+use_think = true
+answer_format = "xml"
+shuffle_answers = false  # Keep original answer order
+
+[orchestrator.sampling]
+max_tokens = 512  # Short answers (A/B/C/D with reasoning)
+temperature = 1.0
+
+# Evaluation configuration
+[orchestrator.eval]
+interval = 10
+eval_base_model = true
+
+[[orchestrator.eval.env]]
+id = "med_mcqa"
+num_examples = 500  # Sample from 4k validation set
+rollouts_per_example = 1
+
+[orchestrator.eval.env.args]
+use_think = true
+answer_format = "xml"
+shuffle_answers = false
+eval_split = "validation"  # Test set has no labels, must use validation
+
+[orchestrator.eval.sampling]
+temperature = 0.0
+max_tokens = 512
+
+[trainer]
+# Default trainer config (GRPO)
+
+[trainer.model.lora]
+rank = 32
+alpha = 64.0
+
+[trainer.optim]
+lr = 1e-5
+
+[inference]
+# Inference server config
+
+[inference.parallel]
+tp = 2
+dp = 3
