@@ -10,93 +10,28 @@ from datasets import Dataset
 from datasets.utils.logging import disable_progress_bar
 import verifiers as vf
 from verifiers.utils.async_utils import maybe_await
-
-def _get_overlong_prompt_dummy_response(message_type: Any) -> Any:
-    """
-    Return Verifiers' "overlong prompt" dummy model response.
-
-    Verifiers has moved this helper across modules between versions; keep this env importable
-    across that churn by resolving it lazily with a final local fallback.
-    """
-    for module_name in ("verifiers.utils.message_utils", "verifiers.envs.environment"):
-        try:
-            mod = __import__(module_name, fromlist=["get_overlong_prompt_dummy_response"])
-            fn = getattr(mod, "get_overlong_prompt_dummy_response", None)
-            if callable(fn):
-                return fn(message_type)
-        except Exception:  # noqa: BLE001
-            continue
-
-    # Last resort: build a minimal OpenAI-types response that matches what Verifiers expects.
-    try:
-        from openai.types.chat import ChatCompletion, ChatCompletionMessage
-        from openai.types.chat.chat_completion import Choice
-        from openai.types.completion import Completion
-        from openai.types.completion_choice import CompletionChoice
-
-        if message_type == "completion":
-            return Completion(
-                id="overlong-prompt",
-                created=0,
-                model="",
-                object="text_completion",
-                choices=[
-                    CompletionChoice(
-                        index=0,
-                        text="Prompt too long.",
-                        finish_reason="length",
-                    )
-                ],
-            )
-
-        return ChatCompletion(
-            id="overlong-prompt",
-            created=0,
-            model="",
-            object="chat.completion",
-            choices=[
-                Choice(
-                    index=0,
-                    message=ChatCompletionMessage(
-                        role="assistant",
-                        content="Prompt too long.",
-                    ),
-                    finish_reason="length",
-                )
-            ],
-        )
-    except Exception:  # noqa: BLE001
-        # Extremely defensive: keep rollouts terminating even if OpenAI types aren't available.
-        if message_type == "completion":
-            return {
-                "id": "overlong-prompt",
-                "created": 0,
-                "model": "",
-                "object": "text_completion",
-                "choices": [{"index": 0, "text": "Prompt too long.", "finish_reason": "length"}],
-            }
-        return {
-            "id": "overlong-prompt",
-            "created": 0,
-            "model": "",
-            "object": "chat.completion",
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {"role": "assistant", "content": "Prompt too long."},
-                    "finish_reason": "length",
-                }
-            ],
-        }
-
-
 from . import graders
 from .tools import build_tool_list
+
 
 disable_progress_bar()
 
 
 class MedAgentBenchV2Env(vf.StatefulToolEnv):
+    @staticmethod
+    def _root_cause(exc: BaseException) -> BaseException:
+        cur = exc
+        seen: set[int] = set()
+        while True:
+            nxt = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
+            if nxt is None:
+                return cur
+            nxt_id = id(nxt)
+            if nxt_id in seen:
+                return cur
+            seen.add(nxt_id)
+            cur = nxt
+
     @staticmethod
     def _status_code(exc: BaseException) -> int | None:
         status = getattr(exc, "status_code", None)
@@ -163,9 +98,10 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
 
     async def get_model_response(
         self,
-        client: Any,
-        model: str,
+        state: vf.State,
         prompt: vf.Messages,
+        client: Any | None = None,
+        model: str | None = None,
         oai_tools: Any | None = None,
         sampling_args: dict | None = None,
         message_type: Any | None = None,
@@ -174,24 +110,25 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
         """Like the base implementation, but tolerate certain provider 500s.
 
         Some OpenAI-compatible servers (especially OSS model endpoints) can 500 on prompts that
-        contain literal chat-template tokens. Instead of crashing the entire evaluation, we
-        sanitize the prompt and, if the call still fails, return Verifiers' "overlong-prompt"
-        dummy response so the rollout terminates cleanly.
+        contain literal chat-template tokens. We retry once with a sanitized prompt to avoid
+        provider-side parser crashes.
         """
         resolved_message_type = message_type or getattr(self, "message_type", "chat")
         try:
             return await super().get_model_response(
-                client,
-                model,
+                state,
                 prompt,
+                client=client,
+                model=model,
                 oai_tools=oai_tools,
                 sampling_args=sampling_args,
                 message_type=message_type,
                 **kwargs,
             )
-        except Exception as exc:  # noqa: BLE001
-            status = self._status_code(exc)
-            msg = str(exc).lower()
+        except vf.Error as exc:
+            root = self._root_cause(exc)
+            status = self._status_code(root)
+            msg = str(root).lower()
             # Common deterministic failure from chat-template parsing on some endpoints.
             is_template_parse = "unexpected tokens remaining in message header" in msg
             if status in (500, 502, 503, 504) or is_template_parse:
@@ -201,22 +138,24 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
                     await asyncio.sleep(0.5)
                     sanitized_prompt = self._sanitize_prompt(prompt) if resolved_message_type == "chat" else prompt
                     return await super().get_model_response(
-                        client,
-                        model,
+                        state,
                         sanitized_prompt,
+                        client=client,
+                        model=model,
                         oai_tools=oai_tools,
                         sampling_args=sampling_args,
                         message_type=message_type,
                         **kwargs,
                     )
-                except Exception:  # noqa: BLE001
+                except vf.Error as retry_exc:
+                    retry_root = self._root_cause(retry_exc)
                     self.logger.error(
-                        "Model call failed with status=%s (%s); terminating rollout with dummy response.",
-                        status,
-                        exc,
+                        "Model call failed after retry (status=%s): %s",
+                        self._status_code(retry_root),
+                        retry_root,
                     )
-                    return _get_overlong_prompt_dummy_response(resolved_message_type)
-            raise
+                    raise retry_exc
+            raise exc
 
     def update_tool_args(
         self,
@@ -230,30 +169,6 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
             return {}
         return tool_args
 
-    async def is_completed(self, messages: vf.Messages, state: vf.State, **kwargs: Any) -> bool:
-        if state.get("status") == "completed":
-            return True
-
-        completed = await super().is_completed(messages, state, **kwargs)
-        if not completed:
-            return False
-
-        last_msg = messages[-1] if messages else {}
-        is_assistant = isinstance(last_msg, dict) and last_msg.get("role") == "assistant"
-        no_tool_calls = not last_msg.get("tool_calls") if isinstance(last_msg, dict) else False
-
-        if is_assistant and no_tool_calls:
-            state["final_answer"] = "[]"
-            state["status"] = "completed"
-        elif await self.max_turns_reached(state):
-            state["final_answer"] = "[]"
-            state["status"] = "completed"
-        elif state.get("prompt_too_long"):
-            state["final_answer"] = "[]"
-            state["status"] = "completed"
-
-        return state.get("status") == "completed"
-
     async def call_tool(
         self, tool_name: str, tool_args: dict, tool_call_id: str, state: vf.State, **kwargs: Any
     ) -> vf.Message:
@@ -262,7 +177,6 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
             result = await maybe_await(tool_func, **tool_args)
             if tool_name == "finish":
                 state["final_answer"] = json.dumps(result)
-                state["status"] = "completed"
             return {
                 "role": "tool",
                 "content": str(result),
@@ -275,7 +189,7 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
                 "tool_call_id": tool_call_id,
             }
 
-    async def env_response(self, messages: vf.Messages, state: vf.State, **kwargs: Any) -> tuple[vf.Messages, vf.State]:
+    async def env_response(self, messages: vf.Messages, state: vf.State, **kwargs: Any) -> vf.Messages:
         assert isinstance(messages, list)
         tool_calls = messages[-1].get("tool_calls") or []
 
@@ -313,6 +227,7 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
 
         tool_messages: list[vf.Message] = []
         sanitized_tool_calls: list[Any] = []
+        finish_called = False
         for tool_call in tool_calls:
             if isinstance(tool_call, str):
                 try:
@@ -365,10 +280,18 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
             tool_message = await self.call_tool(tool_name, tool_args, tool_call_id, state=state)
             tool_messages.append(tool_message)
             sanitized_tool_calls.append(tool_call)
+            if tool_name == "finish":
+                finish_called = True
 
         if tool_calls:
             messages[-1]["tool_calls"] = sanitized_tool_calls
-        return tool_messages, state
+
+        if finish_called:
+            # Ensure we don't make an extra model call after the finish tool executes.
+            # MultiTurnEnv.rollout() skips generation when final_env_response is set.
+            state["final_env_response"] = tool_messages
+
+        return tool_messages
 
 
 def _load_system_prompt() -> str:
