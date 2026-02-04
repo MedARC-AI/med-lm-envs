@@ -145,8 +145,8 @@ def test_manifest_serialization_prunes_nones_and_relativizes(monkeypatch: pytest
         base = fake_root if default_base is None else default_base
         return resolved.relative_to(base).as_posix()
 
-    monkeypatch.setattr("medarc_verifiers.cli._manifest.PROJECT_ROOT", fake_root)
-    monkeypatch.setattr("medarc_verifiers.cli._manifest.to_project_relative", fake_to_project_relative)
+    monkeypatch.setattr("medarc_verifiers.utils.pathing.project_root", lambda: fake_root)
+    monkeypatch.setattr("medarc_verifiers.utils.pathing.to_project_relative", fake_to_project_relative)
 
     snapshot_cfg = {
         "models": {"snapshot-model": {"model": "gpt-4o-mini"}},

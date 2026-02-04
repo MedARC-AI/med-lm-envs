@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass(slots=True)
 class HFSyncConfig:
     repo_id: str | None

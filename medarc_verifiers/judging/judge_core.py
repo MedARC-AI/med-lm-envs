@@ -52,12 +52,10 @@ async def call_judge_model(
         ) from e
     except APIError as e:
         logger.warning(
-            f"API error when calling judge model '{judge_model}'. "
-            f"Check model availability and API key. Error: {str(e)}"
+            f"API error when calling judge model '{judge_model}'. Check model availability and API key. Error: {str(e)}"
         )
         raise RuntimeError(
-            f"Judge model API error. Check model availability and API key. "
-            f"Model: {judge_model}, Error: {str(e)}"
+            f"Judge model API error. Check model availability and API key. Model: {judge_model}, Error: {str(e)}"
         ) from e
     except Exception as e:
         logger.warning(f"Unexpected error when calling judge model '{judge_model}'. Error: {str(e)}")

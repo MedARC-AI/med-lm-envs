@@ -171,7 +171,7 @@ def test_load_rows_extra_columns_populates_extras(tmp_path: Path) -> None:
     rows = load_rows(metadata, extra_columns=("debug",))
     row = rows[0]
     assert "info" not in row
-    assert row["extras"] == "{\"debug\": true}"
+    assert row["extras"] == '{"debug": true}'
 
 
 def test_load_rows_failed_job_preserves_error(tmp_path: Path) -> None:

@@ -456,10 +456,7 @@ def _infer_argparse_spec(annotation: Any, default: Any) -> ArgSpec:
                 if not scalar_spec.unsupported_reason:
                     if scalar_spec.kind == "enum" and list_spec.choices == scalar_spec.choices:
                         return list_spec
-                    if (
-                        scalar_spec.argparse_type is not None
-                        and list_spec.element_type == scalar_spec.argparse_type
-                    ):
+                    if scalar_spec.argparse_type is not None and list_spec.element_type == scalar_spec.argparse_type:
                         return list_spec
         enum_args = [arg for arg in args if _is_enum(arg)]
         non_enum_args = [arg for arg in args if not _is_enum(arg)]
@@ -643,7 +640,9 @@ def _validate_env_arg_value(env_id: str, param: EnvParam, value: Any) -> None:
 
     if param.is_list:
         if not isinstance(value, (list, tuple)):
-            if _list_param_allows_scalar(param) and (param.element_type is None or isinstance(value, param.element_type)):
+            if _list_param_allows_scalar(param) and (
+                param.element_type is None or isinstance(value, param.element_type)
+            ):
                 return
             raise ValueError(
                 f"Environment '{env_id}' env_args.{param.name} must be a list, got {type(value).__name__}."

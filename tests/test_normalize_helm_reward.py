@@ -39,4 +39,3 @@ def test_normalize_helm_reward_returns_zero_when_no_valid_scores() -> None:
     dims = ["a", "b"]
     scores = {"a": {"score": None}, "b": {"score": ""}}
     assert normalize_helm_reward(scores, dimensions=dims) == 0.0
-

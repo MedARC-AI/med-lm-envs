@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from medarc_verifiers.utils.pathing import resolve_under
+
 
 @dataclass(frozen=True, slots=True)
 class EnvIndexInventory:
@@ -29,10 +31,7 @@ def load_env_index(path: Path) -> Mapping[str, Any]:
 def _resolve_path(base_dir: Path, raw_path: str | None) -> Path | None:
     if not raw_path:
         return None
-    candidate = Path(raw_path)
-    if candidate.is_absolute():
-        return candidate
-    return (base_dir / candidate).resolve()
+    return resolve_under(base_dir, raw_path)
 
 
 def _inventory_from_v2(payload: Mapping[str, Any], base_dir: Path) -> EnvIndexInventory:
@@ -81,7 +80,19 @@ def read_env_index_files(processed_dir: Path) -> dict[str, Mapping[str, Any]]:
     files = payload.get("files")
     if not isinstance(files, Mapping):
         return {}
-    return {str(k): v for k, v in files.items() if isinstance(v, Mapping)}
+    safe_files: dict[str, Mapping[str, Any]] = {}
+    for path_str, entry in files.items():
+        if not isinstance(entry, Mapping):
+            continue
+        resolved = resolve_under(processed_dir, str(path_str))
+        if resolved is None:
+            continue
+        try:
+            rel_key = resolved.relative_to(processed_dir).as_posix()
+        except ValueError:
+            continue
+        safe_files[rel_key] = entry
+    return safe_files
 
 
 def read_env_index_models(processed_dir: Path) -> set[str]:
@@ -93,7 +104,9 @@ def read_env_index_models(processed_dir: Path) -> set[str]:
     if not isinstance(files, Mapping):
         return set()
     models: set[str] = set()
-    for entry in files.values():
+    for path_str, entry in files.items():
+        if resolve_under(processed_dir, str(path_str)) is None:
+            continue
         if not isinstance(entry, Mapping):
             continue
         model_id = entry.get("model_id")

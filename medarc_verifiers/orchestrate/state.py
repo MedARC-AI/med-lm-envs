@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
+import json
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
-import json
-import os
-import uuid
 
 
 class JobState:
@@ -31,7 +30,7 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
     tmp_path = path.with_suffix(f"{path.suffix}.tmp-{uuid.uuid4().hex}")
     with open(tmp_path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
-    os.replace(tmp_path, path)
+    tmp_path.replace(path)
 
 
 def write_text(path: Path, text: str) -> None:

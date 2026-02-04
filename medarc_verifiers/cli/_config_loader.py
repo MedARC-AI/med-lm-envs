@@ -266,7 +266,9 @@ def _normalize_section(
 
     normalized: dict[str, Any] = {}
 
-    def _add_entry(entry: Mapping[str, Any], *, key_hint: str | None = None, count_map: dict[str, int] | None = None) -> None:
+    def _add_entry(
+        entry: Mapping[str, Any], *, key_hint: str | None = None, count_map: dict[str, int] | None = None
+    ) -> None:
         if not isinstance(entry, Mapping):
             raise ValueError(f"{context} entries must be mappings.")
         adapted = dict(entry)

@@ -16,7 +16,7 @@ from medarc_verifiers.cli._manifest import (
     RunManifestModel,
     _require_manifest_v2,
 )
-from medarc_verifiers.utils.pathing import from_project_relative
+from medarc_verifiers.utils.pathing import resolve_results_dir_from_manifest
 
 logger = logging.getLogger(__name__)
 
@@ -206,13 +206,8 @@ def _resolve_results_dir(
 ) -> tuple[str, Path]:
     """Interpret manifest results_dir values which may be job-relative, rooted at runs/, or absolute."""
     name = stored_value or job_id
-    candidate = Path(name)
-    if candidate.is_absolute():
-        return name, candidate
-    if candidate.parts and candidate.parts[0] == "runs":
-        resolved = from_project_relative(candidate)
-        return name, resolved
-    return name, (run_dir / candidate).resolve()
+    resolved = resolve_results_dir_from_manifest(stored_value, job_id=job_id, run_dir=run_dir)
+    return name, resolved
 
 
 def _load_manifest(run_dir: Path) -> tuple[RunManifestInfo | None, Sequence[ManifestJobEntry]]:

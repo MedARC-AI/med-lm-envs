@@ -7,6 +7,8 @@ from typing import Iterable, Mapping, Sequence
 
 from verifiers.types import GenerateOutputs
 
+from medarc_verifiers.cli.utils.json_io import write_json
+
 logger = logging.getLogger(__name__)
 
 
@@ -112,8 +114,7 @@ def update_metadata_file(path: Path, avg_reward: float | None, metrics_avg: Mapp
             payload["avg_metrics"] = metrics_avg
             changed = True
     if changed:
-        with path.open("w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, sort_keys=True)
+        write_json(path, payload)
 
 
 def _summarize_metric(metrics: Mapping[str, Iterable[float]], key: str) -> float | None:

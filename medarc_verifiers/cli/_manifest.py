@@ -14,11 +14,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from medarc_verifiers.cli._job_builder import ResolvedJob
 from medarc_verifiers.cli._schemas import ModelConfigSchema
+from medarc_verifiers.cli.utils.json_io import dumps_json
 from medarc_verifiers.cli.utils.shared import compute_checksum, resolve_env_identifier_or
-from medarc_verifiers.utils.pathing import project_root, to_project_relative
+from medarc_verifiers.utils.pathing import normalize_results_dir_for_manifest
 
 MANIFEST_FILENAME = "run_manifest.json"
-PROJECT_ROOT = project_root()
 MANIFEST_VERSION = 2
 
 logger = logging.getLogger(__name__)
@@ -132,15 +132,7 @@ def _drop_resume_tolerant_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 def _relativize_results_dir(value: str | Path, *, run_dir: Path) -> str:
     """Ensure results directories are stored relative to the project root."""
-    candidate = Path(value)
-    if not candidate.is_absolute():
-        if candidate.parts and candidate.parts[0] == "runs":
-            candidate = (PROJECT_ROOT / candidate).resolve()
-        else:
-            candidate = (run_dir / candidate).resolve()
-    else:
-        candidate = candidate.resolve()
-    return to_project_relative(candidate)
+    return normalize_results_dir_for_manifest(value, run_dir=run_dir)
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -168,7 +160,9 @@ def _require_manifest_v2(payload: Mapping[str, Any], *, path: Path | None = None
 
 
 def _sanitize_model_payload(model_payload: Mapping[str, Any]) -> dict[str, Any]:
-    sanitized = {key: value for key, value in model_payload.items() if key not in ModelConfigSchema.resume_tolerant_fields}
+    sanitized = {
+        key: value for key, value in model_payload.items() if key not in ModelConfigSchema.resume_tolerant_fields
+    }
 
     model_slug = sanitized.get("model")
     if isinstance(model_slug, str):
@@ -641,8 +635,8 @@ class RunManifest:
             return
         tmp_path = self.path.with_suffix(".tmp")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with tmp_path.open("w", encoding="utf-8") as handle:
-            json.dump(self.model.model_dump(exclude_none=True), handle, indent=2, sort_keys=True)
+        text = dumps_json(self.model.model_dump(exclude_none=True))
+        tmp_path.write_text(text, encoding="utf-8")
         tmp_path.replace(self.path)
 
     @classmethod

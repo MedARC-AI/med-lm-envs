@@ -211,10 +211,7 @@ def _infer_argparse_spec(annotation: Any, default: Any) -> ArgSpec:
                 if not scalar_spec.unsupported_reason:
                     if scalar_spec.kind == "enum" and list_spec.choices == scalar_spec.choices:
                         return list_spec
-                    if (
-                        scalar_spec.argparse_type is not None
-                        and list_spec.element_type == scalar_spec.argparse_type
-                    ):
+                    if scalar_spec.argparse_type is not None and list_spec.element_type == scalar_spec.argparse_type:
                         return list_spec
         enum_args = [arg for arg in union_args if _is_enum(arg)]
         non_enum_args = [arg for arg in union_args if not _is_enum(arg)]

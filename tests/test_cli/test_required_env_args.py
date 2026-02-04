@@ -66,5 +66,3 @@ def test_extract_env_cli_args_includes_set_boolean() -> None:
 
     explicit = extract_env_cli_args(ns, bindings)
     assert explicit == {"flag": True}
-
-

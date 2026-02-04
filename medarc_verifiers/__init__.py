@@ -12,8 +12,7 @@ try:
         logging.getLogger(__name__).debug("Judge cache namespacing enabled")
     else:
         logging.getLogger(__name__).warning(
-            "Judge cache namespacing failed to initialize. "
-            "Multi-judge runs may share cache entries."
+            "Judge cache namespacing failed to initialize. Multi-judge runs may share cache entries."
         )
 except ImportError as e:
     logging.getLogger(__name__).warning(f"Could not import judge_cache_fix: {e}")
@@ -29,12 +28,9 @@ if os.getenv("MEDARC_DISABLE_TOKEN_TRACKING", "false").lower() != "true":
             logging.getLogger(__name__).debug("Token tracking enabled")
         else:
             logging.getLogger(__name__).warning(
-                "Token tracking failed to initialize. "
-                "Evaluations will continue without token tracking."
+                "Token tracking failed to initialize. Evaluations will continue without token tracking."
             )
     except ImportError as e:
         logging.getLogger(__name__).warning(f"Could not import token_tracker: {e}")
 else:
-    logging.getLogger(__name__).debug(
-        "Token tracking disabled via MEDARC_DISABLE_TOKEN_TRACKING"
-    )
+    logging.getLogger(__name__).debug("Token tracking disabled via MEDARC_DISABLE_TOKEN_TRACKING")
