@@ -193,11 +193,16 @@ def judge_sampling_args_and_headers(
 
 
 def default_judge_api_key(base_url: str | None = None) -> str | None:
+    # Prefer an explicit judge key regardless of provider.
+    if os.environ.get("JUDGE_API_KEY") is not None:
+        return os.environ.get("JUDGE_API_KEY")
+
+    # If judging via Prime Inference and no explicit judge key is set, fall back to PRIME_API_KEY.
     if base_url == PRIME_INFERENCE_URL and os.environ.get("PRIME_API_KEY") is not None:
         return os.environ.get("PRIME_API_KEY")
-    elif os.environ.get("OPENAI_API_KEY") is not None:
+
+    # Back-compat fallback for setups that only set OPENAI_API_KEY.
+    if os.environ.get("OPENAI_API_KEY") is not None:
         return os.environ.get("OPENAI_API_KEY")
-    elif os.environ.get("JUDGE_API_KEY") is not None:
-        return os.environ.get("JUDGE_API_KEY")
-    else:
-        return None
+
+    return None

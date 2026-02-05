@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -224,3 +225,262 @@ def test_auto_resume_allows_resume_tolerant_model_fields(tmp_path: Path) -> None
 
     assert plan.manifest.run_dir == run_dir
     assert plan.runnable_job_ids == set()
+
+
+def test_auto_resume_allows_provider_overrides(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("config: test\n", encoding="utf-8")
+    env = EnvironmentConfigSchema(id="env-a", module="env-a")
+
+    job_seed = ResolvedJob(
+        job_id="job-a",
+        name="job-a",
+        model=ModelConfigSchema(
+            id="model-a",
+            model="google/gemini-3-pro-preview",
+            api_base_url="https://api.pinference.ai/api/v1",
+            api_key_var="PRIME_API_KEY",
+            headers={"X-Prime-Team-ID": "team-a"},
+        ),
+        env=env,
+        env_args={},
+        sampling_args={},
+    )
+
+    env_args_map = {job_seed.job_id: {}}
+    sampling_args_map = {job_seed.job_id: {}}
+    run_dir = tmp_path / "runs" / "existing"
+    manifest = RunManifest.create(
+        run_dir=run_dir,
+        run_id="existing",
+        run_name="demo-run",
+        config_source=config_path,
+        config_checksum="abc123",
+        jobs=[job_seed],
+        env_args_map=env_args_map,
+        sampling_args_map=sampling_args_map,
+        persist=True,
+        restart_source=None,
+    )
+    manifest.record_job_completion(
+        job_seed.job_id,
+        duration_seconds=1.0,
+        results_dir=run_dir / job_seed.job_id,
+        artifacts=[],
+        avg_reward=None,
+        metrics={},
+        num_examples=job_seed.env.num_examples,
+        rollouts_per_example=job_seed.env.rollouts_per_example,
+    )
+
+    # Same model id, but updated provider settings. These should be resume-tolerant.
+    job_current = ResolvedJob(
+        job_id="job-a",
+        name="job-a",
+        model=ModelConfigSchema(
+            id="model-a",
+            model="google/gemini-3-pro-preview",
+            api_base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+            api_key_var="GEMINI_API_KEY",
+            headers={},
+        ),
+        env=env,
+        env_args={},
+        sampling_args={},
+    )
+
+    planner = _planner(
+        tmp_path=tmp_path,
+        jobs=[job_current],
+        run_id="existing",
+        auto_resume=True,
+        config_checksum="abc123",
+    )
+    plan = planner.plan(force_all=False, forced_envs=set())
+
+    assert plan.manifest.run_dir == run_dir
+    assert plan.runnable_job_ids == set()
+    # Auto-resume doesn't populate reused_job_ids (only restart strategies do).
+    assert plan.reused_job_ids == set()
+
+
+def test_restart_in_place_allows_extra_body_usage_override(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    caplog.set_level(logging.WARNING, logger="medarc_verifiers.cli._manifest")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("config: test\n", encoding="utf-8")
+    env = EnvironmentConfigSchema(id="env-a", module="env-a")
+
+    job_seed = ResolvedJob(
+        job_id="job-a",
+        name="job-a",
+        model=ModelConfigSchema(
+            id="model-a",
+            model="google/gemini-3-pro-preview",
+            sampling_args={"temperature": 0.2, "extra_body": {"usage": {"include": True}}},
+        ),
+        env=env,
+        env_args={},
+        sampling_args={},
+    )
+
+    env_args_map = {job_seed.job_id: {}}
+    sampling_args_map = {job_seed.job_id: {}}
+    run_dir = tmp_path / "runs" / "base-run"
+    RunManifest.create(
+        run_dir=run_dir,
+        run_id="base-run",
+        run_name="demo-run",
+        config_source=config_path,
+        config_checksum="seed",
+        jobs=[job_seed],
+        env_args_map=env_args_map,
+        sampling_args_map=sampling_args_map,
+        persist=True,
+        restart_source=None,
+    )
+
+    # Same model id, but drop/alter extra_body.usage (provider-specific).
+    job_current = ResolvedJob(
+        job_id="job-a",
+        name="job-a",
+        model=ModelConfigSchema(
+            id="model-a",
+            model="google/gemini-3-pro-preview",
+            sampling_args={"temperature": 0.2, "extra_body": {}},
+        ),
+        env=env,
+        env_args={},
+        sampling_args={},
+    )
+
+    planner = _planner(
+        tmp_path=tmp_path,
+        jobs=[job_current],
+        restart_source=str(run_dir),
+        auto_resume=False,
+        config_checksum="current",
+    )
+    plan = planner.plan(force_all=False, forced_envs=set())
+
+    assert plan.manifest.run_dir == run_dir
+    assert any("sampling_args.extra_body changed" in record.message for record in caplog.records)
+
+
+def test_restart_in_place_allows_sampling_args_override(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    caplog.set_level(logging.WARNING, logger="medarc_verifiers.cli._manifest")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("config: test\n", encoding="utf-8")
+    env = EnvironmentConfigSchema(id="env-a", module="env-a")
+
+    job_seed = ResolvedJob(
+        job_id="job-a",
+        name="job-a",
+        model=ModelConfigSchema(
+            id="model-a",
+            model="google/gemini-3-pro-preview",
+            sampling_args={"temperature": 0.2, "top_k": 64},
+        ),
+        env=env,
+        env_args={},
+        sampling_args={},
+    )
+
+    env_args_map = {job_seed.job_id: {}}
+    sampling_args_map = {job_seed.job_id: {}}
+    run_dir = tmp_path / "runs" / "base-run"
+    RunManifest.create(
+        run_dir=run_dir,
+        run_id="base-run",
+        run_name="demo-run",
+        config_source=config_path,
+        config_checksum="seed",
+        jobs=[job_seed],
+        env_args_map=env_args_map,
+        sampling_args_map=sampling_args_map,
+        persist=True,
+        restart_source=None,
+    )
+
+    # Same model id, but provider-specific sampling args changed.
+    job_current = ResolvedJob(
+        job_id="job-a",
+        name="job-a",
+        model=ModelConfigSchema(
+            id="model-a",
+            model="google/gemini-3-pro-preview",
+            sampling_args={"temperature": 0.2},
+        ),
+        env=env,
+        env_args={},
+        sampling_args={},
+    )
+
+    planner = _planner(
+        tmp_path=tmp_path,
+        jobs=[job_current],
+        restart_source=str(run_dir),
+        auto_resume=False,
+        config_checksum="current",
+    )
+    plan = planner.plan(force_all=False, forced_envs=set())
+
+    assert plan.manifest.run_dir == run_dir
+    assert any("sampling_args changed" in record.message for record in caplog.records)
+
+
+def test_restart_in_place_allows_model_namespace_override(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("config: test\n", encoding="utf-8")
+    env = EnvironmentConfigSchema(id="env-a", module="env-a")
+
+    job_seed = ResolvedJob(
+        job_id="job-a",
+        name="job-a",
+        model=ModelConfigSchema(
+            id="model-a",
+            model="google/gemini-3-pro-preview",
+        ),
+        env=env,
+        env_args={},
+        sampling_args={},
+    )
+
+    env_args_map = {job_seed.job_id: {}}
+    sampling_args_map = {job_seed.job_id: {}}
+    run_dir = tmp_path / "runs" / "base-run"
+    RunManifest.create(
+        run_dir=run_dir,
+        run_id="base-run",
+        run_name="demo-run",
+        config_source=config_path,
+        config_checksum="seed",
+        jobs=[job_seed],
+        env_args_map=env_args_map,
+        sampling_args_map=sampling_args_map,
+        persist=True,
+        restart_source=None,
+    )
+
+    # Same underlying model, but without the provider namespace prefix.
+    job_current = ResolvedJob(
+        job_id="job-a",
+        name="job-a",
+        model=ModelConfigSchema(
+            id="model-a",
+            model="gemini-3-pro-preview",
+        ),
+        env=env,
+        env_args={},
+        sampling_args={},
+    )
+
+    planner = _planner(
+        tmp_path=tmp_path,
+        jobs=[job_current],
+        restart_source=str(run_dir),
+        auto_resume=False,
+        config_checksum="current",
+    )
+    plan = planner.plan(force_all=False, forced_envs=set())
+
+    assert plan.manifest.run_dir == run_dir
