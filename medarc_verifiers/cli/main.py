@@ -229,6 +229,12 @@ def build_process_parser() -> argparse.ArgumentParser:
         help="Exclude these dataset/env ids from processing (repeatable; comma-separated values allowed).",
     )
     parser.add_argument(
+        "--exclude-model",
+        action="append",
+        default=None,
+        help="Exclude these model ids from processing (repeatable; comma-separated values allowed).",
+    )
+    parser.add_argument(
         "--clean",
         action="store_true",
         default=None,
@@ -238,7 +244,7 @@ def build_process_parser() -> argparse.ArgumentParser:
         "--yes",
         action="store_true",
         default=None,
-        help="Skip confirmation prompts (use with --clean).",
+        help="Skip confirmation prompts (used by --clean and HF repo creation).",
     )
     parser.add_argument("--processed-at", default=None, help="Override processed_at timestamp (ISO8601).")
     parser.add_argument("--dry-run", action="store_true", default=None, help="Plan processing without writing outputs.")
@@ -332,6 +338,12 @@ def build_winrate_parser() -> argparse.ArgumentParser:
         help="Base name for winrates JSON (timestamp appended automatically).",
     )
     parser.add_argument(
+        "--yes",
+        action="store_true",
+        default=None,
+        help="Skip confirmation prompts (used by HF repo creation).",
+    )
+    parser.add_argument(
         "--processed-at",
         help="Timestamp used for default output naming (ISO8601).",
     )
@@ -391,6 +403,16 @@ def build_winrate_parser() -> argparse.ArgumentParser:
             "Dataset selection policy when --include-model is set: "
             "strict drops datasets missing any included models, "
             "include keeps them with missing models treated as all-missing."
+        ),
+    )
+    parser.add_argument(
+        "--dataset-coverage",
+        choices=("all-models", "per-model"),
+        default=None,
+        help=(
+            "Dataset coverage policy for winrate computation: "
+            "all-models enforces an intersection of datasets across the compared models (default), "
+            "per-model uses the legacy behavior where each model may be averaged over a different dataset set."
         ),
     )
     parser.add_argument("--hf-processed-repo", help="Hugging Face repo id for processed dataset download.")
@@ -511,6 +533,7 @@ def _run_process_mode(argv: Sequence[str]) -> int:
     processed_with_args = {
         "status": args.status or [],
         "exclude_datasets": args.exclude_dataset or [],
+        "exclude_models": args.exclude_model or [],
         "dry_run": bool(args.dry_run),
         "clean": bool(args.clean),
         "only_complete_runs": not bool(args.process_incomplete),
@@ -526,6 +549,7 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         runs_dir=args.runs_dir,
         output_dir=args.output_dir,
         exclude_datasets=tuple(args.exclude_dataset or ()),
+        exclude_models=tuple(args.exclude_model or ()),
         processed_at=args.processed_at,
         processed_with_args=processed_with_args,
         status_filter=args.status or (),
@@ -560,6 +584,7 @@ def _run_process_mode(argv: Sequence[str]) -> int:
             min_common=winrate_args.min_common,
             weight_policy=winrate_args.weight_policy,
             weight_cap=winrate_args.weight_cap,
+            dataset_coverage=winrate_args.dataset_coverage,
             include_models=tuple(winrate_args.include_model or ()),
             exclude_models=tuple(winrate_args.exclude_model or ()),
             exclude_datasets=tuple(winrate_args.exclude_dataset or ()),
@@ -590,6 +615,7 @@ def _run_process_mode(argv: Sequence[str]) -> int:
                 repo_id=winrate_args.hf_winrate_repo,
                 token=winrate_args.hf_token,
                 private=bool(winrate_args.hf_private),
+                assume_yes=bool(args.yes),
             )
 
     return 0
@@ -667,6 +693,14 @@ def _apply_process_config(args: argparse.Namespace, path: Path) -> None:
             args.exclude_dataset = [exclude_value.strip()]
         elif isinstance(exclude_value, Sequence):
             args.exclude_dataset = [str(item).strip() for item in exclude_value if str(item).strip()]
+    if "exclude_models" not in payload and "exclude_model" in payload:
+        payload["exclude_models"] = payload["exclude_model"]
+    if "exclude_models" in payload and getattr(args, "exclude_model", None) is None:
+        exclude_value = payload["exclude_models"]
+        if isinstance(exclude_value, str) and exclude_value.strip():
+            args.exclude_model = [exclude_value.strip()]
+        elif isinstance(exclude_value, Sequence):
+            args.exclude_model = [str(item).strip() for item in exclude_value if str(item).strip()]
 
     # HF settings (only apply when unset on CLI)
     if "hf_repo" in payload:
@@ -775,6 +809,8 @@ def _apply_winrate_config(args: argparse.Namespace, path: Path) -> None:
             pass
     if "partial_datasets" in payload:
         _set_if_unset("partial_datasets", str(payload["partial_datasets"]))
+    if "dataset_coverage" in payload:
+        _set_if_unset("dataset_coverage", str(payload["dataset_coverage"]))
     if "include_models" in payload:
         include_value = payload["include_models"]
         if isinstance(include_value, str):
@@ -819,6 +855,7 @@ def _build_winrate_args_from_config(path: Path) -> argparse.Namespace:
         min_common=None,
         weight_policy=None,
         weight_cap=None,
+        dataset_coverage=None,
         include_model=None,
         exclude_model=None,
         exclude_dataset=None,
@@ -858,6 +895,9 @@ def _finalize_process_args(args: argparse.Namespace) -> None:
     if getattr(args, "exclude_dataset", None) is None:
         args.exclude_dataset = []
     args.exclude_dataset = _parse_repeatable_csv(args.exclude_dataset)
+    if getattr(args, "exclude_model", None) is None:
+        args.exclude_model = []
+    args.exclude_model = _parse_repeatable_csv(args.exclude_model)
 
 
 def _finalize_winrate_args(args: argparse.Namespace) -> None:
@@ -876,6 +916,8 @@ def _finalize_winrate_args(args: argparse.Namespace) -> None:
         args.weight_policy = "ln"
     if getattr(args, "weight_cap", None) is None:
         args.weight_cap = 0
+    if getattr(args, "dataset_coverage", None) is None:
+        args.dataset_coverage = "all-models"
     if getattr(args, "include_model", None) is None:
         args.include_model = []
     if getattr(args, "exclude_model", None) is None:
@@ -889,6 +931,8 @@ def _finalize_winrate_args(args: argparse.Namespace) -> None:
         args.hf_processed_pull = False
     if getattr(args, "hf_private", None) is None:
         args.hf_private = False
+    if getattr(args, "yes", None) is None:
+        args.yes = False
 
 
 def _upload_winrate_outputs(
@@ -898,6 +942,7 @@ def _upload_winrate_outputs(
     repo_id: str,
     token: str | None,
     private: bool,
+    assume_yes: bool = False,
 ) -> None:
     if not output_paths:
         return
@@ -922,6 +967,9 @@ def _upload_winrate_outputs(
         token=token,
         private=private,
         message=message,
+        is_tty=sys.stdin.isatty(),
+        assume_yes=assume_yes,
+        prompt_func=input,
     )
 
 
@@ -965,6 +1013,7 @@ def _run_winrate_mode(argv: Sequence[str]) -> int:
         min_common=args.min_common,
         weight_policy=args.weight_policy,
         weight_cap=args.weight_cap,
+        dataset_coverage=args.dataset_coverage,
         include_models=tuple(args.include_model or ()),
         exclude_models=tuple(args.exclude_model or ()),
         exclude_datasets=tuple(args.exclude_dataset or ()),
@@ -995,6 +1044,7 @@ def _run_winrate_mode(argv: Sequence[str]) -> int:
             repo_id=args.hf_winrate_repo,
             token=args.hf_token,
             private=bool(args.hf_private),
+            assume_yes=bool(args.yes),
         )
     return 0
 

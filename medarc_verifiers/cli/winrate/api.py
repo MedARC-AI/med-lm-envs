@@ -32,6 +32,7 @@ class WinrateConfig:
     min_common: int = 0
     weight_policy: str = "ln"  # "equal", "ln", "sqrt", or "cap"
     weight_cap: int = 0
+    dataset_coverage: str = "all-models"  # "all-models" (intersection) or "per-model" (legacy)
     include_models: tuple[str, ...] = ()
     exclude_models: tuple[str, ...] = ()
     exclude_datasets: tuple[str, ...] = ()
@@ -231,6 +232,10 @@ def compute_winrates(
 ) -> ModelCentricResult:
     """Compute win rates for a list of datasets."""
     cfg = config or WinrateConfig()
+    dataset_coverage = str(cfg.dataset_coverage or "all-models").strip().lower().replace("_", "-")
+    if dataset_coverage not in {"all-models", "per-model"}:
+        _raise_user_error(f"Unsupported dataset_coverage policy: {cfg.dataset_coverage}")
+
     dataset_exclude_set = _normalize_dataset_ids(cfg.exclude_datasets)
     if dataset_exclude_set:
         datasets = tuple(
@@ -264,6 +269,7 @@ def compute_winrates(
     avg_rewards_by_dataset: dict[str, dict[str, float | None]] = {}
     n_questions_by_ds: dict[str, int] = {}
     models_by_ds: dict[str, list[str]] = {}
+    models_present_by_ds: dict[str, set[str]] = {}
     seen_models: set[str] = set()
 
     dataset_iter: Iterable[tuple[str, Path | str]] = datasets
@@ -284,7 +290,11 @@ def compute_winrates(
             target_models=target_models,
             partial_datasets=partial_datasets,
         )
-        seen_models.update(models_present)
+        models_present_set = set(models_present)
+        if not include_set and exclude_set:
+            models_present_set = {m for m in models_present_set if m not in exclude_set}
+        models_present_by_ds[dataset_name] = models_present_set
+        seen_models.update(models_present_set)
         if not stats:
             continue
         per_dataset_pairwise[dataset_name] = stats.pairwise
@@ -303,6 +313,37 @@ def compute_winrates(
             if unknown_excludes:
                 _warn_user(f"Unknown exclude model ids ignored: {sorted(unknown_excludes)}")
 
+    if dataset_coverage == "all-models":
+        required_models = set(target_models) if include_set else set(sorted(seen_models))
+        if required_models:
+            kept: set[str] = set()
+            for dataset_name, present in models_present_by_ds.items():
+                if required_models.issubset(present):
+                    kept.add(dataset_name)
+            dropped = sorted(set(per_dataset_pairwise.keys()) - kept)
+            for dataset_name in dropped:
+                present = models_present_by_ds.get(dataset_name, set())
+                missing = sorted(required_models - present)
+                _emit_note(
+                    f"Dropping dataset {dataset_name} (dataset_coverage=all-models missing models: {missing})."
+                )
+                per_dataset_pairwise.pop(dataset_name, None)
+                per_dataset_model_means.pop(dataset_name, None)
+                avg_rewards_by_dataset.pop(dataset_name, None)
+                n_questions_by_ds.pop(dataset_name, None)
+                models_by_ds.pop(dataset_name, None)
+            if not per_dataset_pairwise:
+                _raise_user_error(
+                    "No datasets remain after enforcing dataset_coverage=all-models. "
+                    "Try --dataset-coverage=per-model or restrict the compared models with --include-model."
+                )
+            _emit_dataset_coverage_summary(
+                kept_datasets=sorted(per_dataset_pairwise.keys()),
+                n_questions_by_ds=n_questions_by_ds,
+                models_by_ds=models_by_ds,
+                coverage=dataset_coverage,
+            )
+
     return build_model_centric_result(
         per_dataset_pairwise=per_dataset_pairwise,
         per_dataset_model_means=per_dataset_model_means,
@@ -311,6 +352,32 @@ def compute_winrates(
         models_by_ds=models_by_ds,
         config=cfg,
     )
+
+
+def _emit_dataset_coverage_summary(
+    *,
+    kept_datasets: Sequence[str],
+    n_questions_by_ds: Mapping[str, int],
+    models_by_ds: Mapping[str, Sequence[str]],
+    coverage: str,
+) -> None:
+    console = _get_console()
+    if not console or not getattr(console, "is_terminal", False):
+        return
+    try:
+        from rich.table import Table
+    except Exception:
+        return
+    title = f"Included datasets (dataset_coverage={coverage})"
+    table = Table(title=title)
+    table.add_column("dataset", style="cyan")
+    table.add_column("n_questions", justify="right")
+    table.add_column("n_models", justify="right")
+    for dataset in kept_datasets:
+        nq = int(n_questions_by_ds.get(dataset, 0) or 0)
+        nm = len(models_by_ds.get(dataset, ()) or ())
+        table.add_row(str(dataset), str(nq), str(nm))
+    console.print(table)
 
 
 def build_model_centric_result(

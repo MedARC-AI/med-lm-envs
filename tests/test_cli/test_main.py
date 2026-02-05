@@ -1046,7 +1046,7 @@ def test_process_cli_runs_winrate_post_step(monkeypatch: pytest.MonkeyPatch, tmp
             datasets=[],
         )
 
-    def fake_sync_files_to_hub(*, repo_id, output_dir, files, token, private, message, branch=None, dry_run=False):
+    def fake_sync_files_to_hub(*, repo_id, output_dir, files, token, private, message, branch=None, dry_run=False, **_kw):
         captured["upload"] = {
             "repo_id": repo_id,
             "output_dir": output_dir,

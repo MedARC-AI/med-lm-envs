@@ -48,7 +48,7 @@ def test_compute_winrates_two_datasets(tmp_path: Path) -> None:
         ],
     )
 
-    cfg = winrate.WinrateConfig()
+    cfg = winrate.WinrateConfig(dataset_coverage="per-model")
     result = winrate.compute_winrates(
         [
             ("dataset_one", ds_one),
@@ -113,6 +113,35 @@ def test_compute_winrates_exclude_datasets(tmp_path: Path) -> None:
 
     assert set(payload["datasets"]) == {"dataset_one"}
     assert set(payload["models"]) == {"model_a", "model_b"}
+
+
+def test_dataset_coverage_all_models_errors_without_common_datasets(tmp_path: Path) -> None:
+    ds_one = tmp_path / "dataset_one.parquet"
+    _write_dataset(
+        ds_one,
+        [
+            {"example_id": "q1", "model_id": "model_a", "reward": 1.0},
+            {"example_id": "q1", "model_id": "model_b", "reward": 0.0},
+        ],
+    )
+    ds_two = tmp_path / "dataset_two.parquet"
+    _write_dataset(
+        ds_two,
+        [
+            {"example_id": "q1", "model_id": "model_a", "reward": 1.0},
+            {"example_id": "q1", "model_id": "model_c", "reward": 0.0},
+        ],
+    )
+
+    cfg = winrate.WinrateConfig()
+    with pytest.raises(ValueError, match="No datasets remain.*dataset_coverage=all-models"):
+        winrate.compute_winrates(
+            [
+                ("dataset_one", ds_one),
+                ("dataset_two", ds_two),
+            ],
+            cfg,
+        )
 
 
 def test_read_dataset_lazy_supports_model_id(tmp_path: Path) -> None:
@@ -211,6 +240,7 @@ def test_partial_datasets_include_adds_missing_models(tmp_path: Path) -> None:
     cfg = winrate.WinrateConfig(
         include_models=("model_a", "model_b"),
         partial_datasets="include",
+        dataset_coverage="per-model",
     )
     result = winrate.compute_winrates(
         [("dataset_one", ds_one), ("dataset_two", ds_two)],

@@ -204,15 +204,21 @@ def _resolve_results_dir(
     job_id: str,
     run_dir: Path,
 ) -> tuple[str, Path]:
-    """Interpret manifest results_dir values which may be job-relative, rooted at runs/, or absolute."""
+    """Interpret manifest results_dir values which may be job-relative, project-relative, or absolute."""
     name = stored_value or job_id
     candidate = Path(name)
     if candidate.is_absolute():
         return name, candidate
-    if candidate.parts and candidate.parts[0] == "runs":
-        resolved = from_project_relative(candidate)
-        return name, resolved
-    return name, (run_dir / candidate).resolve()
+    # First try job-relative paths (common in older manifests).
+    job_relative = (run_dir / candidate).resolve()
+    if job_relative.exists():
+        return name, job_relative
+    # Manifest v2 stores results_dir relative to the project root; this may not live under `runs/`.
+    project_relative = from_project_relative(candidate)
+    if project_relative.exists():
+        return name, project_relative
+    # Fall back to job-relative resolution for backwards compatibility; existence will be validated by callers.
+    return name, job_relative
 
 
 def _load_manifest(run_dir: Path) -> tuple[RunManifestInfo | None, Sequence[ManifestJobEntry]]:

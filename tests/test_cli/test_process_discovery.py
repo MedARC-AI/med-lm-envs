@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import medarc_verifiers.utils.pathing as pathing
 from medarc_verifiers.cli.process.discovery import discover_run_records
 
 
@@ -186,3 +187,42 @@ def test_discover_run_records_missing_summary_uses_manifest_status(tmp_path: Pat
     assert record.status == "completed"
     assert record.reason == "cached"
     assert record.has_summary is False
+
+
+def test_discover_run_records_project_relative_results_dir(tmp_path: Path, monkeypatch) -> None:
+    # Ensure from_project_relative resolves within the temp tree.
+    monkeypatch.setattr(pathing, "project_root", lambda: tmp_path)
+
+    runs_dir = tmp_path / "runs_llm_judge" / "raw"
+    run_dir = runs_dir / "job-run-123"
+    results_dir = run_dir / "model-env-job"
+
+    # Stored as project-relative, but not under `runs/` (e.g. runs_llm_judge/raw/...).
+    stored_results_dir = "runs_llm_judge/raw/job-run-123/model-env-job"
+
+    manifest_payload = _base_manifest(
+        [
+            {
+                "job_id": "model-env-job",
+                "job_name": "demo-job",
+                "model_id": "gpt-4",
+                "env_id": "demo-env-module",
+                "env_template_id": "demo-env-template",
+                "env_variant_id": "demo-env",
+                "env_args": {},
+                "results_dir": stored_results_dir,
+                "status": "completed",
+            }
+        ],
+        models={"gpt-4": {"sampling_args": {"temperature": 0.2}}},
+        env_templates={"demo-env-template": {"module": "demo-env-module"}},
+    )
+    _write_json(run_dir / "run_manifest.json", manifest_payload)
+
+    results_dir.mkdir(parents=True, exist_ok=True)
+    _write_json(results_dir / "metadata.json", {"env_id": "demo-env"})
+    (results_dir / "results.jsonl").write_text("{}", encoding="utf-8")
+
+    records = discover_run_records(runs_dir)
+    assert len(records) == 1
+    assert records[0].has_results is True

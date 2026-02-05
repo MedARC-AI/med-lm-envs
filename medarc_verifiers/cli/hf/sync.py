@@ -7,7 +7,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Callable, Sequence
 
 if TYPE_CHECKING:
     from medarc_verifiers.cli.process.writer import EnvWriteSummary
@@ -43,8 +43,49 @@ def _configure_hf_http_timeout(request_timeout_s: float) -> None:
 
 
 def _sleep_backoff_seconds(attempt: int) -> float:
-    # 1, 2, 4, 8, ... capped
-    return min(60.0, 2.0**attempt)
+    # Fixed pause between retry attempts to avoid hammering the Hub.
+    return 5.0
+
+
+def _is_repo_not_found_error(exc: BaseException) -> bool:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if status_code == 404:
+        return True
+    message = str(exc)
+    if "Repository Not Found" in message:
+        return True
+    if "404" in message and "Not Found" in message:
+        return True
+    return False
+
+
+def _confirm_create_repo(
+    *,
+    repo_id: str,
+    private: bool,
+    is_tty: bool,
+    assume_yes: bool,
+    prompt_func: Callable[[str], str] | None,
+) -> bool:
+    if assume_yes:
+        return True
+    if not is_tty:
+        return False
+    try:
+        from rich.console import Console
+        from rich.prompt import Confirm
+
+        console = Console()
+        console.print(f"[bold yellow]HF dataset repo not found:[/bold yellow] {repo_id}")
+        visibility = "private" if private else "public"
+        console.print(f"[dim]Will create as a {visibility} dataset repo.[/dim]")
+        return bool(Confirm.ask("Create it now?", default=False))
+    except Exception:
+        if prompt_func is None:
+            return False
+        response = prompt_func(f"HF dataset repo '{repo_id}' not found. Create it? [y/N]: ").strip().lower()
+        return response in {"y", "yes"}
 
 
 @dataclass(slots=True)
@@ -125,6 +166,9 @@ def sync_files_to_hub(
     request_timeout_s: float | None = None,
     retries: int = 3,
     max_files_per_commit: int | None = None,
+    is_tty: bool = False,
+    assume_yes: bool = False,
+    prompt_func: Callable[[str], str] | None = None,
 ) -> None:
     """Upload explicit file paths from output_dir to a HF dataset repo."""
     if not repo_id:
@@ -151,13 +195,6 @@ def sync_files_to_hub(
         _configure_hf_http_timeout(float(request_timeout_s))
 
     api = HfApi(token=token)
-    if private:
-        api.create_repo(
-            repo_id=repo_id,
-            repo_type="dataset",
-            private=True,
-            exist_ok=True,
-        )
 
     if max_files_per_commit is None or max_files_per_commit <= 0:
         batches = [file_list]
@@ -188,6 +225,26 @@ def sync_files_to_hub(
                 )
                 break
             except Exception as exc:  # noqa: BLE001
+                if _is_repo_not_found_error(exc):
+                    should_create = _confirm_create_repo(
+                        repo_id=repo_id,
+                        private=private,
+                        is_tty=is_tty,
+                        assume_yes=assume_yes,
+                        prompt_func=prompt_func,
+                    )
+                    if not should_create:
+                        raise RuntimeError(
+                            f"HF dataset repo '{repo_id}' not found. Create it on the Hub or re-run with --yes to allow creation."
+                        ) from exc
+                    api.create_repo(
+                        repo_id=repo_id,
+                        repo_type="dataset",
+                        private=private,
+                        exist_ok=True,
+                    )
+                    # Retry the commit immediately after repo creation.
+                    continue
                 try:
                     import httpx  # type: ignore[import-not-found]
 
@@ -213,6 +270,9 @@ def sync_to_hub(
     *,
     output_dir: Path,
     metadata_paths: Sequence[Path] | None = None,
+    is_tty: bool = False,
+    assume_yes: bool = False,
+    prompt_func: Callable[[str], str] | None = None,
 ) -> HFSyncSummary | None:
     """Upload changed artifacts to a HF dataset repo."""
     if not config.repo_id:
@@ -270,6 +330,9 @@ def sync_to_hub(
         request_timeout_s=config.request_timeout_s,
         retries=config.retries,
         max_files_per_commit=config.max_files_per_commit,
+        is_tty=is_tty,
+        assume_yes=assume_yes,
+        prompt_func=prompt_func,
     )
     return summary
 

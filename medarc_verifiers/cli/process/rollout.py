@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from typing import Tuple
 
-ROLL_OUT_SUFFIX_PATTERN = re.compile(r"-(?:r|rollout)(?P<index>\d+)$")
+ROLL_OUT_SUFFIX_PATTERN = re.compile(r"[-_](?:r|rollout)(?P<index>\d+)$")
 
 
 def derive_base_env_id(env_id: str | None, *, combine_rollouts: bool = True) -> tuple[str, int]:

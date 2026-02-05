@@ -117,3 +117,60 @@ def test_sync_to_hub_does_not_double_prefix_metadata_paths(
     assert "env_index.json" in summary.files
     assert "dataset_infos.json" in summary.files
     assert "runs/processed/env_index.json" not in summary.files
+
+
+def test_sync_files_to_hub_creates_repo_with_confirmation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Create a dummy file to upload
+    (tmp_path / "artifact.json").write_text("{}", encoding="utf-8")
+
+    captured: dict[str, object] = {"create_commit_calls": 0}
+
+    class FakeResponse:
+        status_code = 404
+
+    class FakeRepoNotFound(Exception):
+        def __init__(self) -> None:
+            super().__init__("Repository Not Found")
+            self.response = FakeResponse()
+
+    class FakeOp:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            captured["op"] = (args, kwargs)
+
+    class FakeApi:
+        def __init__(self, token: str | None = None) -> None:
+            captured["token"] = token
+            self._created = False
+
+        def create_repo(self, **kwargs: object) -> None:
+            captured["create_repo"] = kwargs
+            self._created = True
+
+        def create_commit(self, **_kwargs: object) -> None:
+            captured["create_commit_calls"] = int(captured["create_commit_calls"]) + 1
+            if not self._created:
+                raise FakeRepoNotFound()
+            captured["create_commit"] = True
+
+    import sys
+    import types
+
+    fake_module = types.SimpleNamespace(CommitOperationAdd=FakeOp, HfApi=FakeApi)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_module)
+
+    hf_sync.sync_files_to_hub(
+        repo_id="local/missing",
+        output_dir=tmp_path,
+        files=["artifact.json"],
+        token="secret-token",
+        private=True,
+        message="msg",
+        dry_run=False,
+        is_tty=True,
+        assume_yes=False,
+        prompt_func=lambda _prompt: "y",
+    )
+
+    assert captured.get("create_repo") is not None
+    assert captured.get("create_commit") is True
+    assert captured["create_commit_calls"] == 2

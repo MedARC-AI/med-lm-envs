@@ -37,6 +37,7 @@ class ProcessOptions:
     output_dir: Path
     only_complete_runs: bool = True
     exclude_datasets: Sequence[str] = field(default_factory=tuple)
+    exclude_models: Sequence[str] = field(default_factory=tuple)
     processed_at: str | None = None
     processed_with_args: Mapping[str, Any] = field(default_factory=dict)
     status_filter: Sequence[str] = field(default_factory=tuple)
@@ -55,6 +56,7 @@ class ProcessOptions:
             self.processed_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         self.status_filter = tuple(str(status) for status in self.status_filter)
         self.exclude_datasets = tuple(str(value) for value in self.exclude_datasets if str(value).strip())
+        self.exclude_models = tuple(str(value) for value in self.exclude_models if str(value).strip())
 
 
 @dataclass(slots=True)
@@ -163,6 +165,8 @@ def run_process(
             )
         if options.exclude_datasets:
             env_groups = _filter_env_groups_by_exclusion(env_groups, options.exclude_datasets)
+        if options.exclude_models:
+            env_groups = _filter_env_groups_by_model_exclusion(env_groups, options.exclude_models)
         records = [item.record for group in env_groups for item in group.records]
 
         _print_records_table(
@@ -170,6 +174,7 @@ def run_process(
             records,
             options.only_complete_runs,
             exclude_datasets=options.exclude_datasets,
+            exclude_models=options.exclude_models,
         )
 
         grouped: dict[tuple[str, str], list[_RecordWork]] = {}
@@ -290,6 +295,9 @@ def run_process(
                 options.hf_config,
                 output_dir=options.output_dir,
                 metadata_paths=metadata_paths,
+                is_tty=sys.stdin.isatty(),
+                assume_yes=options.assume_yes,
+                prompt_func=input,
             )
 
         if options.dry_run:
@@ -333,14 +341,17 @@ def _print_records_table(
     only_complete_runs: bool,
     *,
     exclude_datasets: Sequence[str] = (),
+    exclude_models: Sequence[str] = (),
 ) -> None:
     """Pretty-print job discovery vs planned processing."""
     exclude_set = _normalize_dataset_ids(exclude_datasets)
+    exclude_model_set = _normalize_model_ids(exclude_models)
     eligible_discovered = [
         rec
         for rec in discovered
         if (not only_complete_runs or _manifest_is_complete(rec.manifest))
         and not (exclude_set and _record_is_excluded(rec, exclude_set))
+        and not (exclude_model_set and _record_model_is_excluded(rec, exclude_model_set))
     ]
     total_by_model: dict[str, int] = {}
     completed_by_model: dict[str, int] = {}
@@ -423,6 +434,11 @@ def _record_is_excluded(record: discovery.RunRecord, exclude_set: set[str]) -> b
     return False
 
 
+def _record_model_is_excluded(record: discovery.RunRecord, exclude_model_set: set[str]) -> bool:
+    model_id = str(record.model_id or "").strip()
+    return bool(model_id and model_id.lower() in exclude_model_set)
+
+
 __all__ = ["ProcessOptions", "ProcessResult", "run_process"]
 
 
@@ -478,6 +494,10 @@ def _normalize_dataset_ids(values: Sequence[str] | None) -> set[str]:
     return {str(value).strip().lower() for value in values or () if str(value).strip()}
 
 
+def _normalize_model_ids(values: Sequence[str] | None) -> set[str]:
+    return {str(value).strip().lower() for value in values or () if str(value).strip()}
+
+
 def _filter_env_groups_by_exclusion(
     env_groups: Sequence[_EnvGroupSelection],
     exclude_datasets: Sequence[str],
@@ -492,6 +512,22 @@ def _filter_env_groups_by_exclusion(
         if env_id and env_id.strip().lower() in exclude_set:
             continue
         if base_env_id and base_env_id.strip().lower() in exclude_set:
+            continue
+        filtered.append(group)
+    return filtered
+
+
+def _filter_env_groups_by_model_exclusion(
+    env_groups: Sequence[_EnvGroupSelection],
+    exclude_models: Sequence[str],
+) -> list[_EnvGroupSelection]:
+    exclude_set = _normalize_model_ids(exclude_models)
+    if not exclude_set:
+        return list(env_groups)
+    filtered: list[_EnvGroupSelection] = []
+    for group in env_groups:
+        model_id = str(group.model_key or "").strip()
+        if model_id and model_id.lower() in exclude_set:
             continue
         filtered.append(group)
     return filtered
