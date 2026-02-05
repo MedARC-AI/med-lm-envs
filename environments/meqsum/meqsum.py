@@ -360,7 +360,7 @@ def load_environment(
     rubric.add_reward_func(reward_meqsum, weight=1.0)
 
     return vf.SingleTurnEnv(
-        dataset=eval_dataset,
+        dataset=None,
         eval_dataset=eval_dataset,
         system_prompt=final_system_prompt,
         rubric=rubric,

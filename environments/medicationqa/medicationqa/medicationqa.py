@@ -172,7 +172,7 @@ def load_environment(
     rubric.add_reward_func(reward_medicationqa, weight=1.0)
 
     return vf.SingleTurnEnv(
-        dataset=eval_dataset,
+        dataset=None,
         eval_dataset=eval_dataset,
         system_prompt="You are a helpful, safety-conscious medical assistant. Give a brief but accurate response to the following question.",
         rubric=rubric,

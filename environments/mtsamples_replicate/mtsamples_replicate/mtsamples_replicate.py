@@ -239,7 +239,7 @@ def load_environment(
     system_prompt = PROMPT_THINK if use_think else PROMPT
 
     return vf.SingleTurnEnv(
-        dataset=eval_dataset,
+        dataset=None,
         eval_dataset=eval_dataset,
         system_prompt=system_prompt,
         rubric=rubric,
