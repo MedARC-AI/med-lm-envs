@@ -46,6 +46,8 @@ runs/processed/
 | `--max-workers N` | Parallel processing threads | 4 |
 | `--dry-run` | Show what would be processed | - |
 | `--yes` | Skip confirmation prompts | - |
+| `--exclude-dataset NAME` | Skip processing specific datasets/env ids (repeatable) | - |
+| `--exclude-model MODEL` | Skip processing specific model ids (repeatable) | - |
 
 ## Filtering Runs
 
@@ -87,6 +89,10 @@ runs_dir: runs/raw
 output_dir: runs/processed
 max_workers: 8
 process_incomplete: false
+exclude_datasets:
+  - med_dialog
+exclude_models:
+  - deprecated-v1
 ```
 
 ```bash

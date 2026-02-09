@@ -14,9 +14,8 @@ from medarc_verifiers.cli._manifest import (
     MANIFEST_FILENAME,
     ManifestJobEntry,
     RunManifestModel,
-    _require_manifest_v2,
+    _require_manifest_v3,
 )
-from medarc_verifiers.utils.pathing import from_project_relative
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +39,8 @@ class RunManifestInfo:
     config_source: str | None
     config_checksum: str | None
     run_summary_path: Path
+    version: int = 3
+    artifacts_root: str = "."
     models: Mapping[str, Any] = field(default_factory=dict)
     env_templates: Mapping[str, Any] = field(default_factory=dict)
 
@@ -50,7 +51,6 @@ class RunRecord:
 
     manifest: RunManifestInfo
     job_id: str
-    job_name: str | None
     model_id: str | None
     manifest_env_id: str | None
     results_dir_name: str
@@ -136,7 +136,18 @@ def _build_run_record(
         logger.debug("Skipping job entry without a valid job_id in %s", manifest.manifest_path)
         return None
 
-    results_dir_name, results_dir = _resolve_results_dir(job_entry.results_dir, job_id, manifest.run_dir)
+    results_dir_name, results_dir = _resolve_results_dir(
+        job_entry.results_relpath,
+        manifest.artifacts_root,
+        job_id,
+        manifest.run_dir,
+    )
+    results_dir_name, results_dir = _fallback_results_dir_if_missing(
+        results_dir_name,
+        results_dir,
+        manifest.run_dir,
+        job_id,
+    )
     metadata_path = results_dir / "metadata.json"
     results_path = results_dir / "results.jsonl"
     summary_path = results_dir / "summary.json"
@@ -168,7 +179,6 @@ def _build_run_record(
     return RunRecord(
         manifest=manifest,
         job_id=job_id,
-        job_name=job_entry.job_name,
         model_id=job_entry.model_id,
         manifest_env_id=job_entry.env_id,
         results_dir_name=results_dir_name,
@@ -200,25 +210,46 @@ def _ensure_mapping(value: Any) -> Mapping[str, Any]:
 
 
 def _resolve_results_dir(
-    stored_value: str | None,
+    stored_results_relpath: str | None,
+    artifacts_root: str | None,
     job_id: str,
     run_dir: Path,
 ) -> tuple[str, Path]:
-    """Interpret manifest results_dir values which may be job-relative, project-relative, or absolute."""
-    name = stored_value or job_id
-    candidate = Path(name)
-    if candidate.is_absolute():
-        return name, candidate
-    # First try job-relative paths (common in older manifests).
-    job_relative = (run_dir / candidate).resolve()
-    if job_relative.exists():
-        return name, job_relative
-    # Manifest v2 stores results_dir relative to the project root; this may not live under `runs/`.
-    project_relative = from_project_relative(candidate)
-    if project_relative.exists():
-        return name, project_relative
-    # Fall back to job-relative resolution for backwards compatibility; existence will be validated by callers.
-    return name, job_relative
+    """Resolve a job's results directory from v3 manifest artifact fields."""
+    if stored_results_relpath:
+        rel = Path(stored_results_relpath)
+        base = run_dir / str(artifacts_root or ".")
+        candidate_file = (base / rel).resolve()
+        # v3 stores results_relpath to results.jsonl; derive the containing directory.
+        candidate_dir = candidate_file.parent if candidate_file.name == "results.jsonl" else candidate_file
+        return candidate_dir.name, candidate_dir
+
+    # Backward-compatible fallback for malformed v3 payloads missing relpaths.
+    fallback = (run_dir / job_id).resolve()
+    return job_id, fallback
+
+
+def _fallback_results_dir_if_missing(
+    results_dir_name: str,
+    results_dir: Path,
+    run_dir: Path,
+    job_id: str,
+) -> tuple[str, Path]:
+    metadata_path = results_dir / "metadata.json"
+    results_path = results_dir / "results.jsonl"
+    if metadata_path.exists() or results_path.exists():
+        return results_dir_name, results_dir
+    fallback = (run_dir / job_id).resolve()
+    fallback_metadata = fallback / "metadata.json"
+    fallback_results = fallback / "results.jsonl"
+    if fallback_metadata.exists() or fallback_results.exists():
+        logger.warning(
+            "Manifest results path missing for job '%s'; falling back to run-relative directory '%s'.",
+            job_id,
+            fallback,
+        )
+        return job_id, fallback
+    return results_dir_name, results_dir
 
 
 def _load_manifest(run_dir: Path) -> tuple[RunManifestInfo | None, Sequence[ManifestJobEntry]]:
@@ -232,7 +263,7 @@ def _load_manifest(run_dir: Path) -> tuple[RunManifestInfo | None, Sequence[Mani
         logger.warning("Failed to parse manifest %s: %s", manifest_path, exc)
         return None, ()
 
-    _require_manifest_v2(manifest_payload, path=manifest_path)
+    _require_manifest_v3(manifest_payload, path=manifest_path)
 
     try:
         manifest_model = RunManifestModel.model_validate(manifest_payload)
@@ -271,6 +302,8 @@ def _load_manifest(run_dir: Path) -> tuple[RunManifestInfo | None, Sequence[Mani
         updated_at=manifest_model.updated_at,
         config_source=manifest_model.config_source,
         config_checksum=manifest_model.config_checksum,
+        version=int(manifest_model.version),
+        artifacts_root=str(getattr(manifest_model, "artifacts_root", ".") or "."),
         run_summary_path=run_dir / "run_summary.json",
         models=manifest_model.models or {},
         env_templates=manifest_model.env_templates or {},

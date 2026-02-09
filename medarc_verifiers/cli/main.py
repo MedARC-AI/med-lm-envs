@@ -19,6 +19,7 @@ from medarc_verifiers.cli._config_loader import ConfigFormatError, load_run_conf
 from medarc_verifiers.cli._job_builder import ResolvedJob, build_jobs
 from medarc_verifiers.cli._job_executor import ExecutorSettings, JobExecutionResult, execute_jobs
 from medarc_verifiers.cli._manifest import ManifestJobEntry, RunManifest, compute_snapshot_checksum
+from medarc_verifiers.cli._manifest_tools import format_validation_issues, validate_manifests_in_runs
 from medarc_verifiers.cli._manifest_planner import ManifestPlanner
 from medarc_verifiers.cli._single_run import run_single_mode
 from medarc_verifiers.cli.process import ProcessOptions, ProcessResult, run_process
@@ -248,6 +249,18 @@ def build_process_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--processed-at", default=None, help="Override processed_at timestamp (ISO8601).")
     parser.add_argument("--dry-run", action="store_true", default=None, help="Plan processing without writing outputs.")
+    parser.add_argument(
+        "--validate-manifest",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Validate run manifests before processing (default: enabled).",
+    )
+    parser.add_argument(
+        "--strict-manifest",
+        action="store_true",
+        default=None,
+        help="Treat manifest validation problems as errors.",
+    )
     parser.add_argument(
         "--process-incomplete",
         dest="process_incomplete",
@@ -536,6 +549,8 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         "exclude_models": args.exclude_model or [],
         "dry_run": bool(args.dry_run),
         "clean": bool(args.clean),
+        "validate_manifest": bool(args.validate_manifest),
+        "strict_manifest": bool(args.strict_manifest),
         "only_complete_runs": not bool(args.process_incomplete),
         "hf_repo": args.hf_repo,
         "hf_pull_policy": args.hf_pull_policy,
@@ -561,6 +576,23 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         hf_pull_policy=args.hf_pull_policy,
         max_workers=args.max_workers,
     )
+
+    if args.validate_manifest:
+        validation = validate_manifests_in_runs(options.runs_dir, strict=bool(args.strict_manifest))
+        for line in format_validation_issues(validation.issues):
+            if line.startswith("[ERROR]"):
+                logger.error("%s", line)
+            else:
+                logger.warning("%s", line)
+        logger.info(
+            "Manifest preflight: checked %d manifest(s), %d job(s), %d issue(s).",
+            validation.manifests_checked,
+            validation.jobs_checked,
+            len(validation.issues),
+        )
+        if validation.has_errors:
+            logger.error("Manifest validation failed in strict mode; aborting process.")
+            return 1
 
     try:
         result = run_process(options, env_export_map=env_export_map)
@@ -679,6 +711,10 @@ def _apply_process_config(args: argparse.Namespace, path: Path) -> None:
         _set_if_unset("yes", bool(payload["yes"]))
     if "process_incomplete" in payload:
         _set_if_unset("process_incomplete", bool(payload["process_incomplete"]))
+    if "validate_manifest" in payload:
+        _set_if_unset("validate_manifest", bool(payload["validate_manifest"]))
+    if "strict_manifest" in payload:
+        _set_if_unset("strict_manifest", bool(payload["strict_manifest"]))
     if "status" in payload and getattr(args, "status", None) is None:
         status_value = payload["status"]
         if isinstance(status_value, str) and status_value.strip():
@@ -892,6 +928,10 @@ def _finalize_process_args(args: argparse.Namespace) -> None:
         args.yes = False
     if getattr(args, "process_incomplete", None) is None:
         args.process_incomplete = False
+    if getattr(args, "validate_manifest", None) is None:
+        args.validate_manifest = True
+    if getattr(args, "strict_manifest", None) is None:
+        args.strict_manifest = False
     if getattr(args, "exclude_dataset", None) is None:
         args.exclude_dataset = []
     args.exclude_dataset = _parse_repeatable_csv(args.exclude_dataset)

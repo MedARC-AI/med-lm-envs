@@ -45,7 +45,6 @@ def _make_record(
     record = RunRecord(
         manifest=manifest_info,
         job_id="job-abc",
-        job_name="Example Job",
         model_id="gpt-4o",
         manifest_env_id=manifest_env_id,
         results_dir_name=results_dir_name,
