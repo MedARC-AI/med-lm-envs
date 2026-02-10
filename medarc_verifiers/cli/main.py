@@ -32,6 +32,7 @@ from medarc_verifiers.cli._job_builder import ResolvedJob, build_jobs
 from medarc_verifiers.cli._job_executor import ExecutorSettings, JobExecutionResult, execute_jobs
 from medarc_verifiers.cli._manifest import MANIFEST_FILENAME, ManifestJobEntry, RunManifest, compute_snapshot_checksum
 from medarc_verifiers.cli._manifest_planner import ManifestPlanner
+from medarc_verifiers.cli._manifest_tools import format_validation_issues, validate_manifests_in_runs
 from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, EnvironmentExportConfig
 from medarc_verifiers.cli._single_run import run_single_mode
 from medarc_verifiers.cli.hf import HFSyncConfig, sync_files_to_hub
@@ -230,6 +231,18 @@ def build_process_parser() -> argparse.ArgumentParser:
         help="Filter runs by manifest status (repeatable).",
     )
     parser.add_argument(
+        "--exclude-dataset",
+        action="append",
+        default=None,
+        help="Exclude these dataset/env ids from processing (repeatable; comma-separated values allowed).",
+    )
+    parser.add_argument(
+        "--exclude-model",
+        action="append",
+        default=None,
+        help="Exclude these model ids from processing (repeatable; comma-separated values allowed).",
+    )
+    parser.add_argument(
         "--clean",
         action="store_true",
         default=None,
@@ -239,10 +252,22 @@ def build_process_parser() -> argparse.ArgumentParser:
         "--yes",
         action="store_true",
         default=None,
-        help="Skip confirmation prompts (use with --clean).",
+        help="Skip confirmation prompts (used by --clean and HF repo creation).",
     )
     parser.add_argument("--processed-at", default=None, help="Override processed_at timestamp (ISO8601).")
     parser.add_argument("--dry-run", action="store_true", default=None, help="Plan processing without writing outputs.")
+    parser.add_argument(
+        "--validate-manifest",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Validate run manifests before processing (default: enabled).",
+    )
+    parser.add_argument(
+        "--strict-manifest",
+        action="store_true",
+        default=None,
+        help="Treat manifest validation problems as errors.",
+    )
     parser.add_argument(
         "--process-incomplete",
         dest="process_incomplete",
@@ -277,6 +302,24 @@ def build_process_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=None,
         help="Push dataset as private (default: false).",
+    )
+    parser.add_argument(
+        "--hf-request-timeout",
+        type=float,
+        default=None,
+        help="HTTP request timeout (seconds) for HF upload/create_commit (default: 300).",
+    )
+    parser.add_argument(
+        "--hf-retries",
+        type=int,
+        default=None,
+        help="Retry count for HF upload timeouts/transport errors (default: 3).",
+    )
+    parser.add_argument(
+        "--hf-max-files-per-commit",
+        type=int,
+        default=None,
+        help="Split HF uploads into multiple commits with at most this many files per commit (default: no split).",
     )
 
     return parser
@@ -313,6 +356,12 @@ def build_winrate_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output-name",
         help="Base name for winrates JSON (timestamp appended automatically).",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        default=None,
+        help="Skip confirmation prompts (used by HF repo creation).",
     )
     parser.add_argument(
         "--processed-at",
@@ -361,6 +410,12 @@ def build_winrate_parser() -> argparse.ArgumentParser:
         help="Exclude these model ids from win rate calculation (repeatable).",
     )
     parser.add_argument(
+        "--exclude-dataset",
+        action="append",
+        default=None,
+        help="Exclude these dataset/env ids from win rate calculation (repeatable; comma-separated values allowed).",
+    )
+    parser.add_argument(
         "--partial-datasets",
         choices=("strict", "include"),
         default=None,
@@ -368,6 +423,16 @@ def build_winrate_parser() -> argparse.ArgumentParser:
             "Dataset selection policy when --include-model is set: "
             "strict drops datasets missing any included models, "
             "include keeps them with missing models treated as all-missing."
+        ),
+    )
+    parser.add_argument(
+        "--dataset-coverage",
+        choices=("all-models", "per-model"),
+        default=None,
+        help=(
+            "Dataset coverage policy for winrate computation: "
+            "all-models enforces an intersection of datasets across the compared models (default), "
+            "per-model uses the legacy behavior where each model may be averaged over a different dataset set."
         ),
     )
     parser.add_argument("--hf-processed-repo", help="Hugging Face repo id for processed dataset download.")
@@ -480,21 +545,33 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         token=args.hf_token,
         private=args.hf_private,
         dry_run=args.dry_run,
+        request_timeout=args.hf_request_timeout,
+        retries=args.hf_retries,
+        max_files_per_commit=args.hf_max_files_per_commit,
     )
 
     processed_with_args = {
         "status": args.status or [],
+        "exclude_datasets": args.exclude_dataset or [],
+        "exclude_models": args.exclude_model or [],
         "dry_run": bool(args.dry_run),
         "clean": bool(args.clean),
+        "validate_manifest": bool(args.validate_manifest),
+        "strict_manifest": bool(args.strict_manifest),
         "only_complete_runs": not bool(args.process_incomplete),
         "hf_repo": args.hf_repo,
         "hf_pull_policy": args.hf_pull_policy,
+        "hf_request_timeout": args.hf_request_timeout,
+        "hf_retries": args.hf_retries,
+        "hf_max_files_per_commit": args.hf_max_files_per_commit,
         "max_workers": args.max_workers,
     }
 
     options = ProcessOptions(
         runs_dir=args.runs_dir,
         output_dir=args.output_dir,
+        exclude_datasets=tuple(args.exclude_dataset or ()),
+        exclude_models=tuple(args.exclude_model or ()),
         processed_at=args.processed_at,
         processed_with_args=processed_with_args,
         status_filter=args.status or (),
@@ -506,6 +583,23 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         hf_pull_policy=args.hf_pull_policy,
         max_workers=args.max_workers,
     )
+
+    if args.validate_manifest:
+        validation = validate_manifests_in_runs(options.runs_dir, strict=bool(args.strict_manifest))
+        for line in format_validation_issues(validation.issues):
+            if line.startswith("[ERROR]"):
+                logger.error("%s", line)
+            else:
+                logger.warning("%s", line)
+        logger.info(
+            "Manifest preflight: checked %d manifest(s), %d job(s), %d issue(s).",
+            validation.manifests_checked,
+            validation.jobs_checked,
+            len(validation.issues),
+        )
+        if validation.has_errors:
+            logger.error("Manifest validation failed in strict mode; aborting process.")
+            return 1
 
     try:
         result = run_process(options, env_export_map=env_export_map)
@@ -529,8 +623,10 @@ def _run_process_mode(argv: Sequence[str]) -> int:
             min_common=winrate_args.min_common,
             weight_policy=winrate_args.weight_policy,
             weight_cap=winrate_args.weight_cap,
+            dataset_coverage=winrate_args.dataset_coverage,
             include_models=tuple(winrate_args.include_model or ()),
             exclude_models=tuple(winrate_args.exclude_model or ()),
+            exclude_datasets=tuple(winrate_args.exclude_dataset or ()),
             partial_datasets=winrate_args.partial_datasets,
         )
         try:
@@ -558,6 +654,7 @@ def _run_process_mode(argv: Sequence[str]) -> int:
                 repo_id=winrate_args.hf_winrate_repo,
                 token=winrate_args.hf_token,
                 private=bool(winrate_args.hf_private),
+                assume_yes=bool(args.yes),
             )
 
     return 0
@@ -606,12 +703,32 @@ def _apply_process_config(args: argparse.Namespace, path: Path) -> None:
         _set_if_unset("yes", bool(payload["yes"]))
     if "process_incomplete" in payload:
         _set_if_unset("process_incomplete", bool(payload["process_incomplete"]))
+    if "validate_manifest" in payload:
+        _set_if_unset("validate_manifest", bool(payload["validate_manifest"]))
+    if "strict_manifest" in payload:
+        _set_if_unset("strict_manifest", bool(payload["strict_manifest"]))
     if "status" in payload and getattr(args, "status", None) is None:
         status_value = payload["status"]
         if isinstance(status_value, str) and status_value.strip():
             args.status = [status_value.strip()]
         elif isinstance(status_value, Sequence):
             args.status = [str(item).strip() for item in status_value if str(item).strip()]
+    if "exclude_datasets" not in payload and "exclude_dataset" in payload:
+        payload["exclude_datasets"] = payload["exclude_dataset"]
+    if "exclude_datasets" in payload and getattr(args, "exclude_dataset", None) is None:
+        exclude_value = payload["exclude_datasets"]
+        if isinstance(exclude_value, str) and exclude_value.strip():
+            args.exclude_dataset = [exclude_value.strip()]
+        elif isinstance(exclude_value, Sequence):
+            args.exclude_dataset = [str(item).strip() for item in exclude_value if str(item).strip()]
+    if "exclude_models" not in payload and "exclude_model" in payload:
+        payload["exclude_models"] = payload["exclude_model"]
+    if "exclude_models" in payload and getattr(args, "exclude_model", None) is None:
+        exclude_value = payload["exclude_models"]
+        if isinstance(exclude_value, str) and exclude_value.strip():
+            args.exclude_model = [exclude_value.strip()]
+        elif isinstance(exclude_value, Sequence):
+            args.exclude_model = [str(item).strip() for item in exclude_value if str(item).strip()]
 
     # HF settings (only apply when unset on CLI)
     if "hf_repo" in payload:
@@ -624,6 +741,21 @@ def _apply_process_config(args: argparse.Namespace, path: Path) -> None:
         _set_if_unset("hf_private", bool(payload["hf_private"]))
     if "hf_pull_policy" in payload:
         _set_if_unset("hf_pull_policy", str(payload["hf_pull_policy"]))
+    if "hf_request_timeout" in payload:
+        try:
+            _set_if_unset("hf_request_timeout", float(payload["hf_request_timeout"]))
+        except Exception:
+            pass
+    if "hf_retries" in payload:
+        try:
+            _set_if_unset("hf_retries", int(payload["hf_retries"]))
+        except Exception:
+            pass
+    if "hf_max_files_per_commit" in payload:
+        try:
+            _set_if_unset("hf_max_files_per_commit", int(payload["hf_max_files_per_commit"]))
+        except Exception:
+            pass
 
 
 def _load_winrate_config(path: Path) -> Mapping[str, Any]:
@@ -650,6 +782,8 @@ def _apply_winrate_config(args: argparse.Namespace, path: Path) -> None:
 
     if "exclude_models" not in payload and "exclude_model" in payload:
         payload["exclude_models"] = payload["exclude_model"]
+    if "exclude_datasets" not in payload and "exclude_dataset" in payload:
+        payload["exclude_datasets"] = payload["exclude_dataset"]
 
     def _set_if_unset(attr: str, value: Any) -> None:
         if not hasattr(args, attr):
@@ -688,6 +822,8 @@ def _apply_winrate_config(args: argparse.Namespace, path: Path) -> None:
             pass
     if "partial_datasets" in payload:
         _set_if_unset("partial_datasets", str(payload["partial_datasets"]))
+    if "dataset_coverage" in payload:
+        _set_if_unset("dataset_coverage", str(payload["dataset_coverage"]))
     if "include_models" in payload:
         include_value = payload["include_models"]
         if isinstance(include_value, str):
@@ -700,6 +836,12 @@ def _apply_winrate_config(args: argparse.Namespace, path: Path) -> None:
             _set_if_unset("exclude_model", [exclude_value])
         elif isinstance(exclude_value, Sequence):
             _set_if_unset("exclude_model", [str(item) for item in exclude_value if str(item).strip()])
+    if "exclude_datasets" in payload:
+        exclude_value = payload["exclude_datasets"]
+        if isinstance(exclude_value, str):
+            _set_if_unset("exclude_dataset", [exclude_value])
+        elif isinstance(exclude_value, Sequence):
+            _set_if_unset("exclude_dataset", [str(item) for item in exclude_value if str(item).strip()])
     if "hf_processed_repo" in payload:
         _set_if_unset("hf_processed_repo", str(payload["hf_processed_repo"]))
     if "hf_processed_pull" in payload:
@@ -726,8 +868,10 @@ def _build_winrate_args_from_config(path: Path) -> argparse.Namespace:
         min_common=None,
         weight_policy=None,
         weight_cap=None,
+        dataset_coverage=None,
         include_model=None,
         exclude_model=None,
+        exclude_dataset=None,
         partial_datasets=None,
         hf_processed_repo=None,
         hf_processed_pull=None,
@@ -761,6 +905,16 @@ def _finalize_process_args(args: argparse.Namespace) -> None:
         args.yes = False
     if getattr(args, "process_incomplete", None) is None:
         args.process_incomplete = False
+    if getattr(args, "validate_manifest", None) is None:
+        args.validate_manifest = True
+    if getattr(args, "strict_manifest", None) is None:
+        args.strict_manifest = False
+    if getattr(args, "exclude_dataset", None) is None:
+        args.exclude_dataset = []
+    args.exclude_dataset = _parse_repeatable_csv(args.exclude_dataset)
+    if getattr(args, "exclude_model", None) is None:
+        args.exclude_model = []
+    args.exclude_model = _parse_repeatable_csv(args.exclude_model)
 
 
 def _finalize_winrate_args(args: argparse.Namespace) -> None:
@@ -779,16 +933,23 @@ def _finalize_winrate_args(args: argparse.Namespace) -> None:
         args.weight_policy = "ln"
     if getattr(args, "weight_cap", None) is None:
         args.weight_cap = 0
+    if getattr(args, "dataset_coverage", None) is None:
+        args.dataset_coverage = "all-models"
     if getattr(args, "include_model", None) is None:
         args.include_model = []
     if getattr(args, "exclude_model", None) is None:
         args.exclude_model = []
+    if getattr(args, "exclude_dataset", None) is None:
+        args.exclude_dataset = []
+    args.exclude_dataset = _parse_repeatable_csv(args.exclude_dataset)
     if getattr(args, "partial_datasets", None) is None:
         args.partial_datasets = "strict"
     if getattr(args, "hf_processed_pull", None) is None:
         args.hf_processed_pull = False
     if getattr(args, "hf_private", None) is None:
         args.hf_private = False
+    if getattr(args, "yes", None) is None:
+        args.yes = False
 
 
 def _upload_winrate_outputs(
@@ -798,6 +959,7 @@ def _upload_winrate_outputs(
     repo_id: str,
     token: str | None,
     private: bool,
+    assume_yes: bool = False,
 ) -> None:
     if not output_paths:
         return
@@ -822,6 +984,9 @@ def _upload_winrate_outputs(
         token=token,
         private=private,
         message=message,
+        is_tty=sys.stdin.isatty(),
+        assume_yes=assume_yes,
+        prompt_func=input,
     )
 
 
@@ -847,6 +1012,8 @@ def _run_winrate_mode(argv: Sequence[str]) -> int:
             hf_config=hf_config if args.hf_processed_repo else None,
             hf_processed_pull=bool(args.hf_processed_pull),
         )
+        if args.exclude_dataset:
+            datasets = _filter_winrate_datasets(datasets, args.exclude_dataset)
         if not datasets:
             logger.error("No datasets found from %s.", source_desc)
             return 1
@@ -863,8 +1030,10 @@ def _run_winrate_mode(argv: Sequence[str]) -> int:
         min_common=args.min_common,
         weight_policy=args.weight_policy,
         weight_cap=args.weight_cap,
+        dataset_coverage=args.dataset_coverage,
         include_models=tuple(args.include_model or ()),
         exclude_models=tuple(args.exclude_model or ()),
+        exclude_datasets=tuple(args.exclude_dataset or ()),
         partial_datasets=args.partial_datasets,
     )
 
@@ -892,6 +1061,7 @@ def _run_winrate_mode(argv: Sequence[str]) -> int:
             repo_id=args.hf_winrate_repo,
             token=args.hf_token,
             private=bool(args.hf_private),
+            assume_yes=bool(args.yes),
         )
     return 0
 
@@ -1123,6 +1293,39 @@ def _parse_forced_envs(values: Sequence[str] | None) -> set[str]:
             if value:
                 forced.add(value.lower())
     return forced
+
+
+def _parse_repeatable_csv(values: Sequence[str] | None) -> list[str]:
+    parsed: list[str] = []
+    for chunk in values or ():
+        if chunk is None:
+            continue
+        for item in str(chunk).split(","):
+            value = item.strip()
+            if value:
+                parsed.append(value)
+    return parsed
+
+
+def _filter_winrate_datasets(
+    datasets: Sequence[tuple[str, Sequence[Path]]],
+    exclude_datasets: Sequence[str],
+) -> list[tuple[str, Sequence[Path]]]:
+    from medarc_verifiers.cli.process.rollout import derive_base_env_id
+
+    exclude_set = {str(v).strip().lower() for v in exclude_datasets if str(v).strip()}
+    if not exclude_set:
+        return list(datasets)
+    filtered: list[tuple[str, Sequence[Path]]] = []
+    for name, paths in datasets:
+        dataset = str(name).strip()
+        if dataset.lower() in exclude_set:
+            continue
+        base, _ = derive_base_env_id(dataset)
+        if base and base.strip().lower() in exclude_set:
+            continue
+        filtered.append((name, paths))
+    return filtered
 
 
 def _collect_rerun_envs(envs: Mapping[str, EnvironmentConfigSchema]) -> set[str]:

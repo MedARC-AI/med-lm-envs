@@ -37,7 +37,6 @@ def _build_record(tmp_path: Path, *, status: str = "completed", reason: str | No
     record = RunRecord(
         manifest=manifest_info,
         job_id="job-1",
-        job_name="Job 1",
         model_id="model-alpha",
         manifest_env_id="demo-env-rollout3",
         results_dir_name="job-1",

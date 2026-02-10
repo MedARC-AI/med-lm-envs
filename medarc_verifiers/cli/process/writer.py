@@ -47,6 +47,60 @@ ALLOWED_COLUMNS: tuple[str, ...] = (
     "total_ms",
 )
 
+EXPECTED_POLARS_DTYPES: dict[str, pl.DataType] = {
+    "env_id": pl.String,
+    "error": pl.String,
+    "example_id": pl.Int64,
+    "answer": pl.String,
+    "extras": pl.String,
+    "generation_ms": pl.Float64,
+    "job_run_id": pl.String,
+    "judge_cost": pl.Float64,
+    "judge_token_completion": pl.Float64,
+    "judge_token_prompt": pl.Float64,
+    "judge_token_total": pl.Float64,
+    "model_cost": pl.Float64,
+    "model_id": pl.String,
+    "model_token_completion": pl.Float64,
+    "model_token_prompt": pl.Float64,
+    "model_token_total": pl.Float64,
+    "reward": pl.Float64,
+    "rollout_index": pl.Int64,
+    "run_id": pl.String,
+    "scoring_ms": pl.Float64,
+    "status": pl.String,
+    "task": pl.String,
+    "total_ms": pl.Float64,
+}
+
+EXPECTED_ARROW_SCHEMA = pa.schema(
+    [
+        pa.field("env_id", pa.large_string()),
+        pa.field("error", pa.large_string()),
+        pa.field("example_id", pa.int64()),
+        pa.field("answer", pa.large_string()),
+        pa.field("extras", pa.large_string()),
+        pa.field("generation_ms", pa.float64()),
+        pa.field("job_run_id", pa.large_string()),
+        pa.field("judge_cost", pa.float64()),
+        pa.field("judge_token_completion", pa.float64()),
+        pa.field("judge_token_prompt", pa.float64()),
+        pa.field("judge_token_total", pa.float64()),
+        pa.field("model_cost", pa.float64()),
+        pa.field("model_id", pa.large_string()),
+        pa.field("model_token_completion", pa.float64()),
+        pa.field("model_token_prompt", pa.float64()),
+        pa.field("model_token_total", pa.float64()),
+        pa.field("reward", pa.float64()),
+        pa.field("rollout_index", pa.int64()),
+        pa.field("run_id", pa.large_string()),
+        pa.field("scoring_ms", pa.float64()),
+        pa.field("status", pa.large_string()),
+        pa.field("task", pa.large_string()),
+        pa.field("total_ms", pa.float64()),
+    ]
+)
+
 
 @dataclass(slots=True)
 class WriterConfig:
@@ -228,14 +282,17 @@ def _write_group(group: AggregatedEnvRows, config: WriterConfig) -> EnvWriteSumm
 def _build_arrow_table(group: AggregatedEnvRows) -> pa.Table:
     if not group.rows:
         logger.debug("Group %s has no rows; writing empty table.", group.base_env_id)
-        arrays = [pa.array([], type=pa.null()) for _ in ALLOWED_COLUMNS]
-        return pa.Table.from_arrays(arrays, names=list(ALLOWED_COLUMNS))
+        arrays = [pa.array([], type=EXPECTED_ARROW_SCHEMA.field(col).type) for col in ALLOWED_COLUMNS]
+        return pa.Table.from_arrays(arrays, schema=EXPECTED_ARROW_SCHEMA)
 
     # Use full-length schema inference so late non-null values don't clash with
     # early all-null samples (default inference length is limited).
     df = pl.DataFrame(group.rows, infer_schema_length=None)
     df = _normalize_columns(df)
-    return df.to_arrow()
+    table = df.to_arrow()
+    # Ensure shard schemas are consistent across environments even when a column
+    # is entirely null within a single shard (Arrow would otherwise use `null`).
+    return table.cast(EXPECTED_ARROW_SCHEMA)
 
 
 def _write_env_index(
@@ -377,7 +434,11 @@ def _normalize_columns(df: pl.DataFrame) -> pl.DataFrame:
     for col in ALLOWED_COLUMNS:
         if col not in out.columns:
             out = out.with_columns(pl.lit(None).alias(col))
-    return out.select(list(ALLOWED_COLUMNS))
+    out = out.select(list(ALLOWED_COLUMNS))
+    out = out.with_columns(
+        [pl.col(col).cast(EXPECTED_POLARS_DTYPES[col], strict=False).alias(col) for col in ALLOWED_COLUMNS]
+    )
+    return out
 
 
 def build_output_path(output_dir: Path, *, model_id: str, env_id: str) -> Path:

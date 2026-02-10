@@ -36,6 +36,8 @@ class ProcessOptions:
     runs_dir: Path
     output_dir: Path
     only_complete_runs: bool = True
+    exclude_datasets: Sequence[str] = field(default_factory=tuple)
+    exclude_models: Sequence[str] = field(default_factory=tuple)
     processed_at: str | None = None
     processed_with_args: Mapping[str, Any] = field(default_factory=dict)
     status_filter: Sequence[str] = field(default_factory=tuple)
@@ -53,6 +55,8 @@ class ProcessOptions:
         if not self.processed_at:
             self.processed_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         self.status_filter = tuple(str(status) for status in self.status_filter)
+        self.exclude_datasets = tuple(str(value) for value in self.exclude_datasets if str(value).strip())
+        self.exclude_models = tuple(str(value) for value in self.exclude_models if str(value).strip())
 
 
 @dataclass(slots=True)
@@ -159,9 +163,19 @@ def run_process(
                 index_files,
                 output_dir=options.output_dir,
             )
+        if options.exclude_datasets:
+            env_groups = _filter_env_groups_by_exclusion(env_groups, options.exclude_datasets)
+        if options.exclude_models:
+            env_groups = _filter_env_groups_by_model_exclusion(env_groups, options.exclude_models)
         records = [item.record for group in env_groups for item in group.records]
 
-        _print_records_table(discovered, records, options.only_complete_runs)
+        _print_records_table(
+            discovered,
+            records,
+            options.only_complete_runs,
+            exclude_datasets=options.exclude_datasets,
+            exclude_models=options.exclude_models,
+        )
 
         grouped: dict[tuple[str, str], list[_RecordWork]] = {}
         run_metadata: dict[str, dict[str, Any]] = {}
@@ -281,6 +295,9 @@ def run_process(
                 options.hf_config,
                 output_dir=options.output_dir,
                 metadata_paths=metadata_paths,
+                is_tty=sys.stdin.isatty(),
+                assume_yes=options.assume_yes,
+                prompt_func=input,
             )
 
         if options.dry_run:
@@ -322,13 +339,25 @@ def _print_records_table(
     discovered: Sequence[discovery.RunRecord],
     selected: Sequence[discovery.RunRecord],
     only_complete_runs: bool,
+    *,
+    exclude_datasets: Sequence[str] = (),
+    exclude_models: Sequence[str] = (),
 ) -> None:
     """Pretty-print job discovery vs planned processing."""
+    exclude_set = _normalize_dataset_ids(exclude_datasets)
+    exclude_model_set = _normalize_model_ids(exclude_models)
+    eligible_discovered = [
+        rec
+        for rec in discovered
+        if (not only_complete_runs or _manifest_is_complete(rec.manifest))
+        and not (exclude_set and _record_is_excluded(rec, exclude_set))
+        and not (exclude_model_set and _record_model_is_excluded(rec, exclude_model_set))
+    ]
     total_by_model: dict[str, int] = {}
     completed_by_model: dict[str, int] = {}
     selected_by_model: dict[str, int] = {}
     completed_statuses = {"completed", "succeeded", "success"}
-    for rec in discovered:
+    for rec in eligible_discovered:
         model_id = rec.model_id or "unknown"
         total_by_model[model_id] = total_by_model.get(model_id, 0) + 1
         if (rec.status or "").lower() in completed_statuses:
@@ -337,7 +366,7 @@ def _print_records_table(
         model_id = rec.model_id or "unknown"
         selected_by_model[model_id] = selected_by_model.get(model_id, 0) + 1
 
-    models = sorted(total_by_model.keys())
+    models = sorted(set(total_by_model.keys()) | set(selected_by_model.keys()))
     selected_models = sorted(m for m, c in selected_by_model.items() if c > 0)
     discovered_jobs_total = sum(total_by_model.get(m, 0) for m in models)
     selected_jobs_total = sum(selected_by_model.get(m, 0) for m in models)
@@ -360,28 +389,54 @@ def _print_records_table(
             comp = completed_by_model.get(model_id, 0)
             tot = total_by_model.get(model_id, 0)
             sel = selected_by_model.get(model_id, 0)
-            processing = "yes" if sel > 0 else "no"
-            logger.info("  - %s: processing=%s; %d/%d completed", model_id, processing, comp, tot)
+            logger.info("  - %s: selected=%d; %d/%d completed", model_id, sel, comp, tot)
         return
 
     console = Console()
     title = f"Processing {selected_jobs_total} job(s) across {len(selected_models)} model(s)"
     if only_complete_runs:
         title += " (complete runs only)"
-    title += f" [dim](found {discovered_jobs_total} job(s) across {len(models)} model(s); pre-aggregation)[/dim]"
+    found_suffix = "after filters" if (exclude_set or only_complete_runs) else "pre-aggregation"
+    title += f" [dim](found {discovered_jobs_total} job(s) across {len(models)} model(s); {found_suffix})[/dim]"
     table = Table(title=title, show_header=True, header_style="bold cyan", caption=None)
     table.add_column("Model", style="magenta")
     table.add_column("Jobs (completed/total)", style="green", justify="right")
-    table.add_column("Processing", style="cyan", justify="center")
+    table.add_column("Selected", style="cyan", justify="right")
 
     for model_id in models:
         comp = completed_by_model.get(model_id, 0)
         tot = total_by_model.get(model_id, 0)
         sel = selected_by_model.get(model_id, 0)
-        processing = "yes" if sel > 0 else "no"
-        table.add_row(escape(str(model_id)), f"{comp}/{tot}", processing)
+        table.add_row(escape(str(model_id)), f"{comp}/{tot}", str(sel))
 
     console.print(table)
+
+
+def _manifest_is_complete(manifest: discovery.RunManifestInfo) -> bool:
+    return not (manifest.summary_total_known and manifest.summary_completed != manifest.summary_total)
+
+
+def _record_is_excluded(record: discovery.RunRecord, exclude_set: set[str]) -> bool:
+    env_identifier: str | None = None
+    if record.env_config and isinstance(record.env_config, Mapping):
+        raw = record.env_config.get("id")
+        if raw is not None:
+            env_identifier = str(raw)
+    if not env_identifier:
+        env_identifier = str(record.manifest_env_id or "")
+
+    env_identifier = env_identifier.strip()
+    base_env_id, _ = rollout.derive_base_env_id(env_identifier)
+    if env_identifier and env_identifier.lower() in exclude_set:
+        return True
+    if base_env_id and base_env_id.strip().lower() in exclude_set:
+        return True
+    return False
+
+
+def _record_model_is_excluded(record: discovery.RunRecord, exclude_model_set: set[str]) -> bool:
+    model_id = str(record.model_id or "").strip()
+    return bool(model_id and model_id.lower() in exclude_model_set)
 
 
 __all__ = ["ProcessOptions", "ProcessResult", "run_process"]
@@ -432,6 +487,49 @@ def _filter_env_groups_by_delta(
         if _is_newer_timestamp(group.run_timestamp, prior_updated_at):
             filtered.append(group)
             continue
+    return filtered
+
+
+def _normalize_dataset_ids(values: Sequence[str] | None) -> set[str]:
+    return {str(value).strip().lower() for value in values or () if str(value).strip()}
+
+
+def _normalize_model_ids(values: Sequence[str] | None) -> set[str]:
+    return {str(value).strip().lower() for value in values or () if str(value).strip()}
+
+
+def _filter_env_groups_by_exclusion(
+    env_groups: Sequence[_EnvGroupSelection],
+    exclude_datasets: Sequence[str],
+) -> list[_EnvGroupSelection]:
+    exclude_set = _normalize_dataset_ids(exclude_datasets)
+    if not exclude_set:
+        return list(env_groups)
+    filtered: list[_EnvGroupSelection] = []
+    for group in env_groups:
+        env_id = str(group.env_key or "").strip()
+        base_env_id, _ = rollout.derive_base_env_id(env_id)
+        if env_id and env_id.strip().lower() in exclude_set:
+            continue
+        if base_env_id and base_env_id.strip().lower() in exclude_set:
+            continue
+        filtered.append(group)
+    return filtered
+
+
+def _filter_env_groups_by_model_exclusion(
+    env_groups: Sequence[_EnvGroupSelection],
+    exclude_models: Sequence[str],
+) -> list[_EnvGroupSelection]:
+    exclude_set = _normalize_model_ids(exclude_models)
+    if not exclude_set:
+        return list(env_groups)
+    filtered: list[_EnvGroupSelection] = []
+    for group in env_groups:
+        model_id = str(group.model_key or "").strip()
+        if model_id and model_id.lower() in exclude_set:
+            continue
+        filtered.append(group)
     return filtered
 
 

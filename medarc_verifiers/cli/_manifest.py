@@ -19,7 +19,8 @@ from medarc_verifiers.cli.utils.shared import compute_checksum, resolve_env_iden
 from medarc_verifiers.utils.pathing import normalize_results_dir_for_manifest
 
 MANIFEST_FILENAME = "run_manifest.json"
-MANIFEST_VERSION = 2
+MANIFEST_VERSION = 3
+SUPPORTED_MANIFEST_VERSIONS = {3}
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,6 @@ class ManifestJobEntry(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     job_id: str
-    job_name: str | None = None
     env_id: str | None = None
     model_id: str | None = None
     env_template_id: str
@@ -65,7 +65,9 @@ class ManifestJobEntry(BaseModel):
     ended_at: str | None = None
     duration_seconds: float | None = None
     results_dir: str | None = None
-    artifacts: list[str] | None = None
+    results_relpath: str | None = None
+    metadata_relpath: str | None = None
+    row_count: int | None = None
     metrics: dict[str, Any] | None = None
     avg_reward: float | None = None
     num_examples: int | None = None
@@ -85,6 +87,7 @@ class RunManifestModel(BaseModel):
     created_at: str
     updated_at: str
     restart_source: str | None = None
+    artifacts_root: str = "."
     models: dict[str, dict[str, Any]] = Field(default_factory=dict)
     env_templates: dict[str, dict[str, Any]] = Field(default_factory=dict)
     jobs: list[ManifestJobEntry] = Field(default_factory=list)
@@ -92,8 +95,11 @@ class RunManifestModel(BaseModel):
 
     @model_validator(mode="after")
     def _check_version(self) -> RunManifestModel:
-        if self.version != MANIFEST_VERSION:
-            msg = f"Manifest version {self.version} is not supported; expected {MANIFEST_VERSION}."
+        if self.version not in SUPPORTED_MANIFEST_VERSIONS:
+            msg = (
+                f"Manifest version {self.version} is not supported; "
+                f"expected one of {sorted(SUPPORTED_MANIFEST_VERSIONS)}."
+            )
             raise ValueError(msg)
         return self
 
@@ -151,11 +157,11 @@ def _normalize_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     return _drop(_to_jsonable(payload))
 
 
-def _require_manifest_v2(payload: Mapping[str, Any], *, path: Path | None = None) -> None:
+def _require_manifest_v3(payload: Mapping[str, Any], *, path: Path | None = None) -> None:
     version = payload.get("version")
-    if version != MANIFEST_VERSION:
+    if version not in SUPPORTED_MANIFEST_VERSIONS:
         location = f" '{path}'" if path else ""
-        msg = f"Manifest{location} uses version {version}; expected {MANIFEST_VERSION}."
+        msg = f"Manifest{location} uses version {version}; expected one of {sorted(SUPPORTED_MANIFEST_VERSIONS)}."
         raise ValueError(msg)
 
 
@@ -286,6 +292,37 @@ def _maybe_store_results_dir(value: str | Path | None, *, run_dir: Path, job_id:
     if normalized == default_value:
         return None
     return normalized
+
+
+def _manifest_relative_artifacts(*, run_dir: Path, job_id: str, results_dir: Path | str | None) -> tuple[str, str]:
+    if results_dir is None:
+        base_rel = Path(job_id)
+    else:
+        candidate = Path(results_dir)
+        if not candidate.is_absolute():
+            candidate = (run_dir / candidate).resolve()
+        else:
+            candidate = candidate.resolve()
+        try:
+            base_rel = candidate.relative_to(run_dir)
+        except ValueError:
+            base_rel = Path(job_id)
+    base_rel = Path(base_rel.as_posix())
+    return (
+        (base_rel / "results.jsonl").as_posix(),
+        (base_rel / "metadata.json").as_posix(),
+    )
+
+
+def _count_jsonl_rows(path: Path) -> int | None:
+    if not path.exists() or not path.is_file():
+        return None
+    count = 0
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                count += 1
+    return count
 
 
 def _build_env_template_payload(env_payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -419,9 +456,13 @@ def build_job_entry(
             allow_mismatch=False,
             label="manifest template",
         )
+    results_relpath, metadata_relpath = _manifest_relative_artifacts(
+        run_dir=Path("."),
+        job_id=job.job_id,
+        results_dir=job.job_id,
+    )
     return ManifestJobEntry(
         job_id=job.job_id,
-        job_name=job.name,
         env_id=env_id,
         model_id=_resolve_model_identifier(job),
         env_template_id=env_template_id,
@@ -435,7 +476,9 @@ def build_job_entry(
         ended_at=None,
         duration_seconds=None,
         results_dir=results_dir,
-        artifacts=None,
+        results_relpath=results_relpath,
+        metadata_relpath=metadata_relpath,
+        row_count=None,
         metrics=None,
         avg_reward=None,
         num_examples=None,
@@ -502,6 +545,11 @@ class RunManifest:
     ) -> ManifestJobEntry:
         entry = self._index.get(job.job_id)
         normalized_results_dir = _maybe_store_results_dir(results_dir, run_dir=self.run_dir, job_id=job.job_id)
+        results_relpath, metadata_relpath = _manifest_relative_artifacts(
+            run_dir=self.run_dir,
+            job_id=job.job_id,
+            results_dir=results_dir,
+        )
         if entry is None:
             entry = build_job_entry(
                 job,
@@ -511,6 +559,8 @@ class RunManifest:
                 models=self.model.models,
                 env_templates=self.model.env_templates,
             )
+            entry.results_relpath = results_relpath
+            entry.metadata_relpath = metadata_relpath
             self._jobs.append(entry)
             self._index[job.job_id] = entry
             self._refresh_summary(save=False)
@@ -530,7 +580,9 @@ class RunManifest:
         entry.env_variant_id = updated.env_variant_id
         entry.env_args = updated.env_args
         entry.sampling_args = updated.sampling_args
-        if entry.results_dir is None:
+        entry.results_relpath = results_relpath
+        entry.metadata_relpath = metadata_relpath
+        if entry.results_dir is None and updated.results_dir is not None:
             entry.results_dir = updated.results_dir
         return entry
 
@@ -550,7 +602,6 @@ class RunManifest:
         *,
         duration_seconds: float,
         results_dir: Path,
-        artifacts: Sequence[str],
         avg_reward: float | None,
         metrics: Mapping[str, Any],
         num_examples: int | None,
@@ -564,11 +615,19 @@ class RunManifest:
         entry.ended_at = timestamp()
         entry.duration_seconds = duration_seconds
         entry.results_dir = _maybe_store_results_dir(results_dir, run_dir=self.run_dir, job_id=job_id)
-        entry.artifacts = list(artifacts) if artifacts else None
+        results_relpath, metadata_relpath = _manifest_relative_artifacts(
+            run_dir=self.run_dir,
+            job_id=job_id,
+            results_dir=results_dir,
+        )
+        entry.results_relpath = results_relpath
+        entry.metadata_relpath = metadata_relpath
         entry.avg_reward = avg_reward
         entry.metrics = dict(metrics) if metrics else None
         entry.num_examples = num_examples
         entry.rollouts_per_example = rollouts_per_example
+        results_path = results_dir / "results.jsonl"
+        entry.row_count = _count_jsonl_rows(results_path)
         self._refresh_summary()
 
     def record_job_failure(self, job_id: str, *, error: str, duration_seconds: float | None = None) -> None:
@@ -596,11 +655,6 @@ class RunManifest:
         entry.reason = reason
         entry.ended_at = entry.ended_at or timestamp()
 
-        def _maybe_get(source: Mapping[str, Any] | ManifestJobEntry, key: str) -> Any:
-            if isinstance(source, Mapping):
-                return source.get(key)
-            return getattr(source, key)
-
         if source_entry:
             is_mapping = isinstance(source_entry, Mapping)
             for key in (
@@ -609,7 +663,7 @@ class RunManifest:
                 "metrics",
                 "num_examples",
                 "rollouts_per_example",
-                "artifacts",
+                "row_count",
             ):
                 if is_mapping:
                     if key in source_entry:
@@ -618,8 +672,13 @@ class RunManifest:
                     setattr(entry, key, getattr(source_entry, key))
         if results_dir:
             entry.results_dir = _maybe_store_results_dir(results_dir, run_dir=self.run_dir, job_id=job_id)
-        if entry.artifacts == []:
-            entry.artifacts = None
+            results_relpath, metadata_relpath = _manifest_relative_artifacts(
+                run_dir=self.run_dir,
+                job_id=job_id,
+                results_dir=results_dir,
+            )
+            entry.results_relpath = results_relpath
+            entry.metadata_relpath = metadata_relpath
         if entry.metrics == {}:
             entry.metrics = None
         self._refresh_summary()
@@ -675,6 +734,7 @@ class RunManifest:
             "created_at": timestamp(),
             "updated_at": timestamp(),
             "restart_source": restart_source,
+            "artifacts_root": ".",
             "models": {},
             "env_templates": {},
             "jobs": [],
