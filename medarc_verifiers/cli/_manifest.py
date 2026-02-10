@@ -74,6 +74,23 @@ class ManifestJobEntry(BaseModel):
     rollouts_per_example: int | None = None
 
 
+# Keep this list aligned with runtime/progress fields mutated by record_job_* methods.
+# Fields here must survive ensure_job() refreshes when config/env metadata changes.
+_ENSURE_JOB_RUNTIME_STATE_FIELDS = (
+    "status",
+    "reason",
+    "attempt",
+    "started_at",
+    "ended_at",
+    "duration_seconds",
+    "row_count",
+    "metrics",
+    "avg_reward",
+    "num_examples",
+    "rollouts_per_example",
+)
+
+
 class RunManifestModel(BaseModel):
     """Root manifest payload persisted to disk."""
 
@@ -241,17 +258,64 @@ def _effective_sampling_args(entry: ManifestJobEntry, model_payload: Mapping[str
     return _normalize_payload(model_payload.get("sampling_args") or {})
 
 
+def _canonical_manifest_parts(
+    *,
+    model_payload: Mapping[str, Any],
+    env_payload: Mapping[str, Any],
+    env_args: Mapping[str, Any],
+    sampling_args: Mapping[str, Any],
+    env_identifier: str | None,
+    env_variant_id: str,
+    env_payload_is_template: bool = False,
+    sampling_args_already_resolved: bool = False,
+) -> dict[str, Any]:
+    model_normalized = _normalize_payload(model_payload)
+    env_normalized = _normalize_payload(env_payload)
+    if env_payload_is_template:
+        env_template_payload = dict(env_normalized)
+    else:
+        env_template_payload = _build_env_template_payload(env_normalized)
+        if "module" not in env_template_payload:
+            env_template_payload["module"] = env_identifier
+    if sampling_args_already_resolved:
+        sampling_override = None
+        sampling_payload = sampling_args
+    else:
+        sampling_override = _sampling_args_override(sampling_args=sampling_args, model_payload=model_normalized)
+        sampling_payload = sampling_override or model_normalized.get("sampling_args") or {}
+    effective_env_payload = {
+        **env_template_payload,
+        "module": env_identifier,
+        "id": env_variant_id,
+        "env_args": _normalize_payload(env_args),
+    }
+    return {
+        "model_sanitized": _sanitize_model_payload(model_normalized),
+        "env_template_payload": _normalize_payload(env_template_payload),
+        "effective_env_payload": _normalize_payload(effective_env_payload),
+        "sampling_payload": _normalize_payload(sampling_payload),
+        "sampling_override": sampling_override,
+    }
+
+
 def manifest_job_signature(manifest: RunManifestModel, entry: ManifestJobEntry) -> dict[str, Any]:
     model_payload = _normalize_payload(manifest.models.get(entry.model_id or "", {}) or {})
     env_template = _normalize_payload(manifest.env_templates.get(entry.env_template_id, {}) or {})
-    effective_env = dict(env_template)
-    effective_env["module"] = entry.env_id or env_template.get("module")
-    effective_env["id"] = entry.env_variant_id
-    effective_env["env_args"] = entry.env_args
+    env_identifier = entry.env_id or env_template.get("module")
+    canonical = _canonical_manifest_parts(
+        model_payload=model_payload,
+        env_payload=env_template,
+        env_args=entry.env_args,
+        sampling_args=_effective_sampling_args(entry, model_payload),
+        env_identifier=env_identifier,
+        env_variant_id=entry.env_variant_id,
+        env_payload_is_template=True,
+        sampling_args_already_resolved=True,
+    )
     signature = {
-        "model": _sanitize_model_payload(model_payload),
-        "env": effective_env,
-        "sampling_args": _effective_sampling_args(entry, model_payload),
+        "model": canonical["model_sanitized"],
+        "env": canonical["effective_env_payload"],
+        "sampling_args": canonical["sampling_payload"],
     }
     return _normalize_payload(signature)
 
@@ -264,22 +328,20 @@ def resolved_job_signature(
 ) -> dict[str, Any]:
     model_payload = _normalize_payload(json.loads(job.model.model_dump_json(exclude_none=True)))
     env_payload = _normalize_payload(json.loads(job.env.model_dump_json(exclude_none=True)))
-    env_template_payload = _build_env_template_payload(env_payload)
-    env_id = env_template_payload.get("module") or _resolve_env_identifier(job)
-    if "module" not in env_template_payload:
-        env_template_payload["module"] = env_id
-    env_variant_id = env_payload.get("id") or job.job_id
-    sampling_override = _sampling_args_override(sampling_args=sampling_args, model_payload=model_payload)
-    effective_env = {
-        **env_template_payload,
-        "module": env_id,
-        "id": env_variant_id,
-        "env_args": _normalize_payload(env_args),
-    }
+    env_id = env_payload.get("module") or _resolve_env_identifier(job)
+    env_variant_id = str(env_payload.get("id") or job.job_id)
+    canonical = _canonical_manifest_parts(
+        model_payload=model_payload,
+        env_payload=env_payload,
+        env_args=env_args,
+        sampling_args=sampling_args,
+        env_identifier=env_id,
+        env_variant_id=env_variant_id,
+    )
     signature = {
-        "model": _sanitize_model_payload(model_payload),
-        "env": effective_env,
-        "sampling_args": sampling_override or model_payload.get("sampling_args") or {},
+        "model": canonical["model_sanitized"],
+        "env": canonical["effective_env_payload"],
+        "sampling_args": canonical["sampling_payload"],
     }
     return _normalize_payload(signature)
 
@@ -434,13 +496,18 @@ def build_job_entry(
     """Build the manifest entry recorded for a job."""
     model_payload = _normalize_payload(json.loads(job.model.model_dump_json(exclude_none=True)))
     env_payload = _normalize_payload(json.loads(job.env.model_dump_json(exclude_none=True)))
-    env_template_payload = _build_env_template_payload(env_payload)
-    env_id = env_template_payload.get("module") or _resolve_env_identifier(job)
-    if "module" not in env_template_payload:
-        env_template_payload["module"] = env_id
+    env_id = env_payload.get("module") or _resolve_env_identifier(job)
+    env_variant_id = str(env_payload.get("id") or job.job_id)
+    canonical = _canonical_manifest_parts(
+        model_payload=model_payload,
+        env_payload=env_payload,
+        env_args=env_args,
+        sampling_args=sampling_args,
+        env_identifier=env_id,
+        env_variant_id=env_variant_id,
+    )
+    env_template_payload = canonical["env_template_payload"]
     env_template_id = _env_template_id(env_id, env_template_payload)
-    env_variant_id = env_payload.get("id") or job.job_id
-    sampling_override = _sampling_args_override(sampling_args=sampling_args, model_payload=model_payload)
     if models is not None:
         _merge_unique_model_payload(
             models,
@@ -468,7 +535,7 @@ def build_job_entry(
         env_template_id=env_template_id,
         env_variant_id=env_variant_id,
         env_args=_normalize_payload(env_args),
-        sampling_args=sampling_override,
+        sampling_args=canonical["sampling_override"],
         status="pending",
         reason=None,
         attempt=0,
@@ -574,16 +641,23 @@ class RunManifest:
             models=self.model.models,
             env_templates=self.model.env_templates,
         )
-        entry.env_id = updated.env_id
-        entry.model_id = updated.model_id
-        entry.env_template_id = updated.env_template_id
-        entry.env_variant_id = updated.env_variant_id
-        entry.env_args = updated.env_args
-        entry.sampling_args = updated.sampling_args
-        entry.results_relpath = results_relpath
-        entry.metadata_relpath = metadata_relpath
-        if entry.results_dir is None and updated.results_dir is not None:
-            entry.results_dir = updated.results_dir
+        runtime_state = {field: getattr(entry, field) for field in _ENSURE_JOB_RUNTIME_STATE_FIELDS}
+        if entry.results_dir is not None:
+            results_dir_value = entry.results_dir
+        else:
+            results_dir_value = updated.results_dir
+        replacement = updated.model_copy(
+            update={
+                **runtime_state,
+                "results_dir": results_dir_value,
+                "results_relpath": results_relpath,
+                "metadata_relpath": metadata_relpath,
+            }
+        )
+        # Preserve object identity so external references to `entry` remain live.
+        for field_name, value in replacement.model_dump().items():
+            setattr(entry, field_name, value)
+        self._index[job.job_id] = entry
         return entry
 
     def record_job_start(self, job_id: str) -> None:
