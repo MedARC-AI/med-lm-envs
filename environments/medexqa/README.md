@@ -74,10 +74,10 @@ uv run vf-eval medexqa \
 | `explanation_metrics`  | list[str] \/ str \| None | `None`         | Lexical metrics to use: any of `rougeL`, `bleu`, `meteor`, `bertscore`. `None`\/`"all"` averages all four. |
 | `mcq_weight`           | float                  | `0.5`          | Weight for MCQ accuracy in the combined score. |
 | `explanation_weight`   | float                  | `0.5`          | Weight for explanation in the combined score. |
-| `use_judge`            | bool                   | `False`        | Use LLM-as-judge for explanations instead of lexical metrics. |
-| `judge_model`          | str                    | `gpt-4o-mini`  | Judge model name. |
-| `judge_base_url`       | str \| None            | `None`         | Judge API base URL. |
-| `judge_api_key`        | str \| None            | `None`         | Judge API key (falls back to `JUDGE_API_KEY` or `OPENAI_API_KEY`). |
+| `use_judge`            | bool                   | `True`         | Use LLM-as-judge for explanations instead of lexical metrics. |
+| `judge_model`          | str \| list[str]       | `gpt-4o-mini`  | Judge model name(s). |
+| `judge_base_url`       | str \| list[str] \| None | `None`       | Judge API base URL(s). |
+| `judge_api_key`        | str \| list[str] \| None | `None`       | Judge API key(s) (falls back to `JUDGE_API_KEY` or `OPENAI_API_KEY`). |
 | `seed`                 | int \| None            | `None`         | When multiple specialties are selected, shuffles the combined eval set with this seed. |
 
 ### Metrics

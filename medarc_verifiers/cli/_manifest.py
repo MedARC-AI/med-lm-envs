@@ -14,11 +14,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from medarc_verifiers.cli._job_builder import ResolvedJob
 from medarc_verifiers.cli._schemas import ModelConfigSchema
+from medarc_verifiers.cli.utils.json_io import dumps_json
 from medarc_verifiers.cli.utils.shared import compute_checksum, resolve_env_identifier_or
-from medarc_verifiers.utils.pathing import project_root, to_project_relative
+from medarc_verifiers.utils.pathing import normalize_results_dir_for_manifest
 
 MANIFEST_FILENAME = "run_manifest.json"
-PROJECT_ROOT = project_root()
 MANIFEST_VERSION = 3
 SUPPORTED_MANIFEST_VERSIONS = {3}
 
@@ -138,15 +138,7 @@ def _drop_resume_tolerant_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 def _relativize_results_dir(value: str | Path, *, run_dir: Path) -> str:
     """Ensure results directories are stored relative to the project root."""
-    candidate = Path(value)
-    if not candidate.is_absolute():
-        if candidate.parts and candidate.parts[0] == "runs":
-            candidate = (PROJECT_ROOT / candidate).resolve()
-        else:
-            candidate = (run_dir / candidate).resolve()
-    else:
-        candidate = candidate.resolve()
-    return to_project_relative(candidate)
+    return normalize_results_dir_for_manifest(value, run_dir=run_dir)
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -174,7 +166,9 @@ def _require_manifest_v3(payload: Mapping[str, Any], *, path: Path | None = None
 
 
 def _sanitize_model_payload(model_payload: Mapping[str, Any]) -> dict[str, Any]:
-    sanitized = {key: value for key, value in model_payload.items() if key not in ModelConfigSchema.resume_tolerant_fields}
+    sanitized = {
+        key: value for key, value in model_payload.items() if key not in ModelConfigSchema.resume_tolerant_fields
+    }
 
     model_slug = sanitized.get("model")
     if isinstance(model_slug, str):
@@ -700,8 +694,8 @@ class RunManifest:
             return
         tmp_path = self.path.with_suffix(".tmp")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with tmp_path.open("w", encoding="utf-8") as handle:
-            json.dump(self.model.model_dump(exclude_none=True), handle, indent=2, sort_keys=True)
+        text = dumps_json(self.model.model_dump(exclude_none=True))
+        tmp_path.write_text(text, encoding="utf-8")
         tmp_path.replace(self.path)
 
     @classmethod
@@ -710,6 +704,7 @@ class RunManifest:
             raise FileNotFoundError(f"Run manifest '{path}' not found.")
         with path.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
+        payload, _ = _upgrade_manifest_payload(payload)
         model = RunManifestModel.model_validate(payload)
         return cls(path=path, model=model, persist=persist)
 
@@ -771,3 +766,54 @@ __all__ = [
     "resolved_job_signature",
     "timestamp",
 ]
+
+
+def _upgrade_manifest_payload(payload: Any) -> tuple[Any, bool]:
+    """Apply in-memory migrations for older manifest payloads."""
+    if not isinstance(payload, dict):
+        return payload, False
+
+    changed = False
+    version = payload.get("version")
+    jobs = payload.get("jobs")
+    if version == 2:
+        payload["version"] = MANIFEST_VERSION
+        payload.setdefault("artifacts_root", ".")
+        changed = True
+        if isinstance(jobs, list):
+            for index, job in enumerate(jobs):
+                if not isinstance(job, dict):
+                    continue
+                job_id = str(job.get("job_id") or "")
+                base_dir = Path(str(job.get("results_dir") or job_id or ""))
+                if not base_dir.as_posix():
+                    base_dir = Path(job_id or f"job-{index}")
+                if "results_relpath" not in job:
+                    job["results_relpath"] = (base_dir / "results.jsonl").as_posix()
+                    changed = True
+                if "metadata_relpath" not in job:
+                    job["metadata_relpath"] = (base_dir / "metadata.json").as_posix()
+                    changed = True
+                if "summary_relpath" in job:
+                    job.pop("summary_relpath", None)
+                    changed = True
+                if "artifacts_checksum" in job:
+                    job.pop("artifacts_checksum", None)
+                    changed = True
+                if "artifacts" in job:
+                    job.pop("artifacts", None)
+                    changed = True
+
+    env_templates = payload.get("env_templates")
+    if isinstance(env_templates, dict):
+        for template_id, template in env_templates.items():
+            if not isinstance(template, dict):
+                continue
+            if "interleave_scoring" not in template:
+                continue
+            interleave_value = template.pop("interleave_scoring")
+            template.setdefault("independent_scoring", interleave_value)
+            env_templates[template_id] = template
+            changed = True
+
+    return payload, changed

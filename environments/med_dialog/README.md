@@ -16,7 +16,7 @@
 
 ### Task
 - **Type**: Single-Turn
-- **Rubric overview**: JudgeRubric (LLM-as-a-Judge evaluation using prompts adapted from MedHELM)
+- **Rubric overview**: LLM-as-a-judge evaluation using prompts adapted from MedHELM (single or multi-judge)
 - **Evaluation dimensions**:
   - **Accuracy** (1-5): Does the summary correctly capture the main medical issue and clinical details?
   - **Completeness** (1-5): Does the summary include all important medical information?
@@ -45,9 +45,9 @@ Document any supported environment arguments and their meaning:
 | Arg | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
 | `cache_dir` | str \| Path \| None | `~/.cache/meddialog` | Local directory to cache downloaded datasets. Can also be set via `MEDDIALOG_CACHE_DIR` environment variable. |
-| `judge_model` | str | `"gpt-4o-mini"` | Model identifier for the LLM judge evaluating summaries |
-| `judge_base_url` | str \| None | `None` | Custom API base URL for judge model (defaults to OpenAI API) |
-| `judge_api_key` | str \| None | `None` | API key for judge model. Falls back to `JUDGE_API_KEY` environment variable if not provided |
+| `judge_model` | str \| list[str] | `"gpt-4o-mini"` | Model identifier(s) for the LLM judge evaluating summaries |
+| `judge_base_url` | str \| list[str] \| None | `None` | Custom API base URL(s) for judge model (defaults to OpenAI API) |
+| `judge_api_key` | str \| list[str] \| None | `None` | API key(s) for judge model. Falls back to `JUDGE_API_KEY` environment variable if not provided |
 
 ### Results Dataset Structure
 #### Core Evaluation Fields

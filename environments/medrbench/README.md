@@ -19,7 +19,7 @@
 - **Type**: diagnosis supports `oracle`, `1turn`, and `free_turn`; treatment is `oracle` only
 - **System Prompt**: `"You are a professional doctor"` (matching original)
 - **Parser**: Oracle/treatment use `### Answer:`; `1turn`/`free_turn` diagnosis use `### Conclusion:`
-- **Rubric overview**: JudgeRubric (LLM-as-a-Judge evaluation using original MedRBench prompts)
+- **Rubric overview**: MultiJudgeRubric (LLM-as-a-Judge evaluation using original MedRBench prompts)
 - **Evaluation metric**: Binary accuracy (Correct/Wrong)
 
 #### Diagnosis Split (`outcome_accuracy`)
@@ -89,12 +89,12 @@ uv run vf-eval medrbench \
 | `rare_disease_only` | bool | `False` | If True, only include cases with rare diseases |
 | `task_mode` | str | `oracle` | Diagnosis mode: `oracle`, `1turn`, or `free_turn` (diagnosis only) |
 | `max_turns` | int | `5` | Max turns for `free_turn` diagnosis |
-| `judge_model` | str | `gpt-5-mini` | Model identifier for the LLM judge (original uses `gpt-4o-2024-11-20`) |
-| `judge_base_url` | str | `None` | Custom API base URL for judge model |
-| `judge_api_key` | str | `None` | API key for judge model. Falls back to `JUDGE_API_KEY` or `OPENAI_API_KEY` environment variables |
+| `judge_model` | str \| list[str] | `gpt-5-mini` | Model identifier(s) for the LLM judge (original uses `gpt-4o-2024-11-20`) |
+| `judge_base_url` | str \| list[str] | `None` | Custom API base URL(s) for judge model |
+| `judge_api_key` | str \| list[str] | `None` | API key(s) for judge model. Falls back to `JUDGE_API_KEY` or `OPENAI_API_KEY` environment variables |
 | `patient_agent_model` | str | `gpt-4o` | Model identifier for the patient agent in multi-turn modes |
-| `patient_agent_base_url` | str | `None` | Custom API base URL for the patient agent |
-| `patient_agent_api_key` | str | `None` | API key for the patient agent (defaults to judge credentials) |
+| `patient_agent_base_url` | str | `None` | Custom API base URL for the patient agent (required) |
+| `patient_agent_api_key` | str | `None` | API key for the patient agent (required) |
 | `system_prompt` | str | `"You are a professional doctor"` | System prompt (matches original MedRBench) |
 
 ### Dataset Size Notes

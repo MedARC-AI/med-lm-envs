@@ -5,12 +5,11 @@ from typing import Optional
 
 import verifiers as vf
 from datasets import load_dataset
+from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric, JudgeResult
 from medarc_verifiers.parsers.xml_parser import XMLParser
 from medarc_verifiers.rewards.multiple_choice_accuracy import multiple_choice_accuracy
 from medarc_verifiers.parsers import get_parsed_field
-from medarc_verifiers.utils import default_judge_api_key, judge_sampling_args_and_headers
 from medarc_verifiers.utils.randomize_multiple_choice import randomize_multiple_choice
-from openai import AsyncOpenAI
 from verifiers.types import Info, State
 from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
@@ -131,9 +130,9 @@ def load_environment(
     shuffle_answers: bool = False,
     shuffle_seed: int | None = 1618,
     # Open-ended specific options
-    judge_model: str = "gpt-4o-mini",
-    judge_base_url: str | None = None,
-    judge_api_key: str | None = None,
+    judge_model: str | list[str] = "gpt-4o-mini",
+    judge_base_url: str | list[str] | None = None,
+    judge_api_key: str | list[str] | None = None,
     **kwargs,
 ) -> vf.Environment:
     """
@@ -144,9 +143,9 @@ def load_environment(
         system_prompt: Custom system prompt (uses mode-appropriate default if None).
         shuffle_answers: Shuffle MCQ answer options (MCQ mode only).
         shuffle_seed: Seed for answer shuffling (MCQ mode only).
-        judge_model: Model to use for LLM-as-judge evaluation (Open-ended mode only).
-        judge_base_url: Base URL for judge API (Open-ended mode only).
-        judge_api_key: API key for judge (Open-ended mode only).
+        judge_model: Model(s) to use for LLM-as-judge evaluation (Open-ended mode only).
+        judge_base_url: Base URL(s) for judge API (Open-ended mode only).
+        judge_api_key: API key(s) for judge (Open-ended mode only).
 
     Returns:
         A vf.Environment configured for the selected mode.
@@ -221,9 +220,9 @@ def _load_mcq_environment(
 
 def _load_open_ended_environment(
     system_prompt: Optional[str],
-    judge_model: str,
-    judge_base_url: str | None,
-    judge_api_key: str | None,
+    judge_model: str | list[str],
+    judge_base_url: str | list[str] | None,
+    judge_api_key: str | list[str] | None,
 ) -> vf.Environment:
     """Load CareQA open-ended environment with LLM-as-judge evaluation."""
     eval_dataset = load_dataset("HPAI-BSC/CareQA", "CareQA_en_open", split="test")
@@ -244,57 +243,76 @@ def _load_open_ended_environment(
         "Instructions: The following text is a medical question. Answer it in the most factual, concise, and informative way possible."
     )
 
-    # Judge client setup
-    api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
-    sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
-    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=default_headers)
     judge_parser = XMLParser(
-        fields=["analysis", "semantically_correct", "matches_details", "extraneous_information", "critical_error"]
+        fields=["semantically_correct", "matches_details", "substantive_addition", "critical_error"]
     )
-
-    judge_rubric = vf.JudgeRubric(
-        parser=judge_parser,
-        judge_client=judge_client,
+    multi_judge = MultiJudge.from_env_args(
         judge_model=judge_model,
-        judge_prompt="{question}",
-        judge_sampling_args=sampling_args,
+        judge_base_url=judge_base_url,
+        judge_api_key=judge_api_key,
     )
+    rubric = MultiJudgeRubric(multi_judge)
 
-    async def accuracy(judge, prompt, completion, answer, state: State, info: Info) -> float:
+    async def accuracy(prompt, completion, answer, state: State, info: Info) -> float:
         """Evaluate medical equivalence using LLM-as-judge."""
         completion_text = completion if isinstance(completion, str) else str(completion)
         response = extract_answer_section(completion_text)
 
-        try:
-            judge_prompt = JUDGE_TEMPLATE.format(question=info.get("question", ""), answer=answer, response=response)
-            judge_response = await judge_rubric.judge(judge_prompt, "", "", state)
-            rubric_scores = judge_parser.parse(judge_response)
-        except AttributeError:
-            judge_response = await judge_rubric.judge(judge_prompt, "", "", state)
-            rubric_scores = judge_parser.parse(judge_response)
+        judge_prompt = JUDGE_TEMPLATE.format(question=info.get("question", ""), answer=answer, response=response)
+        judge_results: list[JudgeResult] = await rubric.judge(judge_prompt, "", "", state)
+        judge_entries = []
+        scores: list[float | None] = []
+        for result in judge_results:
+            entry_error = result.error
+            rubric_scores = None
+            try:
+                rubric_scores = judge_parser.parse(result.raw)
+            except AttributeError:
+                result = await rubric.rerun_judge(result, judge_prompt, "", "", state)
+                entry_error = result.error
+                rubric_scores = judge_parser.parse(result.raw)
 
-        semantically_correct = parse_rubric_scores(rubric_scores, "semantically_correct")
-        matches_details = parse_rubric_scores(rubric_scores, "matches_details")
-        substantive_addition = parse_rubric_scores(rubric_scores, "substantive_addition", invert=True)
-        critical_error = parse_rubric_scores(rubric_scores, "critical_error", invert=True)
+            if rubric_scores is None:
+                score = None
+                semantically_correct = None
+                matches_details = None
+                substantive_addition = None
+                critical_error = None
+            else:
+                semantically_correct = parse_rubric_scores(rubric_scores, "semantically_correct")
+                matches_details = parse_rubric_scores(rubric_scores, "matches_details")
+                substantive_addition = parse_rubric_scores(rubric_scores, "substantive_addition", invert=True)
+                critical_error = parse_rubric_scores(rubric_scores, "critical_error", invert=True)
+                score = (semantically_correct + matches_details + substantive_addition + critical_error) / 4.0
 
-        score = semantically_correct + matches_details + substantive_addition + critical_error
+            scores.append(score)
+            judge_entries.append(
+                {
+                    "model": result.model,
+                    "raw": result.raw,
+                    "error": entry_error,
+                    "semantically_correct": semantically_correct,
+                    "matches_details": matches_details,
+                    "substantive_addition": substantive_addition,
+                    "critical_error": critical_error,
+                    "score": score,
+                }
+            )
 
+        aggregated = rubric.multi_judge.mean(scores)
         info.setdefault("judge_feedback", []).append(
             {
-                "semantically_correct": semantically_correct,
-                "matches_details": matches_details,
-                "substantive_addition": substantive_addition,
-                "critical_error": critical_error,
-                "raw_judge": str(judge_response),
+                "judges": judge_entries,
+                "score": aggregated,
             }
         )
-        return score / 4.0
 
-    judge_rubric.add_reward_func(accuracy, weight=1.0)
+        return aggregated
+
+    rubric.add_reward_func(accuracy, weight=1.0)
 
     return vf.SingleTurnEnv(
         eval_dataset=eval_dataset,
         system_prompt=final_system_prompt,
-        rubric=judge_rubric,
+        rubric=rubric,
     )

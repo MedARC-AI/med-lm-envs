@@ -14,4 +14,3 @@ def test_task_root_for_id_prefers_existing_raw(tmp_path: Path) -> None:
     raw.mkdir(parents=True)
     resolved = _task_root_for_id(tmp_path, "job-1:foo")
     assert resolved == raw
-

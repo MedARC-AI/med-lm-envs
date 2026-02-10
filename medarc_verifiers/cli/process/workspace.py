@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
 from medarc_verifiers.cli.hf import HFSyncConfig, download_hf_repo
+from medarc_verifiers.utils.pathing import resolve_under
 
 
 @dataclass(slots=True)
@@ -175,9 +176,8 @@ def _has_complete_hf_baseline(output_dir: Path) -> bool:
     if not isinstance(files, dict):
         return False
     for rel_path in files.keys():
-        try:
-            candidate = output_dir / str(rel_path)
-        except Exception:
+        candidate = resolve_under(output_dir, str(rel_path))
+        if candidate is None:
             return False
         if not candidate.is_file():
             return False

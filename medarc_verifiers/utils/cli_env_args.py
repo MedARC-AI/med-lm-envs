@@ -202,6 +202,17 @@ def _infer_argparse_spec(annotation: Any, default: Any) -> ArgSpec:
 
     if _is_union(normalized):
         union_args = get_args(normalized)
+        list_args = [arg for arg in union_args if get_origin(arg) is list]
+        non_list_args = [arg for arg in union_args if get_origin(arg) is not list]
+        if len(list_args) == 1 and len(non_list_args) == 1:
+            list_spec = _infer_list_spec(list_args[0])
+            if not list_spec.unsupported_reason:
+                scalar_spec = _infer_argparse_spec(non_list_args[0], _EMPTY)
+                if not scalar_spec.unsupported_reason:
+                    if scalar_spec.kind == "enum" and list_spec.choices == scalar_spec.choices:
+                        return list_spec
+                    if scalar_spec.argparse_type is not None and list_spec.element_type == scalar_spec.argparse_type:
+                        return list_spec
         enum_args = [arg for arg in union_args if _is_enum(arg)]
         non_enum_args = [arg for arg in union_args if not _is_enum(arg)]
         if len(enum_args) == 1 and all(arg is str for arg in non_enum_args):
@@ -273,9 +284,12 @@ def _strip_optional(annotation: Any) -> tuple[Any, bool]:
 
     origin = get_origin(annotation)
     if origin in {types.UnionType, Union}:
-        args = [arg for arg in get_args(annotation) if arg is not _NONE_TYPE]
-        if len(args) == 1:
-            return (args[0], True)
+        args = list(get_args(annotation))
+        if _NONE_TYPE in args:
+            args = [arg for arg in args if arg is not _NONE_TYPE]
+            if len(args) == 1:
+                return (args[0], True)
+            return (Union[tuple(args)], True)
         return (annotation, False)
 
     if annotation is Optional:

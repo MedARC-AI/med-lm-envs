@@ -58,9 +58,7 @@ def test_judge_sampling_explicit_include_usage_false(monkeypatch: pytest.MonkeyP
     monkeypatch.setenv("PRIME_TEAM_ID", "prime-team-123")
     monkeypatch.delenv("MEDARC_INCLUDE_USAGE", raising=False)
 
-    result, headers = judge_sampling_args_and_headers(
-        "gpt-4.1", base_url=PRIME_INFERENCE_URL, include_usage=False
-    )
+    result, headers = judge_sampling_args_and_headers("gpt-4.1", base_url=PRIME_INFERENCE_URL, include_usage=False)
 
     assert result["temperature"] == 0.5
     assert result["top_p"] == 1.0

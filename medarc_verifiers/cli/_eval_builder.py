@@ -75,7 +75,7 @@ def build_client_config(
     client_kwargs: dict[str, Any] = {
         "api_key_var": effective_api_key_var,
         "api_base_url": api_base_url,
-        "extra_headers": merged_headers or None,
+        "extra_headers": normalized_headers or {},
     }
     timeout = timeout_override if timeout_override is not None else model_cfg.timeout
     if timeout is not None:
@@ -145,28 +145,54 @@ def build_eval_config(
     verbose_flag = env_cfg.verbose if env_cfg.verbose is not None else verbose
     save_every = env_cfg.save_every if env_cfg.save_every is not None else -1
     state_columns = list(env_cfg.state_columns) if env_cfg.state_columns else None
+    eval_config_fields = _pydantic_field_names(EvalConfig)
 
-    return EvalConfig(
-        env_id=env_id,
-        env_args=merged_env_args,
-        env_dir_path=str(env_dir),
-        model=resolved_model,
-        client_config=client_config,
-        sampling_args=merged_sampling,
-        num_examples=env_cfg.num_examples,
-        rollouts_per_example=env_cfg.rollouts_per_example,
-        max_concurrent=max_concurrent,
-        max_concurrent_generation=max_concurrent_generation,
-        max_concurrent_scoring=max_concurrent_scoring,
-        interleave_scoring=env_cfg.interleave_scoring,
-        print_results=env_cfg.print_results,
-        verbose=verbose_flag,
-        state_columns=state_columns,
-        save_results=save_results,
-        save_every=save_every,
-        save_to_hf_hub=save_to_hf_hub,
-        hf_hub_dataset_name=hf_hub_dataset_name,
-    )
+    eval_kwargs: dict[str, Any] = {
+        "env_id": env_id,
+        "env_args": merged_env_args,
+        "env_dir_path": str(env_dir),
+        "model": resolved_model,
+        "client_config": client_config,
+        "sampling_args": merged_sampling,
+        "num_examples": env_cfg.num_examples,
+        "rollouts_per_example": env_cfg.rollouts_per_example,
+        "max_concurrent": max_concurrent,
+        "max_concurrent_generation": max_concurrent_generation,
+        "max_concurrent_scoring": max_concurrent_scoring,
+        "print_results": env_cfg.print_results,
+        "verbose": verbose_flag,
+        "state_columns": state_columns,
+        "save_results": save_results,
+        "save_every": save_every,
+        "save_to_hf_hub": save_to_hf_hub,
+        "hf_hub_dataset_name": hf_hub_dataset_name,
+    }
+
+    independent_scoring = getattr(env_cfg, "independent_scoring", None)
+    interleave_scoring = getattr(env_cfg, "interleave_scoring", None)
+
+    if interleave_scoring is not None:
+        raise ValueError(
+            f"Environment '{env_id}' uses interleave_scoring, which is no longer supported; use independent_scoring."
+        )
+
+    if "independent_scoring" in eval_config_fields:
+        if independent_scoring is None:
+            independent_scoring = True
+        eval_kwargs["independent_scoring"] = bool(independent_scoring)
+    elif independent_scoring is not None:
+        logger.warning(
+            "Environment '%s' set independent_scoring=%s, but installed verifiers does not support it; ignoring.",
+            env_id,
+            independent_scoring,
+        )
+
+    if "extra_env_kwargs" in eval_config_fields:
+        extra_env_kwargs = getattr(env_cfg, "extra_env_kwargs", None)
+        if extra_env_kwargs is not None:
+            eval_kwargs["extra_env_kwargs"] = dict(extra_env_kwargs)
+
+    return EvalConfig(**eval_kwargs)
 
 
 __all__ = ["build_client_config", "build_eval_config"]
@@ -178,3 +204,13 @@ def _call_env_metadata_loader(loader: Callable[..., Any], env_id: str, cache: En
         return loader(env_id, cache=cache)
     except TypeError:
         return loader(env_id)
+
+
+def _pydantic_field_names(model_type: type[Any]) -> set[str]:
+    fields = getattr(model_type, "model_fields", None)
+    if isinstance(fields, dict):
+        return set(fields.keys())
+    fields = getattr(model_type, "__fields__", None)
+    if isinstance(fields, dict):
+        return set(fields.keys())
+    return set()

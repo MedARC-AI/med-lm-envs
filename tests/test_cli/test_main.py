@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -489,6 +490,146 @@ def test_regen_accepts_path_to_run_dir(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert exit_code == 0
     # Ensure manifest exists after restart-in-place; legacy regen_source not asserted.
     assert (output_dir / "base-run" / "run_manifest.json").exists()
+
+
+def test_regen_accepts_manifest_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    _write_config(
+        config_path,
+        """
+        models:
+          model-a: {}
+        envs:
+          medqa: {}
+        jobs:
+          - model: model-a
+            env: medqa
+        """,
+    )
+
+    monkeypatch.setattr("medarc_verifiers.cli._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+
+    async def fake_run(config):
+        return _stub_cli_result()
+
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
+
+    output_dir = tmp_path / "runs_out"
+    base_run = "base-run"
+    assert (
+        main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir), "--run-id", base_run]) == 0
+    )
+
+    manifest_path = output_dir / base_run / "run_manifest.json"
+    monkeypatch.setattr("medarc_verifiers.cli.main._prompt_completed_jobs_action", lambda: "continue")
+    exit_code = main.main(
+        [
+            "bench",
+            "--config",
+            str(config_path),
+            "--output-dir",
+            str(output_dir),
+            "--restart",
+            str(manifest_path),
+        ]
+    )
+    assert exit_code == 0
+
+
+def test_invalid_run_id_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    _write_config(
+        config_path,
+        """
+        models:
+          model-a: {}
+        envs:
+          medqa: {}
+        jobs:
+          - model: model-a
+            env: medqa
+        """,
+    )
+
+    monkeypatch.setattr("medarc_verifiers.cli._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+
+    output_dir = tmp_path / "runs_out"
+    caplog.set_level(logging.ERROR)
+    exit_code = main.main(
+        [
+            "bench",
+            "--config",
+            str(config_path),
+            "--output-dir",
+            str(output_dir),
+            "--run-id",
+            "../oops",
+        ]
+    )
+    assert exit_code == 1
+    assert "Invalid --run-id '../oops'" in caplog.text
+    assert "Suggested safe value: --run-id" in caplog.text
+
+    caplog.clear()
+    exit_code = main.main(
+        [
+            "bench",
+            "--config",
+            str(config_path),
+            "--output-dir",
+            str(output_dir),
+            "--run-id",
+            "/tmp/elsewhere",
+        ]
+    )
+    assert exit_code == 1
+    assert "Invalid --run-id '/tmp/elsewhere'" in caplog.text
+
+
+def test_restart_run_id_rejects_traversal(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    _write_config(
+        config_path,
+        """
+        models:
+          model-a: {}
+        envs:
+          medqa: {}
+        jobs:
+          - model: model-a
+            env: medqa
+        """,
+    )
+
+    monkeypatch.setattr("medarc_verifiers.cli._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+
+    output_dir = tmp_path / "runs_out"
+    caplog.set_level(logging.ERROR)
+    exit_code = main.main(
+        [
+            "bench",
+            "--config",
+            str(config_path),
+            "--output-dir",
+            str(output_dir),
+            "--restart",
+            "../escape",
+        ]
+    )
+    assert exit_code == 1
+    assert "Invalid --restart '../escape'" in caplog.text
 
 
 def test_auto_resume_discovery_without_run_id(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

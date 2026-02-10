@@ -1,0 +1,25 @@
+[project]
+name = "medagentbenchv2"
+version = "0.1.0"
+description = "MedAgentBench V2 environment for tool-calling evaluation."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "verifiers<0.1.8",
+    "datasets",
+    "requests",
+    "pydantic",
+    "simpleeval",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["medagentbenchv2"]
+
+[tool.prime.environment]
+loader = "medagentbenchv2:load_environment"
+display_name = "MedAgentBench V2"
+visibility = "PUBLIC"

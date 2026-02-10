@@ -1,5 +1,5 @@
+import json
 import os
-import requests
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -8,13 +8,14 @@ import verifiers as vf
 from datasets import Dataset
 from datasets.utils.logging import disable_progress_bar
 from medarc_verifiers.parsers import JSONParser
-from medarc_verifiers.utils import default_judge_api_key, judge_sampling_args_and_headers
-from openai import AsyncOpenAI
+from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric
+from medarc_verifiers.rewards import normalize_helm_reward
+from medarc_verifiers.utils import download_file, medarc_cache_dir
 from verifiers.types import Info, Messages, State
 
 from mtsamples_procedures.judge_prompts import JUDGE_OUTPUT_JSON, JUDGE_TEMPLATE
 
-disable_progress_bar()  
+disable_progress_bar()
 
 GIT_HASH = "c4c252443fa9c52afb6960f53e51be278639bea2"
 BASE_URL = f"https://raw.githubusercontent.com/raulista1997/benchmarkdata/{GIT_HASH}/mtsample_procedure"
@@ -33,30 +34,28 @@ def _resolve_cache_dir(cache_dir: Path | str | None) -> Path:
         env_override = os.getenv("MTSAMPLES_PROCEDURES_CACHE_DIR")
         if env_override:
             return Path(env_override)
-        return Path.home() / ".cache" / "mtsamples_procedures"
-    return Path(cache_dir)
+    return medarc_cache_dir(cache_dir) / "mtsamples_procedures"
 
 
 def _extract_sections(text: str) -> tuple[str | None, str | None, str | None]:
- 
     plan, summary, findings = None, None, None
     text_upper = text.upper()
 
     if "PLAN:" in text_upper:
         idx = text_upper.find("PLAN:")
-        after_header = text[idx + len("PLAN:"):]
+        after_header = text[idx + len("PLAN:") :]
         first_line = after_header.split("\n", 1)[0].strip()
         plan = first_line if first_line else None
 
     if "SUMMARY:" in text_upper:
         idx = text_upper.find("SUMMARY:")
-        after_header = text[idx + len("SUMMARY:"):]
+        after_header = text[idx + len("SUMMARY:") :]
         first_line = after_header.split("\n", 1)[0].strip()
         summary = first_line if first_line else None
 
     if "FINDINGS:" in text_upper:
         idx = text_upper.find("FINDINGS:")
-        after_header = text[idx + len("FINDINGS:"):]
+        after_header = text[idx + len("FINDINGS:") :]
         first_line = after_header.split("\n", 1)[0].strip()
         findings = first_line if first_line else None
 
@@ -70,9 +69,7 @@ def _remove_sections(text: str) -> str:
     return text
 
 
-
 def _download_txt_files(cache_path: Path) -> list[Path]:
-
     txt_dir = cache_path / "txt_files"
     txt_dir.mkdir(parents=True, exist_ok=True)
 
@@ -80,27 +77,23 @@ def _download_txt_files(cache_path: Path) -> list[Path]:
     if len(existing_files) > 0:
         return existing_files
 
-    response = requests.get(API_URL)
-    response.raise_for_status()
-    files_data = response.json()
+    files_json = download_file(API_URL, cache_path / "files.json")
+    files_data = json.loads(files_json.read_text(encoding="utf-8"))
 
     downloaded_files = []
     for file_info in files_data:
         if file_info["name"].endswith(".txt"):
-            encoded_name = quote(file_info['name'])
+            encoded_name = quote(file_info["name"])
             file_url = f"{BASE_URL}/{encoded_name}"
             dest_path = txt_dir / file_info["name"]
 
-            file_response = requests.get(file_url)
-            file_response.raise_for_status()
-            dest_path.write_text(file_response.text, encoding='utf-8')
+            download_file(file_url, dest_path)
             downloaded_files.append(dest_path)
 
     return downloaded_files
 
 
 def _load_dataset(cache_dir: Path | str | None = None) -> Dataset:
- 
     cache_path = _resolve_cache_dir(cache_dir)
     cache_path.mkdir(parents=True, exist_ok=True)
 
@@ -113,7 +106,7 @@ def _load_dataset(cache_dir: Path | str | None = None) -> Dataset:
     examples = []
 
     for idx, txt_file in enumerate(txt_files):
-        text = txt_file.read_text(encoding='utf-8')
+        text = txt_file.read_text(encoding="utf-8")
 
         plan, summary, findings = _extract_sections(text)
 
@@ -134,17 +127,19 @@ def _load_dataset(cache_dir: Path | str | None = None) -> Dataset:
 
         input_text = _remove_sections(text)
 
-        examples.append({
-            "id": idx,
-            "question": input_text,
-            "answer": reference,
-            "info": {
-                "filename": txt_file.name,
-                "extracted_section": extracted_section,
-                "procedure_note": input_text,
-                "reference_plan": reference,
+        examples.append(
+            {
+                "id": idx,
+                "question": input_text,
+                "answer": reference,
+                "info": {
+                    "filename": txt_file.name,
+                    "extracted_section": extracted_section,
+                    "procedure_note": input_text,
+                    "reference_plan": reference,
+                },
             }
-        })
+        )
 
     dataset = Dataset.from_list(examples)
 
@@ -156,27 +151,24 @@ def _load_dataset(cache_dir: Path | str | None = None) -> Dataset:
 def load_environment(
     use_think: bool = False,
     cache_dir: Path | str | None = None,
-    judge_model: str = "gpt-4o-mini",
-    judge_base_url: str | None = None,
-    judge_api_key: str | None = None,
+    judge_model: str | list[str] = "gpt-4o-mini",
+    judge_base_url: str | list[str] | None = None,
+    judge_api_key: str | list[str] | None = None,
     **kwargs: Any,
 ) -> vf.Environment:
-
-  
     eval_dataset = _load_dataset(cache_dir)
 
-    api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
-    sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
     judge_parser = JSONParser(fields=list(JUDGE_DIMENSIONS))
 
-    judge_rubric = vf.JudgeRubric(
-        parser=vf.ThinkParser(extract_fn=lambda x: x) if use_think else None,
-        parallelize_scoring=True,
-        judge_client=AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=default_headers),
+    completion_parser = vf.ThinkParser(extract_fn=lambda x: x) if use_think else None
+    multi_judge = MultiJudge.from_env_args(
         judge_model=judge_model,
+        judge_base_url=judge_base_url,
+        judge_api_key=judge_api_key,
         judge_prompt="{question}",
-        judge_sampling_args=sampling_args,
+        completion_parser=completion_parser,
     )
+    rubric = MultiJudgeRubric(multi_judge)
 
     async def reward_mtsamples(
         prompt: Messages,
@@ -195,36 +187,55 @@ def load_environment(
             output_format=JUDGE_OUTPUT_JSON,
         )
 
-        try:
-            judge_raw = await judge_rubric.judge(judge_prompt, completion_text, gold_plan, state)
-            parsed = judge_parser.parse(str(judge_raw), strip=True)
-        except AttributeError:
-            judge_raw = await judge_rubric.judge(judge_prompt, "", "", state)
-            parsed = judge_parser.parse(str(judge_raw), strip=True)
+        judge_results = await rubric.judge(judge_prompt, completion_text, gold_plan, state)
+        judge_entries = []
+        scores = []
+        for result in judge_results:
+            entry_error = result.error
+            try:
+                parsed = judge_parser.parse(str(result.raw), strip=True)
+            except AttributeError:
+                result = await rubric.rerun_judge(result, judge_prompt, completion_text, gold_plan, state)
+                parsed = judge_parser.parse(str(result.raw), strip=True)
+                entry_error = result.error
 
-        if parsed is None:
-            parsed = {dimension: {"score": None, "explanation": None, "raw": None} for dimension in JUDGE_DIMENSIONS}
+            if parsed is None:
+                parsed = {
+                    dimension: {"score": None, "explanation": None, "raw": None} for dimension in JUDGE_DIMENSIONS
+                }
 
-        normalized = _compute_normalized_reward(parsed)
+            normalized = normalize_helm_reward(parsed, dimensions=JUDGE_DIMENSIONS)
+            score = normalized if result.raw is not None else None
+            scores.append(score)
+            judge_entries.append(
+                {
+                    "model": result.model,
+                    "raw": result.raw,
+                    "error": entry_error,
+                    "scores": parsed,
+                    "score": score,
+                }
+            )
 
+        aggregated = rubric.multi_judge.mean(scores)
         info.setdefault("judge_feedback", []).append(
             {
-                "scores": parsed,
-                "raw_judge": str(judge_raw),
+                "judges": judge_entries,
+                "score": aggregated,
             }
         )
 
-        return normalized
+        return aggregated
 
-    judge_rubric.add_reward_func(reward_mtsamples, weight=1.0)
+    rubric.add_reward_func(reward_mtsamples, weight=1.0)
 
     system_prompt = PROMPT_THINK if use_think else PROMPT
 
     return vf.SingleTurnEnv(
-        dataset=eval_dataset,
+        dataset=None,
         eval_dataset=eval_dataset,
         system_prompt=system_prompt,
-        rubric=judge_rubric,
+        rubric=rubric,
         **kwargs,
     )
 
@@ -235,35 +246,3 @@ def _extract_completion_text(completion: Messages) -> str:
         if isinstance(last_msg, dict):
             return str(last_msg.get("content", ""))
     return str(completion)
-
-
-def _coerce_score(value: Any) -> float | None:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        cleaned = value.strip()
-        if not cleaned:
-            return None
-        try:
-            return float(cleaned)
-        except ValueError:
-            return None
-    return None
-
-
-def _compute_normalized_reward(scores: dict[str, dict[str, Any]]) -> float:
-    total_dims = len(JUDGE_DIMENSIONS)
-    if total_dims == 0:
-        return 0.0
-
-    accumulated = 0.0
-    for dimension in JUDGE_DIMENSIONS:
-        score = _coerce_score(scores.get(dimension, {}).get("score"))
-        if score is None:
-            continue
-        clamped = max(0.0, min(5.0, score))
-        accumulated += clamped / 5.0
-
-    return max(0.0, min(1.0, accumulated / total_dims))

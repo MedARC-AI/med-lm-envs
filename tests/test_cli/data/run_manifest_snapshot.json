@@ -4,8 +4,8 @@
   "config_source": "configs/snapshot.yaml",
   "created_at": "2024-03-01T00:00:00Z",
   "env_templates": {
-    "environments.snapshot_env:63923c6b7b00": {
-      "interleave_scoring": false,
+    "environments.snapshot_env:6ef485576891": {
+      "independent_scoring": false,
       "max_concurrent": 4,
       "module": "environments.snapshot_env",
       "num_examples": 3,
@@ -28,7 +28,7 @@
         "split": "dev"
       },
       "env_id": "environments.snapshot_env",
-      "env_template_id": "environments.snapshot_env:63923c6b7b00",
+      "env_template_id": "environments.snapshot_env:6ef485576891",
       "env_variant_id": "snapshot-env",
       "job_id": "snapshot-model-snapshot-env",
       "metadata_relpath": "snapshot-model-snapshot-env/metadata.json",

@@ -447,6 +447,17 @@ def _infer_argparse_spec(annotation: Any, default: Any) -> ArgSpec:
 
     if _is_union(normalized):
         args = get_args(normalized)
+        list_args = [arg for arg in args if get_origin(arg) is list]
+        non_list_args = [arg for arg in args if get_origin(arg) is not list]
+        if len(list_args) == 1 and len(non_list_args) == 1:
+            list_spec = _infer_list_spec(list_args[0])
+            if not list_spec.unsupported_reason:
+                scalar_spec = _infer_argparse_spec(non_list_args[0], _EMPTY)
+                if not scalar_spec.unsupported_reason:
+                    if scalar_spec.kind == "enum" and list_spec.choices == scalar_spec.choices:
+                        return list_spec
+                    if scalar_spec.argparse_type is not None and list_spec.element_type == scalar_spec.argparse_type:
+                        return list_spec
         enum_args = [arg for arg in args if _is_enum(arg)]
         non_enum_args = [arg for arg in args if not _is_enum(arg)]
         if len(enum_args) == 1 and all(arg is str for arg in non_enum_args):
@@ -551,9 +562,12 @@ def _strip_optional(annotation: Any) -> tuple[Any, bool]:
 
     origin = get_origin(annotation)
     if origin in {types.UnionType, Union}:
-        args = [arg for arg in get_args(annotation) if arg is not _NONE_TYPE]
-        if len(args) == 1:
-            return (args[0], True)
+        args = list(get_args(annotation))
+        if _NONE_TYPE in args:
+            args = [arg for arg in args if arg is not _NONE_TYPE]
+            if len(args) == 1:
+                return (args[0], True)
+            return (Union[tuple(args)], True)
         return (annotation, False)
 
     if annotation is Optional:
@@ -583,6 +597,42 @@ def _validate_env_arg_value(env_id: str, param: EnvParam, value: Any) -> None:
     if value is None:
         return
 
+    def _list_param_allows_scalar(param: EnvParam) -> bool:
+        """Return True if a list-typed CLI param also allows a scalar in config/env_args.
+
+        This covers the common pattern: `str | list[str] | None` (or more generally `T | list[T] | None`).
+        The CLI prefers treating these as list parameters (so users can repeat flags), but config files
+        should still be allowed to provide a single scalar value.
+        """
+        annotation = _normalize_annotation(param.annotation)
+        annotation, _ = _strip_optional(annotation)
+        if not _is_union(annotation):
+            return False
+
+        args = get_args(annotation)
+        list_args = [arg for arg in args if get_origin(arg) is list]
+        non_list_args = [arg for arg in args if get_origin(arg) is not list]
+        if len(list_args) != 1 or len(non_list_args) != 1:
+            return False
+
+        list_spec = _infer_list_spec(list_args[0])
+        if list_spec.unsupported_reason:
+            return False
+
+        scalar_spec = _infer_argparse_spec(non_list_args[0], _EMPTY)
+        if scalar_spec.unsupported_reason:
+            return False
+
+        if scalar_spec.kind == "enum" and list_spec.choices == scalar_spec.choices:
+            return True
+        if (
+            scalar_spec.argparse_type is not None
+            and list_spec.element_type is not None
+            and scalar_spec.argparse_type == list_spec.element_type
+        ):
+            return True
+        return False
+
     if param.choices:
         if value not in param.choices:
             allowed = ", ".join(map(repr, param.choices))
@@ -590,6 +640,10 @@ def _validate_env_arg_value(env_id: str, param: EnvParam, value: Any) -> None:
 
     if param.is_list:
         if not isinstance(value, (list, tuple)):
+            if _list_param_allows_scalar(param) and (
+                param.element_type is None or isinstance(value, param.element_type)
+            ):
+                return
             raise ValueError(
                 f"Environment '{env_id}' env_args.{param.name} must be a list, got {type(value).__name__}."
             )

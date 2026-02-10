@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from dataclasses import dataclass
 import hashlib
-from pathlib import Path
-import re
-from typing import Iterable
 import json
+import re
 import shlex
 import signal
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable
 
 from dotenv import dotenv_values
 
@@ -25,22 +25,27 @@ from medarc_verifiers.orchestrate.bench import (
 from medarc_verifiers.orchestrate.config import PlanConfig, TaskSpec
 from medarc_verifiers.orchestrate.dashboard import ACTIVE_STATES, OrchestratorDashboard
 from medarc_verifiers.orchestrate.docker_vllm import (
-    build_container_args,
     ContainerLogStreamer,
-    create_and_start_container,
     DockerLaunchError,
+    build_container_args,
+    create_and_start_container,
     sanitize_container_name,
     wait_for_readiness_async,
     write_container_request,
 )
 from medarc_verifiers.orchestrate.resources import ResourceManager
 from medarc_verifiers.orchestrate.scheduler import Allocation, TaskScheduler
-from medarc_verifiers.orchestrate.state import JobState, TaskManifest, TaskPaths, write_summary, write_task_manifest, write_task_result, write_text
-
-
-COMMAND_TEMPLATE = (
-    "uv run medarc-eval bench --config {job_config_path} --api-base-url {base_url} --on-complete exit"
+from medarc_verifiers.orchestrate.state import (
+    JobState,
+    TaskManifest,
+    TaskPaths,
+    write_summary,
+    write_task_manifest,
+    write_task_result,
+    write_text,
 )
+
+COMMAND_TEMPLATE = "uv run medarc-eval bench --config {job_config_path} --api-base-url {base_url} --on-complete exit"
 
 _TASK_DIR_ALLOWED = re.compile(r"[^a-zA-Z0-9_.-]+")
 
@@ -133,9 +138,7 @@ class OrchestratorRunner:
         write_summary(self._options.output_root / "summary.json", list(self._manifests.values()))
         try:
             loop = asyncio.get_running_loop()
-            runner_task = asyncio.create_task(
-                scheduler.run(self._tasks, self._run_task, shutdown_event=self._shutdown)
-            )
+            runner_task = asyncio.create_task(scheduler.run(self._tasks, self._run_task, shutdown_event=self._shutdown))
             _register_signal_handlers(loop, lambda: self._handle_shutdown(runner_task, loop))
             try:
                 await runner_task
@@ -317,9 +320,7 @@ class OrchestratorRunner:
                 if "--restart" not in command:
                     command.extend(["--restart", restart_value])
             manifest.bench_command = shlex.join(command)
-            self._dashboard.log(
-                f"JOB bench-start task={task.task_id} cmd={_shorten(manifest.bench_command)}"
-            )
+            self._dashboard.log(f"JOB bench-start task={task.task_id} cmd={_shorten(manifest.bench_command)}")
             self._set_state(manifest, paths, JobState.running)
             bench_proc = await start_benchmark(
                 command,
@@ -334,13 +335,9 @@ class OrchestratorRunner:
             manifest.bench_exit_code = bench_result.exit_code
             manifest.bench_duration_s = bench_result.duration_s
             if bench_result.terminated:
-                self._dashboard.log(
-                    f"JOB bench-terminated task={task.task_id} duration={bench_result.duration_s:.1f}s"
-                )
+                self._dashboard.log(f"JOB bench-terminated task={task.task_id} duration={bench_result.duration_s:.1f}s")
             elif bench_result.exit_code == 0:
-                self._dashboard.log(
-                    f"JOB bench-ok task={task.task_id} duration={bench_result.duration_s:.1f}s"
-                )
+                self._dashboard.log(f"JOB bench-ok task={task.task_id} duration={bench_result.duration_s:.1f}s")
             else:
                 self._dashboard.log(
                     f"JOB bench-failed task={task.task_id} exit={bench_result.exit_code} "
@@ -350,9 +347,9 @@ class OrchestratorRunner:
             result_payload = {
                 "exit_code": bench_result.exit_code,
                 "duration_s": bench_result.duration_s,
-                "state": JobState.cancelled if bench_result.terminated else (
-                    JobState.completed if bench_result.exit_code == 0 else JobState.failed
-                ),
+                "state": JobState.cancelled
+                if bench_result.terminated
+                else (JobState.completed if bench_result.exit_code == 0 else JobState.failed),
                 "command": manifest.bench_command,
                 "argv": list(command),
                 "terminated": bench_result.terminated,
@@ -455,7 +452,7 @@ class OrchestratorRunner:
             self._dashboard.log(
                 "SHUTDOWN graceful requested (press Ctrl+C again to force) "
                 f"active={active} pending={pending} shutdown_elapsed={shutdown_elapsed} "
-                "note=\"no new jobs will start\""
+                'note="no new jobs will start"'
             )
             self._shutdown.set()
             self._dashboard.update(self._manifests.values(), caption=self._dashboard_caption())
@@ -527,16 +524,13 @@ class OrchestratorRunner:
             gpu_text = ",".join(str(gpu) for gpu in manifest.gpu_ids or []) or "-"
             port_text = str(manifest.port) if manifest.port is not None else "-"
             self._dashboard.log(
-                f"JOB start task={manifest.task_id} model={manifest.model_key} "
-                f"gpus={gpu_text} port={port_text}"
+                f"JOB start task={manifest.task_id} model={manifest.model_key} gpus={gpu_text} port={port_text}"
             )
             return
         if state == JobState.completed:
             exit_code = manifest.bench_exit_code
             exit_text = str(exit_code) if exit_code is not None else "-"
-            self._dashboard.log(
-                f"JOB complete task={manifest.task_id} exit={exit_text} total_elapsed={total_elapsed}"
-            )
+            self._dashboard.log(f"JOB complete task={manifest.task_id} exit={exit_text} total_elapsed={total_elapsed}")
             return
         if state == JobState.failed:
             reason = manifest.failure_reason or "unknown"
@@ -639,7 +633,9 @@ def _is_transient_error(exc: Exception) -> bool:
             or "timeout" in message
             or "timed out" in message
         )
-    return "connection reset" in message or "read timed out" in message or "timeout" in message or "timed out" in message
+    return (
+        "connection reset" in message or "read timed out" in message or "timeout" in message or "timed out" in message
+    )
 
 
 __all__ = ["OrchestratorOptions", "OrchestratorRunner"]

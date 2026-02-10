@@ -8,7 +8,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any, Callable
 from pathlib import Path
 
-from omegaconf import OmegaConf
+import yaml
 
 from ._schemas import EnvironmentConfigSchema, RunConfigSchema, RESERVED_MATRIX_KEYS
 from .utils.endpoint_utils import EnvMetadataCache, load_env_metadata
@@ -29,6 +29,15 @@ class ConfigFormatError(ValueError):
 
 def _load_raw_config(path: Path) -> Any:
     """Load and resolve an OmegaConf configuration file."""
+    try:
+        from omegaconf import OmegaConf  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Falling back to PyYAML config loader because OmegaConf failed to import: %s",
+            exc,
+        )
+        return yaml.safe_load(path.read_text(encoding="utf-8"))
+
     cfg = OmegaConf.load(path)
     OmegaConf.resolve(cfg)
     return OmegaConf.to_container(cfg, resolve=True)
@@ -257,7 +266,9 @@ def _normalize_section(
 
     normalized: dict[str, Any] = {}
 
-    def _add_entry(entry: Mapping[str, Any], *, key_hint: str | None = None, count_map: dict[str, int] | None = None) -> None:
+    def _add_entry(
+        entry: Mapping[str, Any], *, key_hint: str | None = None, count_map: dict[str, int] | None = None
+    ) -> None:
         if not isinstance(entry, Mapping):
             raise ValueError(f"{context} entries must be mappings.")
         adapted = dict(entry)

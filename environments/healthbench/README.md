@@ -17,7 +17,7 @@
 
 ### Task
 - **Type**: Single-Turn
-- **Rubric overview**: JudgeRubric
+- **Rubric overview**: LLM-as-a-judge evaluation (single or multi-judge)
 
 ### Quickstart
 Run an evaluation with default settings:
@@ -40,13 +40,16 @@ Document any supported environment arguments and their meaning. Example:
 
 | Arg | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
-| `difficulty` | str | `"all"` | One of 'all', 'hard', or 'consensus'; corresponds to healthbench dataset variant|
+| `difficulty` | str | `"all"` | One of 'all', 'hard', or 'consensus'; corresponds to healthbench dataset variant |
 | `make_dataset` | bool | `False` | Add rubric-specific model performance metric to results |
-| `max_parallel_judges` | int | `5` | Number of concurrent judge requests *per rollout* |
+| `judge_model` | str \| list[str] | `"gpt-4o-mini"` | Judge model(s) for evaluation |
+| `judge_base_url` | str \| list[str] \| None | `None` | Base URL(s) for judge API |
+| `judge_api_key` | str \| list[str] \| None | `None` | API key(s) for judge API |
+| `judge_timeout` | int \| None | `300` | Timeout in seconds for judge calls |
+| `max_parallel_judges` | int \| None | `None` | Max concurrent criteria evaluations per rollout (defaults to `3`) |
 
 > [!NOTE]
-> When setting `max_parallel_judges` your total number of concurrent requests
-> will be `max_concurrent` * `max_parallel_judges`!
+> Total concurrent judge requests will scale roughly as `max_concurrent * max_parallel_judges * len(judge_model)`.
 
 ### Results Dataset
 The results dataset can report model performance by theme, axis and consensus

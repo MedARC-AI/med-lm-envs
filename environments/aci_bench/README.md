@@ -43,7 +43,7 @@ The subsets have the following transcription versions:
 ### Task
 - **Type**: single-turn
 - **Parser**: `XMLParser`, `ThinkParser`, or `Parser`
-- **Rubric overview**: JudgeRubric (LLM-as-a-Judge evaluation using prompts adapted from MedHELM)
+- **Rubric overview**: LLM-as-a-judge evaluation using prompts adapted from MedHELM (single or multi-judge)
 - **Evaluation dimensions**:
   - **Accuracy** (1-5): Does the clinical note correctly capture the main medical issue and clinical details?
   - **Completeness** (1-5): Does the clinical note include all important medical information?
@@ -76,9 +76,9 @@ Notes:
 | `transcript_version` | str  | `all`| The transcript version to use (`all`, `asr`, `asrcorr`, `humantrans`)|
 | `use_think`          | bool | `False` | Whether to check for `<think>...</think>` formatting with `ThinkParser`|
 | `answer_format`      | str  | `xml` | The format of the answer (`xml`, `boxed`)|
-| `judge_model`        | str  | `gpt-5-mini` | Model identifier for the the LLM judge |
-| `judge_base_url`     | str  | `None` | Custom API base URL for judge model (defaults to OpenAI API) |
-| `judge_api_key`      | str  | `None` | API key for judge model. Falls back to `JUDGE_API_KEY` environment variable if not provided |
+| `judge_model`        | str \| list[str]  | `gpt-5-mini` | Model identifier(s) for the LLM judge |
+| `judge_base_url`     | str \| list[str]  | `None` | Custom API base URL(s) for judge model (defaults to OpenAI API) |
+| `judge_api_key`      | str \| list[str]  | `None` | API key(s) for judge model. Falls back to `JUDGE_API_KEY` environment variable if not provided |
 
 
 #### Notes

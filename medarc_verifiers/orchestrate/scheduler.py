@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
-import time
 import heapq
+import time
+from dataclasses import dataclass
 from typing import Awaitable, Callable, Iterable
 
 from medarc_verifiers.orchestrate.config import TaskSpec
-from medarc_verifiers.orchestrate.resources import ResourceManager, ResourceError
+from medarc_verifiers.orchestrate.resources import ResourceError, ResourceManager
 
 
 @dataclass(frozen=True)
@@ -158,9 +158,7 @@ class TaskScheduler:
                 try:
                     allocation = self._allocate(task)
                 except ResourceError:
-                    blocked.append(
-                        (time.monotonic() + blocked_cooldown_s, priority, seq, task)
-                    )
+                    blocked.append((time.monotonic() + blocked_cooldown_s, priority, seq, task))
                     # Yield to event loop to allow other tasks (e.g., dashboard refresh) to run
                     await asyncio.sleep(0)
                     continue

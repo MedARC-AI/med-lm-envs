@@ -71,9 +71,9 @@ python -m medarc_verifiers.cli.main meqsum \
 | Arg | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
 | `split` | `str` | `"test"` | Dataset split to use (`train`, `validation`, `test`). |
-| `judge_model` | `str` | `"gpt-4o-mini"` | Model identifier for the LLM judge. |
-| `judge_base_url` | `str \| None` | `None` | Custom API base URL (e.g., for Ollama or local models). |
-| `judge_api_key` | `str \| None` | `None` | API key for the judge model (falls back to `OPENAI_API_KEY`). |
+| `judge_model` | `str \| list[str]` | `"gpt-4o-mini"` | Model identifier(s) for the LLM judge. |
+| `judge_base_url` | `str \| list[str] \| None` | `None` | Custom API base URL(s) (e.g., for Ollama or local models). |
+| `judge_api_key` | `str \| list[str] \| None` | `None` | API key(s) for the judge model (falls back to `OPENAI_API_KEY`). |
 | `compute_auto_metrics` | `bool` | `True` | Whether to compute BLEU/ROUGE/BERTScore metrics. |
 | `system_prompt` | `str \| None` | `None` | Custom system prompt (uses default if not provided). |
 
