@@ -16,6 +16,7 @@ def _make_record(
     tmp_path: Path,
     *,
     manifest_env_id: str | None = "demo-env-rollout3",
+    results_dir_name: str = "job-abc",
     env_args: dict | None = None,
     sampling_args: dict | None = None,
     num_examples: int | None = 10,
@@ -25,7 +26,7 @@ def _make_record(
 ) -> RunRecord:
     runs_dir = tmp_path / "runs"
     run_dir = runs_dir / "run-123"
-    results_dir = run_dir / "job-abc"
+    results_dir = run_dir / results_dir_name
     manifest_info = RunManifestInfo(
         job_run_id="run-123",
         run_name="Example Run",
@@ -44,10 +45,9 @@ def _make_record(
     record = RunRecord(
         manifest=manifest_info,
         job_id="job-abc",
-        job_name="Example Job",
         model_id="gpt-4o",
         manifest_env_id=manifest_env_id,
-        results_dir_name="job-abc",
+        results_dir_name=results_dir_name,
         results_dir=results_dir,
         metadata_path=results_dir / "metadata.json",
         results_path=results_dir / "results.jsonl",
@@ -142,3 +142,17 @@ def test_load_normalized_metadata_prefers_env_config_variant_id(tmp_path: Path) 
     assert normalized.manifest_env_id == "longhealth-task1-rollout1618"
     assert normalized.base_env_id == "longhealth-task1"
     assert normalized.rollout_index == 1618
+
+
+def test_load_normalized_metadata_falls_back_to_results_dir_underscore_rollout(tmp_path: Path) -> None:
+    record = _make_record(
+        tmp_path,
+        manifest_env_id="agentclinic",
+        results_dir_name="baichuan-m2-agentclinic_rollout1",
+    )
+
+    normalized = load_normalized_metadata(record)
+
+    assert normalized.manifest_env_id == "agentclinic"
+    assert normalized.base_env_id == "agentclinic"
+    assert normalized.rollout_index == 1

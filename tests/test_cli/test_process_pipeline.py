@@ -177,6 +177,68 @@ def test_run_process_resolves_base_env_id(tmp_path: Path) -> None:
     assert group.model_id == "gpt-mini"
 
 
+def test_run_process_excludes_datasets(tmp_path: Path) -> None:
+    _write_run(
+        tmp_path,
+        run_id="run-keep",
+        updated_at="2024-01-01T00:00:00Z",
+        reward=1.0,
+        env_id="keep-env-rollout3",
+    )
+    runs_dir = _write_run(
+        tmp_path,
+        run_id="run-skip",
+        updated_at="2024-01-01T00:01:00Z",
+        reward=0.0,
+        env_id="skip-env",
+    )
+    options = ProcessOptions(
+        runs_dir=runs_dir,
+        output_dir=tmp_path / "processed",
+        exclude_datasets=("skip-env",),
+        dry_run=True,
+        max_workers=1,
+    )
+
+    result = run_process(options)
+
+    assert result.records_processed == 1
+    assert len(result.env_groups) == 1
+    assert result.env_groups[0].base_env_id == "keep-env"
+
+
+def test_run_process_excludes_models(tmp_path: Path) -> None:
+    _write_run(
+        tmp_path,
+        run_id="run-keep",
+        updated_at="2024-01-01T00:00:00Z",
+        reward=1.0,
+        env_id="demo-env-rollout3",
+        model_id="keep-model",
+    )
+    runs_dir = _write_run(
+        tmp_path,
+        run_id="run-skip",
+        updated_at="2024-01-01T00:01:00Z",
+        reward=0.0,
+        env_id="demo-env-rollout3",
+        model_id="skip-model",
+    )
+    options = ProcessOptions(
+        runs_dir=runs_dir,
+        output_dir=tmp_path / "processed",
+        exclude_models=("skip-model",),
+        dry_run=True,
+        max_workers=1,
+    )
+
+    result = run_process(options)
+
+    assert result.records_processed == 1
+    assert len(result.env_groups) == 1
+    assert result.env_groups[0].model_id == "keep-model"
+
+
 def test_run_winrate_from_processed_outputs(tmp_path: Path) -> None:
     runs_dir = _setup_run(tmp_path)
     output_dir = tmp_path / "processed"
