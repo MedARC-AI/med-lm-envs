@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 import pyarrow.parquet as pq
 
+from medarc_verifiers.cli._manifest import MANIFEST_VERSION
 from medarc_verifiers.cli._schemas import EnvironmentExportConfig
 from medarc_verifiers.cli.process import ProcessOptions, run_process
 from medarc_verifiers.cli.winrate import WinrateConfig
@@ -24,7 +25,7 @@ def _setup_run(tmp_path: Path) -> Path:
     run_dir = runs_dir / "run-1"
     results_dir = run_dir / "demo-job"
     manifest = {
-        "version": 2,
+        "version": MANIFEST_VERSION,
         "run_id": "run-1",
         "name": "demo",
         "config_source": "configs/demo.yaml",
@@ -91,7 +92,7 @@ def _write_run(
     run_dir = runs_dir / run_id
     results_dir = run_dir / "demo-job"
     manifest = {
-        "version": 2,
+        "version": MANIFEST_VERSION,
         "run_id": run_id,
         "name": "demo",
         "config_source": "configs/demo.yaml",
