@@ -6,15 +6,13 @@ import numpy as np
 import verifiers as vf
 from datasets import load_dataset
 from datasets.utils.logging import disable_progress_bar
+from medarc_verifiers.judging import JudgeResult, MultiJudge, MultiJudgeRubric
 from medarc_verifiers.parsers import get_parsed_field
 from medarc_verifiers.parsers.xml_parser import XMLParser
 from medarc_verifiers.utils import (
-    default_judge_api_key,
     download_file,
-    judge_sampling_args_and_headers,
     medarc_cache_dir,
 )
-from openai import AsyncOpenAI
 from verifiers.types import Info, Messages, State
 
 disable_progress_bar()  # suppress datasets progress indicators
@@ -131,9 +129,9 @@ def delete_from_text(text, target_idx):
 
 
 def load_environment(
-    judge_model: str = "gpt-4o-mini",
-    judge_base_url: str | None = None,
-    judge_api_key: str | None = None,
+    judge_model: str | list[str] = "gpt-4o-mini",
+    judge_base_url: str | list[str] | None = None,
+    judge_api_key: str | list[str] | None = None,
     eval_method: str | EvalMethod = EvalMethod.JUDGE,
     device: str | None = None,
 ) -> vf.Environment:
@@ -178,18 +176,13 @@ def load_environment(
         except (ValueError, TypeError):
             return 0.0
 
-    api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
-    sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
-    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=default_headers)
-
-    judge_rubric = vf.JudgeRubric(
-        parser=judge_parser,
-        parallelize_scoring=True,
-        judge_client=judge_client,
+    multi_judge = MultiJudge.from_env_args(
         judge_model=judge_model,
+        judge_base_url=judge_base_url,
+        judge_api_key=judge_api_key,
         judge_prompt="{question}",
-        judge_sampling_args=sampling_args,
     )
+    judge_rubric = MultiJudgeRubric(multi_judge)
 
     if eval_method in (EvalMethod.METRICS, EvalMethod.BOTH):
         import bert_score
@@ -248,31 +241,57 @@ def load_environment(
             response=prediction,
         )
         try:
-            try:
-                judge_raw = await judge_rubric.judge(judge_prompt, prediction, ground_truth, state)
-                rubric_scores = judge_parser.parse(judge_raw)
-            except AttributeError:
-                judge_raw = await judge_rubric.judge(judge_prompt, prediction, ground_truth, state)
-                rubric_scores = judge_parser.parse(judge_raw)
+            judge_results: list[JudgeResult] = await judge_rubric.judge(judge_prompt, prediction, ground_truth, state)
+            judge_entries = []
+            scores: list[float | None] = []
 
-            semantically_correct = parse_rubric_scores(rubric_scores, "semantically_correct")
-            matches_details = parse_rubric_scores(rubric_scores, "matches_details")
-            substantive_addition = parse_rubric_scores(rubric_scores, "substantive_addition", invert=True)
-            critical_error = parse_rubric_scores(rubric_scores, "critical_error", invert=True)
+            for result in judge_results:
+                entry_error = result.error
+                rubric_scores = None
+                try:
+                    rubric_scores = judge_parser.parse(result.raw)
+                except AttributeError:
+                    result = await judge_rubric.rerun_judge(result, judge_prompt, prediction, ground_truth, state)
+                    entry_error = result.error
+                    rubric_scores = judge_parser.parse(result.raw)
 
-            score = semantically_correct + matches_details + substantive_addition + critical_error
+                if rubric_scores is None:
+                    semantically_correct = None
+                    matches_details = None
+                    substantive_addition = None
+                    critical_error = None
+                    score = None
+                else:
+                    semantically_correct = parse_rubric_scores(rubric_scores, "semantically_correct")
+                    matches_details = parse_rubric_scores(rubric_scores, "matches_details")
+                    substantive_addition = parse_rubric_scores(rubric_scores, "substantive_addition", invert=True)
+                    critical_error = parse_rubric_scores(rubric_scores, "critical_error", invert=True)
+                    score = (semantically_correct + matches_details + substantive_addition + critical_error) / 4.0
+
+                scores.append(score)
+                judge_entries.append(
+                    {
+                        "model": result.model,
+                        "raw": result.raw,
+                        "error": entry_error,
+                        "semantically_correct": semantically_correct,
+                        "matches_details": matches_details,
+                        "substantive_addition": substantive_addition,
+                        "critical_error": critical_error,
+                        "score": score,
+                    }
+                )
+
+            aggregated = judge_rubric.multi_judge.mean(scores)
 
             info.setdefault("judge_feedback", []).append(
                 {
-                    "semantically_correct": semantically_correct,
-                    "matches_details": matches_details,
-                    "substantive_addition": substantive_addition,
-                    "critical_error": critical_error,
-                    "raw_judge": str(judge_raw),
+                    "judges": judge_entries,
+                    "score": aggregated,
                 }
             )
 
-            return score / 4.0
+            return aggregated
         except Exception as e:
             print(f"Judge call failed for correction: {e}")
             return 0.0

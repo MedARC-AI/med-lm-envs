@@ -119,9 +119,7 @@ def _validate_schedule(
         raise ValueError(f"Port range is invalid: {start}-{end}.")
     port_capacity = end - start + 1
     if port_capacity < max_parallel:
-        raise ValueError(
-            f"Port range {start}-{end} has {port_capacity} ports, but max_parallel={max_parallel}."
-        )
+        raise ValueError(f"Port range {start}-{end} has {port_capacity} ports, but max_parallel={max_parallel}.")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -200,7 +198,9 @@ def main(argv: list[str] | None = None) -> int:
         max_parallel=max_parallel,
         prune_logs_on_success=prune_logs_on_success,
     )
-    runner = OrchestratorRunner(plan, tasks, ResourceManager(gpu_indices=gpu_indices, port_range=port_range), options=options)
+    runner = OrchestratorRunner(
+        plan, tasks, ResourceManager(gpu_indices=gpu_indices, port_range=port_range), options=options
+    )
     runner.run()
     return 0
 

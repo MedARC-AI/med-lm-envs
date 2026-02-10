@@ -5,14 +5,13 @@ import pandas as pd
 import verifiers as vf
 from datasets import Dataset, load_from_disk
 from datasets.utils.logging import disable_progress_bar
+from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric
 from medarc_verifiers.parsers import JSONParser
 from medarc_verifiers.utils import (
-    default_judge_api_key,
     download_file,
-    judge_sampling_args_and_headers,
     medarc_cache_dir,
 )
-from openai import AsyncOpenAI
+from medarc_verifiers.rewards import normalize_helm_reward
 from verifiers.types import Info, Messages, State
 
 from medicationqa.judge_prompts import JUDGE_OUTPUT_JSON, JUDGE_TEMPLATE
@@ -75,52 +74,11 @@ def _extract_completion_text(completion: Messages) -> str:
     return str(completion)
 
 
-def _coerce_score(value: Any) -> float | None:
-    """Best-effort conversion of a score value to a float in Python, or `None` if not possible."""
-
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        value = value.strip()
-        if not value:
-            return None
-        try:
-            return float(value)
-        except ValueError:
-            return None
-    return None
-
-
-def _compute_normalized_reward(scores: dict[str, dict[str, Any]]) -> float:
-    """Normalize per-dimension judge scores to a single value in [0.0, 1.0].
-
-    Each dimension is expected to be on a 1–5 scale. Scores are clamped to
-    [0, 5], divided by 5 to map to [0, 1], and then averaged across the
-    dimensions listed in `JUDGE_DIMENSIONS`.
-    """
-
-    total_dims = len(JUDGE_DIMENSIONS)
-    if total_dims == 0:
-        return 0.0
-
-    accumulated = 0.0
-    for dimension in JUDGE_DIMENSIONS:
-        score = _coerce_score(scores.get(dimension, {}).get("score"))
-        if score is None:
-            continue
-        clamped = max(0.0, min(5.0, score))
-        accumulated += clamped / 5.0
-
-    return max(0.0, min(1.0, accumulated / total_dims))
-
-
 def load_environment(
     cache_dir: Path | str | None = None,
-    judge_model: str = "gpt-4o-mini",
-    judge_base_url: str | None = None,
-    judge_api_key: str | None = None,
+    judge_model: str | list[str] = "gpt-4o-mini",
+    judge_base_url: str | list[str] | None = None,
+    judge_api_key: str | list[str] | None = None,
     **kwargs: Any,
 ) -> vf.SingleTurnEnv:
     """Load the MedicationQA (MedInfo 2019) evaluation environment.
@@ -134,10 +92,10 @@ def load_environment(
     Args:
         cache_dir: Optional override for the cache location. Defaults to `MEDARC_CACHE_DIR/medicationqa`
             (i.e., `~/.cache/medarc/medicationqa`).
-        judge_model: Model identifier to use for the judge (e.g. "gpt-4o").
-        judge_base_url: Optional base URL for a non-OpenAI-compatible endpoint (e.g. Ollama).
-        judge_api_key: API key for the judge model. Defaults to `default_judge_api_key`, which
-            checks common env vars (e.g., OpenAI/Prime `OPENAI_API_KEY`, `JUDGE_API_KEY`).
+        judge_model: Model identifier(s) to use for the judge (e.g. "gpt-4o").
+        judge_base_url: Optional base URL(s) for a non-OpenAI-compatible endpoint (e.g. Ollama).
+        judge_api_key: API key(s) for the judge model(s). Falls back to common env vars (e.g.,
+            `OPENAI_API_KEY`, `JUDGE_API_KEY`) when omitted.
         **kwargs: Additional arguments forwarded to `vf.SingleTurnEnv`.
 
     Returns:
@@ -145,18 +103,14 @@ def load_environment(
     """
     eval_dataset = _load_dataset(cache_dir)
 
-    api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
-    sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
-    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=default_headers)
     judge_parser = JSONParser(fields=list(JUDGE_DIMENSIONS))
-
-    judge_rubric = vf.JudgeRubric(
-        parallelize_scoring=True,
-        judge_client=judge_client,
+    multi_judge = MultiJudge.from_env_args(
         judge_model=judge_model,
+        judge_base_url=judge_base_url,
+        judge_api_key=judge_api_key,
         judge_prompt="{question}",
-        judge_sampling_args=sampling_args,
     )
+    rubric = MultiJudgeRubric(multi_judge)
 
     async def reward_medicationqa(
         prompt: Messages,
@@ -175,33 +129,53 @@ def load_environment(
             output_format=JUDGE_OUTPUT_JSON,
         )
 
-        try:
-            judge_raw = await judge_rubric.judge(judge_prompt, model_answer, gold_response, state)
-            parsed = judge_parser.parse(str(judge_raw), strip=True)
-        except AttributeError:
-            judge_raw = await judge_rubric.judge(judge_prompt, "", "", state)
-            parsed = judge_parser.parse(str(judge_raw), strip=True)
+        judge_results = await rubric.judge(judge_prompt, model_answer, gold_response, state)
+        judge_entries = []
+        scores = []
+        for result in judge_results:
+            entry_error = result.error
+            try:
+                parsed = judge_parser.parse(str(result.raw), strip=True)
+            except AttributeError:
+                result = await rubric.rerun_judge(result, judge_prompt, model_answer, gold_response, state)
+                parsed = judge_parser.parse(result.raw, strip=True)
+                entry_error = result.error
+            except Exception as e:
+                parsed = None
+                entry_error = entry_error or f"ParseError: {e}"
 
-        if parsed is None:
-            parsed = {dim: {"score": None, "explanation": None, "raw": None} for dim in JUDGE_DIMENSIONS}
+            if parsed is None:
+                parsed = {dim: {"score": None, "explanation": None, "raw": None} for dim in JUDGE_DIMENSIONS}
 
-        normalized = _compute_normalized_reward(parsed)
+            normalized = normalize_helm_reward(parsed, dimensions=JUDGE_DIMENSIONS)
+            score = normalized if result.raw is not None else None
+            scores.append(score)
+            judge_entries.append(
+                {
+                    "model": result.model,
+                    "raw": result.raw,
+                    "error": entry_error,
+                    "scores": parsed,
+                    "score": score,
+                }
+            )
 
+        aggregated = rubric.multi_judge.mean(scores)
         info.setdefault("judge_feedback", []).append(
             {
-                "scores": parsed,
-                "raw_judge": str(judge_raw),
+                "judges": judge_entries,
+                "score": aggregated,
             }
         )
-        return normalized
+        return aggregated
 
-    judge_rubric.add_reward_func(reward_medicationqa, weight=1.0)
+    rubric.add_reward_func(reward_medicationqa, weight=1.0)
 
     return vf.SingleTurnEnv(
-        dataset=eval_dataset,
+        dataset=None,
         eval_dataset=eval_dataset,
         system_prompt="You are a helpful, safety-conscious medical assistant. Give a brief but accurate response to the following question.",
-        rubric=judge_rubric,
+        rubric=rubric,
         name="medicationqa",
         **kwargs,
     )

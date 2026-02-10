@@ -112,11 +112,13 @@ async def test_parallel_launch_runs_concurrently(tmp_path: Path, monkeypatch) ->
             if not first_readiness_done.is_set():
                 readiness_overlapped = True
             await asyncio.sleep(0.2)
+
         class Result:
             ready = True
             elapsed_s = 0.2
             attempts = 1
             last_error = None
+
         return Result()
 
     async def fake_to_thread(func, /, *args, **kwargs):
@@ -126,6 +128,7 @@ async def test_parallel_launch_runs_concurrently(tmp_path: Path, monkeypatch) ->
     async def fake_start_benchmark(*args, **kwargs):
         class Proc:
             pass
+
         return Proc()
 
     async def fake_wait_benchmark(proc):
@@ -133,6 +136,7 @@ async def test_parallel_launch_runs_concurrently(tmp_path: Path, monkeypatch) ->
             exit_code = 0
             duration_s = 0.0
             terminated = False
+
         return Result()
 
     monkeypatch.setattr("medarc_verifiers.orchestrate.run.create_and_start_container", fake_create_and_start_container)

@@ -6,6 +6,7 @@ import logging
 from collections.abc import Iterable, Mapping, Sequence
 import hashlib
 import json
+import re
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Iterable as _Iterable
@@ -35,6 +36,28 @@ def slugify(value: str) -> str:
     """
     slug = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in value).strip("-")
     return slug or "run"
+
+
+def validate_simple_name(value: str, *, flag: str) -> str:
+    candidate = value.strip()
+    if not candidate:
+        raise ValueError(f"{flag} must be a non-empty string")
+    path = Path(candidate)
+    if path.is_absolute():
+        raise ValueError(f"{flag} must not be an absolute path")
+    if "/" in candidate or "\\" in candidate:
+        raise ValueError(f"{flag} must not contain path separators")
+    if ".." in path.parts:
+        raise ValueError(f"{flag} must not contain '..' path segments")
+    return candidate
+
+
+_FILENAME_SLUG_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def slugify_filename_component(value: str) -> str:
+    slug = _FILENAME_SLUG_PATTERN.sub("_", value.strip())
+    return slug or "env"
 
 
 def compute_checksum(payload: Any) -> str:

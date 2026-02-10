@@ -11,6 +11,9 @@ RESERVED_MATRIX_KEYS = {
     "id",
     "module",
     "env_args",
+    "extra_env_kwargs",
+    "independent_scoring",
+    "interleave_scoring",
     "matrix",
     "matrix_exclude",
     "matrix_id_format",
@@ -169,7 +172,17 @@ class EnvironmentConfigSchema(BaseModel):
     max_concurrent: int | None = Field(
         None, description="Maximum number of concurrent requests when running the environment."
     )
-    interleave_scoring: bool = Field(True, description="Whether to interleave scoring requests.")
+    independent_scoring: bool | None = Field(
+        default=None,
+        description=(
+            "Whether to score each rollout independently (verifiers>=0.1.9). "
+            "When unset, defaults to rollout-level scoring."
+        ),
+    )
+    interleave_scoring: bool | None = Field(
+        default=None,
+        description="No longer supported; use independent_scoring instead.",
+    )
     state_columns: list[str] | None = Field(
         default=None, description="Optional state columns to persist in job outputs."
     )
@@ -177,6 +190,10 @@ class EnvironmentConfigSchema(BaseModel):
     print_results: bool = Field(False, description="Print environment results to stdout.")
     verbose: bool | None = Field(None, description="Override per-environment verbosity.")
     env_args: dict[str, Any] = Field(default_factory=dict)
+    extra_env_kwargs: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional kwargs forwarded to verifiers Environment.set_kwargs(...) (verifiers>=0.1.9).",
+    )
     rerun: bool = Field(
         False,
         description="Re-run jobs for this environment when resuming/regenerating even if previously completed.",
@@ -189,6 +206,12 @@ class EnvironmentConfigSchema(BaseModel):
         default=None,
         description="Optional export customization (keep/drop columns, prompt settings).",
     )
+
+    @model_validator(mode="after")
+    def validate_scoring_flags(self) -> EnvironmentConfigSchema:
+        if self.interleave_scoring is not None:
+            raise ValueError("interleave_scoring is no longer supported; use independent_scoring instead.")
+        return self
 
     @field_validator("num_examples")
     @classmethod

@@ -134,7 +134,9 @@ def normalize_volumes(volumes: object) -> dict[str, dict[str, str]]:
         if not entry:
             continue
         if not isinstance(entry, str):
-            raise DockerLaunchError("orchestrate.vllm-docker.volumes entries must be strings like host:container[:mode].")
+            raise DockerLaunchError(
+                "orchestrate.vllm-docker.volumes entries must be strings like host:container[:mode]."
+            )
         parts = entry.split(":")
         if len(parts) < 2 or len(parts) > 3:
             raise DockerLaunchError(f"Invalid volume mount: {entry!r} (expected host:container[:mode])")
@@ -202,9 +204,7 @@ def create_and_start_container(
                 return False
         status = getattr(existing, "status", None)
         if status == "running":
-            raise DockerLaunchError(
-                f"Container name {name!r} is already running (id={getattr(existing, 'id', '?')})."
-            )
+            raise DockerLaunchError(f"Container name {name!r} is already running (id={getattr(existing, 'id', '?')}).")
         try:
             existing.remove(v=True, force=True)
             return True

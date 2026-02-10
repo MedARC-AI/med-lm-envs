@@ -126,7 +126,6 @@ Each agent (patient, measurement) can be configured via `--env-args`:
 - `patient_temperature` / `measurement_temperature`
 - `aux_max_tokens`: Max tokens for patient/measurement agents
 - `doctor_bias` / `patient_bias`: Cognitive bias injection (validated)
-- `judge_timeout_s`: Judge request timeout in seconds
 
 
 ### Agent Roles

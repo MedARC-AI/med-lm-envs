@@ -9,30 +9,12 @@ from pathlib import Path
 from textwrap import dedent
 from typing import Any, Mapping, Sequence
 
+import yaml
+from pydantic import ValidationError
 from rich.console import Console
 from rich.table import Table
 
-import yaml
-from pydantic import ValidationError
-
 from medarc_verifiers.cli._config_loader import ConfigFormatError, load_run_config
-from medarc_verifiers.cli._job_builder import ResolvedJob, build_jobs
-from medarc_verifiers.cli._job_executor import ExecutorSettings, JobExecutionResult, execute_jobs
-from medarc_verifiers.cli._manifest import ManifestJobEntry, RunManifest, compute_snapshot_checksum
-from medarc_verifiers.cli._manifest_tools import format_validation_issues, validate_manifests_in_runs
-from medarc_verifiers.cli._manifest_planner import ManifestPlanner
-from medarc_verifiers.cli._single_run import run_single_mode
-from medarc_verifiers.cli.process import ProcessOptions, ProcessResult, run_process
-from medarc_verifiers.cli.hf import HFSyncConfig, sync_files_to_hub
-from medarc_verifiers.cli.winrate import WinrateConfig
-from medarc_verifiers.cli.winrate import (
-    _resolve_source,
-    list_models,
-    print_winrate_summary_markdown,
-    run_winrate,
-)
-from medarc_verifiers.cli.utils.overrides import build_cli_override
-from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, EnvironmentExportConfig
 from medarc_verifiers.cli._constants import (
     BENCH_COMMAND,
     COMMAND,
@@ -46,6 +28,25 @@ from medarc_verifiers.cli._constants import (
     PROCESS_COMMAND,
     WINRATE_COMMAND,
 )
+from medarc_verifiers.cli._job_builder import ResolvedJob, build_jobs
+from medarc_verifiers.cli._job_executor import ExecutorSettings, JobExecutionResult, execute_jobs
+from medarc_verifiers.cli._manifest import MANIFEST_FILENAME, ManifestJobEntry, RunManifest, compute_snapshot_checksum
+from medarc_verifiers.cli._manifest_planner import ManifestPlanner
+from medarc_verifiers.cli._manifest_tools import format_validation_issues, validate_manifests_in_runs
+from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, EnvironmentExportConfig
+from medarc_verifiers.cli._single_run import run_single_mode
+from medarc_verifiers.cli.hf import HFSyncConfig, sync_files_to_hub
+from medarc_verifiers.cli.process import ProcessOptions, ProcessResult, run_process
+from medarc_verifiers.cli.utils.config_io import load_mapping_file
+from medarc_verifiers.cli.utils.overrides import build_cli_override
+from medarc_verifiers.cli.utils.shared import slugify, validate_simple_name
+from medarc_verifiers.cli.winrate import (
+    WinrateConfig,
+    _resolve_source,
+    list_models,
+    print_winrate_summary_markdown,
+    run_winrate,
+)
 
 logger = logging.getLogger(__name__)
 HELP_FLAGS = {"-h", "--help"}
@@ -58,11 +59,17 @@ def build_batch_parser() -> argparse.ArgumentParser:
         description="Run MedARC evaluations using unified configuration files.",
     )
     parser.add_argument("-c", "--config", required=True, type=Path, help="Path to a run configuration YAML file.")
-    parser.add_argument("--run-id", help="Override the generated run identifier.")
+    parser.add_argument(
+        "--run-id",
+        help="Override the generated run identifier (simple name only: no slashes, no '..', not absolute).",
+    )
     parser.add_argument("--name", help="Override the human-friendly run name (defaults to the config name).")
     parser.add_argument(
         "--restart",
-        help="Seed jobs from a previous run identifier (reuse completed jobs when configs match).",
+        help=(
+            "Seed jobs from a previous run directory or run_manifest.json path; "
+            "otherwise treated as a run id under output_dir."
+        ),
     )
     parser.add_argument(
         "--auto-resume",
@@ -654,22 +661,7 @@ def _run_process_mode(argv: Sequence[str]) -> int:
 
 
 def _load_process_config(path: Path) -> Mapping[str, Any]:
-    path = Path(path).expanduser()
-    if not path.exists():
-        raise FileNotFoundError(f"Process config not found: {path}")
-    raw = path.read_text(encoding="utf-8")
-    suffix = path.suffix.lower()
-    if suffix in {".yaml", ".yml"}:
-        payload = yaml.safe_load(raw)
-    elif suffix == ".json":
-        payload = yaml.safe_load(raw)
-    else:
-        raise ValueError(f"Unsupported process config format: {path} (expected .yaml/.yml/.json)")
-    if payload is None:
-        return {}
-    if not isinstance(payload, Mapping):
-        raise ValueError(f"Process config must be a mapping at top level: {path}")
-    return payload
+    return load_mapping_file(path, label="Process config")
 
 
 def _apply_process_config(args: argparse.Namespace, path: Path) -> None:
@@ -767,22 +759,7 @@ def _apply_process_config(args: argparse.Namespace, path: Path) -> None:
 
 
 def _load_winrate_config(path: Path) -> Mapping[str, Any]:
-    path = Path(path).expanduser()
-    if not path.exists():
-        raise FileNotFoundError(f"Winrate config not found: {path}")
-    raw = path.read_text(encoding="utf-8")
-    suffix = path.suffix.lower()
-    if suffix in {".yaml", ".yml"}:
-        payload = yaml.safe_load(raw)
-    elif suffix == ".json":
-        payload = yaml.safe_load(raw)
-    else:
-        raise ValueError(f"Unsupported winrate config format: {path} (expected .yaml/.yml/.json)")
-    if payload is None:
-        return {}
-    if not isinstance(payload, Mapping):
-        raise ValueError(f"Winrate config must be a mapping at top level: {path}")
-    return payload
+    return load_mapping_file(path, label="Winrate config")
 
 
 def _apply_winrate_config(args: argparse.Namespace, path: Path) -> None:
@@ -1104,10 +1081,43 @@ def _execute_batch(args: argparse.Namespace) -> int:
     output_dir = Path(args.output_dir).expanduser() if args.output_dir else Path(run_config.output_dir).expanduser()
     output_dir = output_dir.resolve()
     run_id = args.run_id  # May be None when using --auto-resume discovery
+    if run_id is not None:
+        try:
+            run_id = validate_simple_name(run_id, flag="--run-id")
+        except ValueError as exc:
+            logger.error("Invalid --run-id '%s': %s", run_id, exc)
+            logger.error("Suggested safe value: --run-id %s", slugify(run_id))
+            return 1
+
+    if args.restart:
+        restart_raw = args.restart
+        restart_path = Path(restart_raw).expanduser()
+        try:
+            if restart_path.exists():
+                if restart_path.is_dir():
+                    args.restart = str(restart_path)
+                elif restart_path.is_file() and restart_path.name == MANIFEST_FILENAME:
+                    args.restart = str(restart_path.parent)
+                else:
+                    logger.error(
+                        "Invalid --restart '%s': expected a run directory or %s file.",
+                        restart_raw,
+                        MANIFEST_FILENAME,
+                    )
+                    return 1
+            else:
+                args.restart = validate_simple_name(restart_raw, flag="--restart")
+        except OSError as exc:
+            logger.error("Invalid --restart '%s': %s", restart_raw, exc)
+            return 1
+        except ValueError as exc:
+            logger.error("Invalid --restart '%s': %s", restart_raw, exc)
+            return 1
 
     if args.enable_additional_retries:
-        from medarc_verifiers.utils.retry import patch_verifiers_model_response_retry
         from datetime import datetime
+
+        from medarc_verifiers.utils.retry import patch_verifiers_model_response_retry
 
         cwd = Path.cwd()
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")

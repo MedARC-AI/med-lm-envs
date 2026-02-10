@@ -12,7 +12,7 @@
 ## Task
 
 - **Type**: Single-Turn
-- **Rubric overview**: JudgeRubric (LLM-as-a-Judge evaluation adapted from HELM’s MTSamples Replicate annotator)
+- **Rubric overview**: MultiJudgeRubric (LLM-as-a-Judge evaluation adapted from HELM’s MTSamples Replicate annotator)
 - **Task description**:  
   Given patient notes with the **PLAN section removed** (while preserving SUMMARY and FINDINGS),
   generate a reasonable treatment plan.
@@ -51,11 +51,11 @@ uv run vf-eval mtsamples_replicate --env-args '{"use_think": true}'
 
 | Arg | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
-| `cache_dir` | str \| Path \| None | `~/.cache/mtsamples_procedures` | Local directory to cache downloaded datasets. |
+| `cache_dir` | str \| Path \| None | `~/.cache/medarc/mtsamples_replicate` | Local directory to cache downloaded datasets. |
 | `use_think` | bool | `False` | Whether to use chain-of-thought prompting with `<think>...</think>` |
-| `judge_model` | str | `"gpt-4o-mini"` | Model used by the LLM judge |
-| `judge_base_url` | str \| None | `None` | Custom API base URL for judge model |
-| `judge_api_key` | str \| None | `None` | API key for judge model |
+| `judge_model` | str \| list[str] | `"gpt-4o-mini"` | Model(s) used by the LLM judge |
+| `judge_base_url` | str \| list[str] \| None | `None` | Custom API base URL(s) for judge model |
+| `judge_api_key` | str \| list[str] \| None | `None` | API key(s) for judge model |
 
 ---
 

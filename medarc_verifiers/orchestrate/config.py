@@ -127,9 +127,7 @@ def _extract_single_model(payload: Mapping[str, Any], *, source: Path) -> tuple[
     return model_key, model_entry
 
 
-def _extract_orchestrate_config(
-    payload: Mapping[str, Any], *, model_key: str, source: Path
-) -> Mapping[str, Any]:
+def _extract_orchestrate_config(payload: Mapping[str, Any], *, model_key: str, source: Path) -> Mapping[str, Any]:
     orchestrate = payload.get("orchestrate")
     if not isinstance(orchestrate, Mapping):
         raise ValueError(f"Job config {source} must define a top-level orchestrate mapping.")

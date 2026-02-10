@@ -224,6 +224,15 @@ def test_auto_resume_allows_resume_tolerant_model_fields(tmp_path: Path) -> None
     assert plan.runnable_job_ids == set()
 
 
+def test_restart_dir_missing_manifest_raises(tmp_path: Path) -> None:
+    job = _make_job()
+    seed_dir = tmp_path / "seed-run"
+    seed_dir.mkdir(parents=True, exist_ok=True)
+    planner = _planner(tmp_path=tmp_path, jobs=[job], restart_source=str(seed_dir))
+    with pytest.raises(ValueError, match="run_manifest.json"):
+        planner.plan(force_all=False, forced_envs=set())
+
+
 def test_auto_resume_allows_provider_overrides(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text("config: test\n", encoding="utf-8")

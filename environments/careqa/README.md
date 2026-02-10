@@ -21,7 +21,7 @@ Evaluation environment for the [HPAI-BSC/CareQA](https://huggingface.co/datasets
   - Open-ended mode: `XMLParser()` for judge responses
 - **Rubric overview**:
   - **MCQ mode (`en`)**: `vf.Rubric()` measuring **accuracy** (letter match A–D)
-  - **Open-ended mode (`open`)**: `vf.JudgeRubric()` using an LLM-as-judge to score free-text answers for correctness and clinical reasoning
+  - **Open-ended mode (`open`)**: LLM-as-judge scoring (single or multi-judge)
 
 ### Quickstart
 
@@ -58,9 +58,10 @@ medarc-eval careqa --mode en --shuffle-answers --shuffle-seed 42 --model gpt-4.1
 - `--shuffle-seed`: Seed for answer shuffling (default: 1618)
 
 #### Open-Ended-Specific Parameters
-- `--judge-model`: Model for LLM-as-judge evaluation (default: `gpt-4o-mini`)
-- `--judge-base-url`: Base URL for judge API
-- `--judge-api-key`: API key for judge (falls back to `OPENAI_API_KEY` env var)
+- `--judge-model`: Model(s) for LLM-as-judge evaluation (default: `gpt-4o-mini`)
+- `--judge-base-url`: Base URL(s) for judge API
+- `--judge-api-key`: API key(s) for judge (falls back to `OPENAI_API_KEY` env var)
+- `--judge-timeout`: Timeout in seconds for judge calls
 
 ### Metrics
 

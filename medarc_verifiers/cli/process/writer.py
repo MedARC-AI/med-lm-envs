@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import re
 from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +14,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from medarc_verifiers.cli.process.aggregate import AggregatedEnvRows
+from medarc_verifiers.cli.utils.json_io import write_json
+from medarc_verifiers.cli.utils.shared import slugify_filename_component
 
 logger = logging.getLogger(__name__)
 
@@ -213,7 +213,7 @@ def write_hf_dataset_config(
     payload = {"default": dataset_info}
 
     config_path = config.output_dir / "dataset_infos.json"
-    return _write_json_atomic(config_path, payload)
+    return write_json(config_path, payload)
 
 
 def _write_group(group: AggregatedEnvRows, config: WriterConfig) -> EnvWriteSummary:
@@ -363,7 +363,7 @@ def _write_env_index(
         "files": files,
     }
 
-    return _write_json_atomic(index_path, payload)
+    return write_json(index_path, payload)
 
 
 def _relative_output_path(output_dir: Path, path: Path) -> str:
@@ -418,54 +418,14 @@ def _filter_run_entry(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {key: payload.get(key) for key in allowed if key in payload}
 
 
-def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> bool:
-    text = json.dumps(payload, indent=2, sort_keys=True)
-    if path.exists():
-        try:
-            if path.read_text(encoding="utf-8") == text:
-                return False
-        except Exception:
-            pass
-    tmp_path = path.with_name(f".{path.name}.tmp")
-    try:
-        tmp_path.write_text(text, encoding="utf-8")
-        os.replace(tmp_path, path)
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink()
-    return True
-
-
 def _write_parquet_atomic(table: pa.Table, path: Path) -> None:
     tmp_path = path.with_name(f".{path.name}.tmp")
     try:
-        try:
-            pq.write_table(
-                table,
-                tmp_path,
-                use_content_defined_chunking=True,
-                write_page_index=True,
-            )
-        except TypeError:
-            try:
-                pq.write_table(table, tmp_path, write_page_index=True)
-            except TypeError:
-                try:
-                    pq.write_table(table, tmp_path, use_content_defined_chunking=True)
-                except TypeError:
-                    pq.write_table(table, tmp_path)
-        os.replace(tmp_path, path)
+        pq.write_table(table, tmp_path, use_content_defined_chunking=True, write_page_index=True)
+        tmp_path.replace(path)
     finally:
         if tmp_path.exists():
             tmp_path.unlink()
-
-
-_SLUG_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
-
-
-def _slugify(value: str) -> str:
-    slug = _SLUG_PATTERN.sub("_", value.strip())
-    return slug or "env"
 
 
 def _normalize_columns(df: pl.DataFrame) -> pl.DataFrame:
@@ -487,8 +447,8 @@ def build_output_path(output_dir: Path, *, model_id: str, env_id: str) -> Path:
         raise ValueError("model_id is required for output path.")
     if not env_id:
         raise ValueError("env_id is required for output path.")
-    model_dir = output_dir / _slugify(model_id)
-    return model_dir / f"{_slugify(env_id)}.parquet"
+    model_dir = output_dir / slugify_filename_component(model_id)
+    return model_dir / f"{slugify_filename_component(env_id)}.parquet"
 
 
 __all__ = ["EnvWriteSummary", "WriterConfig", "build_output_path", "write_env_groups", "write_env_index"]

@@ -162,6 +162,11 @@ def test_read_dataset_lazy_supports_model_id(tmp_path: Path) -> None:
     assert sorted(df_avg["model_id"].unique().to_list()) == ["m1", "m2"]
 
 
+def test_read_dataset_lazy_rejects_empty_sequence() -> None:
+    with pytest.raises(ValueError, match="No parquet paths provided"):
+        winrate.read_dataset_lazy([])
+
+
 def test_unknown_include_models_error(tmp_path: Path) -> None:
     dataset = tmp_path / "dataset.parquet"
     _write_dataset(
@@ -362,9 +367,7 @@ def test_unknown_include_models_error_without_known_models(tmp_path: Path) -> No
         winrate.compute_winrates([("dataset", dataset)], cfg)
 
 
-def test_unknown_exclude_models_warns_without_known_models(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_unknown_exclude_models_warns_without_known_models(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     dataset = tmp_path / "dataset.parquet"
     _write_dataset(
         dataset,

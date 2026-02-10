@@ -16,8 +16,7 @@ import verifiers as vf
 from datasets import load_dataset
 from datasets.utils.logging import disable_progress_bar
 from medarc_verifiers.parsers import JSONParser
-from medarc_verifiers.utils import default_judge_api_key, judge_sampling_args_and_headers
-from openai import AsyncOpenAI
+from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric
 from verifiers.types import Info, Messages, State
 
 disable_progress_bar()  # suppress datasets progress bar
@@ -176,9 +175,9 @@ def _compute_normalized_judge_reward(scores: dict[str, dict[str, Any]]) -> float
 
 def load_environment(
     split: str = "test",
-    judge_model: str = "gpt-4o-mini",
-    judge_base_url: str | None = None,
-    judge_api_key: str | None = None,
+    judge_model: str | list[str] = "gpt-4o-mini",
+    judge_base_url: str | list[str] | None = None,
+    judge_api_key: str | list[str] | None = None,
     compute_auto_metrics: bool = True,
     system_prompt: str | None = None,
     **kwargs: Any,
@@ -192,9 +191,9 @@ def load_environment(
 
     Args:
         split: Dataset split to use ('train', 'validation', 'test'). Default: 'test'.
-        judge_model: Model identifier for the LLM judge. Default: 'gpt-4o-mini'.
-        judge_base_url: Base URL for judge API (for non-OpenAI endpoints).
-        judge_api_key: API key for judge model. Falls back to env vars if not provided.
+        judge_model: Model identifier(s) for the LLM judge. Default: 'gpt-4o-mini'.
+        judge_base_url: Base URL(s) for judge API (for non-OpenAI endpoints).
+        judge_api_key: API key(s) for judge model(s). Falls back to env vars if not provided.
         compute_auto_metrics: Whether to compute BLEU/ROUGE/BERTScore metrics. Default: True.
         system_prompt: Custom system prompt. Uses default if not provided.
         **kwargs: Additional arguments forwarded to vf.SingleTurnEnv.
@@ -219,9 +218,7 @@ def load_environment(
     eval_dataset = eval_dataset.map(_map, remove_columns=eval_dataset.column_names)
 
     # Default system prompt from Nature Medicine paper
-    final_system_prompt = system_prompt or (
-        "Summarize the patient health query into one question of 15 words or less."
-    )
+    final_system_prompt = system_prompt or ("Summarize the patient health query into one question of 15 words or less.")
 
     # Initialize automatic metrics if enabled
     bleu_metric = None
@@ -237,21 +234,15 @@ def load_environment(
             print(f"Warning: Could not load automatic metrics: {e}")
             compute_auto_metrics = False
 
-    # Judge client setup
-    api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
-    sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
-    # Remove extra_body as OpenAI doesn't support the usage tracking parameter
-    sampling_args.pop("extra_body", None)
-    judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=default_headers)
     judge_parser = JSONParser(fields=list(JUDGE_DIMENSIONS))
 
-    judge_rubric = vf.JudgeRubric(
-        parallelize_scoring=True,
-        judge_client=judge_client,
+    multi_judge = MultiJudge.from_env_args(
         judge_model=judge_model,
+        judge_base_url=judge_base_url,
+        judge_api_key=judge_api_key,
         judge_prompt="{question}",
-        judge_sampling_args=sampling_args,
     )
+    rubric = MultiJudgeRubric(multi_judge)
 
     async def reward_meqsum(
         prompt: Messages,
@@ -287,26 +278,36 @@ def load_environment(
             output_format=JUDGE_OUTPUT_JSON,
         )
 
-        try:
-            judge_raw = await judge_rubric.judge(judge_prompt, model_response, reference, state)
-            parsed = judge_parser.parse(str(judge_raw), strip=True)
-        except AttributeError:
-            judge_raw = await judge_rubric.judge(judge_prompt, "", "", state)
-            parsed = judge_parser.parse(str(judge_raw), strip=True)
+        judge_results = await rubric.judge(judge_prompt, model_response, reference, state)
+        judge_entries = []
+        scores = []
+        for result in judge_results:
+            entry_error = result.error
+            try:
+                parsed = judge_parser.parse(str(result.raw), strip=True)
+            except AttributeError:
+                result = await rubric.rerun_judge(result, judge_prompt, model_response, reference, state)
+                parsed = judge_parser.parse(str(result.raw), strip=True)
+                entry_error = result.error
 
-        if parsed is None:
-            parsed = {dim: {"score": None, "reason": None} for dim in JUDGE_DIMENSIONS}
+            if parsed is None:
+                parsed = {dim: {"score": None, "reason": None} for dim in JUDGE_DIMENSIONS}
 
-        judge_reward = _compute_normalized_judge_reward(parsed)
+            normalized = _compute_normalized_judge_reward(parsed)
+            score = normalized if result.raw is not None else None
+            scores.append(score)
+            judge_entries.append(
+                {
+                    "model": result.model,
+                    "raw": result.raw,
+                    "error": entry_error,
+                    "scores": parsed,
+                    "score": score,
+                }
+            )
 
-        # Store judge feedback
-        info.setdefault("judge_feedback", []).append(
-            {
-                "scores": parsed,
-                "normalized_reward": judge_reward,
-                "raw_judge": str(judge_raw),
-            }
-        )
+        judge_reward = rubric.multi_judge.mean(scores)
+        info.setdefault("judge_feedback", []).append({"judges": judge_entries, "score": judge_reward})
 
         # --- Automatic Metrics (BLEU, ROUGE, BERTScore) ---
         auto_metrics: dict[str, Any] = {}
@@ -356,13 +357,13 @@ def load_environment(
         # Return the LLM-judge reward as the primary metric
         return judge_reward
 
-    judge_rubric.add_reward_func(reward_meqsum, weight=1.0)
+    rubric.add_reward_func(reward_meqsum, weight=1.0)
 
     return vf.SingleTurnEnv(
-        dataset=eval_dataset,
+        dataset=None,
         eval_dataset=eval_dataset,
         system_prompt=final_system_prompt,
-        rubric=judge_rubric,
+        rubric=rubric,
         name="meqsum",
         **kwargs,
     )

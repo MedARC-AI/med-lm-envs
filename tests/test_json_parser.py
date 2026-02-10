@@ -7,7 +7,7 @@ from medarc_verifiers.parsers import JSONParser
 
 def test_parse_extracts_canonical_fields() -> None:
     parser = JSONParser(fields=["answer", "reasoning"])
-    text = "The result is {\"answer\": \"42\", \"reasoning\": \"math\"}."
+    text = 'The result is {"answer": "42", "reasoning": "math"}.'
 
     parsed = parser.parse(text)
 

@@ -52,9 +52,5 @@ async def test_scheduler_cancellation_cleans_waiters(tmp_path: Path) -> None:
         await run_task
     await asyncio.sleep(0)
 
-    pending = [
-        task
-        for task in asyncio.all_tasks()
-        if not task.done() and task is not asyncio.current_task()
-    ]
+    pending = [task for task in asyncio.all_tasks() if not task.done() and task is not asyncio.current_task()]
     assert pending == []

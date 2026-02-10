@@ -10,9 +10,14 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from medarc_verifiers.cli._job_builder import ResolvedJob
-from medarc_verifiers.cli._manifest import MANIFEST_FILENAME, RunManifest, manifest_job_signature, resolved_job_signature
+from medarc_verifiers.cli._manifest import (
+    MANIFEST_FILENAME,
+    RunManifest,
+    manifest_job_signature,
+    resolved_job_signature,
+)
 from medarc_verifiers.cli.utils.shared import slugify
-from medarc_verifiers.utils.pathing import from_project_relative
+from medarc_verifiers.utils.pathing import resolve_results_dir_from_manifest
 
 logger = logging.getLogger(__name__)
 
@@ -88,9 +93,9 @@ class ManifestPlanner:
         if restart_path.exists() and restart_path.is_dir():
             seed_dir = restart_path.resolve()
         else:
-            candidate = (self.output_dir / restart_source).resolve()
+            candidate = self.output_dir / restart_source
             if candidate.exists() and candidate.is_dir():
-                seed_dir = candidate
+                seed_dir = candidate.resolve()
         if seed_dir and (seed_dir / MANIFEST_FILENAME).exists():
             seed_manifest = RunManifest.load(seed_dir / MANIFEST_FILENAME, persist=persist)
             logger.info(
@@ -106,6 +111,9 @@ class ManifestPlanner:
 
         if seed_dir is None:
             return None
+        if not (seed_dir / MANIFEST_FILENAME).exists():
+            msg = f"Invalid --restart '{seed_dir}': missing {MANIFEST_FILENAME}"
+            raise ValueError(msg)
         seed_manifest = RunManifest.load(seed_dir / MANIFEST_FILENAME, persist=False)
         dest_run_id = self.run_id or _generate_run_id(self.run_name)
         run_dir = self._run_dir_for(dest_run_id)
@@ -367,17 +375,14 @@ def _plan_regen_jobs(
             seed_results_dir = seed_entry.results_dir
             if seed_results_dir is None:
                 seed_results_dir = seed_manifest.run_dir / seed_entry.job_id
-            resolved_results_dir: Path | str | None = None
-            if isinstance(seed_results_dir, str):
-                seed_path = Path(seed_results_dir)
-                if seed_path.is_absolute():
-                    resolved_results_dir = seed_path
-                elif seed_path.parts and seed_path.parts[0] == "runs":
-                    resolved_results_dir = from_project_relative(seed_path)
-                else:
-                    resolved_results_dir = (seed_manifest.run_dir / seed_path).resolve()
-            elif isinstance(seed_results_dir, Path):
-                resolved_results_dir = seed_results_dir
+            if isinstance(seed_results_dir, Path):
+                resolved_results_dir: Path | str | None = seed_results_dir
+            else:
+                resolved_results_dir = resolve_results_dir_from_manifest(
+                    str(seed_results_dir) if seed_results_dir is not None else None,
+                    job_id=seed_entry.job_id,
+                    run_dir=seed_manifest.run_dir,
+                )
             manifest.record_job_skip(
                 job.job_id,
                 reason="up_to_date",

@@ -67,6 +67,8 @@ def read_dataset_lazy(
         lf = parquet_path.lazy()
     else:
         if isinstance(parquet_path, (list, tuple)):
+            if not parquet_path:
+                raise ValueError("No parquet paths provided.")
             if parquet_path and isinstance(parquet_path[0], (PLDataFrame, PLLazyFrame)):
                 frames: list[PLLazyFrame] = []
                 for item in parquet_path:
@@ -550,9 +552,7 @@ def _process_dataset(
         if include_set:
             missing_required = sorted(set(target_models) - set(models_present))
             if missing_required and partial_datasets == "strict":
-                _emit_note(
-                    f"Dropping dataset {dataset_name} (missing include models: {missing_required})."
-                )
+                _emit_note(f"Dropping dataset {dataset_name} (missing include models: {missing_required}).")
                 return None, models_present
 
         if include_set:
@@ -597,9 +597,7 @@ def _process_dataset(
             models_present,
         )
     except Exception as exc:  # noqa: BLE001
-        message = (
-            f"Failed to process dataset {dataset_name} at {_format_parquet_source(parquet_path)}: {exc}"
-        )
+        message = f"Failed to process dataset {dataset_name} at {_format_parquet_source(parquet_path)}: {exc}"
         _raise_user_error(message, exc)
 
 

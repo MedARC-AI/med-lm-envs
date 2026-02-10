@@ -51,7 +51,7 @@ class _SingleRunEnvConfig:
     num_examples: int = 5
     rollouts_per_example: int = 1
     max_concurrent: int | None = None
-    interleave_scoring: bool = True
+    independent_scoring: bool = True
     state_columns: list[str] | None = None
     save_every: int | None = None
     print_results: bool = True
@@ -162,7 +162,7 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         num_examples=args.num_examples,
         rollouts_per_example=args.rollouts_per_example,
         max_concurrent=args.max_concurrent,
-        interleave_scoring=not args.no_interleave_scoring,
+        independent_scoring=not args.group_scoring,
         state_columns=state_columns or None,
         save_every=args.save_every,
         print_results=True,
@@ -298,7 +298,10 @@ def build_base_parser(*, require_env: bool, add_help: bool) -> argparse.Argument
     parser.add_argument("--sampling-args", help="Sampling arguments as JSON object.")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging.")
     parser.add_argument(
-        "--no-interleave-scoring", "-N", action="store_true", help="Disable interleaving of scoring requests."
+        "--group-scoring",
+        action="store_true",
+        default=False,
+        help="Score rollouts per-example group (default: independent scoring).",
     )
     parser.add_argument(
         "--state-columns",

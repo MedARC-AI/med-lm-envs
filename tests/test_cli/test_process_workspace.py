@@ -190,3 +190,33 @@ def test_prepare_hf_baseline_pull_downloads_when_file_missing(
     restored = output_dir / parquet_path.relative_to(snapshot_dir)
     assert restored.exists()
     assert restored in result.files_copied
+
+
+def test_hf_baseline_rejects_absolute_env_index_paths(tmp_path: Path) -> None:
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    (output_dir / "env_index.json").write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "files": {"/abs/path.parquet": {"env_id": "env-a", "model_id": "model-a"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert workspace._has_complete_hf_baseline(output_dir) is False
+
+
+def test_hf_baseline_rejects_traversal_env_index_paths(tmp_path: Path) -> None:
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    (output_dir / "env_index.json").write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "files": {"../escape.parquet": {"env_id": "env-a", "model_id": "model-a"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert workspace._has_complete_hf_baseline(output_dir) is False
