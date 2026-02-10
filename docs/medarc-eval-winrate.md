@@ -61,12 +61,13 @@ The JSON output includes:
 | `--list-models` | Show available models and exit |
 | `--include-model MODEL` | Only include specified models (repeatable) |
 | `--exclude-model MODEL` | Exclude specified models (repeatable) |
+| `--exclude-dataset DATASET` | Exclude specified datasets/env ids (repeatable) |
 
 ### Win Rate Calculation
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--missing-policy` | How to handle missing scores: `zero` or `neg-inf` | `zero` |
+| `--missing-policy` | How to handle missing scores: `zero` or `neg-inf` | `neg-inf` |
 | `--epsilon` | Tie tolerance (scores within epsilon are ties) | `1e-9` |
 | `--min-common` | Minimum shared examples for valid comparison | `0` |
 
@@ -74,15 +75,22 @@ The JSON output includes:
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--weight-policy` | How to weight benchmarks: `equal`, `ln`, `sqrt`, `cap` | `equal` |
+| `--weight-policy` | How to weight benchmarks: `equal`, `ln`, `sqrt`, `cap` | `ln` |
 | `--weight-cap` | Maximum weight per benchmark (for `cap` policy) | `0` |
+
+### Dataset Coverage
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--dataset-coverage all-models` | Enforce intersection of datasets across the compared models | `all-models` |
+| `--dataset-coverage per-model` | Legacy behavior (each model may be averaged over different datasets) | |
 
 ### Partial Data Handling
 
 | Flag | Description |
 |------|-------------|
-| `--partial-datasets strict` | Only use benchmarks where all selected models have data |
-| `--partial-datasets include` | Include benchmarks with partial coverage |
+| `--partial-datasets strict` | When `--include-model` is set, drop datasets missing any included model |
+| `--partial-datasets include` | When `--include-model` is set, keep datasets and treat missing models as all-missing |
 
 ## Using a Config File
 
@@ -101,6 +109,10 @@ weight_policy: ln
 exclude_model:
   - baseline-model
   - deprecated-v1
+
+# Dataset filtering
+exclude_datasets:
+  - med_dialog
 ```
 
 ```bash
@@ -126,13 +138,13 @@ medarc-eval winrate --exclude-model random-baseline
 
 ### Strict Benchmark Coverage
 
-Only use benchmarks where all models have results:
+Only use datasets where all compared models have results:
 
 ```bash
 medarc-eval winrate \
   --include-model gpt-4o \
   --include-model gpt-4o-mini \
-  --partial-datasets strict
+  --dataset-coverage all-models
 ```
 
 ### Custom Weighting

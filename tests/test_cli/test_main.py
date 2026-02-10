@@ -1046,7 +1046,7 @@ def test_process_cli_runs_winrate_post_step(monkeypatch: pytest.MonkeyPatch, tmp
             datasets=[],
         )
 
-    def fake_sync_files_to_hub(*, repo_id, output_dir, files, token, private, message, branch=None, dry_run=False):
+    def fake_sync_files_to_hub(*, repo_id, output_dir, files, token, private, message, branch=None, dry_run=False, **_kw):
         captured["upload"] = {
             "repo_id": repo_id,
             "output_dir": output_dir,
@@ -1089,10 +1089,12 @@ def test_process_cli_runs_winrate_post_step(monkeypatch: pytest.MonkeyPatch, tmp
 def test_process_config_sets_winrate_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg_path = tmp_path / "process.yaml"
     winrate_cfg = tmp_path / "winrate.yaml"
+    fake_runs_dir = tmp_path / "runs" / "raw"
+    fake_runs_dir.mkdir(parents=True)
     winrate_cfg.write_text("output_dir: runs/winrate\n", encoding="utf-8")
     cfg_path.write_text(
         f"""
-        runs_dir: runs/raw
+        runs_dir: {fake_runs_dir}
         output_dir: runs/processed
         winrate: {winrate_cfg}
         """,

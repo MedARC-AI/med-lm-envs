@@ -245,7 +245,7 @@ def execute_jobs(
         duration = perf_counter() - start
         logger.info("Job '%s' completed in %.2fs.", job.job_id, duration)
 
-        artifacts = _materialize_results(job_dir, run_dir, eval_result)
+        _materialize_results(job_dir, run_dir, eval_result)
         avg_reward = _extract_avg_reward(eval_result)
         metrics_avg = compute_metric_averages(_safe_get(eval_result, "metrics", {}))
         metadata = _safe_get(eval_result, "metadata", None)
@@ -257,7 +257,6 @@ def execute_jobs(
                 job.job_id,
                 duration_seconds=duration,
                 results_dir=job_dir,
-                artifacts=artifacts,
                 avg_reward=avg_reward,
                 metrics=metrics_avg,
                 num_examples=num_examples,
