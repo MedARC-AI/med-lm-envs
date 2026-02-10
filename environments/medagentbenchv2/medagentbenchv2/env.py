@@ -17,6 +17,24 @@ from .tools import build_tool_list
 disable_progress_bar()
 
 
+def _set_tool_call_function_field(tool_call: Any, field: str, value: Any) -> None:
+    """Best-effort setter for tool_call.function fields across dict/object tool-call shapes."""
+    try:
+        if isinstance(tool_call, dict):
+            function_payload = tool_call.get("function")
+            if isinstance(function_payload, dict):
+                function_payload[field] = value
+            return
+        function_payload = getattr(tool_call, "function", None)
+        if function_payload is not None:
+            try:
+                setattr(function_payload, field, value)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 class MedAgentBenchV2Env(vf.StatefulToolEnv):
     @staticmethod
     def _root_cause(exc: BaseException) -> BaseException:
@@ -189,41 +207,9 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
                 "tool_call_id": tool_call_id,
             }
 
-    async def env_response(self, messages: vf.Messages, state: vf.State, **kwargs: Any) -> vf.Messages:
+    async def env_response(self, messages: vf.Messages, state: vf.State, **kwargs: Any) -> tuple[vf.Messages, vf.State]:
         assert isinstance(messages, list)
         tool_calls = messages[-1].get("tool_calls") or []
-
-        def _set_tool_call_arguments(tc: Any, args: str) -> None:
-            try:
-                if isinstance(tc, dict):
-                    func = tc.get("function")
-                    if isinstance(func, dict):
-                        func["arguments"] = args
-                    return
-                func = getattr(tc, "function", None)
-                if func is not None:
-                    try:
-                        func.arguments = args
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-        def _set_tool_call_name(tc: Any, name: str) -> None:
-            try:
-                if isinstance(tc, dict):
-                    func = tc.get("function")
-                    if isinstance(func, dict):
-                        func["name"] = name
-                    return
-                func = getattr(tc, "function", None)
-                if func is not None:
-                    try:
-                        func.name = name
-                    except Exception:
-                        pass
-            except Exception:
-                pass
 
         tool_messages: list[vf.Message] = []
         sanitized_tool_calls: list[Any] = []
@@ -249,9 +235,11 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
                 or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", tool_name)
                 or tool_name not in self.tool_map
             ):
+                # Rewrite malformed tool names to a valid configured tool so the next provider request
+                # does not 400 while re-validating prior tool_calls in message history.
                 safe_name = "calculator" if "calculator" in self.tool_map else next(iter(self.tool_map))
-                _set_tool_call_name(tool_call, safe_name)
-                _set_tool_call_arguments(tool_call, "{}")
+                _set_tool_call_function_field(tool_call, "name", safe_name)
+                _set_tool_call_function_field(tool_call, "arguments", "{}")
                 sanitized_tool_calls.append(tool_call)
                 tool_messages.append(
                     {
@@ -265,7 +253,7 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
             try:
                 if raw_args is None or str(raw_args).strip() == "":
                     tool_args = {}
-                    _set_tool_call_arguments(tool_call, "{}")
+                    _set_tool_call_function_field(tool_call, "arguments", "{}")
                 elif isinstance(raw_args, dict):
                     tool_args = raw_args
                 else:
@@ -274,7 +262,7 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
                         tool_args = json.loads(tool_args)
             except json.JSONDecodeError:
                 tool_args = {}
-                _set_tool_call_arguments(tool_call, "{}")
+                _set_tool_call_function_field(tool_call, "arguments", "{}")
 
             tool_args = self.update_tool_args(tool_name, tool_args, messages, state, **kwargs)
             tool_message = await self.call_tool(tool_name, tool_args, tool_call_id, state=state)
@@ -291,7 +279,7 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
             # MultiTurnEnv.rollout() skips generation when final_env_response is set.
             state["final_env_response"] = tool_messages
 
-        return tool_messages
+        return tool_messages, state
 
 
 def _load_system_prompt() -> str:

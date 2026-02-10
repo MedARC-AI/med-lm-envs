@@ -300,6 +300,24 @@ def calculator(*, expression: str) -> str:
         return f"Error: {e}"
 
 
+def _set_tool_call_function_field(tool_call: Any, field: str, value: Any) -> None:
+    """Best-effort setter for tool_call.function fields across dict/object tool-call shapes."""
+    try:
+        if isinstance(tool_call, dict):
+            function_payload = tool_call.get("function")
+            if isinstance(function_payload, dict):
+                function_payload[field] = value
+            return
+        function_payload = getattr(tool_call, "function", None)
+        if function_payload is not None:
+            try:
+                setattr(function_payload, field, value)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 class SimpleToolEnv(vf.StatefulToolEnv):
     """
     Python REPL environment with persistent state across calls within a single rollout (one dataset row).
@@ -386,7 +404,11 @@ class SimpleToolEnv(vf.StatefulToolEnv):
         assert isinstance(messages, list)
         tool_calls = messages[-1].get("tool_calls", [])
 
+        # Rewrite malformed tool names to a valid configured tool so the next provider request
+        # does not 400 while re-validating prior tool_calls in message history.
+        preferred_tool = "calculator" if "calculator" in self.tool_map else next(iter(self.tool_map), "")
         tool_messages: list[vf.Message] = []
+        sanitized_tool_calls: list[Any] = []
         for tool_call in tool_calls:
             # Some providers/models emit tool calls as JSON-encoded strings. Normalize those.
             if isinstance(tool_call, str):
@@ -412,14 +434,40 @@ class SimpleToolEnv(vf.StatefulToolEnv):
             tool_name = getattr(func, "name", None) or (func.get("name", "") if isinstance(func, dict) else "")
             raw_args = getattr(func, "arguments", None) or (func.get("arguments", "") if isinstance(func, dict) else "")
 
+            if (
+                not isinstance(tool_name, str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", tool_name)
+                or tool_name not in self.tool_map
+            ):
+                _set_tool_call_function_field(tool_call, "name", preferred_tool)
+                _set_tool_call_function_field(tool_call, "arguments", "{}")
+                sanitized_tool_calls.append(tool_call)
+                tool_messages.append(
+                    {
+                        "role": "tool",
+                        "content": (f"Error: Invalid tool formatting for '{tool_name}'."),
+                        "tool_call_id": tool_call_id or "",
+                    }
+                )
+                continue
+
             try:
                 # Empty/None arguments occur in the wild; treat them as {} so we can return a normal
                 # tool error (e.g. missing required params) rather than crashing on JSONDecodeError.
                 if raw_args is None or str(raw_args).strip() == "":
                     tool_args = {}
+                    _set_tool_call_function_field(tool_call, "arguments", "{}")
+                elif isinstance(raw_args, dict):
+                    tool_args = raw_args
                 else:
                     tool_args = json.loads(raw_args)
-            except json.JSONDecodeError:
+                    if isinstance(tool_args, str):
+                        tool_args = json.loads(tool_args)
+                if not isinstance(tool_args, dict):
+                    raise ValueError("Tool arguments must be a JSON object.")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                _set_tool_call_function_field(tool_call, "arguments", "{}")
+                sanitized_tool_calls.append(tool_call)
                 tool_messages.append(
                     {
                         "role": "tool",
@@ -430,7 +478,18 @@ class SimpleToolEnv(vf.StatefulToolEnv):
                 continue
 
             tool_args = self.update_tool_args(tool_name, tool_args, messages, state, **kwargs)
-            tool_message = await self.call_tool(tool_name, tool_args, tool_call_id or "")
+            try:
+                tool_message = await self.call_tool(tool_name, tool_args, tool_call_id or "")
+            except Exception as exc:  # noqa: BLE001
+                tool_message = {
+                    "role": "tool",
+                    "content": f"Error: {exc}",
+                    "tool_call_id": tool_call_id or "",
+                }
             tool_messages.append(tool_message)
+            sanitized_tool_calls.append(tool_call)
+
+        if tool_calls:
+            messages[-1]["tool_calls"] = sanitized_tool_calls
 
         return tool_messages, state
