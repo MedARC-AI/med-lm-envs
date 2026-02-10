@@ -774,6 +774,36 @@ def _upgrade_manifest_payload(payload: Any) -> tuple[Any, bool]:
         return payload, False
 
     changed = False
+    version = payload.get("version")
+    jobs = payload.get("jobs")
+    if version == 2:
+        payload["version"] = MANIFEST_VERSION
+        payload.setdefault("artifacts_root", ".")
+        changed = True
+        if isinstance(jobs, list):
+            for index, job in enumerate(jobs):
+                if not isinstance(job, dict):
+                    continue
+                job_id = str(job.get("job_id") or "")
+                base_dir = Path(str(job.get("results_dir") or job_id or ""))
+                if not base_dir.as_posix():
+                    base_dir = Path(job_id or f"job-{index}")
+                if "results_relpath" not in job:
+                    job["results_relpath"] = (base_dir / "results.jsonl").as_posix()
+                    changed = True
+                if "metadata_relpath" not in job:
+                    job["metadata_relpath"] = (base_dir / "metadata.json").as_posix()
+                    changed = True
+                if "summary_relpath" in job:
+                    job.pop("summary_relpath", None)
+                    changed = True
+                if "artifacts_checksum" in job:
+                    job.pop("artifacts_checksum", None)
+                    changed = True
+                if "artifacts" in job:
+                    job.pop("artifacts", None)
+                    changed = True
+
     env_templates = payload.get("env_templates")
     if isinstance(env_templates, dict):
         for template_id, template in env_templates.items():
