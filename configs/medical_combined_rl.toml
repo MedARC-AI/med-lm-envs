@@ -1,0 +1,135 @@
+# Combined Medical RL Training Configuration
+# MedMCQA + MedCalc-Bench + MedCaseReasoning
+
+inference_gpu_ids = [0, 1, 2, 3, 4, 5]
+trainer_gpu_ids = [6, 7]
+
+max_steps = 500
+seq_len = 4096  # Accommodate longest prompts (MedCalc can be ~2800 tokens)
+
+[wandb]
+project = "medical-combined-rl"
+name = "medical-combined-rl"
+
+[ckpt]
+# Checkpoint at the end of training
+
+[model]
+name = "Qwen/Qwen3-4B-Instruct-2507"
+
+[orchestrator]
+batch_size = 512
+rollouts_per_example = 16
+
+# Buffer config - sample evenly from each environment with difficulty filtering
+[orchestrator.buffer]
+env_ratios = [1.0, 1.0, 1.0]  # Equal sampling: MedMCQA, MedCalc, MedCaseReasoning
+
+# Difficulty-based filtering
+easy_threshold = 1.0    # Problems with avg reward >= 1.0 are "easy" (always correct)
+hard_threshold = 0.0    # Problems with avg reward <= 0.0 are "hard" (always wrong)
+online_difficulty_filtering = true  # Filter out rollouts with 0% or 100% success rate
+
+# When resuming, convert some easy/hard back to normal pool
+easy_fraction = 0.1     # 10% of easy problems back to normal
+hard_fraction = 0.1     # 10% of hard problems back to normal
+
+# Environment 1: MedMCQA (182k examples, MCQ)
+[[orchestrator.env]]
+id = "med_mcqa"
+name = "medmcqa"
+
+[orchestrator.env.args]
+use_think = true
+answer_format = "xml"
+shuffle_answers = false
+
+# Environment 2: MedCalc-Bench (10k examples, calculations)
+[[orchestrator.env]]
+id = "medcalc_bench"
+name = "medcalc"
+
+[orchestrator.env.args]
+one_shot = false
+add_python_tool = false
+use_think = true
+answer_format = "xml"
+use_verified_dataset = true
+
+# Environment 3: MedCaseReasoning (13k examples, diagnosis with LLM judge)
+[[orchestrator.env]]
+id = "medcasereasoning"
+name = "medcase"
+
+[orchestrator.env.args]
+judge_model = "gpt-5-nano"
+reasoning_effort = "low"
+
+[orchestrator.sampling]
+max_tokens = 2048  # Accommodate reasoning for all tasks
+temperature = 1.0
+
+# Evaluation configuration
+[orchestrator.eval]
+interval = 25  # Less frequent eval since we have 3 envs
+eval_base_model = true
+
+# Eval: MedMCQA
+[[orchestrator.eval.env]]
+id = "med_mcqa"
+name = "medmcqa"
+num_examples = 300
+rollouts_per_example = 1
+
+[orchestrator.eval.env.args]
+use_think = true
+answer_format = "xml"
+shuffle_answers = false
+eval_split = "validation"
+
+# Eval: MedCalc-Bench
+[[orchestrator.eval.env]]
+id = "medcalc_bench"
+name = "medcalc"
+num_examples = 300
+rollouts_per_example = 1
+
+[orchestrator.eval.env.args]
+one_shot = false
+add_python_tool = false
+use_think = true
+answer_format = "xml"
+use_verified_dataset = true
+
+# Eval: MedCaseReasoning
+[[orchestrator.eval.env]]
+id = "medcasereasoning"
+name = "medcase"
+num_examples = 100  # Smaller due to LLM judge cost
+rollouts_per_example = 1
+
+[orchestrator.eval.env.args]
+judge_model = "gpt-5-nano"
+reasoning_effort = "low"
+eval_split = "test"
+
+[orchestrator.eval.sampling]
+temperature = 0.0
+max_tokens = 2048
+
+[trainer]
+# Default trainer config (GRPO)
+
+[trainer.model.lora]
+rank = 32
+alpha = 64.0
+
+[trainer.optim]
+lr = 1e-5
+
+[inference]
+# Inference server config
+
+[inference.parallel]
+tp = 2
+dp = 3

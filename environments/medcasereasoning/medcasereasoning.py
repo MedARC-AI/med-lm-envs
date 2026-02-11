@@ -43,6 +43,8 @@ def load_environment(
     judge_model: str = "gpt-4o-mini",
     judge_base_url: str | None = None,
     judge_api_key: str | None = None,
+    reasoning_effort: str | None = None,  # "low", "medium", "high" for reasoning models
+    eval_split: str = "val",  # "val" or "test"
 ) -> vf.Environment:
     """
     MedCaseReasoning environment using LLM-as-a-Judge evaluation.
@@ -50,11 +52,18 @@ def load_environment(
     This environment loads the MedCaseReasoning dataset and uses an LLM judge
     to evaluate whether model responses are equivalent to the ground truth
     medical diagnoses.
+    
+    Args:
+        judge_model: Model to use for judging (e.g., "gpt-4o-mini", "gpt-5-nano")
+        judge_base_url: Optional base URL for judge API
+        judge_api_key: Optional API key for judge
+        reasoning_effort: Reasoning effort for reasoning models ("low", "medium", "high")
+        eval_split: Which split to use for evaluation ("val" or "test")
     """
     # Load the MedCaseReasoning dataset
     full_dataset = load_dataset("zou-lab/MedCaseReasoning")
 
-    # Use train split for training, val split for evaluation
+    # Use train split for training
     train_dataset = full_dataset["train"].map(
         lambda x: {
             "question": QUESTION_TEMPLATE.format(question=x["case_prompt"]),
@@ -64,7 +73,7 @@ def load_environment(
         }
     )
 
-    eval_dataset = full_dataset["val"].map(
+    eval_dataset = full_dataset[eval_split].map(
         lambda x: {
             "question": QUESTION_TEMPLATE.format(question=x["case_prompt"]),
             "answer": x["final_diagnosis"],
@@ -73,11 +82,11 @@ def load_environment(
         }
     )
 
-    # System prompt for the task
-
     # Initialize OpenAI client for judge
     api_key = default_judge_api_key(judge_base_url) if judge_api_key is None else judge_api_key
-    sampling_args, default_headers = judge_sampling_args_and_headers(judge_model, judge_base_url)
+    sampling_args, default_headers = judge_sampling_args_and_headers(
+        judge_model, judge_base_url, reasoning_effort=reasoning_effort
+    )
     judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key, default_headers=default_headers)
 
     # Create JudgeRubric with custom prompt

@@ -297,6 +297,7 @@ def load_environment(
     answer_format: AnswerFormat | str = AnswerFormat.XML,
     use_think: bool = False,
     system_prompt: str | None = None,
+    use_verified_dataset: bool = False,  # Use nsk7153/MedCalc-Bench-Verified instead
     **kwargs,
 ) -> vf.Environment:
     # -------- normalize answer_format --------
@@ -322,7 +323,10 @@ def load_environment(
             system_prompt = system_prompt
 
     # -------- load dataset and convert to vf format --------
-    ds = load_dataset("ncbi/MedCalc-Bench-v1.2")
+    if use_verified_dataset:
+        ds = load_dataset("nsk7153/MedCalc-Bench-Verified")
+    else:
+        ds = load_dataset("ncbi/MedCalc-Bench-v1.2")
     one_shot_examples = None
     if one_shot:
         # create mapping from calc id to one-shot example
@@ -377,9 +381,10 @@ def load_environment(
             use_calculator=add_calculator_tool,
             **kwargs,
         )
-        # Add ToolRubric to track tool usage metrics
-        tool_rubric = vf.ToolRubric(tools=env.tools)
-        env.rubric = vf.RubricGroup(rubrics=[tool_rubric, env.rubric])
+        # Add ToolRubric to track tool usage metrics (if available)
+        if hasattr(vf, "ToolRubric"):
+            tool_rubric = vf.ToolRubric(tools=env.tools)
+            env.rubric = vf.RubricGroup(rubrics=[tool_rubric, env.rubric])
         return env
     else:
         return vf.SingleTurnEnv(

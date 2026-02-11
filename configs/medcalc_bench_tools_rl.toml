@@ -1,0 +1,77 @@
+# MedCalc-Bench RL Training Configuration (with Python Tool)
+# Clinical calculator reasoning with code execution
+
+inference_gpu_ids = [0, 1, 2, 3, 4, 5]
+trainer_gpu_ids = [6, 7]
+
+max_steps = 300
+seq_len = 8192  # Longer for multi-turn tool use
+
+[wandb]
+project = "medcalc-bench-tools"
+name = "medcalc-bench-tools-rl"
+
+[ckpt]
+# Checkpoint at the end of training
+
+[model]
+name = "Qwen/Qwen3-4B-Instruct-2507"
+
+[orchestrator]
+batch_size = 256  # Smaller batch for multi-turn (more tokens per example)
+rollouts_per_example = 8
+
+[[orchestrator.env]]
+id = "medcalc_bench"
+
+# Environment arguments for MedCalc-Bench with tools
+[orchestrator.env.args]
+one_shot = false
+add_python_tool = true    # Enable Python tool for calculations
+use_think = true
+answer_format = "xml"
+max_turns = 10            # Allow multiple tool calls
+use_verified_dataset = true  # Use MedCalc-Bench-Verified
+
+[orchestrator.sampling]
+max_tokens = 2048
+temperature = 1.0
+
+# Evaluation configuration
+[orchestrator.eval]
+interval = 10
+eval_base_model = true
+
+[[orchestrator.eval.env]]
+id = "medcalc_bench"
+num_examples = 300
+rollouts_per_example = 1
+
+[orchestrator.eval.env.args]
+one_shot = false
+add_python_tool = true    # Tools enabled for eval too
+use_think = true
+answer_format = "xml"
+max_turns = 10
+use_verified_dataset = true  # Use MedCalc-Bench-Verified
+
+[orchestrator.eval.sampling]
+temperature = 0.0
+max_tokens = 2048
+
+[trainer]
+# Default trainer config (GRPO)
+
+[trainer.model.lora]
+rank = 32
+alpha = 64.0
+
+[trainer.optim]
+lr = 1e-5
+
+[inference]
+# Inference server config
+
+[inference.parallel]
+tp = 2
+dp = 3

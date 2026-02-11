@@ -60,14 +60,18 @@ def load_environment(
     shuffle_answers: bool = False,
     shuffle_seed: int | None = 1618,
     answer_format: AnswerFormat | str = AnswerFormat.XML,
+    eval_split: str = "validation",  # "validation" or "test"
 ) -> vf.Environment:
     """
-    Load the MedMCQA environment with train and validation splits.
+    Load the MedMCQA environment with train and eval splits.
     Supports reasoning (use_think=True) or standard evaluation.
     Returns a SingleTurnEnv ready for model evaluation.
+    
+    Args:
+        eval_split: Which split to use for evaluation ("validation" or "test")
     """
     train_ds = load_dataset("lighteval/med_mcqa", split="train")
-    val_ds = load_dataset("lighteval/med_mcqa", split="validation")
+    eval_ds = load_dataset("lighteval/med_mcqa", split=eval_split)
 
     def _map_example(example: dict[str, Any]) -> dict[str, Any] | None:
         cop = example.get("cop", -1)
@@ -113,7 +117,7 @@ def load_environment(
         remove_columns=columns_to_remove,
         load_from_cache_file=load_from_cache_file,
     ).filter(lambda x: x is not None, load_from_cache_file=load_from_cache_file)
-    val_mapped = val_ds.map(
+    eval_mapped = eval_ds.map(
         _map_example,
         remove_columns=columns_to_remove,
         load_from_cache_file=load_from_cache_file,
@@ -142,7 +146,7 @@ def load_environment(
 
     env = vf.SingleTurnEnv(
         dataset=train_mapped,
-        eval_dataset=val_mapped,
+        eval_dataset=eval_mapped,
         system_prompt=system_prompt,
         parser=parser,
         rubric=rubric,
