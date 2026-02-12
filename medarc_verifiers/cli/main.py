@@ -527,11 +527,13 @@ def _run_process_mode(argv: Sequence[str]) -> int:
     if args.config:
         _load_and_apply_config(args, args.config, mode="process", parser=parser)
     _finalize_config_args(args, mode="process")
+    winrate_args: argparse.Namespace | None = None
     if args.winrate:
         winrate_path = Path(args.winrate).expanduser()
         if not winrate_path.exists():
-            parser.error(f"Winrate config not found: {winrate_path}")
+            parser.error(f"Winrate config path '{winrate_path}' does not exist.")
         args.winrate = winrate_path
+        winrate_args = _build_winrate_args_from_config(winrate_path, parser=parser)
 
     try:
         env_export_map = _load_env_export_map(args.env_config_root)
@@ -613,7 +615,8 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         if options.dry_run:
             logger.info("Skipping winrate post-step for dry-run process.")
             return 0
-        winrate_args = _build_winrate_args_from_config(Path(args.winrate), parser=parser)
+        if winrate_args is None:
+            winrate_args = _build_winrate_args_from_config(Path(args.winrate), parser=parser)
         winrate_args.processed_dir = options.output_dir
         winrate_args.hf_processed_repo = None
         winrate_args.hf_processed_pull = False
