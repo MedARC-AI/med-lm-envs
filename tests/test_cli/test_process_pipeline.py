@@ -240,6 +240,38 @@ def test_run_process_excludes_models(tmp_path: Path) -> None:
     assert result.env_groups[0].model_id == "keep-model"
 
 
+def test_run_process_excludes_models_case_insensitive(tmp_path: Path) -> None:
+    _write_run(
+        tmp_path,
+        run_id="run-keep",
+        updated_at="2024-01-01T00:00:00Z",
+        reward=1.0,
+        env_id="demo-env-rollout3",
+        model_id="keep-model",
+    )
+    runs_dir = _write_run(
+        tmp_path,
+        run_id="run-skip",
+        updated_at="2024-01-01T00:01:00Z",
+        reward=0.0,
+        env_id="demo-env-rollout3",
+        model_id="SKIP-MODEL",
+    )
+    options = ProcessOptions(
+        runs_dir=runs_dir,
+        output_dir=tmp_path / "processed",
+        exclude_models=("skip-model",),
+        dry_run=True,
+        max_workers=1,
+    )
+
+    result = run_process(options)
+
+    assert result.records_processed == 1
+    assert len(result.env_groups) == 1
+    assert result.env_groups[0].model_id == "keep-model"
+
+
 def test_run_winrate_from_processed_outputs(tmp_path: Path) -> None:
     runs_dir = _setup_run(tmp_path)
     output_dir = tmp_path / "processed"

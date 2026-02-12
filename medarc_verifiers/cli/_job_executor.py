@@ -167,36 +167,42 @@ def execute_jobs(
             )
         except KeyboardInterrupt:
             logger.warning("Interrupted while preparing job %s.", job_label)
-            if manifest is not None:
-                manifest.record_job_failure(job.job_id, error="interrupted by user")
             interruption_message = f"{job_label} interrupted by user"
-            results.append(
-                JobExecutionResult(
-                    job_id=job.job_id,
-                    status="failed",
-                    error=interruption_message,
-                    output_path=job_dir,
-                )
+            _record_job_failure(
+                results=results,
+                job_statuses=job_statuses,
+                jobs=jobs,
+                center_index=index,
+                manifest=manifest,
+                job_id=job.job_id,
+                output_path=job_dir,
+                error_message=interruption_message,
+                manifest_error="interrupted by user",
+                duration_seconds=None,
+                status_label="interrupted",
+                event="interruption",
+                note="during preparation",
             )
-            job_statuses[job.job_id] = "interrupted"
-            _log_job_progress_window(jobs, index, job_statuses, event="interruption", note="during preparation")
             interrupted = True
             break
         except Exception as exc:  # noqa: BLE001
             error_message = f"{job_label} preparation failed: {exc}"
             logger.exception("%s", error_message)
-            if manifest is not None:
-                manifest.record_job_failure(job.job_id, error=str(exc))
-            results.append(
-                JobExecutionResult(
-                    job_id=job.job_id,
-                    status="failed",
-                    error=error_message,
-                    output_path=job_dir,
-                )
+            _record_job_failure(
+                results=results,
+                job_statuses=job_statuses,
+                jobs=jobs,
+                center_index=index,
+                manifest=manifest,
+                job_id=job.job_id,
+                output_path=job_dir,
+                error_message=error_message,
+                manifest_error=str(exc),
+                duration_seconds=None,
+                status_label="failed",
+                event="failure",
+                note="during preparation",
             )
-            job_statuses[job.job_id] = "failed"
-            _log_job_progress_window(jobs, index, job_statuses, event="failure", note="during preparation")
             _maybe_sleep_between_jobs(job, settings, is_last=is_last_job)
             continue
 
@@ -206,46 +212,48 @@ def execute_jobs(
         except KeyboardInterrupt:
             duration = perf_counter() - start
             logger.warning("Job %s interrupted by user after %.2fs.", job_label, duration)
-            if manifest is not None:
-                manifest.record_job_failure(job.job_id, error="interrupted by user", duration_seconds=duration)
             interruption_message = f"{job_label} interrupted by user"
-            results.append(
-                JobExecutionResult(
-                    job_id=job.job_id,
-                    status="failed",
-                    error=interruption_message,
-                    duration_seconds=duration,
-                    output_path=job_dir,
-                )
+            _record_job_failure(
+                results=results,
+                job_statuses=job_statuses,
+                jobs=jobs,
+                center_index=index,
+                manifest=manifest,
+                job_id=job.job_id,
+                output_path=job_dir,
+                error_message=interruption_message,
+                manifest_error="interrupted by user",
+                duration_seconds=duration,
+                status_label="interrupted",
+                event="interruption",
             )
-            job_statuses[job.job_id] = "interrupted"
-            _log_job_progress_window(jobs, index, job_statuses, event="interruption")
             interrupted = True
             break
         except Exception as exc:  # noqa: BLE001
             duration = perf_counter() - start
             error_message = f"{job_label} failed after {duration:.2f}s: {exc}"
             logger.exception("%s", error_message)
-            if manifest is not None:
-                manifest.record_job_failure(job.job_id, error=str(exc), duration_seconds=duration)
-            results.append(
-                JobExecutionResult(
-                    job_id=job.job_id,
-                    status="failed",
-                    error=error_message,
-                    duration_seconds=duration,
-                    output_path=job_dir,
-                )
+            _record_job_failure(
+                results=results,
+                job_statuses=job_statuses,
+                jobs=jobs,
+                center_index=index,
+                manifest=manifest,
+                job_id=job.job_id,
+                output_path=job_dir,
+                error_message=error_message,
+                manifest_error=str(exc),
+                duration_seconds=duration,
+                status_label="failed",
+                event="failure",
             )
-            job_statuses[job.job_id] = "failed"
-            _log_job_progress_window(jobs, index, job_statuses, event="failure")
             _maybe_sleep_between_jobs(job, settings, is_last=is_last_job)
             continue
 
         duration = perf_counter() - start
         logger.info("Job '%s' completed in %.2fs.", job.job_id, duration)
 
-        _materialize_results(job_dir, run_dir, eval_result)
+        _materialize_results(job_dir, eval_result)
         avg_reward = _extract_avg_reward(eval_result)
         metrics_avg = compute_metric_averages(_safe_get(eval_result, "metrics", {}))
         metadata = _safe_get(eval_result, "metadata", None)
@@ -295,6 +303,37 @@ def _load_endpoints_for_model(
     return load_endpoint_registry(registry_path, cache=cache)
 
 
+def _record_job_failure(
+    *,
+    results: list[JobExecutionResult],
+    job_statuses: dict[str, str],
+    jobs: Sequence[ResolvedJob],
+    center_index: int,
+    manifest: RunManifest | None,
+    job_id: str,
+    output_path: Path,
+    error_message: str,
+    manifest_error: str,
+    duration_seconds: float | None,
+    status_label: str,
+    event: str,
+    note: str | None = None,
+) -> None:
+    if manifest is not None:
+        manifest.record_job_failure(job_id, error=manifest_error, duration_seconds=duration_seconds)
+    results.append(
+        JobExecutionResult(
+            job_id=job_id,
+            status="failed",
+            error=error_message,
+            duration_seconds=duration_seconds,
+            output_path=output_path,
+        )
+    )
+    job_statuses[job_id] = status_label
+    _log_job_progress_window(jobs, center_index, job_statuses, event=event, note=note)
+
+
 def _safe_get(obj: Any, key: str, default: Any = None) -> Any:
     """Retrieve attribute or dict key, allowing newer dict-style GenerateOutputs."""
     if isinstance(obj, dict):
@@ -302,9 +341,8 @@ def _safe_get(obj: Any, key: str, default: Any = None) -> Any:
     return getattr(obj, key, default)
 
 
-def _materialize_results(job_dir: Path, run_dir: Path, results: GenerateOutputs) -> list[str]:
-    """Move evaluation artifacts into the job directory and report their paths."""
-    artifacts: list[str] = []
+def _materialize_results(job_dir: Path, results: GenerateOutputs) -> None:
+    """Move evaluation artifacts into the job directory."""
     metadata = _safe_get(results, "metadata", None)
     raw_path = _safe_get(metadata, "path_to_save", None)
     src_path = Path(raw_path) if raw_path else job_dir
@@ -324,15 +362,6 @@ def _materialize_results(job_dir: Path, run_dir: Path, results: GenerateOutputs)
             shutil.move(str(item), target)
         with contextlib.suppress(OSError):
             src_path.rmdir()
-
-    for path in sorted(job_dir.rglob("*")):
-        if not path.is_file():
-            continue
-        try:
-            artifacts.append(str(path.relative_to(run_dir)))
-        except ValueError:
-            artifacts.append(str(path))
-    return artifacts
 
 
 def _extract_avg_reward(results: GenerateOutputs) -> float | None:

@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from medarc_verifiers.cli._job_builder import ResolvedJob
 from medarc_verifiers.cli._schemas import ModelConfigSchema
 from medarc_verifiers.cli.utils.json_io import dumps_json
-from medarc_verifiers.cli.utils.shared import compute_checksum, resolve_env_identifier_or
+from medarc_verifiers.cli.utils.shared import count_jsonl_rows, compute_checksum, resolve_env_identifier_or
 from medarc_verifiers.utils.pathing import normalize_results_dir_for_manifest
 
 MANIFEST_FILENAME = "run_manifest.json"
@@ -376,17 +376,6 @@ def _manifest_relative_artifacts(*, run_dir: Path, job_id: str, results_dir: Pat
     )
 
 
-def _count_jsonl_rows(path: Path) -> int | None:
-    if not path.exists() or not path.is_file():
-        return None
-    count = 0
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if line.strip():
-                count += 1
-    return count
-
-
 def _build_env_template_payload(env_payload: Mapping[str, Any]) -> dict[str, Any]:
     payload = dict(env_payload)
     payload.pop("id", None)
@@ -701,7 +690,7 @@ class RunManifest:
         entry.num_examples = num_examples
         entry.rollouts_per_example = rollouts_per_example
         results_path = results_dir / "results.jsonl"
-        entry.row_count = _count_jsonl_rows(results_path)
+        entry.row_count = count_jsonl_rows(results_path)
         self._refresh_summary()
 
     def record_job_failure(self, job_id: str, *, error: str, duration_seconds: float | None = None) -> None:

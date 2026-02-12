@@ -223,30 +223,14 @@ def _make_duplicate_key(base: str, count: int, existing: Mapping[str, Any]) -> s
 
 
 def _normalize_jobs_field(value: Any, *, base_dir: Path) -> list[dict[str, Any]]:
-    entries = _collect_job_entries(value, base_dir=base_dir)
-    return [_adapt_job_entry(entry) for entry in entries]
-
-
-def _collect_model_entries(source: Any, *, base_dir: Path, context: str) -> list[dict[str, Any]]:
-    return _collect_entries(
-        source, base_dir=base_dir, context=context, entry_description="models", env_default_root=None
-    )
-
-
-def _collect_env_entries(
-    source: Any, *, base_dir: Path, context: str, env_default_root: Path | None
-) -> list[dict[str, Any]]:
-    return _collect_entries(
-        source,
+    entries = _collect_entries(
+        value,
         base_dir=base_dir,
-        context=context,
-        entry_description="envs",
-        env_default_root=env_default_root,
+        context="jobs",
+        entry_description="jobs",
+        env_default_root=None,
     )
-
-
-def _collect_job_entries(source: Any, *, base_dir: Path) -> list[dict[str, Any]]:
-    return _collect_entries(source, base_dir=base_dir, context="jobs", entry_description="jobs", env_default_root=None)
+    return [_adapt_job_entry(entry) for entry in entries]
 
 
 def _normalize_section(
