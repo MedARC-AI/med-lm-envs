@@ -7,7 +7,7 @@ import logging
 import sys
 from pathlib import Path
 from textwrap import dedent
-from typing import Any, Mapping, Sequence
+from typing import Any, Literal, Mapping, Sequence
 
 import yaml
 from pydantic import ValidationError
@@ -525,8 +525,8 @@ def _run_process_mode(argv: Sequence[str]) -> int:
     args = parser.parse_args(argv)
 
     if args.config:
-        _apply_process_config(args, args.config)
-    _finalize_process_args(args)
+        _load_and_apply_config(args, args.config, mode="process", parser=parser)
+    _finalize_config_args(args, mode="process")
     if args.winrate:
         winrate_path = Path(args.winrate).expanduser()
         if not winrate_path.exists():
@@ -613,7 +613,7 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         if options.dry_run:
             logger.info("Skipping winrate post-step for dry-run process.")
             return 0
-        winrate_args = _build_winrate_args_from_config(Path(args.winrate))
+        winrate_args = _build_winrate_args_from_config(Path(args.winrate), parser=parser)
         winrate_args.processed_dir = options.output_dir
         winrate_args.hf_processed_repo = None
         winrate_args.hf_processed_pull = False
@@ -660,203 +660,170 @@ def _run_process_mode(argv: Sequence[str]) -> int:
     return 0
 
 
-def _load_process_config(path: Path) -> Mapping[str, Any]:
-    return load_mapping_file(path, label="Process config")
+def _parse_config_numeric(
+    value: Any,
+    *,
+    parser: argparse.ArgumentParser,
+    mode: Literal["process", "winrate"],
+    field: str,
+    cast_type: type[int] | type[float],
+) -> int | float:
+    if isinstance(value, bool):
+        parser.error(
+            f"Invalid {mode} config value for '{field}': expected {cast_type.__name__}, got {value!r}."
+        )
+    try:
+        return cast_type(value)
+    except (TypeError, ValueError):
+        parser.error(
+            f"Invalid {mode} config value for '{field}': expected {cast_type.__name__}, got {value!r}."
+        )
 
 
-def _apply_process_config(args: argparse.Namespace, path: Path) -> None:
-    """Apply config file defaults to process args (CLI flags win)."""
-    payload = dict(_load_process_config(path))
+def _parse_config_list(value: Any) -> list[str] | None:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return [stripped] if stripped else None
+    if isinstance(value, Sequence):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return None
 
+
+def _is_unset(args: argparse.Namespace, attr: str) -> bool:
+    return hasattr(args, attr) and getattr(args, attr) is None
+
+
+def _set_if_unset(args: argparse.Namespace, attr: str, value: Any) -> None:
+    if hasattr(args, attr) and getattr(args, attr) is None:
+        setattr(args, attr, value)
+
+
+def _load_config_payload(path: Path, *, mode: Literal["process", "winrate"]) -> dict[str, Any]:
+    label = "Process config" if mode == "process" else "Winrate config"
+    return dict(load_mapping_file(path, label=label))
+
+
+def _normalize_mode_payload(payload: dict[str, Any], *, mode: Literal["process", "winrate"]) -> None:
     hf_payload = payload.get("hf")
     if isinstance(hf_payload, Mapping):
         for key, value in hf_payload.items():
+            if mode == "winrate":
+                if key == "repo":
+                    payload.setdefault("hf_processed_repo", value)
+                    continue
+                if key == "branch":
+                    payload.setdefault("hf_branch", value)
+                    continue
+                if key == "token":
+                    payload.setdefault("hf_token", value)
+                    continue
+                if key == "private":
+                    payload.setdefault("hf_private", value)
+                    continue
             payload.setdefault(f"hf_{key}", value)
 
-    def _set_if_unset(attr: str, value: Any) -> None:
-        if not hasattr(args, attr):
-            return
-        if getattr(args, attr) is None:
-            setattr(args, attr, value)
-
-    # Paths / simple defaults
-    if "runs_dir" in payload:
-        _set_if_unset("runs_dir", Path(str(payload["runs_dir"])))
-    if "output_dir" in payload:
-        _set_if_unset("output_dir", Path(str(payload["output_dir"])))
-    if "env_config_root" in payload:
-        _set_if_unset("env_config_root", Path(str(payload["env_config_root"])))
-    if "max_workers" in payload:
-        try:
-            _set_if_unset("max_workers", int(payload["max_workers"]))
-        except Exception:
-            pass
-    if "winrate" in payload:
-        _set_if_unset("winrate", Path(str(payload["winrate"])))
-    if "processed_at" in payload:
-        _set_if_unset("processed_at", str(payload["processed_at"]))
-    if "dry_run" in payload:
-        _set_if_unset("dry_run", bool(payload["dry_run"]))
-    if "clean" in payload:
-        _set_if_unset("clean", bool(payload["clean"]))
-    if "yes" in payload:
-        _set_if_unset("yes", bool(payload["yes"]))
-    if "process_incomplete" in payload:
-        _set_if_unset("process_incomplete", bool(payload["process_incomplete"]))
-    if "validate_manifest" in payload:
-        _set_if_unset("validate_manifest", bool(payload["validate_manifest"]))
-    if "strict_manifest" in payload:
-        _set_if_unset("strict_manifest", bool(payload["strict_manifest"]))
-    if "status" in payload and getattr(args, "status", None) is None:
-        status_value = payload["status"]
-        if isinstance(status_value, str) and status_value.strip():
-            args.status = [status_value.strip()]
-        elif isinstance(status_value, Sequence):
-            args.status = [str(item).strip() for item in status_value if str(item).strip()]
     if "exclude_datasets" not in payload and "exclude_dataset" in payload:
         payload["exclude_datasets"] = payload["exclude_dataset"]
-    if "exclude_datasets" in payload and getattr(args, "exclude_dataset", None) is None:
-        exclude_value = payload["exclude_datasets"]
-        if isinstance(exclude_value, str) and exclude_value.strip():
-            args.exclude_dataset = [exclude_value.strip()]
-        elif isinstance(exclude_value, Sequence):
-            args.exclude_dataset = [str(item).strip() for item in exclude_value if str(item).strip()]
     if "exclude_models" not in payload and "exclude_model" in payload:
         payload["exclude_models"] = payload["exclude_model"]
-    if "exclude_models" in payload and getattr(args, "exclude_model", None) is None:
-        exclude_value = payload["exclude_models"]
-        if isinstance(exclude_value, str) and exclude_value.strip():
-            args.exclude_model = [exclude_value.strip()]
-        elif isinstance(exclude_value, Sequence):
-            args.exclude_model = [str(item).strip() for item in exclude_value if str(item).strip()]
-
-    # HF settings (only apply when unset on CLI)
-    if "hf_repo" in payload:
-        _set_if_unset("hf_repo", str(payload["hf_repo"]))
-    if "hf_branch" in payload:
-        _set_if_unset("hf_branch", str(payload["hf_branch"]))
-    if "hf_token" in payload:
-        _set_if_unset("hf_token", str(payload["hf_token"]))
-    if "hf_private" in payload:
-        _set_if_unset("hf_private", bool(payload["hf_private"]))
-    if "hf_pull_policy" in payload:
-        _set_if_unset("hf_pull_policy", str(payload["hf_pull_policy"]))
-    if "hf_request_timeout" in payload:
-        try:
-            _set_if_unset("hf_request_timeout", float(payload["hf_request_timeout"]))
-        except Exception:
-            pass
-    if "hf_retries" in payload:
-        try:
-            _set_if_unset("hf_retries", int(payload["hf_retries"]))
-        except Exception:
-            pass
-    if "hf_max_files_per_commit" in payload:
-        try:
-            _set_if_unset("hf_max_files_per_commit", int(payload["hf_max_files_per_commit"]))
-        except Exception:
-            pass
 
 
-def _load_winrate_config(path: Path) -> Mapping[str, Any]:
-    return load_mapping_file(path, label="Winrate config")
+def _load_and_apply_config(
+    args: argparse.Namespace,
+    path: Path,
+    *,
+    mode: Literal["process", "winrate"],
+    parser: argparse.ArgumentParser,
+) -> None:
+    try:
+        payload = _load_config_payload(path, mode=mode)
+    except (FileNotFoundError, ValueError) as exc:
+        parser.error(str(exc))
+    _normalize_mode_payload(payload, mode=mode)
+
+    path_fields = {
+        "process": {"runs_dir": "runs_dir", "output_dir": "output_dir", "env_config_root": "env_config_root", "winrate": "winrate"},
+        "winrate": {"processed_dir": "processed_dir", "output_dir": "output_dir", "output": "output"},
+    }[mode]
+    string_fields = {
+        "process": {
+            "processed_at": "processed_at",
+            "hf_repo": "hf_repo",
+            "hf_branch": "hf_branch",
+            "hf_token": "hf_token",
+            "hf_pull_policy": "hf_pull_policy",
+        },
+        "winrate": {
+            "output_name": "output_name",
+            "processed_at": "processed_at",
+            "missing_policy": "missing_policy",
+            "weight_policy": "weight_policy",
+            "partial_datasets": "partial_datasets",
+            "dataset_coverage": "dataset_coverage",
+            "hf_processed_repo": "hf_processed_repo",
+            "hf_winrate_repo": "hf_winrate_repo",
+            "hf_branch": "hf_branch",
+            "hf_token": "hf_token",
+        },
+    }[mode]
+    boolean_fields = {
+        "process": {
+            "dry_run": "dry_run",
+            "clean": "clean",
+            "yes": "yes",
+            "process_incomplete": "process_incomplete",
+            "validate_manifest": "validate_manifest",
+            "strict_manifest": "strict_manifest",
+            "hf_private": "hf_private",
+        },
+        "winrate": {"hf_processed_pull": "hf_processed_pull", "hf_private": "hf_private"},
+    }[mode]
+    int_fields = {
+        "process": {
+            "max_workers": "max_workers",
+            "hf_retries": "hf_retries",
+            "hf_max_files_per_commit": "hf_max_files_per_commit",
+        },
+        "winrate": {"min_common": "min_common", "weight_cap": "weight_cap"},
+    }[mode]
+    float_fields = {
+        "process": {"hf_request_timeout": "hf_request_timeout"},
+        "winrate": {"epsilon": "epsilon"},
+    }[mode]
+    repeatable_fields = {
+        "process": {"status": "status", "exclude_datasets": "exclude_dataset", "exclude_models": "exclude_model"},
+        "winrate": {
+            "include_models": "include_model",
+            "exclude_models": "exclude_model",
+            "exclude_datasets": "exclude_dataset",
+        },
+    }[mode]
+
+    for key, attr in path_fields.items():
+        if key in payload and _is_unset(args, attr):
+            _set_if_unset(args, attr, Path(str(payload[key])))
+    for key, attr in string_fields.items():
+        if key in payload and _is_unset(args, attr):
+            _set_if_unset(args, attr, str(payload[key]))
+    for key, attr in boolean_fields.items():
+        if key in payload and _is_unset(args, attr):
+            _set_if_unset(args, attr, bool(payload[key]))
+    for key, attr in int_fields.items():
+        if key in payload and _is_unset(args, attr):
+            parsed = _parse_config_numeric(payload[key], parser=parser, mode=mode, field=key, cast_type=int)
+            _set_if_unset(args, attr, parsed)
+    for key, attr in float_fields.items():
+        if key in payload and _is_unset(args, attr):
+            parsed = _parse_config_numeric(payload[key], parser=parser, mode=mode, field=key, cast_type=float)
+            _set_if_unset(args, attr, parsed)
+    for key, attr in repeatable_fields.items():
+        if key in payload and _is_unset(args, attr):
+            parsed = _parse_config_list(payload[key])
+            if parsed is not None:
+                _set_if_unset(args, attr, parsed)
 
 
-def _apply_winrate_config(args: argparse.Namespace, path: Path) -> None:
-    """Apply config file defaults to winrate args (CLI flags win)."""
-    payload = dict(_load_winrate_config(path))
-
-    hf_payload = payload.get("hf")
-    if isinstance(hf_payload, Mapping):
-        for key, value in hf_payload.items():
-            if key == "repo":
-                payload.setdefault("hf_processed_repo", value)
-            elif key == "branch":
-                payload.setdefault("hf_branch", value)
-            elif key == "token":
-                payload.setdefault("hf_token", value)
-            elif key == "private":
-                payload.setdefault("hf_private", value)
-            else:
-                payload.setdefault(f"hf_{key}", value)
-
-    if "exclude_models" not in payload and "exclude_model" in payload:
-        payload["exclude_models"] = payload["exclude_model"]
-    if "exclude_datasets" not in payload and "exclude_dataset" in payload:
-        payload["exclude_datasets"] = payload["exclude_dataset"]
-
-    def _set_if_unset(attr: str, value: Any) -> None:
-        if not hasattr(args, attr):
-            return
-        if getattr(args, attr) is None:
-            setattr(args, attr, value)
-
-    if "processed_dir" in payload:
-        _set_if_unset("processed_dir", Path(str(payload["processed_dir"])))
-    if "output_dir" in payload:
-        _set_if_unset("output_dir", Path(str(payload["output_dir"])))
-    if "output" in payload:
-        _set_if_unset("output", Path(str(payload["output"])))
-    if "output_name" in payload:
-        _set_if_unset("output_name", str(payload["output_name"]))
-    if "processed_at" in payload:
-        _set_if_unset("processed_at", str(payload["processed_at"]))
-    if "missing_policy" in payload:
-        _set_if_unset("missing_policy", str(payload["missing_policy"]))
-    if "epsilon" in payload:
-        try:
-            _set_if_unset("epsilon", float(payload["epsilon"]))
-        except Exception:
-            pass
-    if "min_common" in payload:
-        try:
-            _set_if_unset("min_common", int(payload["min_common"]))
-        except Exception:
-            pass
-    if "weight_policy" in payload:
-        _set_if_unset("weight_policy", str(payload["weight_policy"]))
-    if "weight_cap" in payload:
-        try:
-            _set_if_unset("weight_cap", int(payload["weight_cap"]))
-        except Exception:
-            pass
-    if "partial_datasets" in payload:
-        _set_if_unset("partial_datasets", str(payload["partial_datasets"]))
-    if "dataset_coverage" in payload:
-        _set_if_unset("dataset_coverage", str(payload["dataset_coverage"]))
-    if "include_models" in payload:
-        include_value = payload["include_models"]
-        if isinstance(include_value, str):
-            _set_if_unset("include_model", [include_value])
-        elif isinstance(include_value, Sequence):
-            _set_if_unset("include_model", [str(item) for item in include_value if str(item).strip()])
-    if "exclude_models" in payload:
-        exclude_value = payload["exclude_models"]
-        if isinstance(exclude_value, str):
-            _set_if_unset("exclude_model", [exclude_value])
-        elif isinstance(exclude_value, Sequence):
-            _set_if_unset("exclude_model", [str(item) for item in exclude_value if str(item).strip()])
-    if "exclude_datasets" in payload:
-        exclude_value = payload["exclude_datasets"]
-        if isinstance(exclude_value, str):
-            _set_if_unset("exclude_dataset", [exclude_value])
-        elif isinstance(exclude_value, Sequence):
-            _set_if_unset("exclude_dataset", [str(item) for item in exclude_value if str(item).strip()])
-    if "hf_processed_repo" in payload:
-        _set_if_unset("hf_processed_repo", str(payload["hf_processed_repo"]))
-    if "hf_processed_pull" in payload:
-        _set_if_unset("hf_processed_pull", bool(payload["hf_processed_pull"]))
-    if "hf_winrate_repo" in payload:
-        _set_if_unset("hf_winrate_repo", str(payload["hf_winrate_repo"]))
-    if "hf_branch" in payload:
-        _set_if_unset("hf_branch", str(payload["hf_branch"]))
-    if "hf_token" in payload:
-        _set_if_unset("hf_token", str(payload["hf_token"]))
-    if "hf_private" in payload:
-        _set_if_unset("hf_private", bool(payload["hf_private"]))
-
-
-def _build_winrate_args_from_config(path: Path) -> argparse.Namespace:
+def _build_winrate_args_from_config(path: Path, *, parser: argparse.ArgumentParser) -> argparse.Namespace:
     args = argparse.Namespace(
         processed_dir=None,
         output_dir=None,
@@ -880,76 +847,55 @@ def _build_winrate_args_from_config(path: Path) -> argparse.Namespace:
         hf_token=None,
         hf_private=None,
     )
-    _apply_winrate_config(args, path)
-    _finalize_winrate_args(args)
+    _load_and_apply_config(args, path, mode="winrate", parser=parser)
+    _finalize_config_args(args, mode="winrate")
     return args
 
 
-def _finalize_process_args(args: argparse.Namespace) -> None:
-    """Fill any unset process args with their defaults (config overrides defaults)."""
-    if getattr(args, "runs_dir", None) is None:
-        args.runs_dir = DEFAULT_RUNS_RAW_DIR
-    if getattr(args, "output_dir", None) is None:
-        args.output_dir = DEFAULT_PROCESSED_DIR
-    if getattr(args, "env_config_root", None) is None:
-        args.env_config_root = DEFAULT_ENV_CONFIG_ROOT
-    if getattr(args, "max_workers", None) is None:
-        args.max_workers = 4
-    if getattr(args, "hf_private", None) is None:
-        args.hf_private = False
-    if getattr(args, "dry_run", None) is None:
-        args.dry_run = False
-    if getattr(args, "clean", None) is None:
-        args.clean = False
-    if getattr(args, "yes", None) is None:
-        args.yes = False
-    if getattr(args, "process_incomplete", None) is None:
-        args.process_incomplete = False
-    if getattr(args, "validate_manifest", None) is None:
-        args.validate_manifest = True
-    if getattr(args, "strict_manifest", None) is None:
-        args.strict_manifest = False
-    if getattr(args, "exclude_dataset", None) is None:
-        args.exclude_dataset = []
-    args.exclude_dataset = _parse_repeatable_csv(args.exclude_dataset)
-    if getattr(args, "exclude_model", None) is None:
-        args.exclude_model = []
-    args.exclude_model = _parse_repeatable_csv(args.exclude_model)
+def _finalize_config_args(args: argparse.Namespace, *, mode: Literal["process", "winrate"]) -> None:
+    """Fill any unset process/winrate args with defaults after config + CLI merge."""
+    defaults = {
+        "process": {
+            "runs_dir": DEFAULT_RUNS_RAW_DIR,
+            "output_dir": DEFAULT_PROCESSED_DIR,
+            "env_config_root": DEFAULT_ENV_CONFIG_ROOT,
+            "max_workers": 4,
+            "hf_private": False,
+            "dry_run": False,
+            "clean": False,
+            "yes": False,
+            "process_incomplete": False,
+            "validate_manifest": True,
+            "strict_manifest": False,
+            "exclude_dataset": [],
+            "exclude_model": [],
+        },
+        "winrate": {
+            "processed_dir": DEFAULT_PROCESSED_DIR,
+            "output_dir": DEFAULT_WINRATE_DIR,
+            "missing_policy": "neg-inf",
+            "epsilon": 1e-9,
+            "min_common": 0,
+            "weight_policy": "ln",
+            "weight_cap": 0,
+            "dataset_coverage": "all-models",
+            "include_model": [],
+            "exclude_model": [],
+            "exclude_dataset": [],
+            "partial_datasets": "strict",
+            "hf_processed_pull": False,
+            "hf_private": False,
+            "yes": False,
+        },
+    }[mode]
+    for attr, default in defaults.items():
+        if getattr(args, attr, None) is None:
+            setattr(args, attr, default)
 
-
-def _finalize_winrate_args(args: argparse.Namespace) -> None:
-    """Fill any unset winrate args with their defaults (config overrides defaults)."""
-    if getattr(args, "processed_dir", None) is None:
-        args.processed_dir = DEFAULT_PROCESSED_DIR
-    if getattr(args, "output_dir", None) is None:
-        args.output_dir = DEFAULT_WINRATE_DIR
-    if getattr(args, "missing_policy", None) is None:
-        args.missing_policy = "neg-inf"
-    if getattr(args, "epsilon", None) is None:
-        args.epsilon = 1e-9
-    if getattr(args, "min_common", None) is None:
-        args.min_common = 0
-    if getattr(args, "weight_policy", None) is None:
-        args.weight_policy = "ln"
-    if getattr(args, "weight_cap", None) is None:
-        args.weight_cap = 0
-    if getattr(args, "dataset_coverage", None) is None:
-        args.dataset_coverage = "all-models"
-    if getattr(args, "include_model", None) is None:
-        args.include_model = []
-    if getattr(args, "exclude_model", None) is None:
-        args.exclude_model = []
-    if getattr(args, "exclude_dataset", None) is None:
-        args.exclude_dataset = []
-    args.exclude_dataset = _parse_repeatable_csv(args.exclude_dataset)
-    if getattr(args, "partial_datasets", None) is None:
-        args.partial_datasets = "strict"
-    if getattr(args, "hf_processed_pull", None) is None:
-        args.hf_processed_pull = False
-    if getattr(args, "hf_private", None) is None:
-        args.hf_private = False
-    if getattr(args, "yes", None) is None:
-        args.yes = False
+    if hasattr(args, "exclude_dataset"):
+        args.exclude_dataset = _parse_repeatable_csv(args.exclude_dataset)
+    if mode == "process" and hasattr(args, "exclude_model"):
+        args.exclude_model = _parse_repeatable_csv(args.exclude_model)
 
 
 def _upload_winrate_outputs(
@@ -995,8 +941,8 @@ def _run_winrate_mode(argv: Sequence[str]) -> int:
     args = parser.parse_args(argv)
 
     if args.config:
-        _apply_winrate_config(args, args.config)
-    _finalize_winrate_args(args)
+        _load_and_apply_config(args, args.config, mode="winrate", parser=parser)
+    _finalize_config_args(args, mode="winrate")
 
     hf_config = HFSyncConfig.from_cli(
         repo=args.hf_processed_repo,
