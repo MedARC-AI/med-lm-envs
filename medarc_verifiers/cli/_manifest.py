@@ -91,6 +91,16 @@ _ENSURE_JOB_RUNTIME_STATE_FIELDS = (
 )
 
 
+def _validate_ensure_job_runtime_state_fields() -> None:
+    missing = set(_ENSURE_JOB_RUNTIME_STATE_FIELDS) - set(ManifestJobEntry.model_fields)
+    if missing:
+        msg = f"Unknown manifest fields in _ENSURE_JOB_RUNTIME_STATE_FIELDS: {sorted(missing)}"
+        raise ValueError(msg)
+
+
+_validate_ensure_job_runtime_state_fields()
+
+
 class RunManifestModel(BaseModel):
     """Root manifest payload persisted to disk."""
 
