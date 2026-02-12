@@ -139,7 +139,9 @@ def _resolve_job_artifact_paths(
     if results_relpath:
         root = (run_dir / artifacts_root).resolve()
         results_path = (root / results_relpath).resolve()
-        metadata_path = (root / (metadata_relpath or f"{Path(results_relpath).parent.as_posix()}/metadata.json")).resolve()
+        metadata_path = (
+            root / (metadata_relpath or f"{Path(results_relpath).parent.as_posix()}/metadata.json")
+        ).resolve()
     else:
         base_dir = (run_dir / job_id).resolve()
         results_path = base_dir / "results.jsonl"

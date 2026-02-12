@@ -253,9 +253,7 @@ def compute_winrates(
     )
     if dataset_exclude_set:
         datasets = tuple(
-            (name, path)
-            for name, path in datasets
-            if not _is_dataset_excluded(str(name), dataset_exclude_set)
+            (name, path) for name, path in datasets if not _is_dataset_excluded(str(name), dataset_exclude_set)
         )
         if not datasets:
             _raise_user_error("No datasets remain after applying dataset exclusions.")
@@ -366,13 +364,9 @@ def compute_winrates(
             for dataset_name in dropped:
                 present = models_present_by_ds.get(dataset_name, set())
                 missing = sorted(required_models - present)
-                missing_labels = [
-                    include_map.get(model, seen_model_case_map.get(model, model))
-                    for model in missing
-                ]
+                missing_labels = [include_map.get(model, seen_model_case_map.get(model, model)) for model in missing]
                 _emit_note(
-                    "Dropping dataset "
-                    f"{dataset_name} (dataset_coverage=all-models missing models: {missing_labels})."
+                    f"Dropping dataset {dataset_name} (dataset_coverage=all-models missing models: {missing_labels})."
                 )
                 per_dataset_pairwise.pop(dataset_name, None)
                 per_dataset_model_means.pop(dataset_name, None)
@@ -618,6 +612,7 @@ def _process_dataset(
 
         df_wide, _ = to_wide(df_filtered)
         if include_set:
+
             def canonical_label(normalized_id: str) -> str:
                 return (
                     seen_model_case_map.get(normalized_id)
@@ -730,9 +725,7 @@ def _merge_case_map(existing: dict[str, str], values: Sequence[str], *, label: s
     for key, value in normalized.items():
         prior = existing.get(key)
         if prior is not None and prior != value:
-            _raise_user_error(
-                f"Conflicting {label} across datasets differ only by case: '{prior}' vs '{value}'."
-            )
+            _raise_user_error(f"Conflicting {label} across datasets differ only by case: '{prior}' vs '{value}'.")
         existing.setdefault(key, value)
 
 

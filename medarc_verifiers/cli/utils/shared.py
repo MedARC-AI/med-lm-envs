@@ -143,10 +143,7 @@ def normalized_match_id_map(values: Sequence[str] | None, *, label: str) -> dict
         key = normalize_match_id(candidate)
         existing = normalized.get(key)
         if existing is not None and existing != candidate:
-            msg = (
-                f"Conflicting {label} values differ only by case: "
-                f"'{existing}' vs '{candidate}'."
-            )
+            msg = f"Conflicting {label} values differ only by case: '{existing}' vs '{candidate}'."
             raise ValueError(msg)
         normalized.setdefault(key, candidate)
     return normalized

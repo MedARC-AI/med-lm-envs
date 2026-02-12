@@ -244,7 +244,9 @@ def _build_base_parser_layout(
         _add_and_track(parser, "env", nargs="?", **env_kwargs)
 
     if add_help:
-        _add_and_track(parser, "-h", "--help", action="help", default=argparse.SUPPRESS, help="show this help message and exit")
+        _add_and_track(
+            parser, "-h", "--help", action="help", default=argparse.SUPPRESS, help="show this help message and exit"
+        )
 
     env_group_title = f"Environment options (ENV={env_id})" if env_id else "Environment options (ENV=<env>)"
     env_group = parser.add_argument_group(env_group_title)
@@ -259,17 +261,14 @@ def _build_base_parser_layout(
     _add_and_track(core_group, "--env-args", help='Environment arguments as JSON object (e.g., \'{"key": "value"}\').')
     _add_and_track(core_group, "--env-dir-path", "-p", default="./environments", help="Path to environments directory.")
     _add_and_track(
-        core_group,
-        "--endpoints-path", "-e", default="./configs/endpoints.py", help="Path to API endpoints registry."
+        core_group, "--endpoints-path", "-e", default="./configs/endpoints.py", help="Path to API endpoints registry."
     )
     _add_and_track(core_group, "--model", "-m", default="gpt-4.1-mini", help="Model identifier to evaluate.")
     _add_and_track(
-        core_group,
-        "--api-key-var", "-k", default="OPENAI_API_KEY", help="Environment variable name for the API key."
+        core_group, "--api-key-var", "-k", default="OPENAI_API_KEY", help="Environment variable name for the API key."
     )
     _add_and_track(
-        core_group,
-        "--api-base-url", "-b", default="https://api.openai.com/v1", help="Base URL for the inference API."
+        core_group, "--api-base-url", "-b", default="https://api.openai.com/v1", help="Base URL for the inference API."
     )
     _add_and_track(
         core_group,
@@ -284,7 +283,9 @@ def _build_base_parser_layout(
         help="File containing newline-delimited 'Name: Value' header entries. Overrides --header on conflicts.",
     )
     _add_and_track(core_group, "--num-examples", "-n", type=int, default=5, help="Number of examples to evaluate.")
-    _add_and_track(core_group, "--rollouts-per-example", "-r", type=int, default=3, help="Number of rollouts per example.")
+    _add_and_track(
+        core_group, "--rollouts-per-example", "-r", type=int, default=3, help="Number of rollouts per example."
+    )
     _add_and_track(
         core_group,
         "--max-concurrent",
@@ -295,11 +296,17 @@ def _build_base_parser_layout(
     )
     _add_and_track(
         core_group,
-        "--max-concurrent-generation", type=int, default=None, help="Maximum number of concurrent generation requests."
+        "--max-concurrent-generation",
+        type=int,
+        default=None,
+        help="Maximum number of concurrent generation requests.",
     )
     _add_and_track(
         core_group,
-        "--max-concurrent-scoring", type=int, default=None, help="Maximum number of concurrent scoring requests."
+        "--max-concurrent-scoring",
+        type=int,
+        default=None,
+        help="Maximum number of concurrent scoring requests.",
     )
     _add_and_track(
         core_group,
@@ -310,16 +317,25 @@ def _build_base_parser_layout(
     )
     _add_and_track(
         core_group,
-        "--max-tokens", "-t", type=int, default=None, help="Maximum tokens to generate (unset to use model defaults)."
+        "--max-tokens",
+        "-t",
+        type=int,
+        default=None,
+        help="Maximum tokens to generate (unset to use model defaults).",
     )
     _add_and_track(core_group, "--temperature", "-T", type=float, default=None, help="Sampling temperature.")
     _add_and_track(core_group, "--top-p", type=float, default=None, help="Top-p nucleus sampling value.")
     _add_and_track(core_group, "--top-k", type=int, default=None, help="Top-k sampling value.")
     _add_and_track(
         core_group,
-        "--n", type=int, default=None, help="Number of responses per prompt (passes through sampling_args.n)."
+        "--n",
+        type=int,
+        default=None,
+        help="Number of responses per prompt (passes through sampling_args.n).",
     )
-    _add_and_track(core_group, "--sampling-arg", action="append", help="Override sampling args with KEY=VALUE (repeatable).")
+    _add_and_track(
+        core_group, "--sampling-arg", action="append", help="Override sampling args with KEY=VALUE (repeatable)."
+    )
     _add_and_track(core_group, "--sampling-args", help="Sampling arguments as JSON object.")
     _add_and_track(core_group, "--verbose", "-v", action="store_true", help="Enable verbose logging.")
     _add_and_track(
@@ -369,8 +385,7 @@ def _build_base_parser_layout(
         core_group, "--hf-hub-dataset-name", "-D", default="", help="Custom Hugging Face dataset name when saving."
     )
     _add_and_track(
-        core_group,
-        "--dry-run", action="store_true", help="Print the resolved EvalConfig and exit without running."
+        core_group, "--dry-run", action="store_true", help="Print the resolved EvalConfig and exit without running."
     )
     _add_and_track(
         core_group,

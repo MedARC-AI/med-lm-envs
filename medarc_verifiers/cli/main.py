@@ -39,7 +39,13 @@ from medarc_verifiers.cli.hf import HFSyncConfig, sync_files_to_hub
 from medarc_verifiers.cli.process import ProcessOptions, ProcessResult, run_process
 from medarc_verifiers.cli.utils.config_io import load_mapping_file
 from medarc_verifiers.cli.utils.overrides import build_cli_override
-from medarc_verifiers.cli.utils.shared import slugify, validate_simple_name
+from medarc_verifiers.cli.utils.shared import (
+    dataset_is_excluded,
+    normalize_dataset_ids,
+    normalize_model_ids,
+    slugify,
+    validate_simple_name,
+)
 from medarc_verifiers.cli.winrate import (
     WinrateConfig,
     _resolve_source,
@@ -527,6 +533,13 @@ def _run_process_mode(argv: Sequence[str]) -> int:
     if args.config:
         _load_and_apply_config(args, args.config, mode="process", parser=parser)
     _finalize_config_args(args, mode="process")
+    try:
+        if args.exclude_dataset:
+            normalize_dataset_ids(args.exclude_dataset, label="process exclude dataset")
+        if args.exclude_model:
+            normalize_model_ids(args.exclude_model, label="process exclude model")
+    except ValueError as exc:
+        parser.error(str(exc))
     winrate_args: argparse.Namespace | None = None
     if args.winrate:
         winrate_path = Path(args.winrate).expanduser()
@@ -672,15 +685,11 @@ def _parse_config_numeric(
     cast_type: type[int] | type[float],
 ) -> int | float:
     if isinstance(value, bool):
-        parser.error(
-            f"Invalid {mode} config value for '{field}': expected {cast_type.__name__}, got {value!r}."
-        )
+        parser.error(f"Invalid {mode} config value for '{field}': expected {cast_type.__name__}, got {value!r}.")
     try:
         return cast_type(value)
     except (TypeError, ValueError):
-        parser.error(
-            f"Invalid {mode} config value for '{field}': expected {cast_type.__name__}, got {value!r}."
-        )
+        parser.error(f"Invalid {mode} config value for '{field}': expected {cast_type.__name__}, got {value!r}.")
 
 
 def _parse_config_list(value: Any) -> list[str] | None:
@@ -745,7 +754,12 @@ def _load_and_apply_config(
     _normalize_mode_payload(payload, mode=mode)
 
     path_fields = {
-        "process": {"runs_dir": "runs_dir", "output_dir": "output_dir", "env_config_root": "env_config_root", "winrate": "winrate"},
+        "process": {
+            "runs_dir": "runs_dir",
+            "output_dir": "output_dir",
+            "env_config_root": "env_config_root",
+            "winrate": "winrate",
+        },
         "winrate": {"processed_dir": "processed_dir", "output_dir": "output_dir", "output": "output"},
     }[mode]
     string_fields = {
@@ -962,7 +976,10 @@ def _run_winrate_mode(argv: Sequence[str]) -> int:
             hf_processed_pull=bool(args.hf_processed_pull),
         )
         if args.exclude_dataset:
-            datasets = _filter_winrate_datasets(datasets, args.exclude_dataset)
+            try:
+                datasets = _filter_winrate_datasets(datasets, args.exclude_dataset)
+            except ValueError as exc:
+                parser.error(str(exc))
         if not datasets:
             logger.error("No datasets found from %s.", source_desc)
             return 1
@@ -1262,16 +1279,14 @@ def _filter_winrate_datasets(
 ) -> list[tuple[str, Sequence[Path]]]:
     from medarc_verifiers.cli.process.rollout import derive_base_env_id
 
-    exclude_set = {str(v).strip().lower() for v in exclude_datasets if str(v).strip()}
+    exclude_set = normalize_dataset_ids(exclude_datasets, label="winrate exclude dataset")
     if not exclude_set:
         return list(datasets)
     filtered: list[tuple[str, Sequence[Path]]] = []
     for name, paths in datasets:
         dataset = str(name).strip()
-        if dataset.lower() in exclude_set:
-            continue
         base, _ = derive_base_env_id(dataset)
-        if base and base.strip().lower() in exclude_set:
+        if dataset_is_excluded(dataset, exclude_set, base_dataset_id=base):
             continue
         filtered.append((name, paths))
     return filtered
