@@ -4,7 +4,7 @@
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import requests
 import verifiers as vf
@@ -749,55 +749,47 @@ class MedAgentBenchEnv(MultiTurnEnv):
         self.fhir_api_base = fhir_api_base
         self.funcs = funcs
 
-    async def is_completed(self, messages: Messages, state: State, **kwargs: Any) -> bool:
-        """
-        Check if the task is complete (FINISH called or invalid action).
-
-        Returns True when:
-        - FINISH command is detected (successful completion)
-        - Invalid command is detected (terminal failure)
-        - Status is already set to completed or invalid_action
-
-        Args:
-            messages: The message history
-            state: Current state dictionary
-            **kwargs: Additional arguments
-
-        Returns:
-            True if the task is complete, False otherwise
-        """
-        if not messages:
-            return False
-
+    @vf.stop
+    async def task_finished(self, state: State, **kwargs: Any) -> bool:
+        """Stop when FINISH is called or when an invalid action is emitted."""
         # Check if we've already determined completion status
         if state.get("status") in ["completed", "invalid_action"]:
             return True
 
+        if len(state.get("trajectory", [])) == 0:
+            return False
+
+        completion = state["trajectory"][-1].get("completion", [])
+        if not completion:
+            return False
+
         # Check the last assistant message for completion conditions
-        last_msg = messages[-1] if messages else None
-        if last_msg and last_msg.get("role") == "assistant":  # type: ignore
-            content = last_msg.get("content", "").strip()  # type: ignore
-            # Remove any code block markers for consistency
-            content = content.replace("```tool_code", "").replace("```", "").strip()
+        last_msg = completion[-1]
+        if last_msg.get("role") != "assistant":
+            return False
 
-            content = self.parser.parse(content)
-            if verbose:
-                print("parsed content -", content)
+        content = (last_msg.get("content", "") or "").strip()  # type: ignore[assignment]
+        # Remove any code block markers for consistency
+        content = content.replace("```tool_code", "").replace("```", "").strip()
+        content = self.parser.parse(content)
+        if verbose:
+            print("parsed content -", content)
 
-            if content.startswith("FINISH("):
-                # Successful completion - extract and store the answer
-                answer = content[len("FINISH(") : -1]
-                state["final_answer"] = answer
-                state["status"] = "completed"
-                return True
-            elif not (content.startswith("GET") or content.startswith("POST")):
-                # Invalid command - terminal failure
-                state["status"] = "invalid_action"
-                return True
+        if content.startswith("FINISH("):
+            # Successful completion - extract and store the answer
+            answer = content[len("FINISH(") : -1]
+            state["final_answer"] = answer
+            state["status"] = "completed"
+            return True
+
+        if not (content.startswith("GET") or content.startswith("POST")):
+            # Invalid command - terminal failure
+            state["status"] = "invalid_action"
+            return True
 
         return False
 
-    async def env_response(self, messages: Messages, state: State, **kwargs: Any) -> Tuple[Messages, State]:
+    async def env_response(self, messages: Messages, state: State, **kwargs: Any) -> Messages:
         """
         Process valid GET/POST commands and return appropriate responses.
 
@@ -810,14 +802,14 @@ class MedAgentBenchEnv(MultiTurnEnv):
             **kwargs: Additional arguments
 
         Returns:
-            Tuple of (response messages to append, updated state)
+            Response messages to append
         """
         if not messages:
-            return [], state
+            return []
 
         last_msg = messages[-1]
         if last_msg.get("role") != "assistant":
-            return [], state
+            return []
 
         content = last_msg.get("content", "").strip()  # type: ignore
         # Remove any code block markers for consistency
@@ -833,7 +825,7 @@ class MedAgentBenchEnv(MultiTurnEnv):
                         "role": "user",
                         "content": f"Here is the response from the GET request:\n{get_res['data']}. Please call FINISH if you have got answers for all the questions and finished all the requested tasks",
                     }
-                ], state
+                ]
             else:
                 error_msg = get_res.get("error", "")
                 # Check if this is a connection refused error indicating FHIR server is down
@@ -842,7 +834,7 @@ class MedAgentBenchEnv(MultiTurnEnv):
                         "FHIR server is unreachable. Please recheck the server URL and ensure it is running, then rerun."
                     )
 
-                return [{"role": "user", "content": f"Error in sending the GET request: {error_msg}"}], state
+                return [{"role": "user", "content": f"Error in sending the GET request: {error_msg}"}]
 
         elif content.startswith("POST"):
             try:
@@ -852,12 +844,12 @@ class MedAgentBenchEnv(MultiTurnEnv):
                         "role": "user",
                         "content": "POST request accepted and executed successfully. Please call FINISH if you have got answers for all the questions and finished all the requested tasks",
                     }
-                ], state
+                ]
             except Exception:
-                return [{"role": "user", "content": "Invalid POST request format"}], state
+                return [{"role": "user", "content": "Invalid POST request format"}]
 
         # This should not happen since invalid actions are caught in is_completed
-        return [], state
+        return []
 
 
 def load_environment(

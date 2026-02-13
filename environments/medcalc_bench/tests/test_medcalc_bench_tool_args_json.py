@@ -19,7 +19,7 @@ def test_env_response_does_not_crash_on_malformed_tool_args() -> None:
             ],
         }
     ]
-    tool_messages, _state = asyncio.run(env.env_response(messages, state={}))
+    tool_messages = asyncio.run(env.env_response(messages, state={}))
     assert len(tool_messages) == 1
     assert tool_messages[0]["role"] == "tool"
     assert "Invalid tool formatting" in tool_messages[0]["content"]
@@ -39,7 +39,7 @@ def test_env_response_treats_empty_args_as_empty_dict() -> None:
             ],
         }
     ]
-    tool_messages, _state = asyncio.run(env.env_response(messages, state={}))
+    tool_messages = asyncio.run(env.env_response(messages, state={}))
     assert len(tool_messages) == 1
     assert tool_messages[0]["role"] == "tool"
 
@@ -55,7 +55,7 @@ def test_env_response_accepts_tool_calls_as_json_strings() -> None:
             ],
         }
     ]
-    tool_messages, _state = asyncio.run(env.env_response(messages, state={}))
+    tool_messages = asyncio.run(env.env_response(messages, state={}))
     assert len(tool_messages) == 1
     assert tool_messages[0]["role"] == "tool"
     assert "Invalid tool formatting" in tool_messages[0]["content"]
@@ -79,7 +79,7 @@ def test_env_response_accepts_double_encoded_arguments() -> None:
             ],
         }
     ]
-    tool_messages, _state = asyncio.run(env.env_response(messages, state={}))
+    tool_messages = asyncio.run(env.env_response(messages, state={}))
     assert len(tool_messages) == 1
     assert tool_messages[0]["role"] == "tool"
     assert tool_messages[0]["content"] == "1\n"
@@ -102,7 +102,7 @@ def test_env_response_accepts_dict_arguments() -> None:
             ],
         }
     ]
-    tool_messages, _state = asyncio.run(env.env_response(messages, state={}))
+    tool_messages = asyncio.run(env.env_response(messages, state={}))
     assert len(tool_messages) == 1
     assert tool_messages[0]["role"] == "tool"
     assert tool_messages[0]["content"] == "2\n"
@@ -126,7 +126,7 @@ def test_env_response_sanitizes_invalid_json_escapes_in_arguments() -> None:
             ],
         }
     ]
-    tool_messages, _state = asyncio.run(env.env_response(messages, state={}))
+    tool_messages = asyncio.run(env.env_response(messages, state={}))
     assert len(tool_messages) == 1
     assert tool_messages[0]["role"] == "tool"
     assert "Invalid tool formatting" in tool_messages[0]["content"]
@@ -152,7 +152,7 @@ def test_env_response_drops_invalid_tool_names_from_message_history() -> None:
             ],
         }
     ]
-    tool_messages, _state = asyncio.run(env.env_response(messages, state={}))
+    tool_messages = asyncio.run(env.env_response(messages, state={}))
     assert len(tool_messages) == 1
     assert tool_messages[0]["role"] == "tool"
     assert "Invalid tool formatting" in tool_messages[0]["content"]

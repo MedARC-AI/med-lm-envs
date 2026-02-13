@@ -775,7 +775,7 @@ def test_single_run_help_lists_env_section_and_header_file(
 
     assert exit_code == 0
     captured = capsys.readouterr().out
-    assert "Environment options (ENV=medqa)" in captured
+    assert "medqa environment options:" in captured
     assert "--header-file" in captured
 
 
@@ -796,8 +796,8 @@ def test_single_run_help_orders_env_group_before_core_options(
     exit_code = main.main(["medqa", "--help"])
     assert exit_code == 0
     captured = capsys.readouterr().out
-    env_idx = captured.index("Environment options (ENV=medqa)")
-    core_idx = captured.index("medarc-eval options")
+    env_idx = captured.index("medqa environment options:")
+    core_idx = captured.index("medarc-eval options:")
     assert env_idx < core_idx
 
 
