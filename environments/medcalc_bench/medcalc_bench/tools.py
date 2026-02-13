@@ -394,7 +394,7 @@ class SimpleToolEnv(vf.StatefulToolEnv):
         CURRENT_SESSION.set(session)
         return tool_args
 
-    async def env_response(self, messages: vf.Messages, state: vf.State, **kwargs: Any) -> tuple[vf.Messages, vf.State]:
+    async def env_response(self, messages: vf.Messages, state: vf.State, **kwargs: Any) -> vf.Messages:
         """Like StatefulToolEnv.env_response, but tolerate malformed tool-call arguments.
 
         Some models occasionally emit non-JSON `tool_call.function.arguments` strings; the upstream
@@ -492,4 +492,4 @@ class SimpleToolEnv(vf.StatefulToolEnv):
         if tool_calls:
             messages[-1]["tool_calls"] = sanitized_tool_calls
 
-        return tool_messages, state
+        return tool_messages
