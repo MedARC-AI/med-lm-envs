@@ -248,7 +248,7 @@ def _build_base_parser_layout(
             parser, "-h", "--help", action="help", default=argparse.SUPPRESS, help="show this help message and exit"
         )
 
-    env_group_title = f"Environment options (ENV={env_id})" if env_id else "Environment options (ENV=<env>)"
+    env_group_title = f"{env_id} environment options" if env_id else "Environment options (ENV=<env>)"
     env_group = parser.add_argument_group(env_group_title)
     core_group = parser.add_argument_group(f"{COMMAND} options")
 
