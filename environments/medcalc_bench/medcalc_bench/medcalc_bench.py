@@ -377,9 +377,7 @@ def load_environment(
             use_calculator=add_calculator_tool,
             **kwargs,
         )
-        # Add ToolRubric to track tool usage metrics
-        tool_rubric = vf.ToolRubric(tools=env.tools)
-        env.rubric = vf.RubricGroup(rubrics=[tool_rubric, env.rubric])
+        # Tool usage metrics are already attached by ToolEnv/StatefulToolEnv in current verifiers.
         return env
     else:
         return vf.SingleTurnEnv(

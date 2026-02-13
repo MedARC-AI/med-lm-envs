@@ -17,7 +17,7 @@ def test_tool_name_list() -> None:
     tools = build_tool_list("http://localhost:8080/fhir/")
     names = {tool.__name__ for tool in tools}
     assert names == {
-        "patient_search",
+        "fhir_patient_search",
         "fhir_observation_search",
         "fhir_vitals_search",
         "fhir_procedure_search",
@@ -34,8 +34,7 @@ def test_tool_name_list() -> None:
 def test_prompt_tool_name_consistency() -> None:
     prompt_path = "environments/medagentbenchv2/medagentbenchv2/_vendor/prompts/new_system.txt"
     content = open(prompt_path).read()
-    assert "patient_search" in content
-    assert "fhir_patient_search" not in content
+    assert "fhir_patient_search" in content
 
 
 def test_grader_returns_false_on_invalid_task() -> None:
@@ -65,11 +64,11 @@ def test_tool_schemas_have_descriptions() -> None:
         eval_dataset=Dataset.from_list([{"prompt": [{"role": "user", "content": "hi"}], "answer": ""}]),
     )
     tool_by_name = {t["function"]["name"]: t for t in env.oai_tools}
-    assert tool_by_name["patient_search"]["function"]["description"]
+    assert tool_by_name["fhir_patient_search"]["function"]["description"]
     assert tool_by_name["fhir_vitals_create"]["function"]["description"]
     # Ensure at least one parameter has a human-readable description (not just a title).
     assert (
-        tool_by_name["patient_search"]["function"]["parameters"]["properties"]["identifier"].get("description")
+        tool_by_name["fhir_patient_search"]["function"]["parameters"]["properties"]["identifier"].get("description")
         is not None
     )
 
@@ -96,7 +95,7 @@ async def test_env_response_sanitizes_tool_args() -> None:
         }
     ]
     state = {}
-    tool_messages, _ = await env.env_response(messages, state)
+    tool_messages = await env.env_response(messages, state)
     assert messages[-1]["tool_calls"][0]["function"]["arguments"] == "{}"
     assert tool_messages[0]["tool_call_id"] == "call_1"
     assert "Error:" in tool_messages[0]["content"]
