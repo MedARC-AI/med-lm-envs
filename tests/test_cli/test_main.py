@@ -11,6 +11,11 @@ import pytest
 
 from medarc_verifiers.cli import main
 from medarc_verifiers.cli.process import ProcessResult
+from medarc_verifiers.cli._single_run import (
+    _build_base_parser_layout,
+    extract_env_cli_args,
+    register_env_options,
+)
 from medarc_verifiers.cli.utils.env_args import EnvParam
 
 
@@ -774,6 +779,28 @@ def test_single_run_help_lists_env_section_and_header_file(
     assert "--header-file" in captured
 
 
+def test_single_run_help_orders_env_group_before_core_options(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    metadata = [
+        _make_env_param(
+            "difficulty",
+            kind="str",
+            default="easy",
+            choices=("easy", "hard"),
+        )
+    ]
+    _patch_single_run_env(monkeypatch, metadata)
+
+    exit_code = main.main(["medqa", "--help"])
+    assert exit_code == 0
+    captured = capsys.readouterr().out
+    env_idx = captured.index("Environment options (ENV=medqa)")
+    core_idx = captured.index("medarc-eval options")
+    assert env_idx < core_idx
+
+
 def test_general_help_uses_invoked_binary_name(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -1286,3 +1313,162 @@ def test_process_cli_rejects_include_prompt_completion(tmp_path: Path) -> None:
                 "--include-prompt-completion",
             ]
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("max_workers", "not-an-int"),
+        ("hf_request_timeout", "not-a-float"),
+        ("hf_retries", "not-an-int"),
+        ("hf_max_files_per_commit", "not-an-int"),
+    ],
+)
+def test_process_cli_rejects_invalid_typed_config_values(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    field: str,
+    value: str,
+) -> None:
+    cfg_path = tmp_path / "process-invalid.yaml"
+    cfg_path.write_text(
+        f"""
+        runs_dir: runs/raw
+        output_dir: runs/processed
+        {field}: {value}
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        main.main(["process", "--config", str(cfg_path)])
+
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert f"Invalid process config value for '{field}'" in err
+    assert value in err
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("epsilon", "not-a-float"),
+        ("min_common", "not-an-int"),
+        ("weight_cap", "not-an-int"),
+    ],
+)
+def test_winrate_cli_rejects_invalid_typed_config_values(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    field: str,
+    value: str,
+) -> None:
+    cfg_path = tmp_path / "winrate-invalid.yaml"
+    cfg_path.write_text(
+        f"""
+        processed_dir: runs/processed
+        {field}: {value}
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        main.main(["winrate", "--config", str(cfg_path), "--processed-at", "2024-01-01T00:00:00Z"])
+
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert f"Invalid winrate config value for '{field}'" in err
+    assert value in err
+
+
+def test_process_cli_allows_cli_override_of_malformed_numeric_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg_path = tmp_path / "process-invalid-override.yaml"
+    cfg_path.write_text(
+        """
+        runs_dir: runs/raw
+        output_dir: runs/processed
+        max_workers: not-an-int
+        """,
+        encoding="utf-8",
+    )
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(options, env_export_map):
+        captured["options"] = options
+        return ProcessResult(records_processed=0, rows_processed=0, env_groups=[], env_summaries=[], hf_summary=None)
+
+    monkeypatch.setattr(main, "_load_env_export_map", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(main, "run_process", fake_run)
+
+    exit_code = main.main(
+        ["process", "--config", str(cfg_path), "--max-workers", "2", "--dry-run", "--no-validate-manifest"]
+    )
+    assert exit_code == 0
+    assert captured["options"].max_workers == 2
+
+
+def test_winrate_cli_allows_cli_override_of_malformed_numeric_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg_path = tmp_path / "winrate-invalid-override.yaml"
+    cfg_path.write_text(
+        """
+        processed_dir: runs/processed
+        epsilon: not-a-float
+        """,
+        encoding="utf-8",
+    )
+
+    captured: dict[str, Any] = {}
+
+    def fake_run_winrate(
+        *, processed_dir, output_dir, output_path, output_name, config, processed_at, hf_config, hf_processed_pull
+    ):
+        captured["config"] = config
+        return SimpleNamespace(
+            output_path=tmp_path / "out.json",
+            output_paths=[tmp_path / "out.json"],
+            result={"models": {}},
+            datasets=[],
+        )
+
+    monkeypatch.setattr(main, "run_winrate", fake_run_winrate)
+    monkeypatch.setattr(main, "print_winrate_summary_markdown", lambda *_args, **_kwargs: None)
+
+    exit_code = main.main(
+        [
+            "winrate",
+            "--config",
+            str(cfg_path),
+            "--epsilon",
+            "0.5",
+            "--processed-at",
+            "2024-01-01T00:00:00Z",
+        ]
+    )
+    assert exit_code == 0
+    assert captured["config"].epsilon == pytest.approx(0.5)
+
+
+def test_single_run_env_option_collision_uses_env_prefix() -> None:
+    metadata = [
+        _make_env_param(
+            "model",
+            kind="str",
+            default=None,
+            annotation=str,
+            argparse_type=str,
+        )
+    ]
+    parser, env_group, reserved_dests = _build_base_parser_layout(require_env=True, add_help=True, env_id="medqa")
+    bindings = register_env_options(env_group, reserved_dests, "medqa", metadata)
+    args = parser.parse_args(["medqa", "--model", "core-model", "--env-model", "env-model", "--dry-run"])
+    explicit = extract_env_cli_args(args, bindings)
+
+    assert args.model == "core-model"
+    assert explicit["model"] == "env-model"

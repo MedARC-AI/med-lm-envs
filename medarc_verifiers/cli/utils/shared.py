@@ -128,6 +128,65 @@ def merge_sampling_overrides(
     return sanitize_sampling_args_for_openai(merged)
 
 
+def normalize_match_id(value: str) -> str:
+    """Normalize identifiers for case-insensitive include/exclude matching."""
+    return str(value).strip().lower()
+
+
+def normalized_match_id_map(values: Sequence[str] | None, *, label: str) -> dict[str, str]:
+    """Normalize IDs and reject values that differ only by case."""
+    normalized: dict[str, str] = {}
+    for raw in values or ():
+        candidate = str(raw).strip()
+        if not candidate:
+            continue
+        key = normalize_match_id(candidate)
+        existing = normalized.get(key)
+        if existing is not None and existing != candidate:
+            msg = f"Conflicting {label} values differ only by case: '{existing}' vs '{candidate}'."
+            raise ValueError(msg)
+        normalized.setdefault(key, candidate)
+    return normalized
+
+
+def normalize_dataset_ids(values: Sequence[str] | None, *, label: str = "dataset id") -> set[str]:
+    """Return case-insensitive dataset IDs while guarding ambiguous mixed-case duplicates."""
+    return set(normalized_match_id_map(values, label=label))
+
+
+def normalize_model_ids(values: Sequence[str] | None, *, label: str = "model id") -> set[str]:
+    """Return case-insensitive model IDs while guarding ambiguous mixed-case duplicates."""
+    return set(normalized_match_id_map(values, label=label))
+
+
+def dataset_is_excluded(dataset_id: str, exclude_set: set[str], *, base_dataset_id: str | None = None) -> bool:
+    """Check dataset exclusion using the dataset id plus optional base-env fallback."""
+    normalized = normalize_match_id(dataset_id)
+    if normalized and normalized in exclude_set:
+        return True
+    base_normalized = normalize_match_id(base_dataset_id or "")
+    return bool(base_normalized and base_normalized in exclude_set)
+
+
+def model_is_excluded(model_id: str, exclude_set: set[str]) -> bool:
+    """Check model exclusion using case-insensitive matching."""
+    normalized = normalize_match_id(model_id)
+    return bool(normalized and normalized in exclude_set)
+
+
+def count_jsonl_rows(path: Path | str) -> int | None:
+    """Count non-empty rows in a JSONL artifact."""
+    resolved = Path(path)
+    if not resolved.exists() or not resolved.is_file():
+        return None
+    count = 0
+    with resolved.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                count += 1
+    return count
+
+
 def flatten_state_columns(values: Iterable[Sequence[str]] | None) -> list[str]:
     """Flatten repeated state column entries into a single list."""
     if not values:
@@ -286,6 +345,13 @@ __all__ = [
     "coerce_json_mapping",
     "merge_sampling_args",
     "merge_sampling_overrides",
+    "normalize_match_id",
+    "normalized_match_id_map",
+    "normalize_dataset_ids",
+    "normalize_model_ids",
+    "dataset_is_excluded",
+    "model_is_excluded",
+    "count_jsonl_rows",
     "flatten_state_columns",
     "resolve_endpoint_selection",
     "merge_cli_override_args",

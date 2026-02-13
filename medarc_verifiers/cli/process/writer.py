@@ -102,6 +102,30 @@ EXPECTED_ARROW_SCHEMA = pa.schema(
 )
 
 
+def _validate_allowed_columns() -> None:
+    allowed = set(ALLOWED_COLUMNS)
+    expected = set(EXPECTED_POLARS_DTYPES)
+    if allowed != expected:
+        msg = (
+            "ALLOWED_COLUMNS and EXPECTED_POLARS_DTYPES keys are out of sync: "
+            f"allowed_only={sorted(allowed - expected)}, "
+            f"expected_only={sorted(expected - allowed)}"
+        )
+        raise ValueError(msg)
+
+    schema_fields = {field.name for field in EXPECTED_ARROW_SCHEMA}
+    if allowed != schema_fields:
+        msg = (
+            "ALLOWED_COLUMNS and EXPECTED_ARROW_SCHEMA fields are out of sync: "
+            f"allowed_only={sorted(allowed - schema_fields)}, "
+            f"schema_only={sorted(schema_fields - allowed)}"
+        )
+        raise ValueError(msg)
+
+
+_validate_allowed_columns()
+
+
 @dataclass(slots=True)
 class WriterConfig:
     """Settings controlling parquet output behavior."""

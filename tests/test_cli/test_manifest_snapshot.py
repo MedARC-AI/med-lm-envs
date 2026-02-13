@@ -9,9 +9,16 @@ import pytest
 
 from medarc_verifiers.cli._job_builder import ResolvedJob
 from medarc_verifiers.cli._manifest import (
+    _ENSURE_JOB_RUNTIME_STATE_FIELDS,
     MANIFEST_FILENAME,
+    MANIFEST_VERSION,
+    ManifestJobEntry,
     RunManifest,
+    RunManifestModel,
+    build_job_entry,
     compute_snapshot_checksum,
+    manifest_job_signature,
+    resolved_job_signature,
 )
 from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, ModelConfigSchema
 
@@ -172,3 +179,272 @@ def test_manifest_serialization_prunes_nones_and_relativizes(monkeypatch: pytest
     assert "avg_reward" not in job_payload
     assert job_payload["env_args"]["job_seed"] == 7
     assert job_payload["sampling_args"]["eval_seed"] == 17
+
+
+def test_manifest_job_signature_is_stable(tmp_path: Path) -> None:
+    job = _build_job()
+    run_dir = tmp_path / "sig-run"
+    manifest = RunManifest.create(
+        run_dir=run_dir,
+        run_id="sig-run",
+        run_name="Signature Run",
+        config_source=Path("configs/sig.yaml"),
+        config_checksum="sig",
+        jobs=[job],
+        env_args_map={job.job_id: job.env_args},
+        sampling_args_map={job.job_id: job.sampling_args},
+        persist=False,
+    )
+    entry = manifest.jobs[0]
+
+    signature = manifest_job_signature(manifest.model, entry)
+    assert signature == {
+        "model": {
+            "id": "snapshot-model",
+            "model": "gpt-4o-mini",
+            "sampling_args": {"max_tokens": 256, "temperature": 0.3},
+            "env_args": {"split": "dev"},
+            "env_overrides": {"snapshot-env": {"temperature": 0.2}},
+        },
+        "env": {
+            "module": "environments.snapshot_env",
+            "num_examples": 3,
+            "rollouts_per_example": 2,
+            "max_concurrent": 4,
+            "independent_scoring": False,
+            "state_columns": ["student_answer", "score"],
+            "print_results": False,
+            "rerun": False,
+            "id": "snapshot-env",
+            "env_args": {"difficulty": "easy", "runner_seed": 99, "split": "dev", "job_seed": 7},
+        },
+        "sampling_args": {"max_tokens": 256, "temperature": 0.3, "eval_seed": 17},
+    }
+
+
+def test_resolved_job_signature_is_stable() -> None:
+    job = _build_job()
+
+    signature = resolved_job_signature(job, env_args=job.env_args, sampling_args=job.sampling_args)
+    assert signature == {
+        "model": {
+            "id": "snapshot-model",
+            "model": "gpt-4o-mini",
+            "sampling_args": {"max_tokens": 256, "temperature": 0.3},
+            "env_args": {"split": "dev"},
+            "env_overrides": {"snapshot-env": {"temperature": 0.2}},
+        },
+        "env": {
+            "module": "environments.snapshot_env",
+            "num_examples": 3,
+            "rollouts_per_example": 2,
+            "max_concurrent": 4,
+            "independent_scoring": False,
+            "state_columns": ["student_answer", "score"],
+            "print_results": False,
+            "rerun": False,
+            "id": "snapshot-env",
+            "env_args": {"difficulty": "easy", "runner_seed": 99, "split": "dev", "job_seed": 7},
+        },
+        "sampling_args": {"max_tokens": 256, "temperature": 0.3, "eval_seed": 17},
+    }
+
+
+def test_build_job_entry_is_stable() -> None:
+    job = _build_job()
+    entry = build_job_entry(job, env_args=job.env_args, sampling_args=job.sampling_args, results_dir=None)
+    assert entry.model_dump() == {
+        "job_id": "snapshot-model-snapshot-env",
+        "env_id": "environments.snapshot_env",
+        "model_id": "snapshot-model",
+        "env_template_id": "environments.snapshot_env:6ef485576891",
+        "env_variant_id": "snapshot-env",
+        "env_args": {"difficulty": "easy", "runner_seed": 99, "split": "dev", "job_seed": 7},
+        "sampling_args": {"max_tokens": 256, "temperature": 0.3, "eval_seed": 17},
+        "status": "pending",
+        "reason": None,
+        "attempt": 0,
+        "started_at": None,
+        "ended_at": None,
+        "duration_seconds": None,
+        "results_dir": None,
+        "results_relpath": "snapshot-model-snapshot-env/results.jsonl",
+        "metadata_relpath": "snapshot-model-snapshot-env/metadata.json",
+        "row_count": None,
+        "metrics": None,
+        "avg_reward": None,
+        "num_examples": None,
+        "rollouts_per_example": None,
+    }
+
+
+def test_resolved_job_signature_ignores_resume_tolerant_fields() -> None:
+    base_job = _build_job()
+    model_variant = base_job.model.model_copy(update={"api_key_var": "ALT_KEY"})
+    variant_job = ResolvedJob(
+        job_id=base_job.job_id,
+        name=base_job.name,
+        model=model_variant,
+        env=base_job.env,
+        env_args=base_job.env_args,
+        sampling_args=base_job.sampling_args,
+        sleep=base_job.sleep,
+    )
+
+    base_sig = resolved_job_signature(base_job, env_args=base_job.env_args, sampling_args=base_job.sampling_args)
+    variant_sig = resolved_job_signature(variant_job, env_args=variant_job.env_args, sampling_args=variant_job.sampling_args)
+
+    assert base_sig == variant_sig
+
+
+def test_ensure_job_preserves_runtime_fields_on_update(tmp_path: Path) -> None:
+    seed_job = _build_job()
+    run_dir = tmp_path / "runtime-run"
+    manifest = RunManifest.create(
+        run_dir=run_dir,
+        run_id="runtime-run",
+        run_name="Runtime Run",
+        config_source=Path("configs/runtime.yaml"),
+        config_checksum="runtime",
+        jobs=[seed_job],
+        env_args_map={seed_job.job_id: seed_job.env_args},
+        sampling_args_map={seed_job.job_id: seed_job.sampling_args},
+        persist=False,
+    )
+    manifest.record_job_completion(
+        seed_job.job_id,
+        duration_seconds=3.5,
+        results_dir=run_dir / seed_job.job_id,
+        avg_reward=0.75,
+        metrics={"pass_rate": 0.75},
+        num_examples=12,
+        rollouts_per_example=2,
+    )
+    entry_before = manifest.job_entry(seed_job.job_id)
+    assert entry_before is not None
+    entry_before.row_count = 4
+    assert set(_ENSURE_JOB_RUNTIME_STATE_FIELDS) == {
+        "status",
+        "reason",
+        "attempt",
+        "started_at",
+        "ended_at",
+        "duration_seconds",
+        "row_count",
+        "metrics",
+        "avg_reward",
+        "num_examples",
+        "rollouts_per_example",
+    }
+    before_runtime = {
+        "status": entry_before.status,
+        "reason": entry_before.reason,
+        "attempt": entry_before.attempt,
+        "started_at": entry_before.started_at,
+        "ended_at": entry_before.ended_at,
+        "duration_seconds": entry_before.duration_seconds,
+        "row_count": entry_before.row_count,
+        "metrics": entry_before.metrics,
+        "avg_reward": entry_before.avg_reward,
+        "num_examples": entry_before.num_examples,
+        "rollouts_per_example": entry_before.rollouts_per_example,
+    }
+
+    updated_job = ResolvedJob(
+        job_id=seed_job.job_id,
+        name=seed_job.name,
+        model=seed_job.model,
+        env=seed_job.env,
+        env_args={**seed_job.env_args, "job_seed": 999},
+        sampling_args={**seed_job.sampling_args, "eval_seed": 999},
+        sleep=seed_job.sleep,
+    )
+    manifest.ensure_job(
+        updated_job,
+        env_args=updated_job.env_args,
+        sampling_args=updated_job.sampling_args,
+        results_dir=run_dir / updated_job.job_id,
+    )
+
+    entry_after = manifest.job_entry(seed_job.job_id)
+    assert entry_after is not None
+    after_runtime = {
+        "status": entry_after.status,
+        "reason": entry_after.reason,
+        "attempt": entry_after.attempt,
+        "started_at": entry_after.started_at,
+        "ended_at": entry_after.ended_at,
+        "duration_seconds": entry_after.duration_seconds,
+        "row_count": entry_after.row_count,
+        "metrics": entry_after.metrics,
+        "avg_reward": entry_after.avg_reward,
+        "num_examples": entry_after.num_examples,
+        "rollouts_per_example": entry_after.rollouts_per_example,
+    }
+
+    assert before_runtime == after_runtime
+
+
+def test_ensure_job_preserves_entry_object_identity(tmp_path: Path) -> None:
+    seed_job = _build_job()
+    run_dir = tmp_path / "identity-run"
+    manifest = RunManifest.create(
+        run_dir=run_dir,
+        run_id="identity-run",
+        run_name="Identity Run",
+        config_source=Path("configs/identity.yaml"),
+        config_checksum="identity",
+        jobs=[seed_job],
+        env_args_map={seed_job.job_id: seed_job.env_args},
+        sampling_args_map={seed_job.job_id: seed_job.sampling_args},
+        persist=False,
+    )
+    entry_before = manifest.job_entry(seed_job.job_id)
+    assert entry_before is not None
+
+    updated_job = ResolvedJob(
+        job_id=seed_job.job_id,
+        name=seed_job.name,
+        model=seed_job.model,
+        env=seed_job.env,
+        env_args={**seed_job.env_args, "job_seed": 111},
+        sampling_args={**seed_job.sampling_args, "eval_seed": 111},
+        sleep=seed_job.sleep,
+    )
+    manifest.ensure_job(
+        updated_job,
+        env_args=updated_job.env_args,
+        sampling_args=updated_job.sampling_args,
+        results_dir=run_dir / updated_job.job_id,
+    )
+    entry_after = manifest.job_entry(seed_job.job_id)
+    assert entry_after is not None
+    assert entry_before is entry_after
+    assert entry_before.env_args["job_seed"] == 111
+
+
+def test_manifest_job_signature_does_not_fallback_module_to_variant_id() -> None:
+    model = RunManifestModel(
+        version=MANIFEST_VERSION,
+        run_id="r",
+        name="n",
+        config_source="cfg.yaml",
+        config_checksum="x",
+        created_at="2024-01-01T00:00:00Z",
+        updated_at="2024-01-01T00:00:00Z",
+        models={},
+        env_templates={"template-no-module": {}},
+        jobs=[],
+        summary={},
+    )
+    entry = ManifestJobEntry(
+        job_id="job-x",
+        env_id=None,
+        model_id="missing-model",
+        env_template_id="template-no-module",
+        env_variant_id="variant-x",
+        env_args={},
+    )
+    signature = manifest_job_signature(model, entry)
+    assert "module" not in signature["env"]
+    assert signature["env"]["id"] == "variant-x"

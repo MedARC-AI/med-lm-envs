@@ -25,6 +25,12 @@ from medarc_verifiers.cli.process import (
 from medarc_verifiers.cli.process.aggregate import AggregatedEnvRows
 from medarc_verifiers.cli.hf import HFSyncConfig, HFSyncSummary
 from medarc_verifiers.cli.process.writer import EnvWriteSummary, WriterConfig
+from medarc_verifiers.cli.utils.shared import (
+    dataset_is_excluded,
+    model_is_excluded,
+    normalize_dataset_ids,
+    normalize_model_ids,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -344,8 +350,8 @@ def _print_records_table(
     exclude_models: Sequence[str] = (),
 ) -> None:
     """Pretty-print job discovery vs planned processing."""
-    exclude_set = _normalize_dataset_ids(exclude_datasets)
-    exclude_model_set = _normalize_model_ids(exclude_models)
+    exclude_set = normalize_dataset_ids(exclude_datasets, label="process exclude dataset")
+    exclude_model_set = normalize_model_ids(exclude_models, label="process exclude model")
     eligible_discovered = [
         rec
         for rec in discovered
@@ -424,19 +430,12 @@ def _record_is_excluded(record: discovery.RunRecord, exclude_set: set[str]) -> b
             env_identifier = str(raw)
     if not env_identifier:
         env_identifier = str(record.manifest_env_id or "")
-
-    env_identifier = env_identifier.strip()
-    base_env_id, _ = rollout.derive_base_env_id(env_identifier)
-    if env_identifier and env_identifier.lower() in exclude_set:
-        return True
-    if base_env_id and base_env_id.strip().lower() in exclude_set:
-        return True
-    return False
+    return _env_is_excluded(env_identifier, exclude_set)
 
 
 def _record_model_is_excluded(record: discovery.RunRecord, exclude_model_set: set[str]) -> bool:
     model_id = str(record.model_id or "").strip()
-    return bool(model_id and model_id.lower() in exclude_model_set)
+    return model_is_excluded(model_id, exclude_model_set)
 
 
 __all__ = ["ProcessOptions", "ProcessResult", "run_process"]
@@ -490,28 +489,16 @@ def _filter_env_groups_by_delta(
     return filtered
 
 
-def _normalize_dataset_ids(values: Sequence[str] | None) -> set[str]:
-    return {str(value).strip().lower() for value in values or () if str(value).strip()}
-
-
-def _normalize_model_ids(values: Sequence[str] | None) -> set[str]:
-    return {str(value).strip().lower() for value in values or () if str(value).strip()}
-
-
 def _filter_env_groups_by_exclusion(
     env_groups: Sequence[_EnvGroupSelection],
     exclude_datasets: Sequence[str],
 ) -> list[_EnvGroupSelection]:
-    exclude_set = _normalize_dataset_ids(exclude_datasets)
+    exclude_set = normalize_dataset_ids(exclude_datasets, label="process exclude dataset")
     if not exclude_set:
         return list(env_groups)
     filtered: list[_EnvGroupSelection] = []
     for group in env_groups:
-        env_id = str(group.env_key or "").strip()
-        base_env_id, _ = rollout.derive_base_env_id(env_id)
-        if env_id and env_id.strip().lower() in exclude_set:
-            continue
-        if base_env_id and base_env_id.strip().lower() in exclude_set:
+        if _env_is_excluded(str(group.env_key or ""), exclude_set):
             continue
         filtered.append(group)
     return filtered
@@ -521,16 +508,22 @@ def _filter_env_groups_by_model_exclusion(
     env_groups: Sequence[_EnvGroupSelection],
     exclude_models: Sequence[str],
 ) -> list[_EnvGroupSelection]:
-    exclude_set = _normalize_model_ids(exclude_models)
+    exclude_set = normalize_model_ids(exclude_models, label="process exclude model")
     if not exclude_set:
         return list(env_groups)
     filtered: list[_EnvGroupSelection] = []
     for group in env_groups:
         model_id = str(group.model_key or "").strip()
-        if model_id and model_id.lower() in exclude_set:
+        if model_is_excluded(model_id, exclude_set):
             continue
         filtered.append(group)
     return filtered
+
+
+def _env_is_excluded(env_id: str, exclude_set: set[str]) -> bool:
+    env_identifier = str(env_id or "").strip()
+    base_env_id, _ = rollout.derive_base_env_id(env_identifier)
+    return dataset_is_excluded(env_identifier, exclude_set, base_dataset_id=base_env_id)
 
 
 def _is_newer_timestamp(current: str, prior: str) -> bool:

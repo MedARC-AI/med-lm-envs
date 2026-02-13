@@ -9,11 +9,15 @@ from medarc_verifiers.cli.utils.shared import (
     MissingEnvParamError,
     asdict_sanitized,
     build_headers,
+    count_jsonl_rows,
     coerce_json_mapping,
+    dataset_is_excluded,
     ensure_required_params,
     flatten_state_columns,
     merge_cli_override_args,
     merge_sampling_args,
+    normalize_dataset_ids,
+    normalize_model_ids,
     normalize_headers,
     resolve_endpoint_selection,
 )
@@ -126,3 +130,19 @@ def test_asdict_sanitized_handles_dataclasses_and_paths(tmp_path: Path) -> None:
     assert serialized["name"] == "demo"
     assert serialized["payload"]["path"] == str(tmp_path / "artifact.json")
     assert sorted(serialized["tags"]) == ["x", "y"]
+
+
+def test_normalize_model_ids_rejects_case_conflicts() -> None:
+    with pytest.raises(ValueError, match="differ only by case"):
+        normalize_model_ids(["Model-A", "model-a"], label="include model")
+
+
+def test_dataset_is_excluded_uses_base_fallback() -> None:
+    exclude_set = normalize_dataset_ids(["demo-env"])
+    assert dataset_is_excluded("demo-env-rollout3", exclude_set, base_dataset_id="demo-env")
+
+
+def test_count_jsonl_rows_counts_nonempty_lines(tmp_path: Path) -> None:
+    jsonl = tmp_path / "rows.jsonl"
+    jsonl.write_text('{"a": 1}\n\n{"a": 2}\n', encoding="utf-8")
+    assert count_jsonl_rows(jsonl) == 2

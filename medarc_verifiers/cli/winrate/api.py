@@ -15,6 +15,13 @@ import polars as pl
 from polars import DataFrame as PLDataFrame, LazyFrame as PLLazyFrame
 
 from medarc_verifiers.cli.process.rollout import derive_base_env_id
+from medarc_verifiers.cli.utils.shared import (
+    dataset_is_excluded,
+    normalize_dataset_ids,
+    normalize_match_id,
+    normalize_model_ids,
+    normalized_match_id_map,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -238,20 +245,25 @@ def compute_winrates(
     if dataset_coverage not in {"all-models", "per-model"}:
         _raise_user_error(f"Unsupported dataset_coverage policy: {cfg.dataset_coverage}")
 
-    dataset_exclude_set = _normalize_dataset_ids(cfg.exclude_datasets)
+    dataset_exclude_set = normalize_dataset_ids(cfg.exclude_datasets, label="winrate exclude dataset")
+    _ensure_case_consistent_ids(
+        [str(name) for name, _ in datasets],
+        label="dataset ids",
+        scope="winrate dataset list",
+    )
     if dataset_exclude_set:
         datasets = tuple(
-            (name, path)
-            for name, path in datasets
-            if not _dataset_is_excluded(str(name), dataset_exclude_set)
+            (name, path) for name, path in datasets if not _is_dataset_excluded(str(name), dataset_exclude_set)
         )
         if not datasets:
             _raise_user_error("No datasets remain after applying dataset exclusions.")
-    include_set = _normalize_model_ids(cfg.include_models)
-    exclude_set = _normalize_model_ids(cfg.exclude_models)
+    include_map = normalized_match_id_map(cfg.include_models, label="winrate include model")
+    include_set = set(include_map)
+    exclude_map = normalized_match_id_map(cfg.exclude_models, label="winrate exclude model")
+    exclude_set = set(exclude_map)
     target_models = sorted(include_set - exclude_set) if include_set else []
     partial_datasets = str(cfg.partial_datasets or "strict").lower()
-    known_model_set = _normalize_model_ids(known_models)
+    known_model_set = normalize_model_ids(known_models, label="known model id")
 
     if include_set and not target_models:
         _raise_user_error("No models remain after applying include/exclude filters.")
@@ -261,10 +273,14 @@ def compute_winrates(
     if known_model_set:
         unknown_includes = include_set - known_model_set
         if unknown_includes:
-            _raise_user_error(f"Unknown include model ids: {sorted(unknown_includes)}")
+            _raise_user_error(
+                f"Unknown include model ids: {[include_map.get(key, key) for key in sorted(unknown_includes)]}"
+            )
         unknown_excludes = exclude_set - known_model_set
         if unknown_excludes:
-            _warn_user(f"Unknown exclude model ids ignored: {sorted(unknown_excludes)}")
+            _warn_user(
+                f"Unknown exclude model ids ignored: {[exclude_map.get(key, key) for key in sorted(unknown_excludes)]}"
+            )
 
     per_dataset_pairwise: dict[str, dict[tuple[str, str], tuple[float | None, int]]] = {}
     per_dataset_model_means: dict[str, dict[str, float]] = {}
@@ -273,6 +289,7 @@ def compute_winrates(
     models_by_ds: dict[str, list[str]] = {}
     models_present_by_ds: dict[str, set[str]] = {}
     seen_models: set[str] = set()
+    seen_model_case_map: dict[str, str] = {}
 
     dataset_iter: Iterable[tuple[str, Path | str]] = datasets
     try:
@@ -290,9 +307,17 @@ def compute_winrates(
             include_set=include_set,
             exclude_set=exclude_set,
             target_models=target_models,
+            include_map=include_map,
+            seen_model_case_map=seen_model_case_map,
             partial_datasets=partial_datasets,
         )
-        models_present_set = set(models_present)
+        _merge_case_map(
+            seen_model_case_map,
+            models_present,
+            label="model ids",
+            scope=f"dataset '{dataset_name}'",
+        )
+        models_present_set = {normalize_match_id(model) for model in models_present}
         if not include_set and exclude_set:
             models_present_set = {m for m in models_present_set if m not in exclude_set}
         models_present_by_ds[dataset_name] = models_present_set
@@ -309,11 +334,24 @@ def compute_winrates(
         if include_set:
             unknown_includes = include_set - seen_models
             if unknown_includes:
-                _raise_user_error(f"Unknown include model ids: {sorted(unknown_includes)}")
+                _raise_user_error(
+                    f"Unknown include model ids: {[include_map.get(key, key) for key in sorted(unknown_includes)]}"
+                )
         if exclude_set:
             unknown_excludes = exclude_set - seen_models
             if unknown_excludes:
-                _warn_user(f"Unknown exclude model ids ignored: {sorted(unknown_excludes)}")
+                _warn_user(
+                    f"Unknown exclude model ids ignored: {[exclude_map.get(key, key) for key in sorted(unknown_excludes)]}"
+                )
+
+    _canonicalize_dataset_model_labels(
+        per_dataset_pairwise=per_dataset_pairwise,
+        per_dataset_model_means=per_dataset_model_means,
+        avg_rewards_by_dataset=avg_rewards_by_dataset,
+        models_by_ds=models_by_ds,
+        include_map=include_map,
+        seen_model_case_map=seen_model_case_map,
+    )
 
     if dataset_coverage == "all-models":
         required_models = set(target_models) if include_set else set(sorted(seen_models))
@@ -326,8 +364,9 @@ def compute_winrates(
             for dataset_name in dropped:
                 present = models_present_by_ds.get(dataset_name, set())
                 missing = sorted(required_models - present)
+                missing_labels = [include_map.get(model, seen_model_case_map.get(model, model)) for model in missing]
                 _emit_note(
-                    f"Dropping dataset {dataset_name} (dataset_coverage=all-models missing models: {missing})."
+                    f"Dropping dataset {dataset_name} (dataset_coverage=all-models missing models: {missing_labels})."
                 )
                 per_dataset_pairwise.pop(dataset_name, None)
                 per_dataset_model_means.pop(dataset_name, None)
@@ -541,6 +580,8 @@ def _process_dataset(
     include_set: set[str],
     exclude_set: set[str],
     target_models: Sequence[str],
+    include_map: Mapping[str, str],
+    seen_model_case_map: Mapping[str, str],
     partial_datasets: str,
 ) -> tuple[DatasetStats | None, list[str]]:
     """Read and process a dataset, raising on failure and honoring selection policies."""
@@ -548,17 +589,22 @@ def _process_dataset(
         lf = read_dataset_lazy(parquet_path)
         df_avg, n_questions = average_rollouts(lf)
         models_present = _models_present(df_avg)
+        models_present_map = normalized_match_id_map(
+            models_present,
+            label=f"model ids in dataset '{dataset_name}'",
+        )
 
         if include_set:
-            missing_required = sorted(set(target_models) - set(models_present))
+            missing_required = sorted(set(target_models) - set(models_present_map))
             if missing_required and partial_datasets == "strict":
-                _emit_note(f"Dropping dataset {dataset_name} (missing include models: {missing_required}).")
+                missing_labels = [include_map.get(model, model) for model in missing_required]
+                _emit_note(f"Dropping dataset {dataset_name} (missing include models: {missing_labels}).")
                 return None, models_present
 
         if include_set:
-            models_filtered = [m for m in target_models if m in models_present]
+            models_filtered = [models_present_map[model] for model in target_models if model in models_present_map]
         else:
-            models_filtered = [m for m in models_present if m not in exclude_set]
+            models_filtered = [m for m in models_present if normalize_match_id(m) not in exclude_set]
         if models_filtered:
             df_filtered = df_avg.filter(pl.col(MODEL_COL).is_in(models_filtered))
         else:
@@ -566,10 +612,19 @@ def _process_dataset(
 
         df_wide, _ = to_wide(df_filtered)
         if include_set:
-            missing_cols = [m for m in target_models if m not in df_wide.columns]
+
+            def canonical_label(normalized_id: str) -> str:
+                return (
+                    seen_model_case_map.get(normalized_id)
+                    or models_present_map.get(normalized_id)
+                    or include_map.get(normalized_id)
+                    or normalized_id
+                )
+
+            models = [canonical_label(model) for model in target_models]
+            missing_cols = [model for model in models if model not in df_wide.columns]
             if missing_cols:
                 df_wide = df_wide.with_columns([pl.lit(None).alias(m) for m in missing_cols])
-            models = list(target_models)
         else:
             models = list(models_filtered)
         if models and EXAMPLE_ID_COL in df_wide.columns:
@@ -585,7 +640,13 @@ def _process_dataset(
                 epsilon=config.epsilon,
                 min_common=config.min_common,
             )
-            pairwise[(a, b)] = (wr, n_used)
+            key = tuple(sorted((a, b)))
+            if wr is None or n_used <= 0:
+                pairwise[key] = (wr, n_used)
+            elif key[0] == a:
+                pairwise[key] = (wr, n_used)
+            else:
+                pairwise[key] = (1.0 - wr, n_used)
         avg_reward_per_model = _mean_reward_per_model(df_avg, allowed=models)
         return (
             DatasetStats(
@@ -626,20 +687,9 @@ def _models_present(df_avg: pl.DataFrame) -> list[str]:
     return sorted(str(value) for value in values if value is not None)
 
 
-def _normalize_model_ids(values: Sequence[str] | None) -> set[str]:
-    return {str(value).strip() for value in values or [] if str(value).strip()}
-
-
-def _normalize_dataset_ids(values: Sequence[str] | None) -> set[str]:
-    return {str(value).strip().lower() for value in values or [] if str(value).strip()}
-
-
-def _dataset_is_excluded(dataset_name: str, exclude_set: set[str]) -> bool:
-    normalized = dataset_name.strip().lower()
-    if normalized in exclude_set:
-        return True
+def _is_dataset_excluded(dataset_name: str, exclude_set: set[str]) -> bool:
     base, _ = derive_base_env_id(dataset_name)
-    return base.strip().lower() in exclude_set if base else False
+    return dataset_is_excluded(dataset_name, exclude_set, base_dataset_id=base)
 
 
 def _filter_models(
@@ -647,16 +697,114 @@ def _filter_models(
     include: Sequence[str] | None,
     exclude: Sequence[str] | None,
 ) -> list[str]:
-    include_set = _normalize_model_ids(include)
-    exclude_set = _normalize_model_ids(exclude)
+    include_set = normalize_model_ids(include, label="winrate include model")
+    exclude_set = normalize_model_ids(exclude, label="winrate exclude model")
     filtered: list[str] = []
     for model in models:
-        if exclude_set and model in exclude_set:
+        normalized = normalize_match_id(model)
+        if exclude_set and normalized in exclude_set:
             continue
-        if include_set and model not in include_set:
+        if include_set and normalized not in include_set:
             continue
         filtered.append(model)
     return filtered
+
+
+def _ensure_case_consistent_ids(values: Sequence[str], *, label: str, scope: str) -> None:
+    try:
+        normalized_match_id_map(values, label=f"{label} in {scope}")
+    except ValueError as exc:
+        _raise_user_error(str(exc), exc)
+
+
+def _merge_case_map(existing: dict[str, str], values: Sequence[str], *, label: str, scope: str) -> None:
+    try:
+        normalized = normalized_match_id_map(values, label=f"{label} in {scope}")
+    except ValueError as exc:
+        _raise_user_error(str(exc), exc)
+    for key, value in normalized.items():
+        prior = existing.get(key)
+        if prior is not None and prior != value:
+            _raise_user_error(f"Conflicting {label} across datasets differ only by case: '{prior}' vs '{value}'.")
+        existing.setdefault(key, value)
+
+
+def _canonical_model_label(
+    value: str,
+    *,
+    include_map: Mapping[str, str],
+    seen_model_case_map: Mapping[str, str],
+) -> str:
+    normalized = normalize_match_id(value)
+    return seen_model_case_map.get(normalized) or include_map.get(normalized) or value
+
+
+def _canonicalize_dataset_model_labels(
+    *,
+    per_dataset_pairwise: dict[str, dict[tuple[str, str], tuple[float | None, int]]],
+    per_dataset_model_means: dict[str, dict[str, float]],
+    avg_rewards_by_dataset: dict[str, dict[str, float | None]],
+    models_by_ds: dict[str, list[str]],
+    include_map: Mapping[str, str],
+    seen_model_case_map: Mapping[str, str],
+) -> None:
+    def canonical(value: str) -> str:
+        return _canonical_model_label(value, include_map=include_map, seen_model_case_map=seen_model_case_map)
+
+    for dataset, pairwise in list(per_dataset_pairwise.items()):
+        if all(canonical(model_a) == model_a and canonical(model_b) == model_b for model_a, model_b in pairwise):
+            continue
+        canonical_pairwise: dict[tuple[str, str], tuple[float | None, int]] = {}
+        for (model_a, model_b), (wr, n_used) in pairwise.items():
+            canon_a = canonical(model_a)
+            canon_b = canonical(model_b)
+            if canon_a == canon_b:
+                continue
+            key = tuple(sorted((canon_a, canon_b)))
+            if wr is None or n_used <= 0:
+                canonical_pairwise[key] = (wr, n_used)
+            elif key[0] == canon_a:
+                canonical_pairwise[key] = (wr, n_used)
+            else:
+                canonical_pairwise[key] = (1.0 - wr, n_used)
+        per_dataset_pairwise[dataset] = canonical_pairwise
+
+    for dataset, means in list(per_dataset_model_means.items()):
+        if all(canonical(model) == model for model in means):
+            continue
+        canonical_means: dict[str, float] = {}
+        for model, mean_value in means.items():
+            canonical_means[canonical(model)] = mean_value
+        per_dataset_model_means[dataset] = canonical_means
+
+    for dataset, rewards in list(avg_rewards_by_dataset.items()):
+        if all(canonical(model) == model for model in rewards):
+            continue
+        canonical_rewards: dict[str, float | None] = {}
+        for model, reward_value in rewards.items():
+            canonical_rewards[canonical(model)] = reward_value
+        avg_rewards_by_dataset[dataset] = canonical_rewards
+
+    for dataset, models in list(models_by_ds.items()):
+        seen_unchanged: set[str] = set()
+        needs_rewrite = False
+        for model in models:
+            canonical_model = canonical(model)
+            if canonical_model != model or canonical_model in seen_unchanged:
+                needs_rewrite = True
+                break
+            seen_unchanged.add(canonical_model)
+        if not needs_rewrite:
+            continue
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for model in models:
+            canonical_model = canonical(model)
+            if canonical_model in seen:
+                continue
+            seen.add(canonical_model)
+            deduped.append(canonical_model)
+        models_by_ds[dataset] = deduped
 
 
 def _format_parquet_source(
