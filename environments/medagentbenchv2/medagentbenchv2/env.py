@@ -3,18 +3,27 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable
 
+import verifiers as vf
 from datasets import Dataset
 from datasets.utils.logging import disable_progress_bar
-import verifiers as vf
 from verifiers.utils.async_utils import maybe_await
+
 from . import graders
 from .tools import build_tool_list
 
-
 disable_progress_bar()
+
+
+class TasksVariant(str, Enum):
+    """MedAgentBench V2 task variant selector."""
+
+    NEW_PATIENT_TASKS = "new_patient_tasks"
+    NEW_TASKS = "new_tasks"
+    TEST_DATA_V2 = "test_data_v2"
 
 
 def _set_tool_call_function_field(tool_call: Any, field: str, value: Any) -> None:
@@ -207,7 +216,7 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
                 "tool_call_id": tool_call_id,
             }
 
-    async def env_response(self, messages: vf.Messages, state: vf.State, **kwargs: Any) -> tuple[vf.Messages, vf.State]:
+    async def env_response(self, messages: vf.Messages, state: vf.State, **kwargs: Any) -> vf.Messages:
         assert isinstance(messages, list)
         tool_calls = messages[-1].get("tool_calls") or []
 
@@ -279,7 +288,7 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
             # MultiTurnEnv.rollout() skips generation when final_env_response is set.
             state["final_env_response"] = tool_messages
 
-        return tool_messages, state
+        return tool_messages
 
 
 def _load_system_prompt() -> str:
@@ -301,7 +310,7 @@ Make sure to format the tool calls correctly and use the finish tool when you ha
     return content
 
 
-def _resolve_tasks_path(tasks_path: str | None, tasks_variant: str) -> Path:
+def _resolve_tasks_path(tasks_path: str | None, tasks_variant_value: str) -> Path:
     if tasks_path:
         path = Path(tasks_path)
         if not path.is_absolute() and path.parent == Path("."):
@@ -313,12 +322,12 @@ def _resolve_tasks_path(tasks_path: str | None, tasks_variant: str) -> Path:
         "new_tasks": base / "new_tasks.json",
         "test_data_v2": base / "test_data_v2.json",
     }
-    return mapping[tasks_variant]
+    return mapping[tasks_variant_value]
 
 
 def load_environment(
     fhir_api_base: str,
-    tasks_variant: Literal["new_patient_tasks", "new_tasks", "test_data_v2"] = "new_patient_tasks",
+    tasks_variant: TasksVariant | str = TasksVariant.NEW_PATIENT_TASKS,
     tasks_path: str | None = None,
     task_types: list[str] | None = None,
     max_turns: int = 8,
@@ -326,8 +335,11 @@ def load_environment(
     if not fhir_api_base.endswith("/"):
         fhir_api_base = f"{fhir_api_base}/"
 
+    # Normalize tasks_variant to enum
+    tasks_variant = TasksVariant(tasks_variant) if isinstance(tasks_variant, str) else tasks_variant
+
     system_prompt = _load_system_prompt()
-    tasks_file = _resolve_tasks_path(tasks_path, tasks_variant)
+    tasks_file = _resolve_tasks_path(tasks_path, tasks_variant.value)
     tasks = json.loads(tasks_file.read_text())
 
     if task_types:

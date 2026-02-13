@@ -7,8 +7,8 @@ Everything you need to complete the task is in the EHR. Do not ask any clarifyin
 Take your time and think through every step. You MUST plan extensively before each function call, and reflect extensively on the outcomes of the previous function calls.
 
 You have access to the following tools:
-- patient_search: search and filter for patients using FHIR search params
 - calculator: evaluate mathematical expressions in python
+- fhir_patient_search: search and filter for patients using FHIR search params
 - fhir_observation_search: search for observations for a patient by code
 - fhir_vitals_create: file vital signs for all flowsheets
 - fhir_vitals_search: search for vital signs
@@ -20,9 +20,9 @@ You have access to the following tools:
 - finish: respond with the final answer in the correct data type
 
 ALWAYS use the `finish` tool to respond with your final answer. The output format will be stated in the instructions or context.
-You should always respond with an answer. IT IS IMPORTANT THAT THE TYPE OF ANSWER IS CORRECT. If
-a value is a number, DO NOT respond with the string version of it. There should not be empty responses ie. [].
-Invoke tools using the model/tooling-specific mechanism; do not emit API-specific JSON or response wrapper fields. The examples below show only the tool name and arguments.
+You should always respond with an answer. IT IS IMPORTANT THAT THE TYPE OF ANSWER IS CORRECT.
+If a value is a number, DO NOT respond with the string version of it. There should not be empty responses ie. [].
+Use your native tool-calling capability to invoke tools, do not manually write out tool-call JSON or response wrappers. The examples below show only the values to pass to `finish`.
 
 GOOD Example Values:
 1. [-1]

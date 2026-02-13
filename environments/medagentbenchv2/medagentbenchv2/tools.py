@@ -175,7 +175,7 @@ def _drop_none(values: dict[str, Any]) -> dict[str, Any]:
 
 
 def create_patient_search(fhir_api_base: str) -> Callable[..., dict]:
-    def patient_search(
+    def fhir_patient_search(
         *,
         birthdate: Annotated[str | None, "The patient's date of birth in YYYY-MM-DD format."] = None,
         family: Annotated[str | None, "The patient's family (last) name."] = None,
@@ -191,7 +191,7 @@ def create_patient_search(fhir_api_base: str) -> Callable[..., dict]:
         res = requests.get(route, params=params)
         return res.json()
 
-    return patient_search
+    return fhir_patient_search
 
 
 def create_fhir_observation_search(fhir_api_base: str) -> Callable[..., dict]:

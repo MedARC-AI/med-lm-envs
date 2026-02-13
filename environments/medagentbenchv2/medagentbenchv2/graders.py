@@ -22,7 +22,7 @@ class TaskResult:
 
 def _api_mapping(fhir_api_base: str) -> dict[str, tuple[str, str]]:
     return {
-        "patient_search": ("GET", urljoin(fhir_api_base, "Patient")),
+        "fhir_patient_search": ("GET", urljoin(fhir_api_base, "Patient")),
         "fhir_vitals_create": ("POST", urljoin(fhir_api_base, "Observation")),
         "fhir_medication_request_create": (
             "POST",
