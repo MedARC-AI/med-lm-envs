@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Sequence
 
 from medarc_verifiers.cli._manifest import MANIFEST_FILENAME, RunManifestModel, SUPPORTED_MANIFEST_VERSIONS
+from medarc_verifiers.cli.utils.shared import count_jsonl_rows
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +102,7 @@ def validate_manifests_in_runs(runs_dir: Path | str, *, strict: bool = False) ->
                     )
                 )
             if entry.row_count is not None and results_path.exists():
-                row_count = _count_jsonl_rows(results_path)
+                row_count = count_jsonl_rows(results_path)
                 if row_count is not None and int(row_count) != int(entry.row_count):
                     kind = "error" if strict else "warning"
                     issues.append(
@@ -138,7 +139,9 @@ def _resolve_job_artifact_paths(
     if results_relpath:
         root = (run_dir / artifacts_root).resolve()
         results_path = (root / results_relpath).resolve()
-        metadata_path = (root / (metadata_relpath or f"{Path(results_relpath).parent.as_posix()}/metadata.json")).resolve()
+        metadata_path = (
+            root / (metadata_relpath or f"{Path(results_relpath).parent.as_posix()}/metadata.json")
+        ).resolve()
     else:
         base_dir = (run_dir / job_id).resolve()
         results_path = base_dir / "results.jsonl"
@@ -148,17 +151,6 @@ def _resolve_job_artifact_paths(
         results_path = (run_dir / job_id / "results.jsonl").resolve()
         metadata_path = (run_dir / job_id / "metadata.json").resolve()
     return results_path, metadata_path, used_fallback
-
-
-def _count_jsonl_rows(path: Path) -> int | None:
-    if not path.exists() or not path.is_file():
-        return None
-    count = 0
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if line.strip():
-                count += 1
-    return count
 
 
 def format_validation_issues(issues: Sequence[ManifestValidationIssue]) -> list[str]:

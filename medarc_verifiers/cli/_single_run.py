@@ -73,13 +73,13 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
     env_id = first_token
     remaining = args_list[1:]
 
-    parser = build_base_parser(require_env=True, add_help=True)
+    parser, env_group, reserved_dests = _build_base_parser_layout(require_env=True, add_help=True, env_id=env_id)
     try:
         metadata = gather_env_cli_metadata(env_id)
     except ImportError as exc:
         parser.error(str(exc))
 
-    bindings = register_env_options(parser, env_id, metadata)
+    bindings = register_env_options(env_group, reserved_dests, env_id, metadata)
 
     try:
         args = parser.parse_args([env_id, *remaining])
@@ -215,10 +215,15 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-def build_base_parser(*, require_env: bool, add_help: bool) -> argparse.ArgumentParser:
+def _build_base_parser_layout(
+    *,
+    require_env: bool,
+    add_help: bool,
+    env_id: str | None = None,
+) -> tuple[argparse.ArgumentParser, Any, set[str]]:
     parser = argparse.ArgumentParser(
         prog=COMMAND,
-        add_help=add_help,
+        add_help=False,
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         description=(
             "Run verifiers evaluations with dynamic environment parameters. "
@@ -226,84 +231,122 @@ def build_base_parser(*, require_env: bool, add_help: bool) -> argparse.Argument
             f"or '{COMMAND} {BENCH_COMMAND} --help' for batch runs."
         ),
     )
-    for group in parser._action_groups:
-        if group.title in {"optional arguments", "options"}:
-            group.title = f"{COMMAND} options"
-            break
+    reserved_dests: set[str] = set()
+
+    def _add_and_track(group, *args: str, **kwargs: Any) -> None:
+        action = group.add_argument(*args, **kwargs)
+        reserved_dests.add(action.dest)
 
     env_kwargs = {"metavar": "ENV", "help": "Environment slug or module path"}
     if require_env:
-        parser.add_argument("env", **env_kwargs)
+        _add_and_track(parser, "env", **env_kwargs)
     else:
-        parser.add_argument("env", nargs="?", **env_kwargs)
+        _add_and_track(parser, "env", nargs="?", **env_kwargs)
 
-    parser.add_argument(
+    if add_help:
+        _add_and_track(
+            parser, "-h", "--help", action="help", default=argparse.SUPPRESS, help="show this help message and exit"
+        )
+
+    env_group_title = f"{env_id} environment options" if env_id else "Environment options (ENV=<env>)"
+    env_group = parser.add_argument_group(env_group_title)
+    core_group = parser.add_argument_group(f"{COMMAND} options")
+
+    _add_and_track(
+        core_group,
         "--env-arg",
         action="append",
         help="Override an environment argument (KEY=VALUE). Repeat for multiple overrides.",
     )
-    parser.add_argument("--env-args", help='Environment arguments as JSON object (e.g., \'{"key": "value"}\').')
-    parser.add_argument("--env-dir-path", "-p", default="./environments", help="Path to environments directory.")
-    parser.add_argument(
-        "--endpoints-path", "-e", default="./configs/endpoints.py", help="Path to API endpoints registry."
+    _add_and_track(core_group, "--env-args", help='Environment arguments as JSON object (e.g., \'{"key": "value"}\').')
+    _add_and_track(core_group, "--env-dir-path", "-p", default="./environments", help="Path to environments directory.")
+    _add_and_track(
+        core_group, "--endpoints-path", "-e", default="./configs/endpoints.py", help="Path to API endpoints registry."
     )
-    parser.add_argument("--model", "-m", default="gpt-4.1-mini", help="Model identifier to evaluate.")
-    parser.add_argument(
-        "--api-key-var", "-k", default="OPENAI_API_KEY", help="Environment variable name for the API key."
+    _add_and_track(core_group, "--model", "-m", default="gpt-4.1-mini", help="Model identifier to evaluate.")
+    _add_and_track(
+        core_group, "--api-key-var", "-k", default="OPENAI_API_KEY", help="Environment variable name for the API key."
     )
-    parser.add_argument(
-        "--api-base-url", "-b", default="https://api.openai.com/v1", help="Base URL for the inference API."
+    _add_and_track(
+        core_group, "--api-base-url", "-b", default="https://api.openai.com/v1", help="Base URL for the inference API."
     )
-    parser.add_argument(
+    _add_and_track(
+        core_group,
         "--header",
         action="append",
         help=f"Extra HTTP header to send ('Name{HEADER_SEPARATOR} Value'). Repeatable.",
     )
-    parser.add_argument(
+    _add_and_track(
+        core_group,
         "--header-file",
         type=Path,
         help="File containing newline-delimited 'Name: Value' header entries. Overrides --header on conflicts.",
     )
-    parser.add_argument("--num-examples", "-n", type=int, default=5, help="Number of examples to evaluate.")
-    parser.add_argument("--rollouts-per-example", "-r", type=int, default=3, help="Number of rollouts per example.")
-    parser.add_argument(
+    _add_and_track(core_group, "--num-examples", "-n", type=int, default=5, help="Number of examples to evaluate.")
+    _add_and_track(
+        core_group, "--rollouts-per-example", "-r", type=int, default=3, help="Number of rollouts per example."
+    )
+    _add_and_track(
+        core_group,
         "--max-concurrent",
         "-c",
         type=int,
         default=DEFAULT_SINGLE_RUN_MAX_CONCURRENT,
         help="Maximum number of concurrent requests.",
     )
-    parser.add_argument(
-        "--max-concurrent-generation", type=int, default=None, help="Maximum number of concurrent generation requests."
+    _add_and_track(
+        core_group,
+        "--max-concurrent-generation",
+        type=int,
+        default=None,
+        help="Maximum number of concurrent generation requests.",
     )
-    parser.add_argument(
-        "--max-concurrent-scoring", type=int, default=None, help="Maximum number of concurrent scoring requests."
+    _add_and_track(
+        core_group,
+        "--max-concurrent-scoring",
+        type=int,
+        default=None,
+        help="Maximum number of concurrent scoring requests.",
     )
-    parser.add_argument(
+    _add_and_track(
+        core_group,
         "--timeout",
         type=float,
         default=None,
         help="Override request timeout in seconds (defaults to the verifier client default).",
     )
-    parser.add_argument(
-        "--max-tokens", "-t", type=int, default=None, help="Maximum tokens to generate (unset to use model defaults)."
+    _add_and_track(
+        core_group,
+        "--max-tokens",
+        "-t",
+        type=int,
+        default=None,
+        help="Maximum tokens to generate (unset to use model defaults).",
     )
-    parser.add_argument("--temperature", "-T", type=float, default=None, help="Sampling temperature.")
-    parser.add_argument("--top-p", type=float, default=None, help="Top-p nucleus sampling value.")
-    parser.add_argument("--top-k", type=int, default=None, help="Top-k sampling value.")
-    parser.add_argument(
-        "--n", type=int, default=None, help="Number of responses per prompt (passes through sampling_args.n)."
+    _add_and_track(core_group, "--temperature", "-T", type=float, default=None, help="Sampling temperature.")
+    _add_and_track(core_group, "--top-p", type=float, default=None, help="Top-p nucleus sampling value.")
+    _add_and_track(core_group, "--top-k", type=int, default=None, help="Top-k sampling value.")
+    _add_and_track(
+        core_group,
+        "--n",
+        type=int,
+        default=None,
+        help="Number of responses per prompt (passes through sampling_args.n).",
     )
-    parser.add_argument("--sampling-arg", action="append", help="Override sampling args with KEY=VALUE (repeatable).")
-    parser.add_argument("--sampling-args", help="Sampling arguments as JSON object.")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging.")
-    parser.add_argument(
+    _add_and_track(
+        core_group, "--sampling-arg", action="append", help="Override sampling args with KEY=VALUE (repeatable)."
+    )
+    _add_and_track(core_group, "--sampling-args", help="Sampling arguments as JSON object.")
+    _add_and_track(core_group, "--verbose", "-v", action="store_true", help="Enable verbose logging.")
+    _add_and_track(
+        core_group,
         "--group-scoring",
         action="store_true",
         default=False,
         help="Score rollouts per-example group (default: independent scoring).",
     )
-    parser.add_argument(
+    _add_and_track(
+        core_group,
         "--state-columns",
         action="append",
         type=parse_state_columns_arg,
@@ -312,7 +355,8 @@ def build_base_parser(*, require_env: bool, add_help: bool) -> argparse.Argument
             f"Comma-separated list of state columns to persist (use '{STATE_COLUMNS_SEPARATOR}' between values); repeatable."
         ),
     )
-    parser.add_argument(
+    _add_and_track(
+        core_group,
         "--save-results",
         "--save-dataset",
         "-s",
@@ -321,25 +365,30 @@ def build_base_parser(*, require_env: bool, add_help: bool) -> argparse.Argument
         default=True,
         help="Save evaluation results to disk (use --no-save-results to disable; accepts legacy --save-dataset alias).",
     )
-    parser.add_argument(
+    _add_and_track(
+        core_group,
         "--save-every",
         "-f",
         type=int,
         default=-1,
         help="Save results every N rollouts when --save-results is set (-1 disables periodic saves).",
     )
-    parser.add_argument(
+    _add_and_track(
+        core_group,
         "--save-to-hf-hub",
         "-H",
         action="store_true",
         default=False,
         help="Push evaluation dataset to the Hugging Face Hub.",
     )
-    parser.add_argument("--hf-hub-dataset-name", "-D", default="", help="Custom Hugging Face dataset name when saving.")
-    parser.add_argument(
-        "--dry-run", action="store_true", help="Print the resolved EvalConfig and exit without running."
+    _add_and_track(
+        core_group, "--hf-hub-dataset-name", "-D", default="", help="Custom Hugging Face dataset name when saving."
     )
-    parser.add_argument(
+    _add_and_track(
+        core_group, "--dry-run", action="store_true", help="Print the resolved EvalConfig and exit without running."
+    )
+    _add_and_track(
+        core_group,
         "--include-usage",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -348,21 +397,21 @@ def build_base_parser(*, require_env: bool, add_help: bool) -> argparse.Argument
             "Default: auto-detect (enabled for Prime Inference, disabled otherwise)."
         ),
     )
+    return parser, env_group, reserved_dests
+
+
+def build_base_parser(*, require_env: bool, add_help: bool) -> argparse.ArgumentParser:
+    parser, _env_group, _reserved_dests = _build_base_parser_layout(require_env=require_env, add_help=add_help)
     return parser
 
 
 def register_env_options(
-    parser: argparse.ArgumentParser,
+    group: Any,
+    reserved_dests: set[str],
     env_id: str,
     metadata: Sequence[EnvParam],
 ) -> dict[str, EnvOptionBinding]:
-    reserved_dests = {action.dest for action in parser._actions}
-    group = parser.add_argument_group(f"Environment options (ENV={env_id})")
-    parser._action_groups.remove(group)
-    parser._action_groups.insert(1, group)
-
     bindings: dict[str, EnvOptionBinding] = {}
-    env_actions: list[argparse.Action] = []
 
     for param in metadata:
         if not param.supports_cli:
@@ -379,6 +428,7 @@ def register_env_options(
         if dest in reserved_dests:
             dest = f"env_{dest}"
             option = f"--env-{param.cli_name}"
+        reserved_dests.add(dest)
 
         kwargs: dict[str, Any] = {"dest": dest, "help": param.help}
         if param.choices:
@@ -397,18 +447,7 @@ def register_env_options(
             kwargs["default"] = param.default
 
         action = group.add_argument(option, **kwargs)
-        env_actions.append(action)
         bindings[action.dest] = EnvOptionBinding(param=param, dest=action.dest, default=action.default)
-
-    if env_actions:
-        help_action_index = next(
-            (index for index, action in enumerate(parser._actions) if action.dest == "help"),
-            None,
-        )
-        insert_at = (help_action_index + 1) if help_action_index is not None else 0
-        for action in reversed(env_actions):
-            parser._actions.remove(action)
-            parser._actions.insert(insert_at, action)
 
     return bindings
 

@@ -7,6 +7,7 @@ import polars as pl
 import pytest
 
 from medarc_verifiers.cli import winrate
+from medarc_verifiers.cli.winrate import api as winrate_api
 
 
 def _write_dataset(path: Path, rows: list[dict[str, object]]) -> None:
@@ -113,6 +114,78 @@ def test_compute_winrates_exclude_datasets(tmp_path: Path) -> None:
 
     assert set(payload["datasets"]) == {"dataset_one"}
     assert set(payload["models"]) == {"model_a", "model_b"}
+
+
+def test_compute_winrates_include_models_case_insensitive(tmp_path: Path) -> None:
+    dataset = tmp_path / "dataset.parquet"
+    _write_dataset(
+        dataset,
+        [
+            {"example_id": "q1", "model_id": "Model_A", "reward": 1.0},
+            {"example_id": "q1", "model_id": "Model_B", "reward": 0.0},
+        ],
+    )
+
+    cfg = winrate.WinrateConfig(
+        include_models=("model_a", "MODEL_B"),
+        dataset_coverage="per-model",
+    )
+    result = winrate.compute_winrates([("dataset", dataset)], cfg)
+    payload = winrate.to_json(result)
+
+    assert set(payload["models"]) == {"Model_A", "Model_B"}
+    assert payload["models"]["Model_A"]["vs"]["Model_B"]["n_datasets"] == 1
+
+
+def test_compute_winrates_exclude_models_case_insensitive(tmp_path: Path) -> None:
+    dataset = tmp_path / "dataset.parquet"
+    _write_dataset(
+        dataset,
+        [
+            {"example_id": "q1", "model_id": "Model_A", "reward": 1.0},
+            {"example_id": "q1", "model_id": "Model_B", "reward": 0.0},
+        ],
+    )
+
+    cfg = winrate.WinrateConfig(exclude_models=("model_b",), dataset_coverage="per-model")
+    result = winrate.compute_winrates([("dataset", dataset)], cfg)
+    payload = winrate.to_json(result)
+
+    assert set(payload["models"]) == {"Model_A"}
+
+
+def test_compute_winrates_rejects_case_conflicting_model_ids(tmp_path: Path) -> None:
+    dataset = tmp_path / "dataset.parquet"
+    _write_dataset(
+        dataset,
+        [
+            {"example_id": "q1", "model_id": "Model_A", "reward": 1.0},
+            {"example_id": "q1", "model_id": "model_a", "reward": 0.0},
+        ],
+    )
+
+    with pytest.raises(ValueError, match="differ only by case"):
+        winrate.compute_winrates([("dataset", dataset)], winrate.WinrateConfig())
+
+
+def test_compute_winrates_rejects_cross_dataset_case_conflicts(tmp_path: Path) -> None:
+    ds_one = tmp_path / "dataset_one.parquet"
+    _write_dataset(
+        ds_one,
+        [
+            {"example_id": "q1", "model_id": "Model_A", "reward": 1.0},
+        ],
+    )
+    ds_two = tmp_path / "dataset_two.parquet"
+    _write_dataset(
+        ds_two,
+        [
+            {"example_id": "q1", "model_id": "model_a", "reward": 0.0},
+        ],
+    )
+
+    with pytest.raises(ValueError, match="differ only by case"):
+        winrate.compute_winrates([("dataset_one", ds_one), ("dataset_two", ds_two)], winrate.WinrateConfig())
 
 
 def test_dataset_coverage_all_models_errors_without_common_datasets(tmp_path: Path) -> None:
@@ -255,6 +328,45 @@ def test_partial_datasets_include_adds_missing_models(tmp_path: Path) -> None:
     assert set(payload["datasets"]) == {"dataset_one", "dataset_two"}
     per_dataset = payload["models"]["model_a"]["vs"]["model_b"]["per_dataset"]
     assert per_dataset["dataset_two"] == pytest.approx(1.0)
+
+
+def test_partial_datasets_include_uses_consistent_canonical_labels(tmp_path: Path) -> None:
+    ds_one = tmp_path / "dataset_one.parquet"
+    _write_dataset(
+        ds_one,
+        [
+            {"example_id": "q1", "model_id": "Model_A", "reward": 0.8},
+        ],
+    )
+    ds_two = tmp_path / "dataset_two.parquet"
+    _write_dataset(
+        ds_two,
+        [
+            {"example_id": "q1", "model_id": "Model_A", "reward": 0.6},
+            {"example_id": "q1", "model_id": "Model_B", "reward": 0.4},
+        ],
+    )
+
+    cfg = winrate.WinrateConfig(
+        include_models=("model_a", "MODEL_B"),
+        partial_datasets="include",
+        dataset_coverage="per-model",
+    )
+    result = winrate.compute_winrates([("dataset_one", ds_one), ("dataset_two", ds_two)], cfg)
+    payload = winrate.to_json(result)
+
+    assert set(payload["models"]) == {"Model_A", "Model_B"}
+    assert "MODEL_B" not in payload["models"]
+    assert payload["models"]["Model_A"]["vs"]["Model_B"]["n_datasets"] == 2
+
+
+def test_filter_models_is_case_insensitive() -> None:
+    filtered = winrate_api._filter_models(
+        ["Model_A", "Model_B", "Model_C"],
+        include=["model_a", "MODEL_C"],
+        exclude=["model_b"],
+    )
+    assert filtered == ["Model_A", "Model_C"]
 
 
 def test_dataset_failure_errors(tmp_path: Path) -> None:
