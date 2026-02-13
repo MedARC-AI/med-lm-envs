@@ -21,7 +21,7 @@ from medarc_verifiers.cli.utils.shared import (
     normalize_headers,
     resolve_endpoint_selection,
 )
-from medarc_verifiers.utils.cli_env_args import EnvParam
+from medarc_verifiers.cli.utils.env_args import EnvParam
 
 
 def _make_env_param(name: str, *, required: bool) -> EnvParam:

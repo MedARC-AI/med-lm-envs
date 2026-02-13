@@ -17,6 +17,7 @@ from medarc_verifiers.cli._single_run import (
     register_env_options,
 )
 from medarc_verifiers.cli.utils.env_args import EnvParam
+from medarc_verifiers.utils.prime_inference import PRIME_INFERENCE_URL
 
 
 def _write_config(path: Path, content: str) -> None:
@@ -908,6 +909,34 @@ def test_single_run_header_file_overrides_cli_headers(
     output = capsys.readouterr().out
     config = json.loads(output)
     assert config["client_config"]["extra_headers"] == {"X-Test": "file"}
+
+
+def test_single_run_auto_adds_prime_team_header(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    metadata: list[EnvParam] = []
+    _patch_single_run_env(monkeypatch, metadata)
+    monkeypatch.setenv("PRIME_TEAM_ID", "team-123")
+
+    exit_code = main.main(
+        [
+            "medqa",
+            "--dry-run",
+            "--api-base-url",
+            PRIME_INFERENCE_URL,
+            "--header",
+            "X-Test: cli",
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    config = json.loads(output)
+    assert config["client_config"]["extra_headers"] == {
+        "X-Prime-Team-ID": "team-123",
+        "X-Test": "cli",
+    }
 
 
 def test_single_run_dry_run_outputs_config(

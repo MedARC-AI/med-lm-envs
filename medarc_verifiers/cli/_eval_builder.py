@@ -75,7 +75,7 @@ def build_client_config(
     client_kwargs: dict[str, Any] = {
         "api_key_var": effective_api_key_var,
         "api_base_url": api_base_url,
-        "extra_headers": normalized_headers or {},
+        "extra_headers": merged_headers,
     }
     timeout = timeout_override if timeout_override is not None else model_cfg.timeout
     if timeout is not None:
