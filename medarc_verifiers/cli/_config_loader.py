@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import logging
-from itertools import product
 from collections.abc import Iterable, Mapping
-from typing import Any, Callable
+from itertools import product
 from pathlib import Path
+from typing import Any, Callable
 
-import yaml
+from omegaconf import OmegaConf
 
-from ._schemas import EnvironmentConfigSchema, RunConfigSchema, RESERVED_MATRIX_KEYS
+from ._schemas import RESERVED_MATRIX_KEYS, EnvironmentConfigSchema, RunConfigSchema
 from .utils.endpoint_utils import EnvMetadataCache, load_env_metadata
 from .utils.env_args import validate_env_args_or_raise
 
@@ -29,15 +29,6 @@ class ConfigFormatError(ValueError):
 
 def _load_raw_config(path: Path) -> Any:
     """Load and resolve an OmegaConf configuration file."""
-    try:
-        from omegaconf import OmegaConf  # type: ignore
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "Falling back to PyYAML config loader because OmegaConf failed to import: %s",
-            exc,
-        )
-        return yaml.safe_load(path.read_text(encoding="utf-8"))
-
     cfg = OmegaConf.load(path)
     OmegaConf.resolve(cfg)
     return OmegaConf.to_container(cfg, resolve=True)
