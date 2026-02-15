@@ -1,7 +1,7 @@
 """
 Token tracking for OpenAI-compatible API responses.
 Tracks model and judge token usage separately via monkey-patching.
-Automatically enabled on import unless MEDARC_DISABLE_TOKEN_TRACKING=true.
+Patches are available via install_patches() and are not auto-installed on import.
 """
 
 import logging
