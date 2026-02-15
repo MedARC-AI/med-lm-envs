@@ -79,7 +79,7 @@ def test_execute_jobs_invokes_run_evaluation(monkeypatch: pytest.MonkeyPatch, tm
     monkeypatch.setattr(
         "medarc_verifiers.cli._job_executor.load_endpoint_registry",
         lambda path, cache=None: {
-            "alias": {"model": "resolved-model", "key": "MODEL_KEY", "url": "https://api.resolved"}
+            "alias": [{"model": "resolved-model", "key": "MODEL_KEY", "url": "https://api.resolved"}]
         },
     )
     monkeypatch.setattr(

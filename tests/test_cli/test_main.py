@@ -168,7 +168,9 @@ def test_batch_api_base_url_override_forces_endpoint(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(
         "medarc_verifiers.cli._job_executor.load_endpoint_registry",
         lambda *args, **kwargs: {
-            "alias-model": {"model": "resolved-model", "url": "https://endpoint.example/v1", "key": "REGISTRY_KEY"}
+            "alias-model": [
+                {"model": "resolved-model", "url": "https://endpoint.example/v1", "key": "REGISTRY_KEY"}
+            ]
         },
     )
     monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
