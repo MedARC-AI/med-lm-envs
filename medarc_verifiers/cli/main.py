@@ -20,6 +20,7 @@ from medarc_verifiers.cli._constants import (
     COMMAND,
     DEFAULT_API_BASE_URL,
     DEFAULT_API_KEY_VAR,
+    DEFAULT_ENDPOINTS_PATH,
     DEFAULT_ENV_CONFIG_ROOT,
     DEFAULT_ENV_DIR,
     DEFAULT_PROCESSED_DIR,
@@ -114,7 +115,12 @@ def build_batch_parser() -> argparse.ArgumentParser:
         default=DEFAULT_ENV_CONFIG_ROOT,
         help="Directory containing environment YAMLs for auto-discovery (default: %(default)s).",
     )
-    parser.add_argument("--endpoints-path", type=Path, help="Override the default endpoints registry path.")
+    parser.add_argument(
+        "--endpoints-path",
+        type=Path,
+        default=DEFAULT_ENDPOINTS_PATH,
+        help=f"Path to the endpoints registry file (default: {DEFAULT_ENDPOINTS_PATH}).",
+    )
     parser.add_argument(
         "--default-api-key-var",
         default=DEFAULT_API_KEY_VAR,

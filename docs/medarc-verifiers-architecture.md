@@ -98,6 +98,8 @@ There are two related concepts:
 
 1. **Endpoint registry** (optional): resolves a model alias to an endpoint URL and key env var.
    - Loader + cache: `medarc_verifiers/cli/utils/endpoint_utils.py`
+   - CLI default path: `configs/endpoints.toml` (TOML-first, aligned with upstream verifiers)
+   - Legacy Python registries remain usable via explicit `--endpoints-path configs/endpoints.py`.
 2. **Prime Inference overrides**:
    - Adds `X-Prime-Team-ID` header (if `PRIME_TEAM_ID` is set and base URL is Prime Inference).
    - Optionally injects `extra_body.usage.include = true` for usage reporting.

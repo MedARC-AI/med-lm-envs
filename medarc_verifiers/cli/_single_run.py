@@ -13,7 +13,13 @@ from typing import Any, Mapping, Sequence
 
 from verifiers.utils.eval_utils import run_evaluation
 
-from medarc_verifiers.cli._constants import BENCH_COMMAND, COMMAND
+from medarc_verifiers.cli._constants import (
+    BENCH_COMMAND,
+    COMMAND,
+    DEFAULT_API_BASE_URL,
+    DEFAULT_API_KEY_VAR,
+    DEFAULT_ENDPOINTS_PATH,
+)
 from medarc_verifiers.cli._eval_builder import build_client_config, build_eval_config
 from medarc_verifiers.cli._schemas import ModelConfigSchema
 from medarc_verifiers.cli.utils.env_args import EnvParam, MissingEnvParamError, gather_env_cli_metadata, merge_env_args
@@ -261,14 +267,22 @@ def _build_base_parser_layout(
     _add_and_track(core_group, "--env-args", help='Environment arguments as JSON object (e.g., \'{"key": "value"}\').')
     _add_and_track(core_group, "--env-dir-path", "-p", default="./environments", help="Path to environments directory.")
     _add_and_track(
-        core_group, "--endpoints-path", "-e", default="./configs/endpoints.py", help="Path to API endpoints registry."
+        core_group,
+        "--endpoints-path",
+        "-e",
+        default=str(DEFAULT_ENDPOINTS_PATH),
+        help="Path to API endpoints registry (TOML preferred).",
     )
     _add_and_track(core_group, "--model", "-m", default="gpt-4.1-mini", help="Model identifier to evaluate.")
     _add_and_track(
-        core_group, "--api-key-var", "-k", default="OPENAI_API_KEY", help="Environment variable name for the API key."
+        core_group,
+        "--api-key-var",
+        "-k",
+        default=DEFAULT_API_KEY_VAR,
+        help="Environment variable name for the API key.",
     )
     _add_and_track(
-        core_group, "--api-base-url", "-b", default="https://api.openai.com/v1", help="Base URL for the inference API."
+        core_group, "--api-base-url", "-b", default=DEFAULT_API_BASE_URL, help="Base URL for the inference API."
     )
     _add_and_track(
         core_group,
