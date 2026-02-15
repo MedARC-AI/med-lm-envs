@@ -6,8 +6,14 @@ from types import SimpleNamespace
 
 import pytest
 
+from medarc_verifiers.cli._constants import DEFAULT_ENDPOINTS_PATH
 from medarc_verifiers.cli._job_builder import ResolvedJob
-from medarc_verifiers.cli._job_executor import ExecutorSettings, JobExecutionResult, execute_jobs
+from medarc_verifiers.cli._job_executor import (
+    ExecutorSettings,
+    JobExecutionResult,
+    _load_endpoints_for_model,
+    execute_jobs,
+)
 from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, ModelConfigSchema
 from medarc_verifiers.cli.utils.env_args import EnvParam
 
@@ -38,6 +44,7 @@ def _settings(tmp_path: Path, **overrides: object) -> ExecutorSettings:
         output_dir=tmp_path / "runs",
         env_dir=tmp_path / "environments",
         endpoints_path=tmp_path / "endpoints.py",
+        endpoints_path_explicit=False,
         default_api_key_var="DEFAULT_KEY",
         default_api_base_url="https://api.default",
         log_level="INFO",
@@ -492,3 +499,24 @@ def test_execute_jobs_warns_for_deprecated_eval_knobs(
     assert results[0].status == "succeeded"
     assert "Environment 'medqa' sets deprecated eval knob(s): print_results, save_every" in caplog.text
     assert "Job 'alias-medqa' sets deprecated eval knob(s): max_concurrent_generation, max_concurrent_scoring" in caplog.text
+
+
+def test_load_endpoints_for_model_missing_default_path_is_non_fatal(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    settings = _settings(tmp_path, endpoints_path=Path(DEFAULT_ENDPOINTS_PATH), endpoints_path_explicit=False)
+    model_cfg = ModelConfigSchema(id="alias")
+
+    endpoints = _load_endpoints_for_model(model_cfg, settings, cache=None)
+
+    assert endpoints == {}
+
+
+def test_load_endpoints_for_model_missing_explicit_path_raises(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, endpoints_path=tmp_path / "missing.toml", endpoints_path_explicit=True)
+    model_cfg = ModelConfigSchema(id="alias")
+
+    with pytest.raises(FileNotFoundError):
+        _load_endpoints_for_model(model_cfg, settings, cache=None)

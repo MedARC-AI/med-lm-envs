@@ -14,6 +14,7 @@ from pydantic import BaseModel, field_validator
 from verifiers.types import GenerateOutputs
 from verifiers.utils.eval_utils import run_evaluation
 
+from medarc_verifiers.cli._constants import DEFAULT_ENDPOINTS_PATH
 from medarc_verifiers.cli._eval_builder import build_client_config, build_eval_config
 from medarc_verifiers.cli._job_builder import ResolvedJob
 from medarc_verifiers.cli._manifest import RunManifest
@@ -42,6 +43,7 @@ class ExecutorSettings(BaseModel):
     output_dir: Path
     env_dir: Path
     endpoints_path: Path | None = None
+    endpoints_path_explicit: bool = False
     default_api_key_var: str
     default_api_base_url: str
     api_base_url_override: str | None = None
@@ -299,7 +301,25 @@ def _load_endpoints_for_model(
     registry_path = model_cfg.endpoints_path or settings.endpoints_path
     if registry_path is None:
         return {}
-    return load_endpoint_registry(registry_path, cache=cache)
+
+    registry_path_obj = Path(registry_path).expanduser()
+    default_registry_path = Path(DEFAULT_ENDPOINTS_PATH).expanduser()
+    explicit_path = bool(model_cfg.endpoints_path) or settings.endpoints_path_explicit
+
+    if not registry_path_obj.exists():
+        if explicit_path:
+            raise FileNotFoundError(f"Endpoint registry not found at {registry_path_obj}")
+        if _same_path(registry_path_obj, default_registry_path):
+            logger.warning(
+                "Default endpoints registry '%s' not found; continuing without endpoint aliases.",
+                registry_path_obj,
+            )
+            return {}
+
+    endpoints = load_endpoint_registry(registry_path_obj, cache=cache)
+    if explicit_path and not endpoints:
+        raise ValueError(f"Failed to load endpoint registry from explicit path '{registry_path_obj}'")
+    return endpoints
 
 
 def _record_job_failure(
@@ -338,6 +358,13 @@ def _safe_get(obj: Any, key: str, default: Any = None) -> Any:
     if isinstance(obj, dict):
         return obj.get(key, default)
     return getattr(obj, key, default)
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve(strict=False) == right.resolve(strict=False)
+    except OSError:
+        return left == right
 
 
 def _materialize_results(job_dir: Path, results: GenerateOutputs) -> None:

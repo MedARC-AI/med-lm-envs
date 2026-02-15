@@ -496,6 +496,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _run_batch_mode(argv: Sequence[str]) -> int:
     parser = build_batch_parser()
     args = parser.parse_args(argv)
+    args.endpoints_path_explicit = _option_was_provided(argv, "--endpoints-path")
 
     try:
         args.cli_env_args = build_cli_override(
@@ -1200,6 +1201,7 @@ def _execute_batch(args: argparse.Namespace) -> int:
         output_dir=output_dir,
         env_dir=Path(args.env_dir).expanduser(),
         endpoints_path=Path(args.endpoints_path).expanduser() if args.endpoints_path else None,
+        endpoints_path_explicit=bool(getattr(args, "endpoints_path_explicit", False)),
         default_api_key_var=args.default_api_key_var,
         default_api_base_url=args.default_api_base_url,
         api_base_url_override=args.api_base_url,
@@ -1277,6 +1279,13 @@ def _parse_repeatable_csv(values: Sequence[str] | None) -> list[str]:
             if value:
                 parsed.append(value)
     return parsed
+
+
+def _option_was_provided(argv: Sequence[str], long_flag: str) -> bool:
+    for token in argv:
+        if token == long_flag or token.startswith(f"{long_flag}="):
+            return True
+    return False
 
 
 def _filter_winrate_datasets(

@@ -153,8 +153,7 @@ medarc-eval careqa \
 medarc-eval pubmedqa \
   -m gpt-4.1-mini \
   -n -1 \                    # All examples
-  --max-concurrent 20 \      # 20 parallel requests
-  --save-every 100           # Checkpoint every 100 samples
+  --max-concurrent 20        # 20 parallel requests
 ```
 
 ## Available Benchmarks

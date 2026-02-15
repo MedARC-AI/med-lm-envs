@@ -76,6 +76,7 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
 
     env_id = first_token
     remaining = args_list[1:]
+    endpoints_path_explicit = _option_was_provided(remaining, "--endpoints-path", "-e")
 
     parser, env_group, reserved_dests = _build_base_parser_layout(require_env=True, add_help=True, env_id=env_id)
     try:
@@ -142,10 +143,34 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
     ensure_root_logging("DEBUG" if args.verbose else "INFO")
 
     endpoints_path = Path(args.endpoints_path).expanduser()
-    try:
-        endpoints = load_endpoint_registry(endpoints_path)
-    except Exception as exc:  # noqa: BLE001
-        parser.error(f"Failed to load endpoints registry: {exc}")
+    default_endpoints_path = Path(DEFAULT_ENDPOINTS_PATH).expanduser()
+    if not endpoints_path.exists():
+        if endpoints_path_explicit:
+            logger.error("Explicit endpoints registry path does not exist: %s", endpoints_path)
+            return 2
+        if _same_path(endpoints_path, default_endpoints_path):
+            logger.warning(
+                "Default endpoints registry '%s' not found; continuing without endpoint aliases.",
+                endpoints_path,
+            )
+        endpoints = {}
+    else:
+        try:
+            endpoints = load_endpoint_registry(endpoints_path)
+        except Exception as exc:  # noqa: BLE001
+            if endpoints_path_explicit:
+                logger.error("Failed to load explicit endpoints registry '%s': %s", endpoints_path, exc)
+                return 2
+            logger.warning(
+                "Failed to load default endpoints registry '%s'; continuing without endpoint aliases: %s",
+                endpoints_path,
+                exc,
+            )
+            endpoints = {}
+
+    if endpoints_path_explicit and not endpoints:
+        logger.error("Failed to load endpoint registry from explicit path: %s", endpoints_path)
+        return 2
 
     model_cfg = ModelConfigSchema(model=args.model)
     resolved_model, client_config, prime_sampling_overrides = build_client_config(
@@ -502,6 +527,24 @@ def extract_env_cli_args(
 def parse_state_columns_arg(value: str) -> list[str]:
     columns = [part.strip() for part in value.split(STATE_COLUMNS_SEPARATOR)]
     return [column for column in columns if column]
+
+
+def _option_was_provided(argv: Sequence[str], long_flag: str, short_flag: str | None = None) -> bool:
+    for token in argv:
+        if token == long_flag or token.startswith(f"{long_flag}="):
+            return True
+        if short_flag and (token == short_flag or token.startswith(f"{short_flag}=")):
+            return True
+        if short_flag and token.startswith(short_flag) and not token.startswith("--") and len(token) > len(short_flag):
+            return True
+    return False
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve(strict=False) == right.resolve(strict=False)
+    except OSError:
+        return left == right
 
 
 def _print_env_first_error() -> None:

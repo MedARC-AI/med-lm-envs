@@ -73,9 +73,14 @@ def load_rows(
     for line_number, payload in decoded_rows:
         extras = _extract_extras(payload, extras_keys=extras_keys)
         cleaned = _clean_row(payload, drop=drop, extras_keys=extras_keys)
+        cleaned.pop("rollout_index", None)
         _map_answer_column(cleaned, payload, answer_column=answer_column)
         _flatten_token_usage(cleaned)
-        if multi_rollout:
+        payload_rollout_index = _coerce_rollout_index(payload.get("rollout_index"))
+        if payload_rollout_index is not None:
+            rollout_index = payload_rollout_index
+            cleaned["rollout_index"] = payload_rollout_index
+        elif multi_rollout:
             ex_id = payload.get("example_id")
             try:
                 seen = seen_per_example.get(ex_id, 0)
@@ -173,6 +178,23 @@ def _is_primitive(value: Any) -> bool:
     return value is None or isinstance(value, (bool, int, float, str))
 
 
+def _coerce_rollout_index(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value.is_integer():
+            return int(value)
+        return None
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
 def _attach_metadata(
     row: MutableMapping[str, Any],
     metadata: NormalizedMetadata,
@@ -194,13 +216,14 @@ def _attach_metadata(
             "job_run_id": record.manifest.job_run_id,
             "run_id": record.job_id,
             "model_id": metadata.model_id,
-            "rollout_index": rollout_index,
             "status": record.status,
             "error": error_value,
             "started_at": record.started_at,
             "ended_at": record.ended_at,
         }
     )
+    if "rollout_index" not in row:
+        row["rollout_index"] = rollout_index
     return row
 
 

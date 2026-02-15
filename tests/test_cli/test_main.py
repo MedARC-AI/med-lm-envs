@@ -35,6 +35,13 @@ def _patch_single_run_env(monkeypatch: pytest.MonkeyPatch, metadata: list[EnvPar
     )
 
 
+def _patch_single_run_metadata_only(monkeypatch: pytest.MonkeyPatch, metadata: list[EnvParam]) -> None:
+    monkeypatch.setattr(
+        "medarc_verifiers.cli._single_run.gather_env_cli_metadata",
+        lambda env_id: metadata,
+    )
+
+
 def _make_env_param(
     name: str,
     *,
@@ -958,6 +965,32 @@ def test_single_run_dry_run_outputs_config(
     assert exit_code == 0
     output = capsys.readouterr().out
     assert '"env_id": "medqa"' in output
+
+
+def test_single_run_uses_empty_registry_when_default_endpoints_path_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    metadata: list[EnvParam] = []
+    _patch_single_run_metadata_only(monkeypatch, metadata)
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main.main(["medqa", "--dry-run"])
+
+    assert exit_code == 0
+
+
+def test_single_run_explicit_missing_endpoints_path_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    metadata: list[EnvParam] = []
+    _patch_single_run_metadata_only(monkeypatch, metadata)
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main.main(["medqa", "--dry-run", "--endpoints-path", "does_not_exist.toml"])
+
+    assert exit_code == 2
 
 
 def test_single_run_warns_when_save_every_is_set(

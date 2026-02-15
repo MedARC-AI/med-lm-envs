@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import Mapping
 
 from verifiers.types import GenerateOutputs
 
@@ -50,35 +50,10 @@ def log_results_summary(
 
     pass_rate = _safe_get(avg_metrics, "pass_rate", None)
     if pass_rate is not None:
-        logger.info("  pass_rate avg: %.4f", pass_rate)
-
-
-def compute_average(values: Sequence[float] | Iterable[float] | None) -> float | None:
-    """Compute the arithmetic mean for a sequence of numeric values."""
-    if not values:
-        return None
-    total = 0.0
-    count = 0
-    for value in values:
-        if value is None:
-            continue
-        total += float(value)
-        count += 1
-    if count == 0:
-        return None
-    return total / count
-
-
-def compute_metric_averages(metrics: Mapping[str, Sequence[float] | Iterable[float]] | None) -> dict[str, float]:
-    """Average every metric list present in the evaluation payload."""
-    if not metrics:
-        return {}
-    summary: dict[str, float] = {}
-    for key, values in metrics.items():
-        avg = compute_average(values)
-        if avg is not None:
-            summary[key] = avg
-    return summary
+        try:
+            logger.info("  pass_rate avg: %.4f", float(pass_rate))
+        except (TypeError, ValueError):
+            logger.debug("Skipping pass_rate logging due to non-numeric value: %r", pass_rate)
 
 
 def update_metadata_file(path: Path, avg_reward: float | None, metrics_avg: Mapping[str, float]) -> None:

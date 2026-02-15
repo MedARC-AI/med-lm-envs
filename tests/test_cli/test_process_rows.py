@@ -295,6 +295,46 @@ def test_load_rows_flattens_flat_token_usage_shape(tmp_path: Path) -> None:
     assert row["judge_cost"] is None
 
 
+def test_load_rows_prefers_jsonl_rollout_index_over_inferred_values(tmp_path: Path) -> None:
+    record = _build_record(tmp_path)
+    _write_json(record.metadata_path, {})
+    _write_results(
+        record.results_path,
+        [
+            {
+                "example_id": "ex-1",
+                "rollout_index": 9,
+            },
+            {
+                "example_id": "ex-1",
+                "rollout_index": "11",
+            },
+        ],
+    )
+
+    metadata = load_normalized_metadata(record)
+    rows = load_rows(metadata)
+
+    assert [row["rollout_index"] for row in rows] == [9, 11]
+
+
+def test_load_rows_infers_rollout_index_when_jsonl_omits_it(tmp_path: Path) -> None:
+    record = _build_record(tmp_path)
+    _write_json(record.metadata_path, {})
+    _write_results(
+        record.results_path,
+        [
+            {"example_id": "ex-1"},
+            {"example_id": "ex-1"},
+        ],
+    )
+
+    metadata = load_normalized_metadata(record)
+    rows = load_rows(metadata)
+
+    assert [row["rollout_index"] for row in rows] == [0, 1]
+
+
 def test_load_rows_maps_answer_column(tmp_path: Path) -> None:
     record = _build_record(tmp_path)
     _write_json(record.metadata_path, {})
