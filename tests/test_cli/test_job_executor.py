@@ -68,6 +68,17 @@ def _stub_results(value: float = 0.5) -> SimpleNamespace:
     return SimpleNamespace(metadata=metadata, reward=[value], metrics={"pass_rate": [value]})
 
 
+def _stub_results_metadata_only(value: float = 0.5) -> SimpleNamespace:
+    metadata = SimpleNamespace(
+        path_to_save="",
+        avg_reward=value,
+        num_examples=2,
+        rollouts_per_example=3,
+        avg_metrics={"pass_rate": value, "accuracy": value / 2},
+    )
+    return SimpleNamespace(metadata=metadata)
+
+
 def test_execute_jobs_invokes_run_evaluation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     captured = {}
 
@@ -151,6 +162,56 @@ def test_execute_jobs_records_failures(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert "alias-medqa" in result.error
     assert "env=medqa" in result.error
     assert result.output_path == (tmp_path / "runs" / "run-1" / job.job_id)
+
+
+def test_execute_jobs_uses_metadata_averages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    class _ManifestStub:
+        def __init__(self) -> None:
+            self.started: list[str] = []
+            self.completed: list[dict[str, object]] = []
+
+        def record_job_start(self, job_id: str) -> None:
+            self.started.append(job_id)
+
+        def record_job_completion(self, job_id: str, **kwargs: object) -> None:
+            payload = {"job_id": job_id}
+            payload.update(kwargs)
+            self.completed.append(payload)
+
+        def record_job_failure(self, job_id: str, **kwargs: object) -> None:
+            raise AssertionError(f"Job should not fail: {job_id}, {kwargs}")
+
+    async def fake_run(config):
+        return _stub_results_metadata_only(0.8)
+
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda path, cache=None: {})
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda env_id, cache=None: [])
+
+    job = ResolvedJob(
+        job_id="alias-medqa",
+        name="alias-medqa",
+        model=ModelConfigSchema(id="alias"),
+        env=EnvironmentConfigSchema(id="medqa"),
+        env_args={},
+        sampling_args={},
+    )
+    manifest = _ManifestStub()
+
+    results = execute_jobs([job], _settings(tmp_path), manifest=manifest)
+
+    assert results[0].status == "succeeded"
+    assert manifest.started == ["alias-medqa"]
+    assert len(manifest.completed) == 1
+    completed = manifest.completed[0]
+    assert completed["job_id"] == "alias-medqa"
+    assert completed["avg_reward"] == pytest.approx(0.8)
+    metrics = completed["metrics"]
+    assert isinstance(metrics, dict)
+    assert metrics["pass_rate"] == pytest.approx(0.8)
+    assert metrics["accuracy"] == pytest.approx(0.4)
+    assert completed["num_examples"] == 2
+    assert completed["rollouts_per_example"] == 3
 
 
 def test_execute_jobs_respects_dry_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

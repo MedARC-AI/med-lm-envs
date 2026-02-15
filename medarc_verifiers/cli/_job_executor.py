@@ -14,7 +14,6 @@ from pydantic import BaseModel, field_validator
 from verifiers.types import GenerateOutputs
 from verifiers.utils.eval_utils import run_evaluation
 
-from medarc_verifiers.cli.utils.reporting import compute_average, compute_metric_averages
 from medarc_verifiers.cli._eval_builder import build_client_config, build_eval_config
 from medarc_verifiers.cli._job_builder import ResolvedJob
 from medarc_verifiers.cli._manifest import RunManifest
@@ -255,7 +254,7 @@ def execute_jobs(
 
         _materialize_results(job_dir, eval_result)
         avg_reward = _extract_avg_reward(eval_result)
-        metrics_avg = compute_metric_averages(_safe_get(eval_result, "metrics", {}))
+        metrics_avg = _extract_avg_metrics(eval_result)
         metadata = _safe_get(eval_result, "metadata", None)
         num_examples = _safe_get(metadata, "num_examples", None)
         rollouts_per_example = _safe_get(metadata, "rollouts_per_example", None)
@@ -365,16 +364,30 @@ def _materialize_results(job_dir: Path, results: GenerateOutputs) -> None:
 
 
 def _extract_avg_reward(results: GenerateOutputs) -> float | None:
-    """Compute the average reward from the evaluation payload."""
-    rewards = _safe_get(results, "reward", None)
-    avg = compute_average(rewards)
-    if avg is not None:
-        return avg
+    """Return metadata-level average reward from GenerateOutputs."""
     metadata = _safe_get(results, "metadata", None)
     metadata_avg = _safe_get(metadata, "avg_reward", None)
     if metadata_avg is not None:
         return float(metadata_avg)
     return None
+
+
+def _extract_avg_metrics(results: GenerateOutputs) -> dict[str, float]:
+    """Return metadata-level average metrics from GenerateOutputs."""
+    metadata = _safe_get(results, "metadata", None)
+    raw_metrics = _safe_get(metadata, "avg_metrics", None)
+    if not isinstance(raw_metrics, Mapping):
+        return {}
+
+    metrics: dict[str, float] = {}
+    for key, value in raw_metrics.items():
+        if value is None:
+            continue
+        try:
+            metrics[str(key)] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return metrics
 
 
 def _log_job_progress_window(
