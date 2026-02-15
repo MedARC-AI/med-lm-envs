@@ -227,3 +227,31 @@ def test_build_arrow_table_infers_schema_beyond_default_window() -> None:
 
     assert df.schema["judge_cost"] == pl.Float64
     assert df["judge_cost"].drop_nulls().to_list() == [0.0]
+
+
+def test_build_arrow_table_drops_unexpected_flat_token_columns() -> None:
+    rows = [
+        {
+            "env_id": "demo-env",
+            "base_env_id": "demo-env",
+            "example_id": "ex-1",
+            "job_run_id": "run-1",
+            "model_id": "demo-model",
+            "input_tokens": 12,  # Should be dropped by fixed schema selection.
+            "output_tokens": 8,  # Should be dropped by fixed schema selection.
+            "model_token_prompt": 12.0,
+            "model_token_completion": 8.0,
+            "model_token_total": 20.0,
+        }
+    ]
+    group = aggregate_rows_by_env(rows)[0]
+
+    table = writer._build_arrow_table(group)
+    assert table.schema.names == list(writer.ALLOWED_COLUMNS)
+
+    df = pl.from_arrow(table)
+    assert "input_tokens" not in df.columns
+    assert "output_tokens" not in df.columns
+    assert df["model_token_prompt"].drop_nulls().to_list() == [12.0]
+    assert df["model_token_completion"].drop_nulls().to_list() == [8.0]
+    assert df["model_token_total"].drop_nulls().to_list() == [20.0]

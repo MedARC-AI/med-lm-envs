@@ -264,6 +264,37 @@ def test_load_rows_drops_non_mapping_token_usage(tmp_path: Path) -> None:
     assert row["judge_cost"] is None
 
 
+def test_load_rows_flattens_flat_token_usage_shape(tmp_path: Path) -> None:
+    record = _build_record(tmp_path)
+    _write_json(record.metadata_path, {})
+    _write_results(
+        record.results_path,
+        [
+            {
+                "example_id": "ex-flat-token",
+                "token_usage": {
+                    "input_tokens": 12,
+                    "output_tokens": 8,
+                },
+            }
+        ],
+    )
+
+    metadata = load_normalized_metadata(record)
+    rows = load_rows(metadata)
+    row = rows[0]
+
+    assert "token_usage" not in row
+    assert row["model_token_prompt"] == 12
+    assert row["model_token_completion"] == 8
+    assert row["model_token_total"] == 20
+    assert row["model_cost"] is None
+    assert row["judge_token_prompt"] is None
+    assert row["judge_token_completion"] is None
+    assert row["judge_token_total"] is None
+    assert row["judge_cost"] is None
+
+
 def test_load_rows_maps_answer_column(tmp_path: Path) -> None:
     record = _build_record(tmp_path)
     _write_json(record.metadata_path, {})

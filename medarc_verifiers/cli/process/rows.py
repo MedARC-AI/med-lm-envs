@@ -210,11 +210,7 @@ def _flatten_token_usage(row: MutableMapping[str, Any]) -> None:
         return
     usage = row.pop("token_usage", None)
 
-    def _extract(role: str, key: str) -> Any:
-        block = usage.get(role)
-        if not isinstance(block, Mapping):
-            return None
-        value = block.get(key)
+    def _coerce_number(value: Any) -> float | None:
         if value is None:
             return None
         if isinstance(value, (int, float)):
@@ -223,6 +219,14 @@ def _flatten_token_usage(row: MutableMapping[str, Any]) -> None:
             return float(value)
         except Exception:
             return None
+
+    def _extract_nested(role: str, key: str) -> float | None:
+        if not isinstance(usage, Mapping):
+            return None
+        block = usage.get(role)
+        if not isinstance(block, Mapping):
+            return None
+        return _coerce_number(block.get(key))
 
     for role in ("judge", "model"):
         row[f"{role}_cost"] = None
@@ -233,11 +237,22 @@ def _flatten_token_usage(row: MutableMapping[str, Any]) -> None:
     if not isinstance(usage, Mapping):
         return
 
+    # verifiers 0.1.10+ shape:
+    # token_usage = {"input_tokens": ..., "output_tokens": ...}
+    if "input_tokens" in usage or "output_tokens" in usage:
+        prompt_tokens = _coerce_number(usage.get("input_tokens"))
+        completion_tokens = _coerce_number(usage.get("output_tokens"))
+        row["model_token_prompt"] = prompt_tokens
+        row["model_token_completion"] = completion_tokens
+        if prompt_tokens is not None or completion_tokens is not None:
+            row["model_token_total"] = float((prompt_tokens or 0.0) + (completion_tokens or 0.0))
+        return
+
     for role in ("judge", "model"):
-        row[f"{role}_cost"] = _extract(role, "cost")
-        row[f"{role}_token_completion"] = _extract(role, "completion")
-        row[f"{role}_token_prompt"] = _extract(role, "prompt")
-        row[f"{role}_token_total"] = _extract(role, "total")
+        row[f"{role}_cost"] = _extract_nested(role, "cost")
+        row[f"{role}_token_completion"] = _extract_nested(role, "completion")
+        row[f"{role}_token_prompt"] = _extract_nested(role, "prompt")
+        row[f"{role}_token_total"] = _extract_nested(role, "total")
 
 
 __all__ = ["load_rows"]
