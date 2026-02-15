@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -449,3 +450,45 @@ def test_job_sleep_overrides_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 
     assert all(result.status == "succeeded" for result in results)
     assert sleep_calls == [pytest.approx(1.5)]
+
+
+def test_execute_jobs_warns_for_deprecated_eval_knobs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def fake_run(config):  # noqa: ARG001
+        return _stub_results()
+
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda path, cache=None: {})
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda env_id, cache=None: [])
+
+    model_cfg = ModelConfigSchema(id="alias")
+    env_cfg = EnvironmentConfigSchema(
+        id="medqa",
+        save_every=5,
+        print_results=True,
+    )
+    job = ResolvedJob(
+        job_id="alias-medqa",
+        name="alias-medqa",
+        model=model_cfg,
+        env=env_cfg,
+        env_args={},
+        sampling_args={},
+    )
+
+    with caplog.at_level(logging.WARNING):
+        results = execute_jobs(
+            [job],
+            _settings(
+                tmp_path,
+                max_concurrent_generation=2,
+                max_concurrent_scoring=3,
+            ),
+        )
+
+    assert results[0].status == "succeeded"
+    assert "Environment 'medqa' sets deprecated eval knob(s): print_results, save_every" in caplog.text
+    assert "Job 'alias-medqa' sets deprecated eval knob(s): max_concurrent_generation, max_concurrent_scoring" in caplog.text

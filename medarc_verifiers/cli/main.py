@@ -173,8 +173,8 @@ def build_batch_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override env max_concurrent for all jobs (CLI > model > env > defaults).",
     )
-    parser.add_argument("--max-concurrent-generation", type=int, help="Override generation concurrency for all jobs.")
-    parser.add_argument("--max-concurrent-scoring", type=int, help="Override scoring concurrency for all jobs.")
+    parser.add_argument("--max-concurrent-generation", type=int, help="Deprecated: ignored.")
+    parser.add_argument("--max-concurrent-scoring", type=int, help="Deprecated: ignored.")
     parser.add_argument(
         "--timeout",
         type=float,

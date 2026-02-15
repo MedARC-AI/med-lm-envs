@@ -50,8 +50,8 @@ class ExecutorSettings(BaseModel):
     save_results: bool = True
     save_to_hf_hub: bool = False
     hf_hub_dataset_name: str | None = None
-    max_concurrent_generation: int | None = None
-    max_concurrent_scoring: int | None = None
+    max_concurrent_generation: int | None = None  # Deprecated; accepted for compatibility and ignored.
+    max_concurrent_scoring: int | None = None  # Deprecated; accepted for compatibility and ignored.
     max_concurrent: int | None = None  # CLI override for max_concurrent
     timeout: float | None = None
     sleep: float = 0.0

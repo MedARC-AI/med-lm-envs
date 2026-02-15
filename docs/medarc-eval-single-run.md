@@ -53,7 +53,7 @@ medarc-eval medqa -m gpt-4.1-mini -n 25 --dry-run
 | Flag | Description |
 |------|-------------|
 | `--save-results` / `--no-save-results` | Save outputs (default: enabled) |
-| `--save-every N` | Save checkpoint every N rollouts |
+| `--save-every N` | Deprecated (accepted for compatibility; ignored) |
 | `-v`, `--verbose` | Enable debug logging |
 
 ### Prime Inference

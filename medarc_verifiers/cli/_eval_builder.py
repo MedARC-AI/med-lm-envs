@@ -136,6 +136,14 @@ def build_eval_config(
     merged_sampling = dict(sampling_args)
     merged_sampling = merge_sampling_overrides(merged_sampling, cli_sampling_args)
 
+    _warn_deprecated_eval_knobs(
+        env_cfg=env_cfg,
+        env_id=env_id,
+        job_label=job_label,
+        max_concurrent_generation=max_concurrent_generation,
+        max_concurrent_scoring=max_concurrent_scoring,
+    )
+
     max_concurrent = resolve_max_concurrent(
         cli_override=max_concurrent_override,
         model_max=model_cfg.max_concurrent,
@@ -143,7 +151,6 @@ def build_eval_config(
         default_max=default_max_concurrent,
     )
     verbose_flag = env_cfg.verbose if env_cfg.verbose is not None else verbose
-    save_every = env_cfg.save_every if env_cfg.save_every is not None else -1
     state_columns = list(env_cfg.state_columns) if env_cfg.state_columns else None
     eval_config_fields = _pydantic_field_names(EvalConfig)
 
@@ -157,13 +164,9 @@ def build_eval_config(
         "num_examples": env_cfg.num_examples,
         "rollouts_per_example": env_cfg.rollouts_per_example,
         "max_concurrent": max_concurrent,
-        "max_concurrent_generation": max_concurrent_generation,
-        "max_concurrent_scoring": max_concurrent_scoring,
-        "print_results": env_cfg.print_results,
         "verbose": verbose_flag,
         "state_columns": state_columns,
         "save_results": save_results,
-        "save_every": save_every,
         "save_to_hf_hub": save_to_hf_hub,
         "hf_hub_dataset_name": hf_hub_dataset_name,
     }
@@ -214,3 +217,39 @@ def _pydantic_field_names(model_type: type[Any]) -> set[str]:
     if isinstance(fields, dict):
         return set(fields.keys())
     return set()
+
+
+def _warn_deprecated_eval_knobs(
+    *,
+    env_cfg: Any,
+    env_id: str,
+    job_label: str | None,
+    max_concurrent_generation: int | None,
+    max_concurrent_scoring: int | None,
+) -> None:
+    env_fields_set = set(getattr(env_cfg, "model_fields_set", set()))
+
+    deprecated_env_knobs: list[str] = []
+    if "save_every" in env_fields_set and getattr(env_cfg, "save_every", None) is not None:
+        deprecated_env_knobs.append("save_every")
+    if "print_results" in env_fields_set:
+        deprecated_env_knobs.append("print_results")
+    if deprecated_env_knobs:
+        logger.warning(
+            "Environment '%s' sets deprecated eval knob(s): %s. These options are ignored.",
+            env_id,
+            ", ".join(sorted(deprecated_env_knobs)),
+        )
+
+    deprecated_concurrency_knobs: list[str] = []
+    if max_concurrent_generation is not None:
+        deprecated_concurrency_knobs.append("max_concurrent_generation")
+    if max_concurrent_scoring is not None:
+        deprecated_concurrency_knobs.append("max_concurrent_scoring")
+    if deprecated_concurrency_knobs:
+        label = job_label or env_id
+        logger.warning(
+            "Job '%s' sets deprecated eval knob(s): %s. These options are ignored.",
+            label,
+            ", ".join(sorted(deprecated_concurrency_knobs)),
+        )

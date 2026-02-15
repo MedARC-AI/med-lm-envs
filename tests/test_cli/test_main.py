@@ -960,6 +960,25 @@ def test_single_run_dry_run_outputs_config(
     assert '"env_id": "medqa"' in output
 
 
+def test_single_run_warns_when_save_every_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    metadata: list[EnvParam] = []
+    _patch_single_run_env(monkeypatch, metadata)
+
+    async def fake_run(config):  # noqa: ARG001
+        return _stub_cli_result()
+
+    monkeypatch.setattr("medarc_verifiers.cli._single_run.run_evaluation", fake_run)
+
+    with caplog.at_level(logging.WARNING):
+        exit_code = main.main(["medqa", "--save-every", "10"])
+
+    assert exit_code == 0
+    assert "Single-run option --save-every is deprecated and ignored." in caplog.text
+
+
 def test_env_must_be_first(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     exit_code = main.main(["--temperature", "0.1", "medqa", "--dry-run"])
     assert exit_code == 2

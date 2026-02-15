@@ -59,8 +59,6 @@ class _SingleRunEnvConfig:
     max_concurrent: int | None = None
     independent_scoring: bool = True
     state_columns: list[str] | None = None
-    save_every: int | None = None
-    print_results: bool = True
     verbose: bool | None = False
 
 
@@ -170,8 +168,6 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         max_concurrent=args.max_concurrent,
         independent_scoring=not args.group_scoring,
         state_columns=state_columns or None,
-        save_every=args.save_every,
-        print_results=True,
         verbose=args.verbose,
     )
 
@@ -201,6 +197,9 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
     if args.dry_run:
         print(eval_config.model_dump_json(indent=2))
         return 0
+
+    if args.save_every != -1:
+        logger.warning("Single-run option --save-every is deprecated and ignored.")
 
     # Set the include_usage environment variable if explicitly specified
     if args.include_usage is not None:
@@ -313,14 +312,14 @@ def _build_base_parser_layout(
         "--max-concurrent-generation",
         type=int,
         default=None,
-        help="Maximum number of concurrent generation requests.",
+        help="Deprecated: ignored.",
     )
     _add_and_track(
         core_group,
         "--max-concurrent-scoring",
         type=int,
         default=None,
-        help="Maximum number of concurrent scoring requests.",
+        help="Deprecated: ignored.",
     )
     _add_and_track(
         core_group,
@@ -385,7 +384,7 @@ def _build_base_parser_layout(
         "-f",
         type=int,
         default=-1,
-        help="Save results every N rollouts when --save-results is set (-1 disables periodic saves).",
+        help="Deprecated: ignored.",
     )
     _add_and_track(
         core_group,

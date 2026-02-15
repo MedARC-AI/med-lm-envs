@@ -186,8 +186,8 @@ class EnvironmentConfigSchema(BaseModel):
     state_columns: list[str] | None = Field(
         default=None, description="Optional state columns to persist in job outputs."
     )
-    save_every: int | None = Field(default=None, description="Persist intermediate results every N examples when set.")
-    print_results: bool = Field(False, description="Print environment results to stdout.")
+    save_every: int | None = Field(default=None, description="Deprecated; accepted for compatibility and ignored.")
+    print_results: bool = Field(False, description="Deprecated; accepted for compatibility and ignored.")
     verbose: bool | None = Field(None, description="Override per-environment verbosity.")
     env_args: dict[str, Any] = Field(default_factory=dict)
     extra_env_kwargs: dict[str, Any] | None = Field(
