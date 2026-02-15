@@ -15,7 +15,3 @@ try:
         )
 except ImportError as e:
     logging.getLogger(__name__).warning(f"Could not import judge_cache_fix: {e}")
-
-# Token tracking monkey patches are intentionally not installed at import time.
-# See plans/verifiers-0.1.10-support-findings.md Step 0.
-logging.getLogger(__name__).debug("Token tracking import-time patching disabled")

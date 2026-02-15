@@ -23,10 +23,8 @@ At a high level, everything funnels into a three-stage workflow:
 Importing `medarc_verifiers` installs monkey patches into `verifiers` by default (`medarc_verifiers/__init__.py`):
 
 - **Judge cache namespacing**: cached judge responses are keyed by `base_url::model` so multi-judge runs don’t collide (`medarc_verifiers/judging/judge_cache_fix.py`).
-- **Token tracking**: patches `verifiers.utils.eval_utils.make_dataset()` to add a `token_usage` column containing model + judge token usage, plus cost when present (`medarc_verifiers/utils/token_tracker.py`).
-  - Disable via `MEDARC_DISABLE_TOKEN_TRACKING=true`.
 
-These patches impact downstream processing because `token_usage` is later flattened into explicit columns during `medarc-eval process`.
+`token_usage` is now produced by upstream `verifiers` output serialization and is flattened into explicit columns during `medarc-eval process`.
 
 ## `medarc-eval` CLI: modes and code layout
 

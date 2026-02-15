@@ -63,7 +63,6 @@ def test_multi_judge_rubric_injects_objects():
 @pytest.mark.asyncio
 async def test_judge_cache_namespacing(monkeypatch: pytest.MonkeyPatch):
     install_cache_patch()
-    monkeypatch.setattr("medarc_verifiers.utils.token_tracker.TOKEN_TRACKING_ENABLED", False, raising=False)
 
     calls = []
 
@@ -95,7 +94,6 @@ async def test_judge_cache_namespacing(monkeypatch: pytest.MonkeyPatch):
 @pytest.mark.asyncio
 async def test_judge_cache_concurrent_writes(monkeypatch: pytest.MonkeyPatch):
     install_cache_patch()
-    monkeypatch.setattr("medarc_verifiers.utils.token_tracker.TOKEN_TRACKING_ENABLED", False, raising=False)
 
     async def fake_call_judge_model(judge_client, judge_model, judge_prompt, judge_sampling_args, logger):
         if "openai" in str(judge_client.base_url):
