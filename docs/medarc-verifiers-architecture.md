@@ -229,7 +229,7 @@ Some environments use “LLM-as-judge” scoring. `medarc_verifiers` provides:
 
 ## vLLM orchestrator (local Docker) – separate CLI
 
-Docs: `docs/vllm-orchestrator.md`.
+Docs: `docs/medarc-orchestrate.md`.
 
 This is a separate tool (`medarc-orchestrate`) for running batch configs against locally hosted vLLM Docker containers with GPU/port scheduling.
 

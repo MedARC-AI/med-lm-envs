@@ -10,12 +10,13 @@
 
 ## Architecture Overview (Start Here)
 
-- Detailed overview: `docs/medarc-verifiers-agents-overview.md`
+- **IMPORTANT: Read `docs/medarc-verifiers-architecture.md` before writing or modifying any code.**
 - Quick workflow: eval → process → winrate
   - raw outputs: `runs/raw/<run_id>/...`
   - processed parquet: `runs/processed/<model>/<env>.parquet` + `runs/processed/env_index.json`
   - winrate outputs: `runs/winrate/latest.json` and `runs/winrate/latest.csv`
-- CLI entrypoint/router: `medarc_verifiers/cli/main.py`
+- `medarc-eval` CLI entrypoint/router: (`medarc_verifiers/cli/main.py`; docs: `docs/medarc-eval.md`)
+- `medarc-orchestrate` CLI entrypoint: (`medarc_verifiers/orchestrate/cli.py`; docs: `docs/medarc-orchestrate.md`)
 - Batch resume/restart state lives in `runs/raw/<run_id>/run_manifest.json`
 - Environment `load_environment()` params become CLI flags (see `medarc-eval <env> --help`).
 - Environment authoring utilities (used by `environments/*`):
@@ -23,6 +24,7 @@
   - MCQ grading: `medarc_verifiers/rewards/multiple_choice_accuracy.py`
   - deterministic shuffling: `medarc_verifiers/utils/randomize_multiple_choice.py` (use `shuffle_seed`)
   - judging: `medarc_verifiers/judging/`, `medarc_verifiers/utils/judge_helpers.py`
+  - multi-judge path: `medarc_verifiers/judging/multi_judge.py` (judge cache is namespaced by `base_url::model` to avoid collisions)
 
 ## Build, Test, and Development Commands
 
