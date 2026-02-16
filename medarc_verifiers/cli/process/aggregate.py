@@ -6,6 +6,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
+from medarc_verifiers.cli.process.rollout import derive_base_env_id
+
 logger = logging.getLogger(__name__)
 
 
@@ -62,9 +64,13 @@ def aggregate_rows_by_env(
     aggregated: list[AggregatedEnvRows] = []
     for key in sorted(groups):
         group = groups[key]
-        # Preserve rollout_index as assigned during row loading; aggregation just passes rows through.
+        # Preserve rollout_index as assigned during row loading. Only normalize rollout_index values when
+        # processing "fake rollouts" that are created by running separate jobs with rollout suffixes
+        # (e.g., env-a-rollout7) and then combining them under a shared base_env_id.
         normalized_rows: list[Mapping[str, Any]] = list(group["rows"])  # shallow copy
-        _normalize_rollout_indices(normalized_rows)
+        if _group_uses_rollout_suffixes(normalized_rows, base_env_id=group["base_env_id"] or key[1]):
+            _ensure_rollout_index_from_suffix(normalized_rows, base_env_id=group["base_env_id"] or key[1])
+            _normalize_rollout_indices(normalized_rows)
         candidate_env_id = group["env_id"] or group["base_env_id"] or ""
         aggregated.append(
             AggregatedEnvRows(
@@ -79,26 +85,59 @@ def aggregate_rows_by_env(
     return aggregated
 
 
+def _group_uses_rollout_suffixes(rows: list[Mapping[str, Any]], *, base_env_id: str) -> bool:
+    for row in rows:
+        manifest_env_id = row.get("manifest_env_id")
+        if not isinstance(manifest_env_id, str) or not manifest_env_id:
+            continue
+        derived_base, _ = derive_base_env_id(manifest_env_id)
+        if derived_base and derived_base == base_env_id and manifest_env_id != derived_base:
+            return True
+    return False
+
+
+def _ensure_rollout_index_from_suffix(rows: list[Mapping[str, Any]], *, base_env_id: str) -> None:
+    for row in rows:
+        value = row.get("rollout_index")
+        if _coerce_rollout_index(value) is not None:
+            continue
+        manifest_env_id = row.get("manifest_env_id")
+        if not isinstance(manifest_env_id, str) or not manifest_env_id:
+            continue
+        derived_base, derived_index = derive_base_env_id(manifest_env_id)
+        if not derived_base or derived_base != base_env_id:
+            continue
+        try:
+            row["rollout_index"] = derived_index
+        except TypeError:
+            continue
+
+
+def _coerce_rollout_index(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _normalize_rollout_indices(rows: list[Mapping[str, Any]]) -> None:
     values: list[int] = []
     for row in rows:
-        value = row.get("rollout_index")
-        if value is None:
+        coerced = _coerce_rollout_index(row.get("rollout_index"))
+        if coerced is None:
             continue
-        try:
-            values.append(int(value))
-        except (TypeError, ValueError):
-            continue
+        values.append(coerced)
     if not values:
         return
     mapping = {val: idx for idx, val in enumerate(sorted(set(values)))}
     for row in rows:
-        value = row.get("rollout_index")
-        if value is None:
+        coerced = _coerce_rollout_index(row.get("rollout_index"))
+        if coerced is None:
             continue
-        try:
-            normalized = mapping[int(value)]
-        except (TypeError, ValueError, KeyError):
+        normalized = mapping.get(coerced)
+        if normalized is None:
             continue
         try:
             row["rollout_index"] = normalized

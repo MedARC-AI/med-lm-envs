@@ -168,17 +168,21 @@ Entry point: `medarc_verifiers/cli/process/pipeline.py` (via `run_process()`).
 2. **Normalize metadata** by merging manifest fields with `metadata.json`:
    - `medarc_verifiers/cli/process/metadata.py`
 3. **Handle rollouts**:
-   - Some runs encode rollout indices in env ids like `env-a-rollout7` or `env-a-r7`.
-   - If not present, processing can fall back to parsing the results directory name.
+   - MedARC sometimes “fakes” multiple rollouts by running the same base environment multiple times with different settings (e.g., different seeds).
+   - These fake rollouts are identified by a rollout suffix in the **manifest env id** like `env-a-rollout7` or `env-a-r7` (fallback: parse the results directory name).
+   - This suffix-derived rollout index is only used when rollouts are faked this way. Native verifiers rollouts (below) use the per-row JSONL field.
    - `medarc_verifiers/cli/process/rollout.py`
 4. **Load rows from `results.jsonl`**:
    - Drops large fields (`prompt`, `completion`) by default.
    - Allows selecting extra per-env columns into a JSON-encoded `extras` column.
-   - If the JSONL contains multiple rollouts per `example_id`, computes a data-driven `rollout_index` based on occurrence count.
+   - If the JSONL provides a per-row `rollout_index` (native verifiers multi-rollout runs), it is treated as authoritative and preserved.
+   - If `rollout_index` is missing but the JSONL contains multiple rows per `example_id`, computes a data-driven `rollout_index` based on occurrence count.
    - Flattens `token_usage` into explicit columns like `model_token_total`, `judge_cost`, etc.
    - `medarc_verifiers/cli/process/rows.py`
 5. **Aggregate** rows per `(model_id, base_env_id)` and union schemas:
    - `medarc_verifiers/cli/process/aggregate.py`
+   - When aggregating fake rollouts (manifest env ids include rollout suffixes), ensures every row has a `rollout_index` (derived from the suffix if missing) and normalizes indices to `0..K-1` within the dataset.
+   - When aggregating native verifiers rollouts (no rollout suffixes), preserves `rollout_index` values as provided by `results.jsonl` (no normalization).
 6. **Write Parquet**:
    - Output path is `<processed_dir>/<model_id>/<env_id>.parquet`.
    - Adds exporter metadata under a Parquet schema metadata key.
