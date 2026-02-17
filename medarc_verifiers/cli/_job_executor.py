@@ -459,10 +459,7 @@ def _prepare_job_dir_for_resume(*, job_id: str, job_dir: Path, forced_clean: boo
         job_dir.mkdir(parents=True, exist_ok=True)
         return
     if not job_dir.is_dir():
-        msg = (
-            f"Job output dir '{job_dir}' is not a directory. "
-            "Use --force to rerun cleanly or choose a new run_id."
-        )
+        msg = f"Job output dir '{job_dir}' is not a directory. Use --force to rerun cleanly or choose a new run_id."
         raise ValueError(msg)
     if not any(job_dir.iterdir()):
         return

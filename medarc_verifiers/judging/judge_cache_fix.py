@@ -28,6 +28,7 @@ def _judge_cache_key(rubric) -> str:
     base_url_str = str(base_url) if base_url is not None else "default"
     return f"{base_url_str}::{rubric.judge_model}"
 
+
 def install_cache_patch() -> bool:
     try:
         from verifiers.rubrics.judge_rubric import JudgeRubric

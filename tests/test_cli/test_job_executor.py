@@ -300,17 +300,13 @@ def test_batch_resume_mismatch_logs_saved_and_current_values(
     job_dir.mkdir(parents=True, exist_ok=True)
     (job_dir / "results.jsonl").write_text("", encoding="utf-8")
     (job_dir / "metadata.json").write_text(
-        (
-            '{"env_id":"saved-env","model":"saved-model",'
-            '"rollouts_per_example":2,"num_examples":8}'
-        ),
+        ('{"env_id":"saved-env","model":"saved-model","rollouts_per_example":2,"num_examples":8}'),
         encoding="utf-8",
     )
 
     async def fake_run(_config):
         raise ValueError(
-            f"Cannot resume from {job_dir}: metadata mismatch "
-            "(env_id: saved='saved-env', current='medqa')"
+            f"Cannot resume from {job_dir}: metadata mismatch (env_id: saved='saved-env', current='medqa')"
         )
 
     monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
@@ -657,7 +653,10 @@ def test_execute_jobs_warns_for_deprecated_eval_knobs(
 
     assert results[0].status == "succeeded"
     assert "Environment 'medqa' sets deprecated eval knob(s): print_results, save_every" in caplog.text
-    assert "Job 'alias-medqa' sets deprecated eval knob(s): max_concurrent_generation, max_concurrent_scoring" in caplog.text
+    assert (
+        "Job 'alias-medqa' sets deprecated eval knob(s): max_concurrent_generation, max_concurrent_scoring"
+        in caplog.text
+    )
 
 
 def test_load_endpoints_for_model_missing_default_path_is_non_fatal(

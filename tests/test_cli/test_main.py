@@ -198,9 +198,7 @@ def test_batch_api_base_url_override_forces_endpoint(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(
         "medarc_verifiers.cli._job_executor.load_endpoint_registry",
         lambda *args, **kwargs: {
-            "alias-model": [
-                {"model": "resolved-model", "url": "https://endpoint.example/v1", "key": "REGISTRY_KEY"}
-            ]
+            "alias-model": [{"model": "resolved-model", "url": "https://endpoint.example/v1", "key": "REGISTRY_KEY"}]
         },
     )
     monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
@@ -1971,7 +1969,9 @@ def test_process_cli_runs_winrate_post_step(monkeypatch: pytest.MonkeyPatch, tmp
             datasets=[],
         )
 
-    def fake_sync_files_to_hub(*, repo_id, output_dir, files, token, private, message, branch=None, dry_run=False, **_kw):
+    def fake_sync_files_to_hub(
+        *, repo_id, output_dir, files, token, private, message, branch=None, dry_run=False, **_kw
+    ):
         captured["upload"] = {
             "repo_id": repo_id,
             "output_dir": output_dir,

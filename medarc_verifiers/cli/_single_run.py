@@ -662,9 +662,7 @@ def _resolve_model_call_retries(model_call_retries: int | None, deprecated_toggl
     if deprecated_toggle is None:
         return 0
 
-    logger.warning(
-        "Flag --enable-additional-retries is deprecated; use --model-call-retries <attempts> instead."
-    )
+    logger.warning("Flag --enable-additional-retries is deprecated; use --model-call-retries <attempts> instead.")
     return 3 if deprecated_toggle else 0
 
 

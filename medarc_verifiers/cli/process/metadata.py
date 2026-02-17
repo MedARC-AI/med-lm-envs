@@ -113,7 +113,9 @@ def _load_metadata(record: RunRecord) -> tuple[_MetadataPayload | None, Mapping[
         logger.warning("Failed to read metadata for %s: %s", path, exc)
         return None, {}
     if not isinstance(payload, Mapping):
-        logger.warning("Invalid metadata payload type for %s: expected JSON object, got %s", path, type(payload).__name__)
+        logger.warning(
+            "Invalid metadata payload type for %s: expected JSON object, got %s", path, type(payload).__name__
+        )
         return None, {}
     raw_payload = dict(payload)
     try:
