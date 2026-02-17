@@ -351,3 +351,40 @@ def test_load_rows_maps_answer_column(tmp_path: Path) -> None:
     rows = load_rows(metadata, answer_column="ground_truth")
 
     assert rows[0]["answer"] == "42"
+
+
+def test_load_rows_includes_version_info_when_present(tmp_path: Path) -> None:
+    record = _build_record(tmp_path)
+    _write_json(
+        record.metadata_path,
+        {
+            "version_info": {
+                "vf_version": "0.1.10",
+                "vf_commit": "abc123",
+                "env_version": "2.0.0",
+                "env_commit": None,
+            }
+        },
+    )
+    _write_results(record.results_path, [{"example_id": "ex-version"}])
+
+    metadata = load_normalized_metadata(record)
+    rows = load_rows(metadata)
+    encoded = rows[0]["version_info"]
+
+    assert isinstance(encoded, str)
+    payload = json.loads(encoded)
+    assert payload["vf_version"] == "0.1.10"
+    assert payload["env_version"] == "2.0.0"
+
+
+def test_load_rows_keeps_backward_compat_when_version_info_absent(tmp_path: Path) -> None:
+    record = _build_record(tmp_path)
+    _write_json(record.metadata_path, {})
+    _write_results(record.results_path, [{"example_id": "ex-no-version"}])
+
+    metadata = load_normalized_metadata(record)
+    rows = load_rows(metadata)
+
+    assert "version_info" in rows[0]
+    assert rows[0]["version_info"] is None

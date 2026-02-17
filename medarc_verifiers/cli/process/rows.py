@@ -64,6 +64,7 @@ def load_rows(
         return []
 
     multi_rollout = any(count > 1 for count in example_counts.values())
+    version_info_json = _encode_metadata_json_column(metadata.raw_metadata.get("version_info"))
 
     # Second pass: enrich rows. If the file contains multiple rollouts, compute
     # a data-driven rollout_index by counting seen occurrences per example_id.
@@ -95,7 +96,13 @@ def load_rows(
             cleaned["extras"] = json.dumps(extras, sort_keys=True)
         else:
             cleaned["extras"] = None
-        enriched = _attach_metadata(cleaned, metadata, line_number=line_number, rollout_index=rollout_index)
+        enriched = _attach_metadata(
+            cleaned,
+            metadata,
+            line_number=line_number,
+            rollout_index=rollout_index,
+            version_info_json=version_info_json,
+        )
         rows.append(enriched)
 
     return rows
@@ -201,6 +208,7 @@ def _attach_metadata(
     *,
     line_number: int,
     rollout_index: int,
+    version_info_json: str | None,
 ) -> MutableMapping[str, Any]:
     record = metadata.record
 
@@ -216,6 +224,7 @@ def _attach_metadata(
             "job_run_id": record.manifest.job_run_id,
             "run_id": record.job_id,
             "model_id": metadata.model_id,
+            "version_info": version_info_json,
             "status": record.status,
             "error": error_value,
             "started_at": record.started_at,
@@ -276,6 +285,15 @@ def _flatten_token_usage(row: MutableMapping[str, Any]) -> None:
         row[f"{role}_token_completion"] = _extract_nested(role, "completion")
         row[f"{role}_token_prompt"] = _extract_nested(role, "prompt")
         row[f"{role}_token_total"] = _extract_nested(role, "total")
+
+
+def _encode_metadata_json_column(value: Any) -> str | None:
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        return json.dumps(value, sort_keys=True)
+    except (TypeError, ValueError):
+        return None
 
 
 __all__ = ["load_rows"]
