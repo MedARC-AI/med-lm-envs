@@ -120,8 +120,22 @@ def _load_metadata(record: RunRecord) -> tuple[_MetadataPayload | None, Mapping[
         model = _MetadataPayload.model_validate(raw_payload)
     except ValidationError as exc:
         logger.warning("Invalid metadata schema for %s: %s", path, exc)
-        return None, raw_payload
+        return None, _sanitize_invalid_raw_metadata(raw_payload)
     return model, raw_payload
+
+
+def _sanitize_invalid_raw_metadata(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    sanitized: dict[str, Any] = {}
+    version_info = payload.get("version_info")
+    if isinstance(version_info, Mapping):
+        sanitized["version_info"] = dict(version_info)
+    endpoint_id = payload.get("endpoint_id")
+    if isinstance(endpoint_id, str):
+        sanitized["endpoint_id"] = endpoint_id
+    base_url = payload.get("base_url")
+    if isinstance(base_url, str):
+        sanitized["base_url"] = base_url
+    return sanitized
 
 
 def _merge_mappings(

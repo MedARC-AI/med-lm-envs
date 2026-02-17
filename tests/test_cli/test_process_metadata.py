@@ -180,3 +180,33 @@ def test_load_normalized_metadata_preserves_raw_metadata_payload(tmp_path: Path)
     assert normalized.raw_metadata["endpoint_id"] == "cluster-a"
     assert normalized.raw_metadata["base_url"] == "https://example.invalid/v1"
     assert normalized.raw_metadata["version_info"]["vf_version"] == "0.1.10"
+
+
+def test_load_normalized_metadata_validation_failure_sanitizes_raw_metadata(tmp_path: Path) -> None:
+    record = _make_record(tmp_path, manifest_env_id="demo-env")
+    _write_json(
+        record.metadata_path,
+        {
+            "env_id": "demo-env",
+            "num_examples": "not-an-int",
+            "version_info": {
+                "vf_version": "0.1.10",
+                "vf_commit": "abc123",
+            },
+            "endpoint_id": "cluster-a",
+            "base_url": "https://example.invalid/v1",
+            "api_key": "secret-value",
+            "nested": {"keep": "out"},
+        },
+    )
+
+    normalized = load_normalized_metadata(record)
+
+    assert normalized.raw_metadata == {
+        "version_info": {
+            "vf_version": "0.1.10",
+            "vf_commit": "abc123",
+        },
+        "endpoint_id": "cluster-a",
+        "base_url": "https://example.invalid/v1",
+    }
