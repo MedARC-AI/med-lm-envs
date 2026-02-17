@@ -302,7 +302,8 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
             }
             for line in format_resume_mismatch_lines(saved_values=saved_values, current_values=current_values):
                 logger.error("  %s", line)
-            logger.error("Resume supports increasing num_examples, but not decreasing it.")
+            logger.error("Use --resume PATH with matching settings, or start a new run.")
+            return 1
         if args.verbose:
             logger.exception("Evaluation failed.")
         else:

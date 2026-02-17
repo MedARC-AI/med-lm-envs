@@ -1564,6 +1564,7 @@ def test_single_run_resume_mismatch_logs_saved_and_current_values(
     assert "model: saved='saved-model', current='current-model'" in caplog.text
     assert "rollouts_per_example: saved=2, current=3" in caplog.text
     assert "num_examples: saved=8, current=5 (current must be >= saved)" in caplog.text
+    assert "Evaluation failed" not in caplog.text
 
 
 def test_single_run_uses_empty_registry_when_default_endpoints_path_is_missing(
