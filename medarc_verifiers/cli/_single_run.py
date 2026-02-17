@@ -160,7 +160,7 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
 
     ensure_root_logging("DEBUG" if args.verbose else "INFO")
 
-    if args.model_call_retries > 0:
+    if args.model_call_retries > 0 and not args.dry_run:
         from datetime import datetime
 
         from medarc_verifiers.utils.retry import patch_verifiers_model_response_retry

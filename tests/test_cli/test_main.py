@@ -603,6 +603,58 @@ def test_model_call_retries_overrides_deprecated_toggle(
     assert "Ignoring deprecated --enable-additional-retries" in caplog.text
 
 
+def test_batch_dry_run_with_model_call_retries_does_not_patch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    _write_config(
+        config_path,
+        """
+        models:
+          model-a:
+            model: alias-model
+        envs:
+          medqa: {}
+        jobs:
+          - model: model-a
+            env: medqa
+        """,
+    )
+
+    captured_attempts: list[int] = []
+
+    def fake_patch(*, attempts=3, backoff_s=1.0, log_path="medarc_model_retry.log"):  # noqa: ARG001
+        captured_attempts.append(attempts)
+
+    monkeypatch.setattr("medarc_verifiers.utils.retry.patch_verifiers_model_response_retry", fake_patch)
+    monkeypatch.setattr("medarc_verifiers.cli._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+
+    output_dir = tmp_path / "runs_out"
+    env_dir = tmp_path / "envs"
+    env_dir.mkdir()
+
+    exit_code = main.main(
+        [
+            "bench",
+            "--config",
+            str(config_path),
+            "--output-dir",
+            str(output_dir),
+            "--env-dir",
+            str(env_dir),
+            "--dry-run",
+            "--model-call-retries",
+            "3",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured_attempts == []
+
+
 def test_env_rerun_flag_forces_completed_jobs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     _write_config(
@@ -1435,6 +1487,28 @@ def test_single_run_dry_run_outputs_config(
     exit_code = main.main(["medqa", "--dry-run"])
 
     assert exit_code == 0
+    output = capsys.readouterr().out
+    assert '"env_id": "medqa"' in output
+
+
+def test_single_run_dry_run_with_model_call_retries_does_not_patch(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    metadata: list[EnvParam] = []
+    _patch_single_run_env(monkeypatch, metadata)
+
+    captured_attempts: list[int] = []
+
+    def fake_patch(*, attempts=3, backoff_s=1.0, log_path="medarc_model_retry.log"):  # noqa: ARG001
+        captured_attempts.append(attempts)
+
+    monkeypatch.setattr("medarc_verifiers.utils.retry.patch_verifiers_model_response_retry", fake_patch)
+
+    exit_code = main.main(["medqa", "--dry-run", "--model-call-retries", "3"])
+
+    assert exit_code == 0
+    assert captured_attempts == []
     output = capsys.readouterr().out
     assert '"env_id": "medqa"' in output
 

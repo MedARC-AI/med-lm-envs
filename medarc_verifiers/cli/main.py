@@ -1114,7 +1114,7 @@ def _execute_batch(args: argparse.Namespace) -> int:
             logger.error("Invalid --restart '%s': %s", restart_raw, exc)
             return 1
 
-    if args.model_call_retries > 0:
+    if args.model_call_retries > 0 and not args.dry_run:
         from datetime import datetime
 
         from medarc_verifiers.utils.retry import patch_verifiers_model_response_retry
