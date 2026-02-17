@@ -90,6 +90,17 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         args = parser.parse_args([env_id, *remaining])
     except SystemExit as exc:  # pragma: no cover - argparse already emitted error/help
         return int(exc.code)
+    try:
+        args.model_call_retries = _resolve_model_call_retries(
+            args.model_call_retries,
+            args.enable_additional_retries,
+        )
+        if args.http_max_retries is not None and args.http_max_retries < 0:
+            raise ValueError("--http-max-retries must be >= 0.")
+        if args.rollout_max_retries < 0:
+            raise ValueError("--rollout-max-retries must be >= 0.")
+    except ValueError as exc:
+        parser.error(str(exc))
 
     try:
         env_override_mapping = build_cli_override(
@@ -142,6 +153,19 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
 
     ensure_root_logging("DEBUG" if args.verbose else "INFO")
 
+    if args.model_call_retries > 0:
+        from datetime import datetime
+
+        from medarc_verifiers.utils.retry import patch_verifiers_model_response_retry
+
+        cwd = Path.cwd()
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        retry_log_path = cwd / "logs" / f"medarc_model_retry_{ts}.log"
+        patch_verifiers_model_response_retry(
+            attempts=args.model_call_retries,
+            log_path=retry_log_path,
+        )
+
     endpoints_path = Path(args.endpoints_path).expanduser()
     default_endpoints_path = Path(DEFAULT_ENDPOINTS_PATH).expanduser()
     if not endpoints_path.exists():
@@ -179,6 +203,7 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         default_api_key_var=args.api_key_var,
         default_api_base_url=args.api_base_url,
         api_base_url_override=None,
+        http_max_retries_override=args.http_max_retries,
         timeout_override=args.timeout,
         headers=headers,
     )
@@ -210,6 +235,7 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         max_concurrent_override=args.max_concurrent,
         max_concurrent_generation=args.max_concurrent_generation,
         max_concurrent_scoring=args.max_concurrent_scoring,
+        rollout_max_retries=args.rollout_max_retries,
         default_max_concurrent=DEFAULT_SINGLE_RUN_MAX_CONCURRENT,
         save_results=args.save_results,
         save_to_hf_hub=args.save_to_hf_hub,
@@ -352,6 +378,34 @@ def _build_base_parser_layout(
         type=float,
         default=None,
         help="Override request timeout in seconds (defaults to the verifier client default).",
+    )
+    _add_and_track(
+        core_group,
+        "--http-max-retries",
+        type=int,
+        default=None,
+        help="HTTP/client-level retries for model calls (overrides model config max_retries).",
+    )
+    _add_and_track(
+        core_group,
+        "--rollout-max-retries",
+        type=int,
+        default=0,
+        help="Retry full rollout/group on retryable infra/invalid-response errors.",
+    )
+    _add_and_track(
+        core_group,
+        "--model-call-retries",
+        type=int,
+        default=None,
+        help="Per-model-call MedARC retry attempts (0 disables the monkeypatch).",
+    )
+    _add_and_track(
+        core_group,
+        "--enable-additional-retries",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Deprecated alias for --model-call-retries (true maps to 3 attempts).",
     )
     _add_and_track(
         core_group,
@@ -538,6 +592,25 @@ def _option_was_provided(argv: Sequence[str], long_flag: str, short_flag: str | 
         if short_flag and token.startswith(short_flag) and not token.startswith("--") and len(token) > len(short_flag):
             return True
     return False
+
+
+def _resolve_model_call_retries(model_call_retries: int | None, deprecated_toggle: bool | None) -> int:
+    if model_call_retries is not None:
+        if model_call_retries < 0:
+            raise ValueError("--model-call-retries must be >= 0.")
+        if deprecated_toggle is not None:
+            logger.warning(
+                "Ignoring deprecated --enable-additional-retries because --model-call-retries was explicitly set."
+            )
+        return model_call_retries
+
+    if deprecated_toggle is None:
+        return 0
+
+    logger.warning(
+        "Flag --enable-additional-retries is deprecated; use --model-call-retries <attempts> instead."
+    )
+    return 3 if deprecated_toggle else 0
 
 
 def _same_path(left: Path, right: Path) -> bool:

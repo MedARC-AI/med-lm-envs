@@ -67,7 +67,7 @@ def test_resolve_model_endpoint_handles_aliases(model: str, expected: tuple[str,
     assert resolved == expected
 
 
-def test_resolve_model_endpoint_uses_first_variant_and_logs_selection(caplog: pytest.LogCaptureFixture) -> None:
+def test_resolve_model_endpoint_uses_first_variant_and_logs_variant_count(caplog: pytest.LogCaptureFixture) -> None:
     registry = {
         "alias": [
             {"model": "primary-model", "key": "PRIMARY_KEY", "url": "https://primary.example/v1"},
@@ -75,7 +75,7 @@ def test_resolve_model_endpoint_uses_first_variant_and_logs_selection(caplog: py
         ]
     }
 
-    with caplog.at_level("INFO"):
+    with caplog.at_level("DEBUG"):
         resolved = utils.resolve_model_endpoint(
             "alias",
             registry,
@@ -84,4 +84,4 @@ def test_resolve_model_endpoint_uses_first_variant_and_logs_selection(caplog: py
         )
 
     assert resolved == ("primary-model", "PRIMARY_KEY", "https://primary.example/v1")
-    assert "Using endpoint variant 0 of 2 for alias" in caplog.text
+    assert "Endpoint id 'alias' has 2 variants configured." in caplog.text

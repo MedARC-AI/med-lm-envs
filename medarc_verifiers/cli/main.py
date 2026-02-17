@@ -182,6 +182,24 @@ def build_batch_parser() -> argparse.ArgumentParser:
         help="Override request timeout in seconds for all jobs (CLI > model > default).",
     )
     parser.add_argument(
+        "--http-max-retries",
+        type=int,
+        default=None,
+        help="HTTP/client-level retries for model calls (CLI > model max_retries).",
+    )
+    parser.add_argument(
+        "--rollout-max-retries",
+        type=int,
+        default=0,
+        help="Retry full rollout/group on retryable infra/invalid-response errors.",
+    )
+    parser.add_argument(
+        "--model-call-retries",
+        type=int,
+        default=None,
+        help="Per-model-call MedARC retry attempts (0 disables the monkeypatch).",
+    )
+    parser.add_argument(
         "--sleep",
         "--sleep-seconds",
         dest="sleep",
@@ -192,8 +210,8 @@ def build_batch_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--enable-additional-retries",
         action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Enable per-call model retry wrapper (default: disabled).",
+        default=None,
+        help="Deprecated alias for --model-call-retries (true maps to 3 attempts).",
     )
     parser.add_argument(
         "--include-usage",
@@ -511,6 +529,14 @@ def _run_batch_mode(argv: Sequence[str]) -> int:
             json_flag="--sampling-args",
             pair_flag="--sampling-arg",
         )
+        args.model_call_retries = _resolve_model_call_retries(
+            args.model_call_retries,
+            args.enable_additional_retries,
+        )
+        if args.http_max_retries is not None and args.http_max_retries < 0:
+            raise ValueError("--http-max-retries must be >= 0.")
+        if args.rollout_max_retries < 0:
+            raise ValueError("--rollout-max-retries must be >= 0.")
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -1087,7 +1113,7 @@ def _execute_batch(args: argparse.Namespace) -> int:
             logger.error("Invalid --restart '%s': %s", restart_raw, exc)
             return 1
 
-    if args.enable_additional_retries:
+    if args.model_call_retries > 0:
         from datetime import datetime
 
         from medarc_verifiers.utils.retry import patch_verifiers_model_response_retry
@@ -1095,7 +1121,10 @@ def _execute_batch(args: argparse.Namespace) -> int:
         cwd = Path.cwd()
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         retry_log_path = cwd / "logs" / f"medarc_model_retry_{ts}.log"
-        patch_verifiers_model_response_retry(log_path=retry_log_path)
+        patch_verifiers_model_response_retry(
+            attempts=args.model_call_retries,
+            log_path=retry_log_path,
+        )
 
     jobs = build_jobs(run_config)
     if not jobs:
@@ -1213,6 +1242,8 @@ def _execute_batch(args: argparse.Namespace) -> int:
         max_concurrent_generation=args.max_concurrent_generation,
         max_concurrent_scoring=args.max_concurrent_scoring,
         max_concurrent=args.max_concurrent,  # CLI override (None if not provided)
+        http_max_retries=args.http_max_retries,
+        rollout_max_retries=args.rollout_max_retries,
         timeout=args.timeout,
         sleep=args.sleep,
         dry_run=args.dry_run,
@@ -1286,6 +1317,25 @@ def _option_was_provided(argv: Sequence[str], long_flag: str) -> bool:
         if token == long_flag or token.startswith(f"{long_flag}="):
             return True
     return False
+
+
+def _resolve_model_call_retries(model_call_retries: int | None, deprecated_toggle: bool | None) -> int:
+    if model_call_retries is not None:
+        if model_call_retries < 0:
+            raise ValueError("--model-call-retries must be >= 0.")
+        if deprecated_toggle is not None:
+            logger.warning(
+                "Ignoring deprecated --enable-additional-retries because --model-call-retries was explicitly set."
+            )
+        return model_call_retries
+
+    if deprecated_toggle is None:
+        return 0
+
+    logger.warning(
+        "Flag --enable-additional-retries is deprecated; use --model-call-retries <attempts> instead."
+    )
+    return 3 if deprecated_toggle else 0
 
 
 def _filter_winrate_datasets(

@@ -258,6 +258,222 @@ def test_model_level_max_concurrent_applies(monkeypatch: pytest.MonkeyPatch, tmp
     assert config.max_concurrent == 7
 
 
+def test_batch_rollout_max_retries_sets_eval_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    _write_config(
+        config_path,
+        """
+        models:
+          model-a:
+            model: alias-model
+        envs:
+          medqa: {}
+        jobs:
+          - model: model-a
+            env: medqa
+        """,
+    )
+
+    captured = []
+
+    async def fake_run(config):
+        captured.append(config)
+        return _stub_cli_result()
+
+    monkeypatch.setattr("medarc_verifiers.cli._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
+
+    output_dir = tmp_path / "runs_out"
+    env_dir = tmp_path / "envs"
+    env_dir.mkdir()
+
+    exit_code = main.main(
+        [
+            "bench",
+            "--config",
+            str(config_path),
+            "--output-dir",
+            str(output_dir),
+            "--env-dir",
+            str(env_dir),
+            "--rollout-max-retries",
+            "3",
+        ]
+    )
+
+    assert exit_code == 0
+    assert len(captured) == 1
+    assert captured[0].max_retries == 3
+
+
+def test_batch_http_max_retries_sets_client_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    _write_config(
+        config_path,
+        """
+        models:
+          model-a:
+            model: alias-model
+        envs:
+          medqa: {}
+        jobs:
+          - model: model-a
+            env: medqa
+        """,
+    )
+
+    captured = []
+
+    async def fake_run(config):
+        captured.append(config)
+        return _stub_cli_result()
+
+    monkeypatch.setattr("medarc_verifiers.cli._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
+
+    output_dir = tmp_path / "runs_out"
+    env_dir = tmp_path / "envs"
+    env_dir.mkdir()
+
+    exit_code = main.main(
+        [
+            "bench",
+            "--config",
+            str(config_path),
+            "--output-dir",
+            str(output_dir),
+            "--env-dir",
+            str(env_dir),
+            "--http-max-retries",
+            "7",
+        ]
+    )
+
+    assert exit_code == 0
+    assert len(captured) == 1
+    assert captured[0].client_config.max_retries == 7
+
+
+def test_deprecated_enable_additional_retries_warns_and_maps_to_default_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    _write_config(
+        config_path,
+        """
+        models:
+          model-a:
+            model: alias-model
+        envs:
+          medqa: {}
+        jobs:
+          - model: model-a
+            env: medqa
+        """,
+    )
+
+    captured_attempts: list[int] = []
+
+    def fake_patch(*, attempts=3, backoff_s=1.0, log_path="medarc_model_retry.log"):  # noqa: ARG001
+        captured_attempts.append(attempts)
+
+    async def fake_run(config):  # noqa: ARG001
+        return _stub_cli_result()
+
+    monkeypatch.setattr("medarc_verifiers.utils.retry.patch_verifiers_model_response_retry", fake_patch)
+    monkeypatch.setattr("medarc_verifiers.cli._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
+
+    output_dir = tmp_path / "runs_out"
+    env_dir = tmp_path / "envs"
+    env_dir.mkdir()
+
+    with caplog.at_level(logging.WARNING):
+        exit_code = main.main(
+            [
+                "bench",
+                "--config",
+                str(config_path),
+                "--output-dir",
+                str(output_dir),
+                "--env-dir",
+                str(env_dir),
+                "--enable-additional-retries",
+            ]
+        )
+
+    assert exit_code == 0
+    assert captured_attempts == [3]
+    assert "Flag --enable-additional-retries is deprecated" in caplog.text
+
+
+def test_model_call_retries_overrides_deprecated_toggle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    _write_config(
+        config_path,
+        """
+        models:
+          model-a:
+            model: alias-model
+        envs:
+          medqa: {}
+        jobs:
+          - model: model-a
+            env: medqa
+        """,
+    )
+
+    captured_attempts: list[int] = []
+
+    def fake_patch(*, attempts=3, backoff_s=1.0, log_path="medarc_model_retry.log"):  # noqa: ARG001
+        captured_attempts.append(attempts)
+
+    async def fake_run(config):  # noqa: ARG001
+        return _stub_cli_result()
+
+    monkeypatch.setattr("medarc_verifiers.utils.retry.patch_verifiers_model_response_retry", fake_patch)
+    monkeypatch.setattr("medarc_verifiers.cli._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
+
+    output_dir = tmp_path / "runs_out"
+    env_dir = tmp_path / "envs"
+    env_dir.mkdir()
+
+    with caplog.at_level(logging.WARNING):
+        exit_code = main.main(
+            [
+                "bench",
+                "--config",
+                str(config_path),
+                "--output-dir",
+                str(output_dir),
+                "--env-dir",
+                str(env_dir),
+                "--enable-additional-retries",
+                "--model-call-retries",
+                "5",
+            ]
+        )
+
+    assert exit_code == 0
+    assert captured_attempts == [5]
+    assert "Ignoring deprecated --enable-additional-retries" in caplog.text
+
+
 def test_env_rerun_flag_forces_completed_jobs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     _write_config(
@@ -965,6 +1181,30 @@ def test_single_run_dry_run_outputs_config(
     assert exit_code == 0
     output = capsys.readouterr().out
     assert '"env_id": "medqa"' in output
+
+
+def test_single_run_retry_flags_apply_to_client_and_eval_config(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    metadata: list[EnvParam] = []
+    _patch_single_run_env(monkeypatch, metadata)
+
+    exit_code = main.main(
+        [
+            "medqa",
+            "--dry-run",
+            "--http-max-retries",
+            "7",
+            "--rollout-max-retries",
+            "3",
+        ]
+    )
+
+    assert exit_code == 0
+    config = json.loads(capsys.readouterr().out)
+    assert config["client_config"]["max_retries"] == 7
+    assert config["max_retries"] == 3
 
 
 def test_single_run_uses_empty_registry_when_default_endpoints_path_is_missing(

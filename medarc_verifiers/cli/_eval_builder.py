@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from verifiers.types import ClientConfig, EvalConfig
+from verifiers.types import ClientConfig, EndpointClientConfig, EvalConfig
 
 from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, ModelConfigSchema
 from medarc_verifiers.cli.utils.endpoint_utils import (
@@ -35,6 +35,7 @@ def build_client_config(
     default_api_key_var: str,
     default_api_base_url: str,
     api_base_url_override: str | None,
+    http_max_retries_override: int | None,
     timeout_override: float | None,
     headers: list[str] | dict[str, str] | None,
 ) -> tuple[str, ClientConfig, dict[str, Any]]:
@@ -53,6 +54,7 @@ def build_client_config(
 
     default_key_var = model_cfg.api_key_var or default_api_key_var
     default_base_url = model_cfg.api_base_url or default_api_base_url
+    endpoint_group = endpoints.get(model_alias, [])
     resolved_model, api_key_var, api_base_url = resolve_model_endpoint(
         model_alias,
         endpoints,
@@ -72,9 +74,34 @@ def build_client_config(
     # Merge headers: user-provided headers take precedence over Prime auto-detected
     merged_headers = {**prime_headers, **(normalized_headers or {})}
 
+    endpoint_configs: list[EndpointClientConfig] = []
+    if api_base_url_override is None and len(endpoint_group) > 1:
+        first_entry = endpoint_group[0]
+        expected_model = first_entry.get("model", model_alias)
+        expected_key = first_entry.get("key", default_key_var)
+        for idx, endpoint in enumerate(endpoint_group[1:], start=1):
+            entry_model = endpoint.get("model", model_alias)
+            entry_key = endpoint.get("key", default_key_var)
+            if entry_model != expected_model or entry_key != expected_key:
+                raise ValueError(
+                    "Endpoint replicas for "
+                    f"'{model_alias}' must agree on 'model' and 'key'; "
+                    f"variant 0 has model={expected_model!r}, key={expected_key!r}, "
+                    f"variant {idx} has model={entry_model!r}, key={entry_key!r}."
+                )
+        endpoint_configs = [
+            EndpointClientConfig(
+                api_key_var=effective_api_key_var,
+                api_base_url=endpoint["url"],
+                extra_headers=merged_headers,
+            )
+            for endpoint in endpoint_group
+        ]
+
     client_kwargs: dict[str, Any] = {
         "api_key_var": effective_api_key_var,
         "api_base_url": api_base_url,
+        "endpoint_configs": endpoint_configs,
         "extra_headers": merged_headers,
     }
     timeout = timeout_override if timeout_override is not None else model_cfg.timeout
@@ -84,7 +111,9 @@ def build_client_config(
         client_kwargs["max_connections"] = model_cfg.max_connections
     if model_cfg.max_keepalive_connections is not None:
         client_kwargs["max_keepalive_connections"] = model_cfg.max_keepalive_connections
-    if model_cfg.max_retries is not None:
+    if http_max_retries_override is not None:
+        client_kwargs["max_retries"] = http_max_retries_override
+    elif model_cfg.max_retries is not None:
         client_kwargs["max_retries"] = model_cfg.max_retries
 
     return resolved_model, ClientConfig(**client_kwargs), sampling_overrides
@@ -105,6 +134,7 @@ def build_eval_config(
     max_concurrent_override: int | None,
     max_concurrent_generation: int | None,
     max_concurrent_scoring: int | None,
+    rollout_max_retries: int = 0,
     default_max_concurrent: int = DEFAULT_BATCH_MAX_CONCURRENT,
     save_results: bool = True,
     save_to_hf_hub: bool = False,
@@ -170,6 +200,8 @@ def build_eval_config(
         "save_to_hf_hub": save_to_hf_hub,
         "hf_hub_dataset_name": hf_hub_dataset_name,
     }
+    if "max_retries" in eval_config_fields:
+        eval_kwargs["max_retries"] = rollout_max_retries
 
     independent_scoring = getattr(env_cfg, "independent_scoring", None)
     interleave_scoring = getattr(env_cfg, "interleave_scoring", None)

@@ -55,6 +55,8 @@ class ExecutorSettings(BaseModel):
     max_concurrent_generation: int | None = None  # Deprecated; accepted for compatibility and ignored.
     max_concurrent_scoring: int | None = None  # Deprecated; accepted for compatibility and ignored.
     max_concurrent: int | None = None  # CLI override for max_concurrent
+    http_max_retries: int | None = None  # CLI override for ClientConfig.max_retries
+    rollout_max_retries: int = 0  # CLI override for EvalConfig.max_retries
     timeout: float | None = None
     sleep: float = 0.0
     dry_run: bool = False
@@ -138,6 +140,7 @@ def execute_jobs(
                 default_api_key_var=settings.default_api_key_var,
                 default_api_base_url=settings.default_api_base_url,
                 api_base_url_override=settings.api_base_url_override,
+                http_max_retries_override=settings.http_max_retries,
                 timeout_override=settings.timeout,
                 headers=job.model.headers,
             )
@@ -157,6 +160,7 @@ def execute_jobs(
                 max_concurrent_override=settings.max_concurrent,
                 max_concurrent_generation=settings.max_concurrent_generation,
                 max_concurrent_scoring=settings.max_concurrent_scoring,
+                rollout_max_retries=settings.rollout_max_retries,
                 default_max_concurrent=DEFAULT_BATCH_MAX_CONCURRENT,
                 save_results=settings.save_results,
                 save_to_hf_hub=settings.save_to_hf_hub,

@@ -78,7 +78,7 @@ def resolve_model_endpoint(
             return model, default_key_var, default_base_url
 
         if len(variants) > 1:
-            logger.info("Using endpoint variant 0 of %d for %s", len(variants), model)
+            logger.debug("Endpoint id '%s' has %d variants configured.", model, len(variants))
 
         entry = variants[0]
         resolved_model = entry.get("model", model)
