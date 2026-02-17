@@ -81,6 +81,29 @@ def _stub_cli_result(value: float = 0.5) -> SimpleNamespace:
     return SimpleNamespace(metadata=metadata, reward=[value], metrics={"pass_rate": [value]})
 
 
+def _write_resume_artifacts(
+    path: Path,
+    *,
+    env_id: str = "medqa",
+    model: str = "gpt-4.1-mini",
+    num_examples: int = 5,
+    rollouts_per_example: int = 3,
+) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "results.jsonl").write_text("", encoding="utf-8")
+    (path / "metadata.json").write_text(
+        json.dumps(
+            {
+                "env_id": env_id,
+                "model": model,
+                "num_examples": num_examples,
+                "rollouts_per_example": rollouts_per_example,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_cli_runs_configuration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     _write_config(
@@ -1355,6 +1378,109 @@ def test_single_run_retry_flags_apply_to_client_and_eval_config(
     config = json.loads(capsys.readouterr().out)
     assert config["client_config"]["max_retries"] == 7
     assert config["max_retries"] == 3
+
+
+def test_single_run_resume_path_sets_eval_resume_path_and_forces_save_results(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    metadata: list[EnvParam] = []
+    _patch_single_run_env(monkeypatch, metadata)
+    resume_dir = tmp_path / "resume-explicit"
+    _write_resume_artifacts(resume_dir)
+
+    exit_code = main.main(
+        [
+            "medqa",
+            "--dry-run",
+            "--resume",
+            str(resume_dir),
+            "--no-save-results",
+        ]
+    )
+
+    assert exit_code == 0
+    config = json.loads(capsys.readouterr().out)
+    assert config["resume_path"] == str(resume_dir)
+    assert config["save_results"] is True
+
+
+def test_single_run_resume_auto_discovery_sets_eval_resume_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    metadata: list[EnvParam] = []
+    _patch_single_run_env(monkeypatch, metadata)
+    discovered = tmp_path / "resume-auto"
+    _write_resume_artifacts(discovered)
+    captured: dict[str, Any] = {}
+
+    def fake_find_latest_incomplete_eval_results_path(**kwargs: Any) -> Path:
+        captured.update(kwargs)
+        return discovered
+
+    monkeypatch.setattr(
+        "medarc_verifiers.cli.utils.resume.find_latest_incomplete_eval_results_path",
+        fake_find_latest_incomplete_eval_results_path,
+    )
+
+    exit_code = main.main(["medqa", "--dry-run", "--resume"])
+
+    assert exit_code == 0
+    config = json.loads(capsys.readouterr().out)
+    assert config["resume_path"] == str(discovered)
+    assert captured["env_id"] == "medqa"
+    assert captured["model"] == "gpt-4.1-mini"
+    assert captured["rollouts_per_example"] == 3
+
+
+def test_single_run_resume_mismatch_logs_saved_and_current_values(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    metadata: list[EnvParam] = []
+    _patch_single_run_env(monkeypatch, metadata)
+    resume_dir = tmp_path / "resume-mismatch"
+    _write_resume_artifacts(
+        resume_dir,
+        env_id="saved-env",
+        model="saved-model",
+        num_examples=8,
+        rollouts_per_example=2,
+    )
+
+    async def fake_run(_config: Any) -> Any:
+        raise ValueError(
+            f"Cannot resume from {resume_dir}: metadata mismatch (env_id: saved='saved-env', current='medqa'). "
+            "Use matching evaluation settings or provide a new results path."
+        )
+
+    monkeypatch.setattr("medarc_verifiers.cli._single_run.run_evaluation", fake_run)
+
+    with caplog.at_level(logging.ERROR):
+        exit_code = main.main(
+            [
+                "medqa",
+                "--model",
+                "current-model",
+                "--num-examples",
+                "5",
+                "--rollouts-per-example",
+                "3",
+                "--resume",
+                str(resume_dir),
+            ]
+        )
+
+    assert exit_code == 1
+    assert "Resume metadata mismatch for" in caplog.text
+    assert "env_id: saved='saved-env', current='medqa'" in caplog.text
+    assert "model: saved='saved-model', current='current-model'" in caplog.text
+    assert "rollouts_per_example: saved=2, current=3" in caplog.text
+    assert "num_examples: saved=8, current=5 (current must be >= saved)" in caplog.text
 
 
 def test_single_run_uses_empty_registry_when_default_endpoints_path_is_missing(

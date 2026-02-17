@@ -144,6 +144,7 @@ def build_eval_config(
     max_concurrent_generation: int | None,
     max_concurrent_scoring: int | None,
     rollout_max_retries: int = 0,
+    resume_path: Path | None = None,
     default_max_concurrent: int = DEFAULT_BATCH_MAX_CONCURRENT,
     save_results: bool = True,
     save_to_hf_hub: bool = False,
@@ -189,6 +190,11 @@ def build_eval_config(
         env_max=env_cfg.max_concurrent,
         default_max=default_max_concurrent,
     )
+    effective_save_results = save_results
+    if resume_path is not None and not effective_save_results:
+        logger.warning("Enabling save_results (required for resume support).")
+        effective_save_results = True
+
     verbose_flag = env_cfg.verbose if env_cfg.verbose is not None else verbose
     state_columns = list(env_cfg.state_columns) if env_cfg.state_columns else None
     eval_config_fields = _pydantic_field_names(EvalConfig)
@@ -205,12 +211,14 @@ def build_eval_config(
         "max_concurrent": max_concurrent,
         "verbose": verbose_flag,
         "state_columns": state_columns,
-        "save_results": save_results,
+        "save_results": effective_save_results,
         "save_to_hf_hub": save_to_hf_hub,
         "hf_hub_dataset_name": hf_hub_dataset_name,
     }
     if "max_retries" in eval_config_fields:
         eval_kwargs["max_retries"] = rollout_max_retries
+    if "resume_path" in eval_config_fields:
+        eval_kwargs["resume_path"] = resume_path
 
     independent_scoring = getattr(env_cfg, "independent_scoring", None)
     interleave_scoring = getattr(env_cfg, "interleave_scoring", None)

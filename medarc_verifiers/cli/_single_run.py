@@ -25,6 +25,12 @@ from medarc_verifiers.cli._schemas import ModelConfigSchema
 from medarc_verifiers.cli.utils.env_args import EnvParam, MissingEnvParamError, gather_env_cli_metadata, merge_env_args
 from medarc_verifiers.cli.utils.endpoint_utils import load_endpoint_registry
 from medarc_verifiers.cli.utils.overrides import build_cli_override
+from medarc_verifiers.cli.utils.resume import (
+    format_resume_mismatch_lines,
+    is_resume_metadata_mismatch_error,
+    load_resume_metadata_values,
+    resolve_resume_path,
+)
 from medarc_verifiers.cli.utils.shared import (
     HEADER_SEPARATOR,
     STATE_COLUMNS_SEPARATOR,
@@ -223,6 +229,26 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         verbose=args.verbose,
     )
 
+    try:
+        resume_path = resolve_resume_path(
+            resume_arg=args.resume,
+            env_id=args.env,
+            model=resolved_model,
+            num_examples=args.num_examples,
+            rollouts_per_example=args.rollouts_per_example,
+            env_dir_path=Path(args.env_dir_path).expanduser(),
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    if isinstance(args.resume, str):
+        logger.info("Resuming from explicit path: %s", resume_path)
+    elif args.resume is True:
+        if resume_path is not None:
+            logger.info("Auto-resuming from: %s", resume_path)
+        else:
+            logger.info("No matching incomplete run found for --resume; starting a new run.")
+
     eval_config = build_eval_config(
         job_label=args.env,
         model_cfg=model_cfg,
@@ -238,6 +264,7 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         max_concurrent_generation=args.max_concurrent_generation,
         max_concurrent_scoring=args.max_concurrent_scoring,
         rollout_max_retries=args.rollout_max_retries,
+        resume_path=resume_path,
         default_max_concurrent=DEFAULT_SINGLE_RUN_MAX_CONCURRENT,
         save_results=args.save_results,
         save_to_hf_hub=args.save_to_hf_hub,
@@ -264,6 +291,18 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         logger.error("Evaluation interrupted by user.")
         return 1
     except Exception as exc:  # noqa: BLE001
+        if resume_path is not None and is_resume_metadata_mismatch_error(exc):
+            logger.error("Resume metadata mismatch for %s.", resume_path)
+            saved_values = load_resume_metadata_values(resume_path)
+            current_values = {
+                "env_id": eval_config.env_id,
+                "model": eval_config.model,
+                "rollouts_per_example": eval_config.rollouts_per_example,
+                "num_examples": eval_config.num_examples,
+            }
+            for line in format_resume_mismatch_lines(saved_values=saved_values, current_values=current_values):
+                logger.error("  %s", line)
+            logger.error("Resume supports increasing num_examples, but not decreasing it.")
         if args.verbose:
             logger.exception("Evaluation failed.")
         else:
@@ -458,6 +497,19 @@ def _build_base_parser_layout(
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Save evaluation results to disk (use --no-save-results to disable; accepts legacy --save-dataset alias).",
+    )
+    _add_and_track(
+        core_group,
+        "--resume",
+        nargs="?",
+        const=True,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Resume from PATH (must contain results.jsonl and metadata.json), or pass --resume with no PATH to "
+            "auto-discover the latest matching incomplete run. Resume requires matching env/model/rollouts; "
+            "num_examples may increase but cannot decrease."
+        ),
     )
     _add_and_track(
         core_group,
