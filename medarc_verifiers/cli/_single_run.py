@@ -77,6 +77,7 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
     env_id = first_token
     remaining = args_list[1:]
     endpoints_path_explicit = _option_was_provided(remaining, "--endpoints-path", "-e")
+    api_key_var_explicit = _option_was_provided(remaining, "--api-key-var", "-k")
 
     parser, env_group, reserved_dests = _build_base_parser_layout(require_env=True, add_help=True, env_id=env_id)
     try:
@@ -201,6 +202,7 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         model_cfg,
         endpoints=endpoints,
         default_api_key_var=args.api_key_var,
+        default_api_key_var_explicit=api_key_var_explicit,
         default_api_base_url=args.api_base_url,
         api_base_url_override=None,
         http_max_retries_override=args.http_max_retries,

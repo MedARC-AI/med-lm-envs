@@ -208,6 +208,112 @@ def test_batch_api_base_url_override_forces_endpoint(monkeypatch: pytest.MonkeyP
     assert captured[0].client_config.api_base_url == override_url
 
 
+def test_batch_prime_base_url_forces_prime_api_key_when_default_not_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    _write_config(
+        config_path,
+        f"""
+        models:
+          model-a:
+            model: alias-model
+            api_base_url: {PRIME_INFERENCE_URL}
+        envs:
+          medqa: {{}}
+        jobs:
+          - model: model-a
+            env: medqa
+        """,
+    )
+
+    captured = []
+
+    async def fake_run(config):
+        captured.append(config)
+        return _stub_cli_result()
+
+    monkeypatch.setattr("medarc_verifiers.cli._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
+
+    output_dir = tmp_path / "runs_out"
+    env_dir = tmp_path / "envs"
+    env_dir.mkdir()
+
+    exit_code = main.main(
+        [
+            "bench",
+            "--config",
+            str(config_path),
+            "--output-dir",
+            str(output_dir),
+            "--env-dir",
+            str(env_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    assert len(captured) == 1
+    assert captured[0].client_config.api_key_var == "PRIME_API_KEY"
+
+
+def test_batch_explicit_default_api_key_var_is_respected_for_prime_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    _write_config(
+        config_path,
+        f"""
+        models:
+          model-a:
+            model: alias-model
+            api_base_url: {PRIME_INFERENCE_URL}
+        envs:
+          medqa: {{}}
+        jobs:
+          - model: model-a
+            env: medqa
+        """,
+    )
+
+    captured = []
+
+    async def fake_run(config):
+        captured.append(config)
+        return _stub_cli_result()
+
+    monkeypatch.setattr("medarc_verifiers.cli._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
+
+    output_dir = tmp_path / "runs_out"
+    env_dir = tmp_path / "envs"
+    env_dir.mkdir()
+
+    exit_code = main.main(
+        [
+            "bench",
+            "--config",
+            str(config_path),
+            "--output-dir",
+            str(output_dir),
+            "--env-dir",
+            str(env_dir),
+            "--default-api-key-var",
+            "OPENAI_API_KEY",
+        ]
+    )
+
+    assert exit_code == 0
+    assert len(captured) == 1
+    assert captured[0].client_config.api_key_var == "OPENAI_API_KEY"
+
+
 def test_model_level_max_concurrent_applies(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     _write_config(
@@ -1162,6 +1268,50 @@ def test_single_run_auto_adds_prime_team_header(
         "X-Prime-Team-ID": "team-123",
         "X-Test": "cli",
     }
+
+
+def test_single_run_prime_url_forces_prime_api_key_when_key_var_not_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    metadata: list[EnvParam] = []
+    _patch_single_run_env(monkeypatch, metadata)
+
+    exit_code = main.main(
+        [
+            "medqa",
+            "--dry-run",
+            "--api-base-url",
+            PRIME_INFERENCE_URL,
+        ]
+    )
+
+    assert exit_code == 0
+    config = json.loads(capsys.readouterr().out)
+    assert config["client_config"]["api_key_var"] == "PRIME_API_KEY"
+
+
+def test_single_run_explicit_api_key_var_is_respected_for_prime_url(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    metadata: list[EnvParam] = []
+    _patch_single_run_env(monkeypatch, metadata)
+
+    exit_code = main.main(
+        [
+            "medqa",
+            "--dry-run",
+            "--api-base-url",
+            PRIME_INFERENCE_URL,
+            "--api-key-var",
+            "OPENAI_API_KEY",
+        ]
+    )
+
+    assert exit_code == 0
+    config = json.loads(capsys.readouterr().out)
+    assert config["client_config"]["api_key_var"] == "OPENAI_API_KEY"
 
 
 def test_single_run_dry_run_outputs_config(

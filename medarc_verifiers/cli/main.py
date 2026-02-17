@@ -515,6 +515,7 @@ def _run_batch_mode(argv: Sequence[str]) -> int:
     parser = build_batch_parser()
     args = parser.parse_args(argv)
     args.endpoints_path_explicit = _option_was_provided(argv, "--endpoints-path")
+    args.default_api_key_var_explicit = _option_was_provided(argv, "--default-api-key-var")
 
     try:
         args.cli_env_args = build_cli_override(
@@ -1232,6 +1233,7 @@ def _execute_batch(args: argparse.Namespace) -> int:
         endpoints_path=Path(args.endpoints_path).expanduser() if args.endpoints_path else None,
         endpoints_path_explicit=bool(getattr(args, "endpoints_path_explicit", False)),
         default_api_key_var=args.default_api_key_var,
+        default_api_key_var_explicit=bool(getattr(args, "default_api_key_var_explicit", False)),
         default_api_base_url=args.default_api_base_url,
         api_base_url_override=args.api_base_url,
         log_level="DEBUG" if args.verbose else "INFO",

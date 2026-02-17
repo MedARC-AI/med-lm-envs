@@ -45,6 +45,7 @@ class ExecutorSettings(BaseModel):
     endpoints_path: Path | None = None
     endpoints_path_explicit: bool = False
     default_api_key_var: str
+    default_api_key_var_explicit: bool = False
     default_api_base_url: str
     api_base_url_override: str | None = None
     log_level: str = "INFO"
@@ -138,6 +139,7 @@ def execute_jobs(
                 job.model,
                 endpoints=endpoints,
                 default_api_key_var=settings.default_api_key_var,
+                default_api_key_var_explicit=settings.default_api_key_var_explicit,
                 default_api_base_url=settings.default_api_base_url,
                 api_base_url_override=settings.api_base_url_override,
                 http_max_retries_override=settings.http_max_retries,

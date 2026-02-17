@@ -23,7 +23,7 @@ from medarc_verifiers.cli.utils.shared import (
     resolve_env_identifier,
     resolve_max_concurrent,
 )
-from medarc_verifiers.utils.prime_inference import prime_inference_overrides
+from medarc_verifiers.utils.prime_inference import PRIME_INFERENCE_URL, prime_inference_overrides
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,7 @@ def build_client_config(
     *,
     endpoints: EndpointRegistry,
     default_api_key_var: str,
+    default_api_key_var_explicit: bool,
     default_api_base_url: str,
     api_base_url_override: str | None,
     http_max_retries_override: int | None,
@@ -52,7 +53,8 @@ def build_client_config(
     if not model_alias:
         raise ValueError("Model entries must define 'id' or 'model'.")
 
-    default_key_var = model_cfg.api_key_var or default_api_key_var
+    model_api_key_var_explicit = model_cfg.api_key_var is not None
+    default_key_var = model_cfg.api_key_var if model_api_key_var_explicit else default_api_key_var
     default_base_url = model_cfg.api_base_url or default_api_base_url
     endpoint_group = endpoints.get(model_alias, [])
     resolved_model, api_key_var, api_base_url = resolve_model_endpoint(
@@ -65,11 +67,18 @@ def build_client_config(
         logger.debug("Forcing api_base_url override for model '%s'.", model_alias)
         api_base_url = api_base_url_override
 
-    # Get Prime Inference-specific overrides (headers, sampling args, api_key_var)
-    prime_headers, sampling_overrides, prime_api_key_var = prime_inference_overrides(api_base_url)
+    # Get Prime Inference-specific overrides (headers + sampling args).
+    prime_headers, sampling_overrides = prime_inference_overrides(api_base_url)
 
-    # Use Prime API key if auto-detected and user didn't explicitly override
-    effective_api_key_var = prime_api_key_var if prime_api_key_var else api_key_var
+    effective_api_key_var = api_key_var
+    # MedARC defaults to OPENAI_API_KEY. For Prime URLs, force PRIME_API_KEY only when
+    # neither model config nor CLI explicitly selected a key var.
+    if (
+        api_base_url == PRIME_INFERENCE_URL
+        and not model_api_key_var_explicit
+        and not default_api_key_var_explicit
+    ):
+        effective_api_key_var = "PRIME_API_KEY"
 
     # Merge headers: user-provided headers take precedence over Prime auto-detected
     merged_headers = {**prime_headers, **(normalized_headers or {})}

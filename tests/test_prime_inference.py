@@ -7,42 +7,44 @@ from medarc_verifiers.utils.prime_inference import (
 
 
 def test_prime_inference_overrides_with_prime_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When using Prime Inference URL with PRIME_TEAM_ID and PRIME_API_KEY, all overrides should be returned."""
+    """Prime URL should inject team header and usage override when enabled."""
     monkeypatch.setenv("PRIME_TEAM_ID", "team-123")
     monkeypatch.setenv("PRIME_API_KEY", "secret-key")
     monkeypatch.delenv("MEDARC_INCLUDE_USAGE", raising=False)
 
-    headers, sampling, api_key_var = prime_inference_overrides(PRIME_INFERENCE_URL)
+    headers, sampling = prime_inference_overrides(PRIME_INFERENCE_URL)
 
     assert headers == {"X-Prime-Team-ID": "team-123"}
     assert sampling == {"extra_body": {"usage": {"include": True}}}
-    assert api_key_var == "PRIME_API_KEY"
 
 
 def test_prime_inference_overrides_without_team_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When PRIME_TEAM_ID is not set, headers should be empty but usage and api_key should still work."""
+    """Missing PRIME_TEAM_ID should keep headers empty while preserving usage override behavior."""
     monkeypatch.delenv("PRIME_TEAM_ID", raising=False)
     monkeypatch.setenv("PRIME_API_KEY", "secret-key")
     monkeypatch.delenv("MEDARC_INCLUDE_USAGE", raising=False)
 
-    headers, sampling, api_key_var = prime_inference_overrides(PRIME_INFERENCE_URL)
+    headers, sampling = prime_inference_overrides(PRIME_INFERENCE_URL)
 
     assert headers == {}
     assert sampling == {"extra_body": {"usage": {"include": True}}}
-    assert api_key_var == "PRIME_API_KEY"
 
 
-def test_prime_inference_overrides_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When PRIME_API_KEY is not set, api_key_var should be None."""
-    monkeypatch.setenv("PRIME_TEAM_ID", "team-123")
-    monkeypatch.delenv("PRIME_API_KEY", raising=False)
+def test_prime_inference_overrides_returns_two_tuple_without_api_key_inference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PRIME_API_KEY presence should not affect override outputs or return shape."""
+    monkeypatch.delenv("PRIME_TEAM_ID", raising=False)
     monkeypatch.delenv("MEDARC_INCLUDE_USAGE", raising=False)
+    monkeypatch.setenv("PRIME_API_KEY", "secret-key")
 
-    headers, sampling, api_key_var = prime_inference_overrides(PRIME_INFERENCE_URL)
+    with_key = prime_inference_overrides(PRIME_INFERENCE_URL)
+    monkeypatch.delenv("PRIME_API_KEY", raising=False)
+    without_key = prime_inference_overrides(PRIME_INFERENCE_URL)
 
-    assert headers == {"X-Prime-Team-ID": "team-123"}
-    assert sampling == {"extra_body": {"usage": {"include": True}}}
-    assert api_key_var is None
+    assert len(with_key) == 2
+    assert with_key == without_key
+    assert with_key == ({}, {"extra_body": {"usage": {"include": True}}})
 
 
 def test_prime_inference_overrides_non_prime_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -51,11 +53,10 @@ def test_prime_inference_overrides_non_prime_url(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("PRIME_API_KEY", "secret-key")
     monkeypatch.delenv("MEDARC_INCLUDE_USAGE", raising=False)
 
-    headers, sampling, api_key_var = prime_inference_overrides("https://api.openai.com/v1")
+    headers, sampling = prime_inference_overrides("https://api.openai.com/v1")
 
     assert headers == {}
     assert sampling == {}
-    assert api_key_var is None
 
 
 def test_prime_inference_overrides_explicit_include_usage_true(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -64,11 +65,10 @@ def test_prime_inference_overrides_explicit_include_usage_true(monkeypatch: pyte
     monkeypatch.delenv("PRIME_API_KEY", raising=False)
     monkeypatch.delenv("MEDARC_INCLUDE_USAGE", raising=False)
 
-    headers, sampling, api_key_var = prime_inference_overrides("https://api.openai.com/v1", include_usage=True)
+    headers, sampling = prime_inference_overrides("https://api.openai.com/v1", include_usage=True)
 
     assert headers == {}
     assert sampling == {"extra_body": {"usage": {"include": True}}}
-    assert api_key_var is None
 
 
 def test_prime_inference_overrides_explicit_include_usage_false(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -77,11 +77,10 @@ def test_prime_inference_overrides_explicit_include_usage_false(monkeypatch: pyt
     monkeypatch.setenv("PRIME_API_KEY", "secret-key")
     monkeypatch.delenv("MEDARC_INCLUDE_USAGE", raising=False)
 
-    headers, sampling, api_key_var = prime_inference_overrides(PRIME_INFERENCE_URL, include_usage=False)
+    headers, sampling = prime_inference_overrides(PRIME_INFERENCE_URL, include_usage=False)
 
     assert headers == {"X-Prime-Team-ID": "team-123"}
     assert sampling == {}
-    assert api_key_var == "PRIME_API_KEY"
 
 
 def test_prime_inference_overrides_env_var_include_usage(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -91,17 +90,15 @@ def test_prime_inference_overrides_env_var_include_usage(monkeypatch: pytest.Mon
 
     # Test with env var set to true on non-Prime URL
     monkeypatch.setenv("MEDARC_INCLUDE_USAGE", "true")
-    headers, sampling, api_key_var = prime_inference_overrides("https://api.openai.com/v1")
+    headers, sampling = prime_inference_overrides("https://api.openai.com/v1")
     assert headers == {}
     assert sampling == {"extra_body": {"usage": {"include": True}}}
-    assert api_key_var is None
 
     # Test with env var set to false on Prime URL
     monkeypatch.setenv("MEDARC_INCLUDE_USAGE", "false")
-    headers, sampling, api_key_var = prime_inference_overrides(PRIME_INFERENCE_URL)
+    headers, sampling = prime_inference_overrides(PRIME_INFERENCE_URL)
     assert headers == {}
     assert sampling == {}
-    assert api_key_var is None
 
 
 def test_prime_inference_overrides_none_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -110,8 +107,7 @@ def test_prime_inference_overrides_none_url(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setenv("PRIME_API_KEY", "secret-key")
     monkeypatch.delenv("MEDARC_INCLUDE_USAGE", raising=False)
 
-    headers, sampling, api_key_var = prime_inference_overrides(None)
+    headers, sampling = prime_inference_overrides(None)
 
     assert headers == {}
     assert sampling == {}
-    assert api_key_var is None

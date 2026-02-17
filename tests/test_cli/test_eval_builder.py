@@ -4,6 +4,7 @@ import pytest
 
 from medarc_verifiers.cli._eval_builder import build_client_config
 from medarc_verifiers.cli._schemas import ModelConfigSchema
+from medarc_verifiers.utils.prime_inference import PRIME_INFERENCE_URL
 
 
 def test_build_client_config_populates_endpoint_configs_for_replicas() -> None:
@@ -20,6 +21,7 @@ def test_build_client_config_populates_endpoint_configs_for_replicas() -> None:
         model_cfg,
         endpoints=endpoints,
         default_api_key_var="DEFAULT_KEY",
+        default_api_key_var_explicit=False,
         default_api_base_url="https://default.example/v1",
         api_base_url_override=None,
         http_max_retries_override=None,
@@ -54,6 +56,7 @@ def test_build_client_config_api_base_url_override_suppresses_endpoint_configs()
         model_cfg,
         endpoints=endpoints,
         default_api_key_var="DEFAULT_KEY",
+        default_api_key_var_explicit=False,
         default_api_base_url="https://default.example/v1",
         api_base_url_override="http://127.0.0.1:8000/v1",
         http_max_retries_override=None,
@@ -79,9 +82,57 @@ def test_build_client_config_replicas_must_share_model_and_key() -> None:
             model_cfg,
             endpoints=endpoints,
             default_api_key_var="DEFAULT_KEY",
+            default_api_key_var_explicit=False,
             default_api_base_url="https://default.example/v1",
             api_base_url_override=None,
             http_max_retries_override=None,
             timeout_override=None,
             headers=None,
         )
+
+
+def test_build_client_config_prime_base_url_forces_prime_key_when_non_explicit() -> None:
+    model_cfg = ModelConfigSchema(model="prime-model")
+
+    _, client_config, _ = build_client_config(
+        model_cfg,
+        endpoints={},
+        default_api_key_var="OPENAI_API_KEY",
+        default_api_key_var_explicit=False,
+        default_api_base_url=PRIME_INFERENCE_URL,
+        api_base_url_override=None,
+        http_max_retries_override=None,
+        timeout_override=None,
+        headers=None,
+    )
+
+    assert client_config.api_base_url == PRIME_INFERENCE_URL
+    assert client_config.api_key_var == "PRIME_API_KEY"
+
+
+@pytest.mark.parametrize(
+    ("model_cfg", "default_key_var", "default_key_var_explicit", "expected"),
+    [
+        (ModelConfigSchema(model="prime-model", api_key_var="MODEL_KEY"), "OPENAI_API_KEY", False, "MODEL_KEY"),
+        (ModelConfigSchema(model="prime-model"), "CUSTOM_KEY", True, "CUSTOM_KEY"),
+    ],
+)
+def test_build_client_config_prime_base_url_respects_explicit_key_var(
+    model_cfg: ModelConfigSchema,
+    default_key_var: str,
+    default_key_var_explicit: bool,
+    expected: str,
+) -> None:
+    _, client_config, _ = build_client_config(
+        model_cfg,
+        endpoints={},
+        default_api_key_var=default_key_var,
+        default_api_key_var_explicit=default_key_var_explicit,
+        default_api_base_url=PRIME_INFERENCE_URL,
+        api_base_url_override=None,
+        http_max_retries_override=None,
+        timeout_override=None,
+        headers=None,
+    )
+
+    assert client_config.api_key_var == expected
