@@ -499,10 +499,10 @@ def _log_resume_mismatch_diagnostics(*, job_id: str, resume_path: Path, eval_con
     logger.error("Resume metadata mismatch for job '%s' at %s.", job_id, resume_path)
     saved_values = load_resume_metadata_values(resume_path)
     current_values = {
-        "env_id": _safe_get(eval_config, "env_id", "<missing>"),
-        "model": _safe_get(eval_config, "model", "<missing>"),
-        "rollouts_per_example": _safe_get(eval_config, "rollouts_per_example", "<missing>"),
-        "num_examples": _safe_get(eval_config, "num_examples", "<missing>"),
+        "env_id": getattr(eval_config, "env_id", "<missing>"),
+        "model": getattr(eval_config, "model", "<missing>"),
+        "rollouts_per_example": getattr(eval_config, "rollouts_per_example", "<missing>"),
+        "num_examples": getattr(eval_config, "num_examples", "<missing>"),
     }
     for line in format_resume_mismatch_lines(saved_values=saved_values, current_values=current_values):
         logger.error("  %s", line)
