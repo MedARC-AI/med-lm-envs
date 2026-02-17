@@ -1226,6 +1226,14 @@ def _execute_batch(args: argparse.Namespace) -> int:
         _log_summary([], manifest_plan.manifest)
         return 0
 
+    forced_job_ids = _compute_forced_job_ids(
+        planned_jobs=planned_jobs,
+        runnable_job_ids=runnable_ids,
+        manifest=manifest_plan.manifest,
+        force_all=bool(args.force),
+        forced_envs=forced_envs,
+    )
+
     settings = ExecutorSettings(
         run_id=manifest_plan.manifest.model.run_id or "",
         output_dir=output_dir,
@@ -1251,6 +1259,7 @@ def _execute_batch(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
         cli_env_args=getattr(args, "cli_env_args", None),
         cli_sampling_args=getattr(args, "cli_sampling_args", None),
+        forced_job_ids=forced_job_ids,
     )
 
     logger.info(
@@ -1367,6 +1376,42 @@ def _collect_rerun_envs(envs: Mapping[str, EnvironmentConfigSchema]) -> set[str]
                 if key:
                     rerun.add(str(key).lower())
     return rerun
+
+
+def _compute_forced_job_ids(
+    *,
+    planned_jobs: Sequence[ResolvedJob],
+    runnable_job_ids: set[str],
+    manifest: RunManifest | None,
+    force_all: bool,
+    forced_envs: set[str],
+) -> set[str]:
+    forced_ids: set[str] = set()
+    if force_all:
+        return {job.job_id for job in planned_jobs}
+
+    for job in planned_jobs:
+        entry = manifest.job_entry(job.job_id) if manifest is not None else None
+        env_forced = any(key in forced_envs for key in _force_keys_for_job(job, entry))
+        completed_but_runnable = bool(
+            entry is not None and entry.status == "completed" and job.job_id in runnable_job_ids
+        )
+        if env_forced or completed_but_runnable:
+            forced_ids.add(job.job_id)
+    return forced_ids
+
+
+def _force_keys_for_job(job: ResolvedJob, entry: ManifestJobEntry | None) -> set[str]:
+    keys: set[str] = {job.job_id.lower()}
+    for value in (
+        getattr(job.env, "id", None),
+        getattr(job.env, "module", None),
+        getattr(job.env, "matrix_base_id", None),
+        getattr(entry, "env_id", None),
+    ):
+        if value:
+            keys.add(str(value).lower())
+    return keys
 
 
 def _filter_jobs(jobs: Sequence[ResolvedJob], job_filters: Sequence[str] | None) -> list[ResolvedJob]:

@@ -16,6 +16,11 @@ RESUME_MISMATCH_FIELDS: tuple[str, ...] = (
 )
 
 
+def is_valid_resume_results_path(path: str | Path) -> bool:
+    """Return True when path points to a valid verifiers eval results directory."""
+    return is_valid_eval_results_path(Path(path).expanduser())
+
+
 def resolve_resume_path(
     *,
     resume_arg: str | bool | None,
@@ -132,6 +137,7 @@ __all__ = [
     "RESUME_MISMATCH_FIELDS",
     "format_resume_mismatch_lines",
     "is_resume_metadata_mismatch_error",
+    "is_valid_resume_results_path",
     "load_resume_metadata_values",
     "resolve_resume_path",
 ]

@@ -675,6 +675,89 @@ def test_env_rerun_flag_forces_completed_jobs(monkeypatch: pytest.MonkeyPatch, t
     assert manifest["summary"]["completed"] == 1
 
 
+def test_on_complete_rerun_marks_completed_jobs_as_forced(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    _write_config(
+        config_path,
+        """
+        name: rerun-on-complete
+        models:
+          model-a:
+            model: alias-model
+        envs:
+          medqa: {}
+        jobs:
+          - model: model-a
+            env: medqa
+        """,
+    )
+
+    monkeypatch.setattr("medarc_verifiers.cli._config_loader.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda *args, **kwargs: [])
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda *args, **kwargs: {})
+
+    async def fake_run(config):  # noqa: ARG001
+        return _stub_cli_result()
+
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
+
+    output_dir = tmp_path / "runs_out"
+    env_dir = tmp_path / "envs"
+    env_dir.mkdir()
+
+    first_exit = main.main(
+        [
+            "bench",
+            "--config",
+            str(config_path),
+            "--output-dir",
+            str(output_dir),
+            "--env-dir",
+            str(env_dir),
+            "--run-id",
+            "forced-rerun-test",
+        ]
+    )
+    assert first_exit == 0
+
+    captured: dict[str, Any] = {}
+
+    def fake_execute_jobs(planned_jobs, settings, **kwargs):  # noqa: ANN001, ARG001
+        captured["planned_job_ids"] = [job.job_id for job in planned_jobs]
+        captured["forced_job_ids"] = set(settings.forced_job_ids)
+        return [
+            main.JobExecutionResult(
+                job_id=planned_jobs[0].job_id,
+                status="skipped",
+                output_path=settings.output_dir / settings.run_id / planned_jobs[0].job_id,
+            )
+        ]
+
+    monkeypatch.setattr("medarc_verifiers.cli.main.execute_jobs", fake_execute_jobs)
+
+    second_exit = main.main(
+        [
+            "bench",
+            "--config",
+            str(config_path),
+            "--output-dir",
+            str(output_dir),
+            "--env-dir",
+            str(env_dir),
+            "--run-id",
+            "forced-rerun-test",
+            "--on-complete",
+            "rerun",
+        ]
+    )
+    assert second_exit == 0
+    assert captured["planned_job_ids"] == ["model-a-medqa"]
+    assert captured["forced_job_ids"] == {"model-a-medqa"}
+
+
 def test_cli_env_config_root_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     config_dir = tmp_path / "configs"
     config_dir.mkdir()

@@ -6,10 +6,11 @@ import asyncio
 import contextlib
 import logging
 import shutil
+from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter, sleep
 from typing import Any, Literal, Mapping, Sequence
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from verifiers.types import GenerateOutputs
 from verifiers.utils.eval_utils import run_evaluation
@@ -25,6 +26,12 @@ from medarc_verifiers.cli.utils.endpoint_utils import (
     EnvMetadataCache,
     load_endpoint_registry,
     load_env_metadata,
+)
+from medarc_verifiers.cli.utils.resume import (
+    format_resume_mismatch_lines,
+    is_resume_metadata_mismatch_error,
+    is_valid_resume_results_path,
+    load_resume_metadata_values,
 )
 from medarc_verifiers.cli.utils.shared import DEFAULT_BATCH_MAX_CONCURRENT, ensure_root_logging, resolve_env_identifier
 
@@ -63,6 +70,7 @@ class ExecutorSettings(BaseModel):
     dry_run: bool = False
     cli_env_args: dict[str, Any] | None = None
     cli_sampling_args: dict[str, Any] | None = None
+    forced_job_ids: set[str] = Field(default_factory=set)
 
     @field_validator("output_dir", "env_dir", mode="before")
     @classmethod
@@ -116,6 +124,7 @@ def execute_jobs(
         job_dir = (run_dir / job.job_id).resolve()
         job_dir.mkdir(parents=True, exist_ok=True)
         job_statuses[job.job_id] = "running"
+        forced_clean = job.job_id in settings.forced_job_ids
 
         if settings.dry_run:
             logger.info("Dry run enabled; skipping execution for job '%s'.", job.job_id)
@@ -132,6 +141,29 @@ def execute_jobs(
 
         if manifest is not None:
             manifest.record_job_start(job.job_id)
+
+        try:
+            _prepare_job_dir_for_resume(job_id=job.job_id, job_dir=job_dir, forced_clean=forced_clean)
+        except Exception as exc:  # noqa: BLE001
+            error_message = f"{job_label} preflight failed: {exc}"
+            logger.exception("%s", error_message)
+            _record_job_failure(
+                results=results,
+                job_statuses=job_statuses,
+                jobs=jobs,
+                center_index=index,
+                manifest=manifest,
+                job_id=job.job_id,
+                output_path=job_dir,
+                error_message=error_message,
+                manifest_error=str(exc),
+                duration_seconds=None,
+                status_label="failed",
+                event="failure",
+                note="during preflight",
+            )
+            _maybe_sleep_between_jobs(job, settings, is_last=is_last_job)
+            continue
 
         try:
             endpoints = _load_endpoints_for_model(job.model, settings, cache=endpoints_cache)
@@ -163,6 +195,7 @@ def execute_jobs(
                 max_concurrent_generation=settings.max_concurrent_generation,
                 max_concurrent_scoring=settings.max_concurrent_scoring,
                 rollout_max_retries=settings.rollout_max_retries,
+                resume_path=job_dir,
                 default_max_concurrent=DEFAULT_BATCH_MAX_CONCURRENT,
                 save_results=settings.save_results,
                 save_to_hf_hub=settings.save_to_hf_hub,
@@ -238,8 +271,19 @@ def execute_jobs(
             break
         except Exception as exc:  # noqa: BLE001
             duration = perf_counter() - start
-            error_message = f"{job_label} failed after {duration:.2f}s: {exc}"
-            logger.exception("%s", error_message)
+            if is_resume_metadata_mismatch_error(exc):
+                _log_resume_mismatch_diagnostics(job_id=job.job_id, resume_path=job_dir, eval_config=eval_config)
+                prescriptive = (
+                    "Job output dir contains incompatible prior results; "
+                    "use --force to rerun cleanly or start a new run_id."
+                )
+                error_message = f"{job_label} failed after {duration:.2f}s: {prescriptive}"
+                logger.error("%s", error_message)
+                manifest_error = prescriptive
+            else:
+                error_message = f"{job_label} failed after {duration:.2f}s: {exc}"
+                logger.exception("%s", error_message)
+                manifest_error = str(exc)
             _record_job_failure(
                 results=results,
                 job_statuses=job_statuses,
@@ -249,7 +293,7 @@ def execute_jobs(
                 job_id=job.job_id,
                 output_path=job_dir,
                 error_message=error_message,
-                manifest_error=str(exc),
+                manifest_error=manifest_error,
                 duration_seconds=duration,
                 status_label="failed",
                 event="failure",
@@ -382,8 +426,22 @@ def _materialize_results(job_dir: Path, results: GenerateOutputs) -> None:
         resolved_src = src_path.resolve()
     except OSError:
         resolved_src = src_path
+    try:
+        resolved_job_dir = job_dir.resolve()
+    except OSError:
+        resolved_job_dir = job_dir
 
-    if src_path.exists() and resolved_src != job_dir:
+    if resolved_src == resolved_job_dir:
+        logger.debug("Results already in job_dir; _materialize_results no-op for %s.", job_dir)
+        return
+
+    if src_path.exists() and resolved_src != resolved_job_dir:
+        logger.warning(
+            "Unexpected results source path for job '%s': src=%s, job_dir=%s. Materializing as a safety net.",
+            job_dir.name,
+            src_path,
+            job_dir,
+        )
         for item in src_path.iterdir():
             target = job_dir / item.name
             if target.exists():
@@ -394,6 +452,61 @@ def _materialize_results(job_dir: Path, results: GenerateOutputs) -> None:
             shutil.move(str(item), target)
         with contextlib.suppress(OSError):
             src_path.rmdir()
+
+
+def _prepare_job_dir_for_resume(*, job_id: str, job_dir: Path, forced_clean: bool) -> None:
+    if not job_dir.exists():
+        job_dir.mkdir(parents=True, exist_ok=True)
+        return
+    if not job_dir.is_dir():
+        msg = (
+            f"Job output dir '{job_dir}' is not a directory. "
+            "Use --force to rerun cleanly or choose a new run_id."
+        )
+        raise ValueError(msg)
+    if not any(job_dir.iterdir()):
+        return
+
+    if forced_clean:
+        archive_path = _archive_job_dir(job_dir)
+        logger.info("Forced rerun for job '%s': archived '%s' -> '%s'.", job_id, job_dir, archive_path)
+        job_dir.mkdir(parents=True, exist_ok=True)
+        return
+
+    if is_valid_resume_results_path(job_dir):
+        return
+
+    msg = (
+        f"Job output dir '{job_dir}' is non-empty but not a valid evaluation results path "
+        "(expected results.jsonl and metadata.json). "
+        "Use --force to rerun cleanly or choose a new run_id."
+    )
+    raise ValueError(msg)
+
+
+def _archive_job_dir(job_dir: Path) -> Path:
+    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    candidate = job_dir.with_name(f"{job_dir.name}__old_{timestamp}")
+    suffix = 1
+    while candidate.exists():
+        candidate = job_dir.with_name(f"{job_dir.name}__old_{timestamp}_{suffix}")
+        suffix += 1
+    job_dir.rename(candidate)
+    return candidate
+
+
+def _log_resume_mismatch_diagnostics(*, job_id: str, resume_path: Path, eval_config: Any) -> None:
+    logger.error("Resume metadata mismatch for job '%s' at %s.", job_id, resume_path)
+    saved_values = load_resume_metadata_values(resume_path)
+    current_values = {
+        "env_id": _safe_get(eval_config, "env_id", "<missing>"),
+        "model": _safe_get(eval_config, "model", "<missing>"),
+        "rollouts_per_example": _safe_get(eval_config, "rollouts_per_example", "<missing>"),
+        "num_examples": _safe_get(eval_config, "num_examples", "<missing>"),
+    }
+    for line in format_resume_mismatch_lines(saved_values=saved_values, current_values=current_values):
+        logger.error("  %s", line)
+    logger.error("Resume supports increasing num_examples, but not decreasing it.")
 
 
 def _extract_avg_reward(results: GenerateOutputs) -> float | None:
