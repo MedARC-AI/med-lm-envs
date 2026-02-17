@@ -110,6 +110,34 @@ def test_build_client_config_prime_base_url_forces_prime_key_when_non_explicit()
     assert client_config.api_key_var == "PRIME_API_KEY"
 
 
+def test_build_client_config_prime_registry_keeps_endpoint_key_var() -> None:
+    model_cfg = ModelConfigSchema(model="prime-model")
+    endpoints = {
+        "prime-model": [
+            {
+                "model": "prime-model-resolved",
+                "key": "CUSTOM_KEY",
+                "url": PRIME_INFERENCE_URL,
+            }
+        ]
+    }
+
+    _, client_config, _ = build_client_config(
+        model_cfg,
+        endpoints=endpoints,
+        default_api_key_var="OPENAI_API_KEY",
+        default_api_key_var_explicit=False,
+        default_api_base_url="https://default.example/v1",
+        api_base_url_override=None,
+        http_max_retries_override=None,
+        timeout_override=None,
+        headers=None,
+    )
+
+    assert client_config.api_base_url == PRIME_INFERENCE_URL
+    assert client_config.api_key_var == "CUSTOM_KEY"
+
+
 @pytest.mark.parametrize(
     ("model_cfg", "default_key_var", "default_key_var_explicit", "expected"),
     [

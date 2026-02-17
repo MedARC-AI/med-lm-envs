@@ -72,11 +72,13 @@ def build_client_config(
 
     effective_api_key_var = api_key_var
     # MedARC defaults to OPENAI_API_KEY. For Prime URLs, force PRIME_API_KEY only when
-    # neither model config nor CLI explicitly selected a key var.
+    # neither model config nor CLI explicitly selected a key var, and no endpoint
+    # registry group resolved this alias (which may intentionally provide a custom key var).
     if (
         api_base_url == PRIME_INFERENCE_URL
         and not model_api_key_var_explicit
         and not default_api_key_var_explicit
+        and not endpoint_group
     ):
         effective_api_key_var = "PRIME_API_KEY"
 
