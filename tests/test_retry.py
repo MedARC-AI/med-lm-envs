@@ -124,3 +124,20 @@ def test_should_retry_exception_unwraps_verifiers_model_error_chain():
     retry, code, _reason, _delay = should_retry_exception(wrapped)
     assert retry is True
     assert code == 429
+
+
+def test_should_retry_exception_unwraps_verifiers_model_error_with_wrapper_layer():
+    request = httpx.Request("GET", "https://example.com")
+    response = httpx.Response(429, request=request)
+    try:
+        raise httpx.HTTPStatusError("rate limited", request=request, response=response)
+    except httpx.HTTPStatusError as inner_exc:
+        try:
+            raise RuntimeError("intermediate wrapper") from inner_exc
+        except RuntimeError as wrapper_exc:
+            wrapped = ModelError("wrapped model error")
+            wrapped.__cause__ = wrapper_exc
+
+    retry, code, _reason, _delay = should_retry_exception(wrapped)
+    assert retry is True
+    assert code == 429

@@ -171,13 +171,24 @@ def _unwrap_retry_exception(exc: BaseException) -> BaseException:
     if not _is_verifiers_model_error(exc):
         return exc
 
+    preferred_types = (
+        httpx.HTTPStatusError,
+        RateLimitError,
+        BadRequestError,
+        AssertionError,
+    )
+    first_non_wrapper: BaseException | None = None
+
     for candidate in _iter_exception_chain(exc):
         if candidate is exc:
             continue
         if _is_verifiers_model_error(candidate):
             continue
-        return candidate
-    return exc
+        if isinstance(candidate, preferred_types):
+            return candidate
+        if first_non_wrapper is None:
+            first_non_wrapper = candidate
+    return first_non_wrapper or exc
 
 
 def should_retry_exception(exc: BaseException) -> tuple[bool, int | None, str | None, float | None]:
