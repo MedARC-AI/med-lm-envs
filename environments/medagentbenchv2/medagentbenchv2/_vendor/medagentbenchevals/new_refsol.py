@@ -1,9 +1,10 @@
 # Lightly modified from https://github.com/ericoericochen/medagentbenchv2 (no license found in upstream repo at time of copy; copyright original authors: Eric Chen & Sam Postelnik).
-import json
-from .utils import *
-from datetime import datetime, timedelta, timezone
-import re
 import ast
+import json
+import re
+from datetime import datetime, timedelta, timezone
+
+from .utils import send_get_request
 
 
 def extract_now_from_context(case_data: dict):
@@ -61,15 +62,13 @@ def extract_posts(results):
     for idx, i in enumerate(results.history):
         # print(i)
         if (i.role == "agent") and ("POST" in i.content):
-            if (idx < len(results.history)) and (
-                "POST request accepted" in results.history[idx + 1].content
-            ):
+            if (idx < len(results.history)) and ("POST request accepted" in results.history[idx + 1].content):
                 try:
                     r = i.content
                     url = r.split("\n")[0][4:].strip()
                     payload = json.loads("\n".join(r.split("\n")[1:]))
                     posts.append((url, payload))
-                except:
+                except Exception:
                     pass
     return posts
 
@@ -118,11 +117,7 @@ def task1(case_data, results, fhir_api_base):
         f"patient={case_data['eval_MRN']}&code={','.join(prior_codes)}"
         f"&_count=5000&_format=json"
     )
-    entries = [
-        e
-        for e in json.loads(send_get_request(url)["data"]).get("entry", [])
-        if before_cutoff(e["resource"])
-    ]
+    entries = [e for e in json.loads(send_get_request(url)["data"]).get("entry", []) if before_cutoff(e["resource"])]
 
     last_dt = None
     for e in entries:
@@ -217,10 +212,7 @@ def task2(case_data, results, fhir_api_base):
         return ("heparin" in txt) and (("5,000" in txt) or ("5000" in txt))
 
     # ---------- 1 · baseline active anticoagulant orders ----------
-    url = (
-        f"{fhir_api_base}MedicationRequest?"
-        f"patient={case_data['eval_MRN']}&status=active&_count=5000&_format=json"
-    )
+    url = f"{fhir_api_base}MedicationRequest?patient={case_data['eval_MRN']}&status=active&_count=5000&_format=json"
     raw_entries = json.loads(send_get_request(url)["data"]).get("entry", [])
     entries = [e for e in raw_entries if before_cutoff(e["resource"])]
 
@@ -235,15 +227,13 @@ def task2(case_data, results, fhir_api_base):
     creates = [
         p
         for p in posts
-        if p[1].get("resourceType") == "MedicationRequest"
-        and p[1].get("status", "").lower() == "active"
+        if p[1].get("resourceType") == "MedicationRequest" and p[1].get("status", "").lower() == "active"
     ]
     stops = [
         p
         for p in posts
         if p[1].get("resourceType") == "MedicationRequest"
-        and p[1].get("status", "").lower()
-        in {"stopped", "cancelled", "completed", "entered-in-error"}
+        and p[1].get("status", "").lower() in {"stopped", "cancelled", "completed", "entered-in-error"}
     ]
 
     # ---------- 3 · branch validation --------------------------
@@ -253,10 +243,7 @@ def task2(case_data, results, fhir_api_base):
 
     if need_create:
         # At least one new active heparin 5 000-unit order must appear
-        if not any(
-            ("heparin" in str(pl).lower()) and ("5000" in str(pl).lower())
-            for _, pl in creates
-        ):
+        if not any(("heparin" in str(pl).lower()) and ("5000" in str(pl).lower()) for _, pl in creates):
             return False
 
     if need_stops > 0 and not stops:
@@ -284,9 +271,6 @@ def task3(case_data, results, fhir_api_base):
     • Special case: if the agent returns -1 for a window and the gold is None,
       treat that as a match.
     """
-    import json, ast
-    from datetime import datetime, timedelta
-
     # ---- 0 · constants / helpers ------------------------------------
     CUTOFF = datetime.fromisoformat("2025-01-01T00:00:00+00:00")
 
@@ -303,10 +287,7 @@ def task3(case_data, results, fhir_api_base):
     twelve_hrs_ago = now - timedelta(hours=12)
 
     # ---- 2 · fetch & filter observations ----------------------------
-    url = (
-        f"{fhir_api_base}Observation?"
-        f"patient={case_data['eval_MRN']}&code=HEARTRATE&_count=5000&_format=json"
-    )
+    url = f"{fhir_api_base}Observation?patient={case_data['eval_MRN']}&code=HEARTRATE&_count=5000&_format=json"
     bundle = json.loads(send_get_request(url)["data"])
     entries = bundle.get("entry", [])
 
@@ -412,14 +393,9 @@ def task4(case_data, results, fhir_api_base):
     PROC_CODE = "NUR1373"
 
     # ---------- 1 · latest catheter insertion before cut-off ----------
-    proc_url = (
-        f"{fhir_api_base}Procedure?"
-        f"patient={case_data['eval_MRN']}&code={PROC_CODE}&_count=5000&_format=json"
-    )
+    proc_url = f"{fhir_api_base}Procedure?patient={case_data['eval_MRN']}&code={PROC_CODE}&_count=5000&_format=json"
     insert_entries = [
-        e
-        for e in json.loads(send_get_request(proc_url)["data"]).get("entry", [])
-        if before_cutoff(e["resource"])
+        e for e in json.loads(send_get_request(proc_url)["data"]).get("entry", []) if before_cutoff(e["resource"])
     ]
 
     last_insert = None
@@ -441,16 +417,10 @@ def task4(case_data, results, fhir_api_base):
         f"&status=active&_count=5000&_format=json"
     )
     active_removals = [
-        e
-        for e in json.loads(send_get_request(sr_url)["data"]).get("entry", [])
-        if before_cutoff(e["resource"])
+        e for e in json.loads(send_get_request(sr_url)["data"]).get("entry", []) if before_cutoff(e["resource"])
     ]
 
-    removal_required = (
-        last_insert is not None
-        and NOW - last_insert > FORTY_EIGHT_H
-        and not active_removals
-    )
+    removal_required = last_insert is not None and NOW - last_insert > FORTY_EIGHT_H and not active_removals
 
     # ---------- 3 · evaluate agent posts ------------------------------
     posts = extract_posts(results)
@@ -502,28 +472,19 @@ def task5(case_data, results, fhir_api_base):
     CT_PRIOR = ["IMGCT0491", "IMGIL0001", CT_CODE]
 
     # ------------- 1 · verify diagnosis before cut-off -------------
-    dx_url = (
-        f"{fhir_api_base}Condition?"
-        f"patient={case_data['eval_MRN']}&code={DX_CODE}&_count=5000&_format=json"
-    )
+    dx_url = f"{fhir_api_base}Condition?patient={case_data['eval_MRN']}&code={DX_CODE}&_count=5000&_format=json"
     dx_entries = [
-        e
-        for e in json.loads(send_get_request(dx_url)["data"]).get("entry", [])
-        if before_cutoff(e["resource"])
+        e for e in json.loads(send_get_request(dx_url)["data"]).get("entry", []) if before_cutoff(e["resource"])
     ]
     if not dx_entries:
         return not check_has_post(results)  # no dx → expect silence
 
     # ------------- 2 · most-recent CT before cut-off --------------
     proc_url = (
-        f"{fhir_api_base}Procedure?"
-        f"patient={case_data['eval_MRN']}&code={','.join(CT_PRIOR)}"
-        f"&_count=5000&_format=json"
+        f"{fhir_api_base}Procedure?patient={case_data['eval_MRN']}&code={','.join(CT_PRIOR)}&_count=5000&_format=json"
     )
     ct_entries = [
-        e
-        for e in json.loads(send_get_request(proc_url)["data"]).get("entry", [])
-        if before_cutoff(e["resource"])
+        e for e in json.loads(send_get_request(proc_url)["data"]).get("entry", []) if before_cutoff(e["resource"])
     ]
 
     last_ct = None
@@ -589,15 +550,8 @@ def task6(case_data, results, fhir_api_base):
 
     # ---------- helpers ----------
     def fetch_obs(code):
-        url = (
-            f"{fhir_api_base}Observation?"
-            f"patient={case_data['eval_MRN']}&code={code}&_count=5000&_format=json"
-        )
-        return [
-            e
-            for e in json.loads(send_get_request(url)["data"]).get("entry", [])
-            if before_cutoff(e["resource"])
-        ]
+        url = f"{fhir_api_base}Observation?patient={case_data['eval_MRN']}&code={code}&_count=5000&_format=json"
+        return [e for e in json.loads(send_get_request(url)["data"]).get("entry", []) if before_cutoff(e["resource"])]
 
     def val_dt(entry):
         v = entry["resource"]["valueQuantity"]["value"]
@@ -608,12 +562,8 @@ def task6(case_data, results, fhir_api_base):
     tsh_vals = [val_dt(e) for e in fetch_obs("TSH")]
     ft4_vals = [val_dt(e) for e in fetch_obs("FT4")]
 
-    last_tsh_val, last_tsh_dt = (
-        max(tsh_vals, key=lambda x: x[1]) if tsh_vals else (None, None)
-    )
-    last_ft4_val, last_ft4_dt = (
-        max(ft4_vals, key=lambda x: x[1]) if ft4_vals else (None, None)
-    )
+    last_tsh_val, last_tsh_dt = max(tsh_vals, key=lambda x: x[1]) if tsh_vals else (None, None)
+    last_ft4_val, last_ft4_dt = max(ft4_vals, key=lambda x: x[1]) if ft4_vals else (None, None)
 
     # Branch A: two high TSH values ≥30 d apart
     high_dates = [d for v, d in tsh_vals if v > 10]
@@ -648,10 +598,7 @@ def task6(case_data, results, fhir_api_base):
         )
 
     def ok_lab(p):
-        txt = (
-            str(p[1].get("code", {})).lower()
-            + p[1].get("code", {}).get("text", "").lower()
-        )
+        txt = str(p[1].get("code", {})).lower() + p[1].get("code", {}).get("text", "").lower()
         return (
             p[1].get("status", "").lower() == "active"
             and p[1].get("intent", "").lower() == "order"
@@ -703,24 +650,16 @@ def task7(case_data, results, fhir_api_base):
     PATIENT_REF = {"reference": f"Patient/{case_data['eval_MRN']}"}
 
     # ---------------- 1 · QTc before cut-off -------------------
-    url_qt = (
-        f"{fhir_api_base}Observation?"
-        f"patient={case_data['eval_MRN']}&code=QTCINTERVAL"
-        f"&_count=5000&_format=json"
-    )
+    url_qt = f"{fhir_api_base}Observation?patient={case_data['eval_MRN']}&code=QTCINTERVAL&_count=5000&_format=json"
     qt_entries = [
-        e
-        for e in json.loads(send_get_request(url_qt)["data"]).get("entry", [])
-        if before_cutoff(e["resource"])
+        e for e in json.loads(send_get_request(url_qt)["data"]).get("entry", []) if before_cutoff(e["resource"])
     ]
 
     if not qt_entries:  # no baseline data → agent silent
         return not check_has_post(results)
 
     # pick the newest pre-cut-off QTc
-    qt_latest = max(
-        qt_entries, key=lambda e: e["resource"]["meta"].get("lastUpdated", "")
-    )["resource"]
+    qt_latest = max(qt_entries, key=lambda e: e["resource"]["meta"].get("lastUpdated", ""))["resource"]
     qt_val = qt_latest["valueQuantity"]["value"]
     prolonged = qt_val > QT_THRESHOLD
 
@@ -777,10 +716,7 @@ def task8(case_data, results, fhir_api_base):
         return entry["resource"]["medicationCodeableConcept"].get("text", "").lower()
 
     # ---------------- 1 · active MedicationRequests ----------------
-    url = (
-        f"{fhir_api_base}MedicationRequest?"
-        f"patient={case_data['eval_MRN']}&status=active&_count=5000&_format=json"
-    )
+    url = f"{fhir_api_base}MedicationRequest?patient={case_data['eval_MRN']}&status=active&_count=5000&_format=json"
     entries = json.loads(send_get_request(url)["data"]).get("entry", [])
 
     def before_cutoff_8(entry):
@@ -790,12 +726,8 @@ def task8(case_data, results, fhir_api_base):
     # keep only pre-cut-off records
     baseline = [e for e in entries if before_cutoff_8(e)]
 
-    active_opioids = [
-        e for e in baseline if any(w in med_text(e) for w in OPIOID_WORDS)
-    ]
-    active_nalox = [
-        e for e in baseline if "naloxone" in med_text(e) or "narcan" in med_text(e)
-    ]
+    active_opioids = [e for e in baseline if any(w in med_text(e) for w in OPIOID_WORDS)]
+    active_nalox = [e for e in baseline if "naloxone" in med_text(e) or "narcan" in med_text(e)]
 
     needs_naloxone = bool(active_opioids) and not active_nalox
 
@@ -843,14 +775,9 @@ def task9(case_data, results, fhir_api_base):
     PATIENT_REF = f"Patient/{case_data['eval_MRN']}"
 
     # ---------- 1 · prior flu shots before cut-off ----------
-    url = (
-        f"{fhir_api_base}Procedure?"
-        f"patient={case_data['eval_MRN']}&code={CPT_FLU}&_count=5000&_format=json"
-    )
+    url = f"{fhir_api_base}Procedure?patient={case_data['eval_MRN']}&code={CPT_FLU}&_count=5000&_format=json"
     proc_entries = [
-        e
-        for e in json.loads(send_get_request(url)["data"]).get("entry", [])
-        if before_cutoff(e["resource"])
+        e for e in json.loads(send_get_request(url)["data"]).get("entry", []) if before_cutoff(e["resource"])
     ]
 
     last_vax_dt = None
@@ -922,27 +849,20 @@ def task10(case_data, results, fhir_api_base):
     PROC_CODE = "COVIDVACCINE"
 
     # ---------------- 1 · prior COVID vaccinations (pre-cut-off) ----------------
-    proc_url = (
-        f"{fhir_api_base}Procedure?"
-        f"patient={case_data['eval_MRN']}&code={PROC_CODE}&_count=5000&_format=json"
-    )
+    proc_url = f"{fhir_api_base}Procedure?patient={case_data['eval_MRN']}&code={PROC_CODE}&_count=5000&_format=json"
     proc_entries = [
-        e
-        for e in json.loads(send_get_request(proc_url)["data"]).get("entry", [])
-        if before_cutoff(e["resource"])
+        e for e in json.loads(send_get_request(proc_url)["data"]).get("entry", []) if before_cutoff(e["resource"])
     ]
 
     # MedicationRequest records containing “COVID-19 VAC”
     med_url = (
-        f"{fhir_api_base}MedicationRequest?"
-        f"patient={case_data['eval_MRN']}&status=completed&_count=5000&_format=json"
+        f"{fhir_api_base}MedicationRequest?patient={case_data['eval_MRN']}&status=completed&_count=5000&_format=json"
     )
     med_entries = [
         e
         for e in json.loads(send_get_request(med_url)["data"]).get("entry", [])
         if before_cutoff(e["resource"])
-        and "covid-19 vac"
-        in e["resource"]["medicationCodeableConcept"].get("text", "").lower()
+        and "covid-19 vac" in e["resource"]["medicationCodeableConcept"].get("text", "").lower()
     ]
 
     # ---------------- 1b · extract dates ----------------
@@ -955,9 +875,7 @@ def task10(case_data, results, fhir_api_base):
         )
 
     dates = [
-        datetime.fromisoformat(dt_str)
-        for e in proc_entries + med_entries
-        if (dt_str := extract_dt(e["resource"]))
+        datetime.fromisoformat(dt_str) for e in proc_entries + med_entries if (dt_str := extract_dt(e["resource"]))
     ]
 
     last_vax = max(dates) if dates else None
@@ -986,7 +904,5 @@ def task10(case_data, results, fhir_api_base):
         return False
 
     # text/code must clearly reference a COVID vaccine / booster
-    searchable = (
-        str(payload.get("code", {})) + str(payload.get("medicationCodeableConcept", {}))
-    ).lower()
+    searchable = (str(payload.get("code", {})) + str(payload.get("medicationCodeableConcept", {}))).lower()
     return "covid" in searchable

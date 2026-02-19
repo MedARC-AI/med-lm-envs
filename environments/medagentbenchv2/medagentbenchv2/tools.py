@@ -13,16 +13,10 @@ from decimal import Decimal
 
 
 class PatientSearchParams(BaseModel):
-    birthdate: str | None = Field(
-        default=None, description="The patient's date of birth in the format YYYY-MM-DD."
-    )
+    birthdate: str | None = Field(default=None, description="The patient's date of birth in the format YYYY-MM-DD.")
     family: str | None = Field(default=None, description="The patient's family (last) name.")
-    given: str | None = Field(
-        default=None, description="The patient's given name. May include first and middle names."
-    )
-    identifier: str | None = Field(
-        default=None, description="The patient's identifier or Medical Record Number (MRN)."
-    )
+    given: str | None = Field(default=None, description="The patient's given name. May include first and middle names.")
+    identifier: str | None = Field(default=None, description="The patient's identifier or Medical Record Number (MRN).")
 
 
 class ObservationSearchParams(BaseModel):
@@ -184,9 +178,7 @@ def create_patient_search(fhir_api_base: str) -> Callable[..., dict]:
     ) -> dict:
         """Search for a patient via the FHIR Patient search API."""
         route = f"{fhir_api_base}Patient"
-        args = PatientSearchParams(
-            birthdate=birthdate, family=family, given=given, identifier=identifier
-        )
+        args = PatientSearchParams(birthdate=birthdate, family=family, given=given, identifier=identifier)
         params = args.model_dump(exclude_none=True)
         res = requests.get(route, params=params)
         return res.json()

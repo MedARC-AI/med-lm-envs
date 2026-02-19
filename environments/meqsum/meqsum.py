@@ -222,13 +222,11 @@ def load_environment(
     final_system_prompt = system_prompt or ("Summarize the patient health query into one question of 15 words or less.")
 
     # Initialize automatic metrics if enabled
-    bleu_metric = None
     rouge_metric = None
     bertscore_metric = None
 
     if compute_auto_metrics:
         try:
-            bleu_metric = evaluate.load("bleu")
             rouge_metric = evaluate.load("rouge")
             bertscore_metric = evaluate.load("bertscore")
         except Exception as e:
