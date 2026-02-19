@@ -13,7 +13,8 @@ from medarc_verifiers.utils import (
     download_file,
     medarc_cache_dir,
 )
-from verifiers.types import Info, Messages, State
+from medarc_verifiers.types import Messages
+from verifiers.types import Info, State
 
 disable_progress_bar()  # suppress datasets progress indicators
 
