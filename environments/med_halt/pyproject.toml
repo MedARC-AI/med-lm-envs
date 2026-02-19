@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 dependencies = [
     "datasets>=4.0.0",
     "verifiers>=0.1.2.post0",
-    "medarc_verifiers>=0.1.0",
+    "medarc-verifiers>=0.1.0",
 ]
 
 [tool.prime.environment]
@@ -22,5 +22,3 @@ build-backend = "hatchling.build"
 [tool.hatch.build]
 include = ["med_halt.py"]
 
-[tool.uv.sources]
-medarc_verifiers = { git = "https://github.com/MedARC-AI/med-lm-envs" }
