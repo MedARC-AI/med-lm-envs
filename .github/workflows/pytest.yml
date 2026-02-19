@@ -1,0 +1,46 @@
+name: CI
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'medarc_verifiers/**'
+      - '!medarc_verifiers/orchestrate/**'
+      - 'tests/**'
+      - '!tests/test_orchestrate/**'
+  pull_request:
+    paths:
+      - 'medarc_verifiers/**'
+      - '!medarc_verifiers/orchestrate/**'
+      - 'tests/**'
+      - '!tests/test_orchestrate/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Python and uv with caching
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ">=0.10.4,<0.11.0"
+          python-version: 3.13
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+
+      - name: Install optimi
+        run: uv sync
+
+      - name: Ruff Check
+        id: ruff
+        run: |
+          uv run ruff check --output-format=github .
+          uv run ruff format --check .
+
+      - name: Run Tests
+        id: pytest
+        run: |
+          uv run pytest -v --ignore=tests/test_orchestrate

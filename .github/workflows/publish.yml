@@ -1,0 +1,47 @@
+name: Publish to PyPI
+on:
+  workflow_dispatch:
+  release:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/pytest.yml
+
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event_name == 'workflow_dispatch' && 'testpypi' || 'release' }}
+      url: ${{ github.event_name == 'workflow_dispatch' && 'https://test.pypi.org/p/medarc-verifiers' || 'https://pypi.org/p/medarc-verifiers' }}
+    permissions:
+      id-token: write
+    needs: test
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Python and uv with caching
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ">=0.10.4,<0.11.0"
+          python-version: 3.13
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+
+      - name: Install optimi
+        run: uv sync --group cpu
+
+      - name: Build
+        run: uv build
+
+      - name: Publish to PyPI
+        if: github.event_name == 'release'
+        run: uv publish
+
+      - name: Publish to Test PyPI
+        if: github.event_name == 'workflow_dispatch'
+        run: uv publish --publish-url https://test.pypi.org/legacy/
