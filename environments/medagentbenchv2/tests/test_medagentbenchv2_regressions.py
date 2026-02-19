@@ -1,5 +1,3 @@
-import json
-
 import pytest
 from datasets import Dataset
 
@@ -63,14 +61,21 @@ def test_tool_schemas_have_descriptions() -> None:
         fhir_api_base="http://localhost:8080/fhir/",
         eval_dataset=Dataset.from_list([{"prompt": [{"role": "user", "content": "hi"}], "answer": ""}]),
     )
-    tool_by_name = {t["function"]["name"]: t for t in env.oai_tools}
-    assert tool_by_name["fhir_patient_search"]["function"]["description"]
-    assert tool_by_name["fhir_vitals_create"]["function"]["description"]
-    # Ensure at least one parameter has a human-readable description (not just a title).
-    assert (
-        tool_by_name["fhir_patient_search"]["function"]["parameters"]["properties"]["identifier"].get("description")
-        is not None
-    )
+    if hasattr(env, "oai_tools"):
+        tool_by_name = {t["function"]["name"]: t for t in env.oai_tools}
+        assert tool_by_name["fhir_patient_search"]["function"]["description"]
+        assert tool_by_name["fhir_vitals_create"]["function"]["description"]
+        # Ensure at least one parameter has a human-readable description (not just a title).
+        assert (
+            tool_by_name["fhir_patient_search"]["function"]["parameters"]["properties"]["identifier"].get("description")
+            is not None
+        )
+    else:
+        tool_by_name = {t.name: t for t in env.tool_defs}
+        assert tool_by_name["fhir_patient_search"].description
+        assert tool_by_name["fhir_vitals_create"].description
+        # Ensure at least one parameter has a human-readable description (not just a title).
+        assert tool_by_name["fhir_patient_search"].parameters["properties"]["identifier"].get("description") is not None
 
 
 def test_procedure_search_date_is_optional() -> None:
