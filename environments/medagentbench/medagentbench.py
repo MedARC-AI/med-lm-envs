@@ -13,7 +13,8 @@ from datasets.utils.logging import disable_progress_bar
 from verifiers.envs.multiturn_env import MultiTurnEnv
 from verifiers.parsers.parser import Parser
 from verifiers.rubrics.rubric import Rubric
-from verifiers.types import Messages, State
+from medarc_verifiers.types import Messages
+from verifiers.types import State
 
 disable_progress_bar()  # suppress datasets progress indicators
 

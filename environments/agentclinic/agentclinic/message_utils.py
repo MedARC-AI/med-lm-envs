@@ -1,6 +1,6 @@
 from typing import Any
 
-import verifiers as vf
+from medarc_verifiers.types import Messages
 
 
 def message_content_to_text(content: Any) -> str:
@@ -22,7 +22,7 @@ def message_content_to_text(content: Any) -> str:
     return str(content)
 
 
-def extract_last_assistant_text(messages: vf.Messages) -> str:
+def extract_last_assistant_text(messages: Messages) -> str:
     if isinstance(messages, str):
         return messages
     if not messages:

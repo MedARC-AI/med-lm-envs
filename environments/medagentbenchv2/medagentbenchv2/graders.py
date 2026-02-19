@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urljoin
 
+from medarc_verifiers.utils.tool_call_compat import extract_tool_call_fields
+
 from ._vendor.medagentbenchevals import new_refsol
 
 
@@ -44,17 +46,7 @@ def _api_mapping(fhir_api_base: str) -> dict[str, tuple[str, str]]:
 
 
 def _coerce_tool_call(tool_call: Any) -> tuple[str, str, Any]:
-    if isinstance(tool_call, dict):
-        func = tool_call.get("function") or {}
-        name = func.get("name", "") if isinstance(func, dict) else ""
-        args = func.get("arguments", "") if isinstance(func, dict) else ""
-        call_id = tool_call.get("id", "") or ""
-        return name, call_id, args
-
-    func = getattr(tool_call, "function", None)
-    name = getattr(func, "name", "") if func is not None else ""
-    args = getattr(func, "arguments", "") if func is not None else ""
-    call_id = getattr(tool_call, "id", "") or ""
+    call_id, name, args = extract_tool_call_fields(tool_call)
     return name, call_id, args
 
 
@@ -72,8 +64,25 @@ def _parse_tool_args(raw_args: Any) -> Any:
         return {}
 
 
+def _message_get(message: Any, key: str, default: Any = None) -> Any:
+    if isinstance(message, dict):
+        return message.get(key, default)
+    getter = getattr(message, "get", None)
+    if callable(getter):
+        try:
+            return getter(key, default)
+        except TypeError:
+            try:
+                return getter(key)
+            except Exception:
+                pass
+        except Exception:
+            pass
+    return getattr(message, key, default)
+
+
 def build_task_result(
-    completion: list[dict[str, Any]],
+    completion: list[Any],
     final_answer: str | list[Any] | None,
     fhir_api_base: str,
 ) -> TaskResult:
@@ -89,13 +98,14 @@ def build_task_result(
         result_value = json.dumps(final_answer)
 
     for msg in completion:
-        role = msg.get("role")
+        role = _message_get(msg, "role")
         if role == "assistant":
-            content = msg.get("content") or ""
+            raw_content = _message_get(msg, "content", "")
+            content = raw_content if isinstance(raw_content, str) else ""
             if content:
                 history.append(ChatHistoryItem(role="agent", content=content))
 
-            for tool_call in msg.get("tool_calls") or []:
+            for tool_call in _message_get(msg, "tool_calls") or []:
                 tool_name, call_id, raw_args = _coerce_tool_call(tool_call)
                 tool_args = _parse_tool_args(raw_args)
                 if tool_name in api_mapping:
@@ -107,22 +117,16 @@ def build_task_result(
                         )
                     )
                 else:
-                    history.append(
-                        ChatHistoryItem(
-                            role="agent", content=f"{tool_name}({tool_args})"
-                        )
-                    )
+                    history.append(ChatHistoryItem(role="agent", content=f"{tool_name}({tool_args})"))
                 if call_id:
                     tool_calls[call_id] = tool_name
 
         if role == "tool":
-            call_id = msg.get("tool_call_id", "") or ""
+            call_id = _message_get(msg, "tool_call_id", "") or ""
             tool_name = tool_calls.get(call_id)
             if tool_name in api_mapping:
                 method, _ = api_mapping[tool_name]
-                history.append(
-                    ChatHistoryItem(role="agent", content=f"{method} request accepted")
-                )
+                history.append(ChatHistoryItem(role="agent", content=f"{method} request accepted"))
 
     return TaskResult(result=result_value, history=history)
 
@@ -147,7 +151,7 @@ category_to_eval_fn = {
 
 def evaluate_task(
     task: dict[str, Any],
-    completion: list[dict[str, Any]],
+    completion: list[Any],
     final_answer: str | list[Any] | None,
     fhir_api_base: str,
 ) -> bool:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import re
 from enum import Enum
@@ -10,6 +11,13 @@ from typing import Any, Callable
 import verifiers as vf
 from datasets import Dataset
 from datasets.utils.logging import disable_progress_bar
+from medarc_verifiers.types import Messages
+from medarc_verifiers.utils.tool_call_compat import (
+    extract_tool_call_fields,
+    sanitize_messages_content,
+    set_message_tool_calls,
+    set_tool_call_name_and_arguments,
+)
 from verifiers.utils.async_utils import maybe_await
 
 from . import graders
@@ -27,24 +35,45 @@ class TasksVariant(str, Enum):
 
 
 def _set_tool_call_function_field(tool_call: Any, field: str, value: Any) -> None:
-    """Best-effort setter for tool_call.function fields across dict/object tool-call shapes."""
-    try:
-        if isinstance(tool_call, dict):
-            function_payload = tool_call.get("function")
-            if isinstance(function_payload, dict):
-                function_payload[field] = value
-            return
-        function_payload = getattr(tool_call, "function", None)
-        if function_payload is not None:
+    """Best-effort setter for tool_call.function fields across nested/flat shapes."""
+    if field not in {"name", "arguments"}:
+        return
+    _, current_name, current_args = extract_tool_call_fields(tool_call)
+    resolved_name = current_name
+    resolved_args = current_args
+    if field == "name":
+        resolved_name = value
+    if field == "arguments":
+        resolved_args = value
+    if not isinstance(resolved_name, str):
+        resolved_name = str(resolved_name or "")
+    if not isinstance(resolved_args, str):
+        if isinstance(resolved_args, (dict, list)):
             try:
-                setattr(function_payload, field, value)
+                resolved_args = json.dumps(resolved_args)
             except Exception:
-                pass
-    except Exception:
-        pass
+                resolved_args = "{}"
+        else:
+            resolved_args = str(resolved_args or "")
+    set_tool_call_name_and_arguments(tool_call, name=resolved_name, arguments=resolved_args)
 
 
 class MedAgentBenchV2Env(vf.StatefulToolEnv):
+    _supports_tool_defs_cache: bool | None = None
+
+    @classmethod
+    def _supports_tool_defs(cls) -> bool:
+        cached = cls._supports_tool_defs_cache
+        if cached is not None:
+            return cached
+        try:
+            params = inspect.signature(vf.Environment.get_model_response).parameters
+            cached = "tool_defs" in params
+        except Exception:
+            cached = False
+        cls._supports_tool_defs_cache = cached
+        return cached
+
     @staticmethod
     def _root_cause(exc: BaseException) -> BaseException:
         cur = exc
@@ -71,39 +100,9 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
                 return code
         return None
 
-    @staticmethod
-    def _sanitize_message_content(value: Any) -> Any:
-        """Strip common chat-template tokens that can crash some OpenAI-compatible servers.
-
-        We keep this conservative: only remove `<|...|>` style tokens that some OSS chat templates
-        emit literally (e.g. `<|end|><|start|>assistant<|channel|>commentary`).
-        """
-        if not isinstance(value, str):
-            return value
-        # Remove `<|...|>` tokens (llama/chatml-ish) while leaving surrounding text intact.
-        return re.sub(r"<\|[^|>]+\|>", "", value)
-
     @classmethod
-    def _sanitize_prompt(cls, prompt: vf.Messages) -> vf.Messages:
-        if not isinstance(prompt, list):
-            return prompt
-        sanitized: list[dict[str, Any]] = []
-        for msg in prompt:
-            if not isinstance(msg, dict):
-                sanitized.append(msg)  # type: ignore[arg-type]
-                continue
-            if "content" not in msg:
-                sanitized.append(msg)
-                continue
-            content = msg.get("content")
-            # Only sanitize string content; multimodal content is left untouched.
-            if isinstance(content, str):
-                new_msg = dict(msg)
-                new_msg["content"] = cls._sanitize_message_content(content)
-                sanitized.append(new_msg)
-            else:
-                sanitized.append(msg)
-        return sanitized
+    def _sanitize_prompt(cls, prompt: Messages) -> Messages:
+        return sanitize_messages_content(prompt)
 
     def __init__(
         self,
@@ -126,10 +125,11 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
     async def get_model_response(
         self,
         state: vf.State,
-        prompt: vf.Messages,
+        prompt: Messages,
         client: Any | None = None,
         model: str | None = None,
         oai_tools: Any | None = None,
+        tool_defs: Any | None = None,
         sampling_args: dict | None = None,
         message_type: Any | None = None,
         **kwargs: Any,
@@ -140,11 +140,25 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
         contain literal chat-template tokens. We retry once with a sanitized prompt to avoid
         provider-side parser crashes.
         """
+        supports_tool_defs = self._supports_tool_defs()
         resolved_message_type = message_type or getattr(self, "message_type", "chat")
-        try:
-            return await super().get_model_response(
+        resolved_tool_defs = tool_defs if tool_defs is not None else getattr(self, "tool_defs", None)
+        base_get_model_response = super(MedAgentBenchV2Env, self).get_model_response
+
+        async def _call_base_model(current_prompt: Messages) -> Any:
+            if supports_tool_defs:
+                return await base_get_model_response(
+                    state,
+                    current_prompt,
+                    client=client,
+                    model=model,
+                    tool_defs=resolved_tool_defs,
+                    sampling_args=sampling_args,
+                    **kwargs,
+                )
+            return await base_get_model_response(
                 state,
-                prompt,
+                current_prompt,
                 client=client,
                 model=model,
                 oai_tools=oai_tools,
@@ -152,6 +166,9 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
                 message_type=message_type,
                 **kwargs,
             )
+
+        try:
+            return await _call_base_model(prompt)
         except vf.Error as exc:
             root = self._root_cause(exc)
             status = self._status_code(root)
@@ -164,16 +181,7 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
                 try:
                     await asyncio.sleep(0.5)
                     sanitized_prompt = self._sanitize_prompt(prompt) if resolved_message_type == "chat" else prompt
-                    return await super().get_model_response(
-                        state,
-                        sanitized_prompt,
-                        client=client,
-                        model=model,
-                        oai_tools=oai_tools,
-                        sampling_args=sampling_args,
-                        message_type=message_type,
-                        **kwargs,
-                    )
+                    return await _call_base_model(sanitized_prompt)
                 except vf.Error as retry_exc:
                     retry_root = self._root_cause(retry_exc)
                     self.logger.error(
@@ -188,7 +196,7 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
         self,
         tool_name: str,
         tool_args: dict,
-        messages: vf.Messages,
+        messages: Messages,
         state: vf.State,
         **kwargs: Any,
     ) -> dict:
@@ -216,9 +224,17 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
                 "tool_call_id": tool_call_id,
             }
 
-    async def env_response(self, messages: vf.Messages, state: vf.State, **kwargs: Any) -> vf.Messages:
+    async def env_response(self, messages: Messages, state: vf.State, **kwargs: Any) -> Messages:
         assert isinstance(messages, list)
-        tool_calls = messages[-1].get("tool_calls") or []
+        last_message = messages[-1]
+        if isinstance(last_message, dict):
+            tool_calls = last_message.get("tool_calls") or []
+        else:
+            message_get = getattr(last_message, "get", None)
+            if callable(message_get):
+                tool_calls = message_get("tool_calls") or []
+            else:
+                tool_calls = getattr(last_message, "tool_calls", None) or []
 
         tool_messages: list[vf.Message] = []
         sanitized_tool_calls: list[Any] = []
@@ -230,14 +246,7 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
                 except json.JSONDecodeError:
                     continue
 
-            tool_call_id = getattr(tool_call, "id", None) or (
-                tool_call.get("id", "") if isinstance(tool_call, dict) else ""
-            )
-            func = getattr(tool_call, "function", None) or (
-                tool_call.get("function", {}) if isinstance(tool_call, dict) else {}
-            )
-            tool_name = getattr(func, "name", None) or (func.get("name", "") if isinstance(func, dict) else "")
-            raw_args = getattr(func, "arguments", None) or (func.get("arguments", "") if isinstance(func, dict) else "")
+            tool_call_id, tool_name, raw_args = extract_tool_call_fields(tool_call)
 
             if (
                 not isinstance(tool_name, str)
@@ -281,7 +290,7 @@ class MedAgentBenchV2Env(vf.StatefulToolEnv):
                 finish_called = True
 
         if tool_calls:
-            messages[-1]["tool_calls"] = sanitized_tool_calls
+            set_message_tool_calls(messages, -1, sanitized_tool_calls)
 
         if finish_called:
             # Ensure we don't make an extra model call after the finish tool executes.
@@ -364,7 +373,7 @@ def load_environment(
     eval_dataset = Dataset.from_list([_map(task) for task in tasks])
 
     def medagentbench_reward(
-        completion: list[dict[str, Any]],
+        completion: list[Any],
         state: vf.State,
         info: dict[str, Any] | None = None,
         **_: Any,

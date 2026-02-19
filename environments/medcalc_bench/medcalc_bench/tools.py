@@ -17,6 +17,12 @@ from RestrictedPython.compile import CompileResult, compile_restricted_exec
 from RestrictedPython.Eval import default_guarded_getitem, default_guarded_getiter
 from RestrictedPython.Guards import guarded_iter_unpack_sequence, safer_getattr
 from RestrictedPython.PrintCollector import PrintCollector
+from medarc_verifiers.types import Messages
+from medarc_verifiers.utils.tool_call_compat import (
+    extract_tool_call_fields,
+    set_message_tool_calls,
+    set_tool_call_name_and_arguments,
+)
 from simpleeval import SimpleEval
 
 # Per-async-task storage to isolate parallel REPL sessions
@@ -301,21 +307,27 @@ def calculator(*, expression: str) -> str:
 
 
 def _set_tool_call_function_field(tool_call: Any, field: str, value: Any) -> None:
-    """Best-effort setter for tool_call.function fields across dict/object tool-call shapes."""
-    try:
-        if isinstance(tool_call, dict):
-            function_payload = tool_call.get("function")
-            if isinstance(function_payload, dict):
-                function_payload[field] = value
-            return
-        function_payload = getattr(tool_call, "function", None)
-        if function_payload is not None:
+    """Best-effort setter for tool_call.function fields across nested/flat shapes."""
+    if field not in {"name", "arguments"}:
+        return
+    _, current_name, current_args = extract_tool_call_fields(tool_call)
+    resolved_name = current_name
+    resolved_args = current_args
+    if field == "name":
+        resolved_name = value
+    if field == "arguments":
+        resolved_args = value
+    if not isinstance(resolved_name, str):
+        resolved_name = str(resolved_name or "")
+    if not isinstance(resolved_args, str):
+        if isinstance(resolved_args, (dict, list)):
             try:
-                setattr(function_payload, field, value)
+                resolved_args = json.dumps(resolved_args)
             except Exception:
-                pass
-    except Exception:
-        pass
+                resolved_args = "{}"
+        else:
+            resolved_args = str(resolved_args or "")
+    set_tool_call_name_and_arguments(tool_call, name=resolved_name, arguments=resolved_args)
 
 
 class SimpleToolEnv(vf.StatefulToolEnv):
@@ -364,7 +376,7 @@ class SimpleToolEnv(vf.StatefulToolEnv):
         self,
         tool_name: str,
         tool_args: dict,
-        messages: vf.Messages,
+        messages: Messages,
         state: vf.State,
         **kwargs: Any,
     ) -> dict:
@@ -394,7 +406,7 @@ class SimpleToolEnv(vf.StatefulToolEnv):
         CURRENT_SESSION.set(session)
         return tool_args
 
-    async def env_response(self, messages: vf.Messages, state: vf.State, **kwargs: Any) -> vf.Messages:
+    async def env_response(self, messages: Messages, state: vf.State, **kwargs: Any) -> Messages:
         """Like StatefulToolEnv.env_response, but tolerate malformed tool-call arguments.
 
         Some models occasionally emit non-JSON `tool_call.function.arguments` strings; the upstream
@@ -402,7 +414,15 @@ class SimpleToolEnv(vf.StatefulToolEnv):
         a tool error message instead.
         """
         assert isinstance(messages, list)
-        tool_calls = messages[-1].get("tool_calls", [])
+        last_message = messages[-1]
+        if isinstance(last_message, dict):
+            tool_calls = last_message.get("tool_calls") or []
+        else:
+            message_get = getattr(last_message, "get", None)
+            if callable(message_get):
+                tool_calls = message_get("tool_calls") or []
+            else:
+                tool_calls = getattr(last_message, "tool_calls", None) or []
 
         # Rewrite malformed tool names to a valid configured tool so the next provider request
         # does not 400 while re-validating prior tool_calls in message history.
@@ -424,15 +444,7 @@ class SimpleToolEnv(vf.StatefulToolEnv):
                     )
                     continue
 
-            # Support both OpenAI tool-call objects and plain dicts.
-            tool_call_id = getattr(tool_call, "id", None) or (
-                tool_call.get("id", "") if isinstance(tool_call, dict) else ""
-            )
-            func = getattr(tool_call, "function", None) or (
-                tool_call.get("function", {}) if isinstance(tool_call, dict) else {}
-            )
-            tool_name = getattr(func, "name", None) or (func.get("name", "") if isinstance(func, dict) else "")
-            raw_args = getattr(func, "arguments", None) or (func.get("arguments", "") if isinstance(func, dict) else "")
+            tool_call_id, tool_name, raw_args = extract_tool_call_fields(tool_call)
 
             if (
                 not isinstance(tool_name, str)
@@ -490,6 +502,6 @@ class SimpleToolEnv(vf.StatefulToolEnv):
             sanitized_tool_calls.append(tool_call)
 
         if tool_calls:
-            messages[-1]["tool_calls"] = sanitized_tool_calls
+            set_message_tool_calls(messages, -1, sanitized_tool_calls)
 
         return tool_messages
