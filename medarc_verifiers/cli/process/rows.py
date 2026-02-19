@@ -64,6 +64,7 @@ def load_rows(
         return []
 
     multi_rollout = any(count > 1 for count in example_counts.values())
+    version_info_json = _encode_metadata_json_column(metadata.raw_metadata.get("version_info"))
 
     # Second pass: enrich rows. If the file contains multiple rollouts, compute
     # a data-driven rollout_index by counting seen occurrences per example_id.
@@ -73,9 +74,14 @@ def load_rows(
     for line_number, payload in decoded_rows:
         extras = _extract_extras(payload, extras_keys=extras_keys)
         cleaned = _clean_row(payload, drop=drop, extras_keys=extras_keys)
+        cleaned.pop("rollout_index", None)
         _map_answer_column(cleaned, payload, answer_column=answer_column)
         _flatten_token_usage(cleaned)
-        if multi_rollout:
+        payload_rollout_index = _coerce_rollout_index(payload.get("rollout_index"))
+        if payload_rollout_index is not None:
+            rollout_index = payload_rollout_index
+            cleaned["rollout_index"] = payload_rollout_index
+        elif multi_rollout:
             ex_id = payload.get("example_id")
             try:
                 seen = seen_per_example.get(ex_id, 0)
@@ -90,7 +96,13 @@ def load_rows(
             cleaned["extras"] = json.dumps(extras, sort_keys=True)
         else:
             cleaned["extras"] = None
-        enriched = _attach_metadata(cleaned, metadata, line_number=line_number, rollout_index=rollout_index)
+        enriched = _attach_metadata(
+            cleaned,
+            metadata,
+            line_number=line_number,
+            rollout_index=rollout_index,
+            version_info_json=version_info_json,
+        )
         rows.append(enriched)
 
     return rows
@@ -173,12 +185,30 @@ def _is_primitive(value: Any) -> bool:
     return value is None or isinstance(value, (bool, int, float, str))
 
 
+def _coerce_rollout_index(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value.is_integer():
+            return int(value)
+        return None
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
 def _attach_metadata(
     row: MutableMapping[str, Any],
     metadata: NormalizedMetadata,
     *,
     line_number: int,
     rollout_index: int,
+    version_info_json: str | None,
 ) -> MutableMapping[str, Any]:
     record = metadata.record
 
@@ -194,13 +224,15 @@ def _attach_metadata(
             "job_run_id": record.manifest.job_run_id,
             "run_id": record.job_id,
             "model_id": metadata.model_id,
-            "rollout_index": rollout_index,
+            "version_info": version_info_json,
             "status": record.status,
             "error": error_value,
             "started_at": record.started_at,
             "ended_at": record.ended_at,
         }
     )
+    if "rollout_index" not in row:
+        row["rollout_index"] = rollout_index
     return row
 
 
@@ -210,11 +242,7 @@ def _flatten_token_usage(row: MutableMapping[str, Any]) -> None:
         return
     usage = row.pop("token_usage", None)
 
-    def _extract(role: str, key: str) -> Any:
-        block = usage.get(role)
-        if not isinstance(block, Mapping):
-            return None
-        value = block.get(key)
+    def _coerce_number(value: Any) -> float | None:
         if value is None:
             return None
         if isinstance(value, (int, float)):
@@ -223,6 +251,14 @@ def _flatten_token_usage(row: MutableMapping[str, Any]) -> None:
             return float(value)
         except Exception:
             return None
+
+    def _extract_nested(role: str, key: str) -> float | None:
+        if not isinstance(usage, Mapping):
+            return None
+        block = usage.get(role)
+        if not isinstance(block, Mapping):
+            return None
+        return _coerce_number(block.get(key))
 
     for role in ("judge", "model"):
         row[f"{role}_cost"] = None
@@ -233,11 +269,31 @@ def _flatten_token_usage(row: MutableMapping[str, Any]) -> None:
     if not isinstance(usage, Mapping):
         return
 
+    # verifiers 0.1.10+ shape:
+    # token_usage = {"input_tokens": ..., "output_tokens": ...}
+    if "input_tokens" in usage or "output_tokens" in usage:
+        prompt_tokens = _coerce_number(usage.get("input_tokens"))
+        completion_tokens = _coerce_number(usage.get("output_tokens"))
+        row["model_token_prompt"] = prompt_tokens
+        row["model_token_completion"] = completion_tokens
+        if prompt_tokens is not None or completion_tokens is not None:
+            row["model_token_total"] = float((prompt_tokens or 0.0) + (completion_tokens or 0.0))
+        return
+
     for role in ("judge", "model"):
-        row[f"{role}_cost"] = _extract(role, "cost")
-        row[f"{role}_token_completion"] = _extract(role, "completion")
-        row[f"{role}_token_prompt"] = _extract(role, "prompt")
-        row[f"{role}_token_total"] = _extract(role, "total")
+        row[f"{role}_cost"] = _extract_nested(role, "cost")
+        row[f"{role}_token_completion"] = _extract_nested(role, "completion")
+        row[f"{role}_token_prompt"] = _extract_nested(role, "prompt")
+        row[f"{role}_token_total"] = _extract_nested(role, "total")
+
+
+def _encode_metadata_json_column(value: Any) -> str | None:
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        return json.dumps(value, sort_keys=True)
+    except (TypeError, ValueError):
+        return None
 
 
 __all__ = ["load_rows"]

@@ -87,10 +87,33 @@ def test_aggregate_rows_tracks_job_runs() -> None:
 
 def test_aggregate_rows_normalizes_rollout_index() -> None:
     rows = [
-        {"env_id": "env-a", "base_env_id": "env-a", "rollout_index": 7},
-        {"env_id": "env-a", "base_env_id": "env-a", "rollout_index": 3},
-        {"env_id": "env-a", "base_env_id": "env-a", "rollout_index": 7},
+        {"env_id": "env-a", "base_env_id": "env-a", "manifest_env_id": "env-a-rollout7"},
+        {"env_id": "env-a", "base_env_id": "env-a", "manifest_env_id": "env-a-rollout3"},
+        {"env_id": "env-a", "base_env_id": "env-a", "manifest_env_id": "env-a-rollout7"},
     ]
     grouped = aggregate_rows_by_env(rows)
     assert grouped[0].rows[0]["rollout_index"] in {0, 1}
+    assert sorted({row["rollout_index"] for row in grouped[0].rows}) == [0, 1]
+
+
+def test_aggregate_rows_preserves_native_rollout_index_values() -> None:
+    rows = [
+        {"env_id": "env-a", "base_env_id": "env-a", "manifest_env_id": "env-a", "rollout_index": 7},
+        {"env_id": "env-a", "base_env_id": "env-a", "manifest_env_id": "env-a", "rollout_index": 3},
+        {"env_id": "env-a", "base_env_id": "env-a", "manifest_env_id": "env-a", "rollout_index": 7},
+    ]
+
+    grouped = aggregate_rows_by_env(rows)
+
+    assert [row["rollout_index"] for row in grouped[0].rows] == [7, 3, 7]
+
+
+def test_aggregate_rows_fills_missing_rollout_index_from_suffix() -> None:
+    rows = [
+        {"env_id": "env-a", "base_env_id": "env-a", "manifest_env_id": "env-a-rollout7"},
+        {"env_id": "env-a", "base_env_id": "env-a", "manifest_env_id": "env-a-rollout3"},
+    ]
+
+    grouped = aggregate_rows_by_env(rows)
+
     assert sorted({row["rollout_index"] for row in grouped[0].rows}) == [0, 1]

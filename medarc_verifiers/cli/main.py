@@ -20,6 +20,7 @@ from medarc_verifiers.cli._constants import (
     COMMAND,
     DEFAULT_API_BASE_URL,
     DEFAULT_API_KEY_VAR,
+    DEFAULT_ENDPOINTS_PATH,
     DEFAULT_ENV_CONFIG_ROOT,
     DEFAULT_ENV_DIR,
     DEFAULT_PROCESSED_DIR,
@@ -114,7 +115,12 @@ def build_batch_parser() -> argparse.ArgumentParser:
         default=DEFAULT_ENV_CONFIG_ROOT,
         help="Directory containing environment YAMLs for auto-discovery (default: %(default)s).",
     )
-    parser.add_argument("--endpoints-path", type=Path, help="Override the default endpoints registry path.")
+    parser.add_argument(
+        "--endpoints-path",
+        type=Path,
+        default=DEFAULT_ENDPOINTS_PATH,
+        help=f"Path to the endpoints registry file (default: {DEFAULT_ENDPOINTS_PATH}).",
+    )
     parser.add_argument(
         "--default-api-key-var",
         default=DEFAULT_API_KEY_VAR,
@@ -167,13 +173,31 @@ def build_batch_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override env max_concurrent for all jobs (CLI > model > env > defaults).",
     )
-    parser.add_argument("--max-concurrent-generation", type=int, help="Override generation concurrency for all jobs.")
-    parser.add_argument("--max-concurrent-scoring", type=int, help="Override scoring concurrency for all jobs.")
+    parser.add_argument("--max-concurrent-generation", type=int, help="Deprecated: ignored.")
+    parser.add_argument("--max-concurrent-scoring", type=int, help="Deprecated: ignored.")
     parser.add_argument(
         "--timeout",
         type=float,
         default=None,
         help="Override request timeout in seconds for all jobs (CLI > model > default).",
+    )
+    parser.add_argument(
+        "--http-max-retries",
+        type=int,
+        default=None,
+        help="HTTP/client-level retries for model calls (CLI > model max_retries).",
+    )
+    parser.add_argument(
+        "--rollout-max-retries",
+        type=int,
+        default=0,
+        help="Retry full rollout/group on retryable infra/invalid-response errors.",
+    )
+    parser.add_argument(
+        "--model-call-retries",
+        type=int,
+        default=None,
+        help="Per-model-call MedARC retry attempts (0 disables the monkeypatch).",
     )
     parser.add_argument(
         "--sleep",
@@ -186,8 +210,8 @@ def build_batch_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--enable-additional-retries",
         action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Enable per-call model retry wrapper (default: disabled).",
+        default=None,
+        help="Deprecated alias for --model-call-retries (true maps to 3 attempts).",
     )
     parser.add_argument(
         "--include-usage",
@@ -490,6 +514,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _run_batch_mode(argv: Sequence[str]) -> int:
     parser = build_batch_parser()
     args = parser.parse_args(argv)
+    args.endpoints_path_explicit = _option_was_provided(argv, "--endpoints-path")
+    args.default_api_key_var_explicit = _option_was_provided(argv, "--default-api-key-var")
 
     try:
         args.cli_env_args = build_cli_override(
@@ -504,6 +530,14 @@ def _run_batch_mode(argv: Sequence[str]) -> int:
             json_flag="--sampling-args",
             pair_flag="--sampling-arg",
         )
+        args.model_call_retries = _resolve_model_call_retries(
+            args.model_call_retries,
+            args.enable_additional_retries,
+        )
+        if args.http_max_retries is not None and args.http_max_retries < 0:
+            raise ValueError("--http-max-retries must be >= 0.")
+        if args.rollout_max_retries < 0:
+            raise ValueError("--rollout-max-retries must be >= 0.")
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -1080,7 +1114,7 @@ def _execute_batch(args: argparse.Namespace) -> int:
             logger.error("Invalid --restart '%s': %s", restart_raw, exc)
             return 1
 
-    if args.enable_additional_retries:
+    if args.model_call_retries > 0 and not args.dry_run:
         from datetime import datetime
 
         from medarc_verifiers.utils.retry import patch_verifiers_model_response_retry
@@ -1088,7 +1122,10 @@ def _execute_batch(args: argparse.Namespace) -> int:
         cwd = Path.cwd()
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         retry_log_path = cwd / "logs" / f"medarc_model_retry_{ts}.log"
-        patch_verifiers_model_response_retry(log_path=retry_log_path)
+        patch_verifiers_model_response_retry(
+            attempts=args.model_call_retries,
+            log_path=retry_log_path,
+        )
 
     jobs = build_jobs(run_config)
     if not jobs:
@@ -1189,12 +1226,22 @@ def _execute_batch(args: argparse.Namespace) -> int:
         _log_summary([], manifest_plan.manifest)
         return 0
 
+    forced_job_ids = _compute_forced_job_ids(
+        planned_jobs=planned_jobs,
+        runnable_job_ids=runnable_ids,
+        manifest=manifest_plan.manifest,
+        force_all=bool(args.force),
+        forced_envs=forced_envs,
+    )
+
     settings = ExecutorSettings(
         run_id=manifest_plan.manifest.model.run_id or "",
         output_dir=output_dir,
         env_dir=Path(args.env_dir).expanduser(),
         endpoints_path=Path(args.endpoints_path).expanduser() if args.endpoints_path else None,
+        endpoints_path_explicit=bool(getattr(args, "endpoints_path_explicit", False)),
         default_api_key_var=args.default_api_key_var,
+        default_api_key_var_explicit=bool(getattr(args, "default_api_key_var_explicit", False)),
         default_api_base_url=args.default_api_base_url,
         api_base_url_override=args.api_base_url,
         log_level="DEBUG" if args.verbose else "INFO",
@@ -1205,11 +1252,14 @@ def _execute_batch(args: argparse.Namespace) -> int:
         max_concurrent_generation=args.max_concurrent_generation,
         max_concurrent_scoring=args.max_concurrent_scoring,
         max_concurrent=args.max_concurrent,  # CLI override (None if not provided)
+        http_max_retries=args.http_max_retries,
+        rollout_max_retries=args.rollout_max_retries,
         timeout=args.timeout,
         sleep=args.sleep,
         dry_run=args.dry_run,
         cli_env_args=getattr(args, "cli_env_args", None),
         cli_sampling_args=getattr(args, "cli_sampling_args", None),
+        forced_job_ids=forced_job_ids,
     )
 
     logger.info(
@@ -1273,6 +1323,30 @@ def _parse_repeatable_csv(values: Sequence[str] | None) -> list[str]:
     return parsed
 
 
+def _option_was_provided(argv: Sequence[str], long_flag: str) -> bool:
+    for token in argv:
+        if token == long_flag or token.startswith(f"{long_flag}="):
+            return True
+    return False
+
+
+def _resolve_model_call_retries(model_call_retries: int | None, deprecated_toggle: bool | None) -> int:
+    if model_call_retries is not None:
+        if model_call_retries < 0:
+            raise ValueError("--model-call-retries must be >= 0.")
+        if deprecated_toggle is not None:
+            logger.warning(
+                "Ignoring deprecated --enable-additional-retries because --model-call-retries was explicitly set."
+            )
+        return model_call_retries
+
+    if deprecated_toggle is None:
+        return 0
+
+    logger.warning("Flag --enable-additional-retries is deprecated; use --model-call-retries <attempts> instead.")
+    return 3 if deprecated_toggle else 0
+
+
 def _filter_winrate_datasets(
     datasets: Sequence[tuple[str, Sequence[Path]]],
     exclude_datasets: Sequence[str],
@@ -1300,6 +1374,42 @@ def _collect_rerun_envs(envs: Mapping[str, EnvironmentConfigSchema]) -> set[str]
                 if key:
                     rerun.add(str(key).lower())
     return rerun
+
+
+def _compute_forced_job_ids(
+    *,
+    planned_jobs: Sequence[ResolvedJob],
+    runnable_job_ids: set[str],
+    manifest: RunManifest | None,
+    force_all: bool,
+    forced_envs: set[str],
+) -> set[str]:
+    forced_ids: set[str] = set()
+    if force_all:
+        return {job.job_id for job in planned_jobs}
+
+    for job in planned_jobs:
+        entry = manifest.job_entry(job.job_id) if manifest is not None else None
+        env_forced = any(key in forced_envs for key in _force_keys_for_job(job, entry))
+        completed_but_runnable = bool(
+            entry is not None and entry.status == "completed" and job.job_id in runnable_job_ids
+        )
+        if env_forced or completed_but_runnable:
+            forced_ids.add(job.job_id)
+    return forced_ids
+
+
+def _force_keys_for_job(job: ResolvedJob, entry: ManifestJobEntry | None) -> set[str]:
+    keys: set[str] = {job.job_id.lower()}
+    for value in (
+        getattr(job.env, "id", None),
+        getattr(job.env, "module", None),
+        getattr(job.env, "matrix_base_id", None),
+        getattr(entry, "env_id", None),
+    ):
+        if value:
+            keys.add(str(value).lower())
+    return keys
 
 
 def _filter_jobs(jobs: Sequence[ResolvedJob], job_filters: Sequence[str] | None) -> list[ResolvedJob]:

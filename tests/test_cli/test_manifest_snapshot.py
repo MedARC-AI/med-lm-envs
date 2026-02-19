@@ -292,7 +292,9 @@ def test_resolved_job_signature_ignores_resume_tolerant_fields() -> None:
     )
 
     base_sig = resolved_job_signature(base_job, env_args=base_job.env_args, sampling_args=base_job.sampling_args)
-    variant_sig = resolved_job_signature(variant_job, env_args=variant_job.env_args, sampling_args=variant_job.sampling_args)
+    variant_sig = resolved_job_signature(
+        variant_job, env_args=variant_job.env_args, sampling_args=variant_job.sampling_args
+    )
 
     assert base_sig == variant_sig
 

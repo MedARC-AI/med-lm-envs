@@ -4,19 +4,20 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Mapping, MutableMapping, Sequence
+from typing import MutableMapping, Sequence
 
+from verifiers.types import Endpoints
 from verifiers.utils.eval_utils import load_endpoints
 
 from medarc_verifiers.cli.utils.env_args import EnvParam, gather_env_cli_metadata
 
 logger = logging.getLogger(__name__)
 
-EndpointRegistry = Mapping[str, Mapping[str, str]]
-EndpointRegistryCache = MutableMapping[str, EndpointRegistry]
+EndpointRegistry = Endpoints
+EndpointRegistryCache = MutableMapping[str, Endpoints]
 EnvMetadataCache = MutableMapping[str, Sequence[EnvParam]]
 
-_GLOBAL_ENDPOINT_CACHE: dict[str, EndpointRegistry] = {}
+_GLOBAL_ENDPOINT_CACHE: dict[str, Endpoints] = {}
 _GLOBAL_ENV_METADATA_CACHE: dict[str, Sequence[EnvParam]] = {}
 
 
@@ -68,7 +69,18 @@ def resolve_model_endpoint(
 ) -> tuple[str, str, str]:
     """Resolve model aliases and infer endpoint configuration."""
     if model in endpoints:
-        entry = endpoints[model]
+        variants = endpoints[model]
+        if not variants:
+            logger.warning(
+                "Model '%s' has no endpoint variants configured; using CLI-specified API config.",
+                model,
+            )
+            return model, default_key_var, default_base_url
+
+        if len(variants) > 1:
+            logger.debug("Endpoint id '%s' has %d variants configured.", model, len(variants))
+
+        entry = variants[0]
         resolved_model = entry.get("model", model)
         api_key_var = entry.get("key", default_key_var)
         api_base_url = entry.get("url", default_base_url)

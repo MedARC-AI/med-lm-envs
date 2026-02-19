@@ -69,7 +69,7 @@ def test_coerce_json_mapping_requires_object() -> None:
 
 def test_resolve_endpoint_selection_prefers_registry() -> None:
     endpoints = {
-        "alias": {"model": "true-model", "key": "SPECIAL_KEY", "url": "https://example.test"},
+        "alias": [{"model": "true-model", "key": "SPECIAL_KEY", "url": "https://example.test"}],
     }
     resolved = resolve_endpoint_selection(
         "alias",

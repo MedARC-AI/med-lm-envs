@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import Mapping
 
 from verifiers.types import GenerateOutputs
 
@@ -21,8 +21,10 @@ def log_results_summary(
     reward_limit: int = 25,
 ) -> None:
     """Emit a concise summary of rewards and key metrics for a run."""
+    _ = reward_limit  # Legacy arg kept for API compatibility.
     metadata = _safe_get(results, "metadata", {}) or {}
     avg_reward = _safe_get(metadata, "avg_reward", None)
+    avg_metrics = _safe_get(metadata, "avg_metrics", {}) or {}
     rollouts = _safe_get(metadata, "rollouts_per_example", None)
     examples = _safe_get(metadata, "num_examples", None)
 
@@ -46,52 +48,12 @@ def log_results_summary(
             rollouts,
         )
 
-    rewards = _safe_get(results, "reward", None)
-    per_rollout: list[list[float]] = []
-    if isinstance(rollouts, int) and rollouts > 0 and rewards:
-        block = len(rewards) // rollouts
-        for idx in range(rollouts):
-            start = idx * block
-            end = start + block
-            per_rollout.append(rewards[start:end])
-    for idx, sequence in enumerate(per_rollout, start=1):
-        display = sequence[:reward_limit]
-        suffix = ""
-        if len(sequence) > reward_limit:
-            suffix = f" (showing first {reward_limit} of {len(sequence)})"
-        logger.info("  r%d rewards: %s%s", idx, [round(val, 3) for val in display], suffix)
-
-    pass_rate = _summarize_metric(_safe_get(results, "metrics", {}) or {}, "pass_rate")
+    pass_rate = _safe_get(avg_metrics, "pass_rate", None)
     if pass_rate is not None:
-        logger.info("  pass_rate avg: %.4f", pass_rate)
-
-
-def compute_average(values: Sequence[float] | Iterable[float] | None) -> float | None:
-    """Compute the arithmetic mean for a sequence of numeric values."""
-    if not values:
-        return None
-    total = 0.0
-    count = 0
-    for value in values:
-        if value is None:
-            continue
-        total += float(value)
-        count += 1
-    if count == 0:
-        return None
-    return total / count
-
-
-def compute_metric_averages(metrics: Mapping[str, Sequence[float] | Iterable[float]] | None) -> dict[str, float]:
-    """Average every metric list present in the evaluation payload."""
-    if not metrics:
-        return {}
-    summary: dict[str, float] = {}
-    for key, values in metrics.items():
-        avg = compute_average(values)
-        if avg is not None:
-            summary[key] = avg
-    return summary
+        try:
+            logger.info("  pass_rate avg: %.4f", float(pass_rate))
+        except (TypeError, ValueError):
+            logger.debug("Skipping pass_rate logging due to non-numeric value: %r", pass_rate)
 
 
 def update_metadata_file(path: Path, avg_reward: float | None, metrics_avg: Mapping[str, float]) -> None:
@@ -115,16 +77,6 @@ def update_metadata_file(path: Path, avg_reward: float | None, metrics_avg: Mapp
             changed = True
     if changed:
         write_json(path, payload)
-
-
-def _summarize_metric(metrics: Mapping[str, Iterable[float]], key: str) -> float | None:
-    values = metrics.get(key)
-    if not values:
-        return None
-    values_list = list(values)
-    if not values_list:
-        return None
-    return sum(values_list) / len(values_list)
 
 
 def _safe_get(obj: object, key: str, default: object = None) -> object:

@@ -13,12 +13,24 @@ from typing import Any, Mapping, Sequence
 
 from verifiers.utils.eval_utils import run_evaluation
 
-from medarc_verifiers.cli._constants import BENCH_COMMAND, COMMAND
+from medarc_verifiers.cli._constants import (
+    BENCH_COMMAND,
+    COMMAND,
+    DEFAULT_API_BASE_URL,
+    DEFAULT_API_KEY_VAR,
+    DEFAULT_ENDPOINTS_PATH,
+)
 from medarc_verifiers.cli._eval_builder import build_client_config, build_eval_config
 from medarc_verifiers.cli._schemas import ModelConfigSchema
 from medarc_verifiers.cli.utils.env_args import EnvParam, MissingEnvParamError, gather_env_cli_metadata, merge_env_args
 from medarc_verifiers.cli.utils.endpoint_utils import load_endpoint_registry
 from medarc_verifiers.cli.utils.overrides import build_cli_override
+from medarc_verifiers.cli.utils.resume import (
+    format_resume_mismatch_lines,
+    is_resume_metadata_mismatch_error,
+    load_resume_metadata_values,
+    resolve_resume_path,
+)
 from medarc_verifiers.cli.utils.shared import (
     HEADER_SEPARATOR,
     STATE_COLUMNS_SEPARATOR,
@@ -53,8 +65,6 @@ class _SingleRunEnvConfig:
     max_concurrent: int | None = None
     independent_scoring: bool = True
     state_columns: list[str] | None = None
-    save_every: int | None = None
-    print_results: bool = True
     verbose: bool | None = False
 
 
@@ -72,6 +82,8 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
 
     env_id = first_token
     remaining = args_list[1:]
+    endpoints_path_explicit = _option_was_provided(remaining, "--endpoints-path", "-e")
+    api_key_var_explicit = _option_was_provided(remaining, "--api-key-var", "-k")
 
     parser, env_group, reserved_dests = _build_base_parser_layout(require_env=True, add_help=True, env_id=env_id)
     try:
@@ -85,6 +97,17 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         args = parser.parse_args([env_id, *remaining])
     except SystemExit as exc:  # pragma: no cover - argparse already emitted error/help
         return int(exc.code)
+    try:
+        args.model_call_retries = _resolve_model_call_retries(
+            args.model_call_retries,
+            args.enable_additional_retries,
+        )
+        if args.http_max_retries is not None and args.http_max_retries < 0:
+            raise ValueError("--http-max-retries must be >= 0.")
+        if args.rollout_max_retries < 0:
+            raise ValueError("--rollout-max-retries must be >= 0.")
+    except ValueError as exc:
+        parser.error(str(exc))
 
     try:
         env_override_mapping = build_cli_override(
@@ -137,19 +160,58 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
 
     ensure_root_logging("DEBUG" if args.verbose else "INFO")
 
+    if args.model_call_retries > 0 and not args.dry_run:
+        from datetime import datetime
+
+        from medarc_verifiers.utils.retry import patch_verifiers_model_response_retry
+
+        cwd = Path.cwd()
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        retry_log_path = cwd / "logs" / f"medarc_model_retry_{ts}.log"
+        patch_verifiers_model_response_retry(
+            attempts=args.model_call_retries,
+            log_path=retry_log_path,
+        )
+
     endpoints_path = Path(args.endpoints_path).expanduser()
-    try:
-        endpoints = load_endpoint_registry(endpoints_path)
-    except Exception as exc:  # noqa: BLE001
-        parser.error(f"Failed to load endpoints registry: {exc}")
+    default_endpoints_path = Path(DEFAULT_ENDPOINTS_PATH).expanduser()
+    if not endpoints_path.exists():
+        if endpoints_path_explicit:
+            logger.error("Explicit endpoints registry path does not exist: %s", endpoints_path)
+            return 2
+        if _same_path(endpoints_path, default_endpoints_path):
+            logger.warning(
+                "Default endpoints registry '%s' not found; continuing without endpoint aliases.",
+                endpoints_path,
+            )
+        endpoints = {}
+    else:
+        try:
+            endpoints = load_endpoint_registry(endpoints_path)
+        except Exception as exc:  # noqa: BLE001
+            if endpoints_path_explicit:
+                logger.error("Failed to load explicit endpoints registry '%s': %s", endpoints_path, exc)
+                return 2
+            logger.warning(
+                "Failed to load default endpoints registry '%s'; continuing without endpoint aliases: %s",
+                endpoints_path,
+                exc,
+            )
+            endpoints = {}
+
+    if endpoints_path_explicit and not endpoints:
+        logger.error("Failed to load endpoint registry from explicit path: %s", endpoints_path)
+        return 2
 
     model_cfg = ModelConfigSchema(model=args.model)
     resolved_model, client_config, prime_sampling_overrides = build_client_config(
         model_cfg,
         endpoints=endpoints,
         default_api_key_var=args.api_key_var,
+        default_api_key_var_explicit=api_key_var_explicit,
         default_api_base_url=args.api_base_url,
         api_base_url_override=None,
+        http_max_retries_override=args.http_max_retries,
         timeout_override=args.timeout,
         headers=headers,
     )
@@ -164,10 +226,28 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         max_concurrent=args.max_concurrent,
         independent_scoring=not args.group_scoring,
         state_columns=state_columns or None,
-        save_every=args.save_every,
-        print_results=True,
         verbose=args.verbose,
     )
+
+    try:
+        resume_path = resolve_resume_path(
+            resume_arg=args.resume,
+            env_id=args.env,
+            model=resolved_model,
+            num_examples=args.num_examples,
+            rollouts_per_example=args.rollouts_per_example,
+            env_dir_path=Path(args.env_dir_path).expanduser(),
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    if isinstance(args.resume, str):
+        logger.info("Resuming from explicit path: %s", resume_path)
+    elif args.resume is True:
+        if resume_path is not None:
+            logger.info("Auto-resuming from: %s", resume_path)
+        else:
+            logger.info("No matching incomplete run found for --resume; starting a new run.")
 
     eval_config = build_eval_config(
         job_label=args.env,
@@ -183,6 +263,8 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         max_concurrent_override=args.max_concurrent,
         max_concurrent_generation=args.max_concurrent_generation,
         max_concurrent_scoring=args.max_concurrent_scoring,
+        rollout_max_retries=args.rollout_max_retries,
+        resume_path=resume_path,
         default_max_concurrent=DEFAULT_SINGLE_RUN_MAX_CONCURRENT,
         save_results=args.save_results,
         save_to_hf_hub=args.save_to_hf_hub,
@@ -196,6 +278,9 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         print(eval_config.model_dump_json(indent=2))
         return 0
 
+    if args.save_every != -1:
+        logger.warning("Single-run option --save-every is deprecated and ignored.")
+
     # Set the include_usage environment variable if explicitly specified
     if args.include_usage is not None:
         os.environ["MEDARC_INCLUDE_USAGE"] = "true" if args.include_usage else "false"
@@ -206,6 +291,19 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         logger.error("Evaluation interrupted by user.")
         return 1
     except Exception as exc:  # noqa: BLE001
+        if resume_path is not None and is_resume_metadata_mismatch_error(exc):
+            logger.error("Resume metadata mismatch for %s.", resume_path)
+            saved_values = load_resume_metadata_values(resume_path)
+            current_values = {
+                "env_id": eval_config.env_id,
+                "model": eval_config.model,
+                "rollouts_per_example": eval_config.rollouts_per_example,
+                "num_examples": eval_config.num_examples,
+            }
+            for line in format_resume_mismatch_lines(saved_values=saved_values, current_values=current_values):
+                logger.error("  %s", line)
+            logger.error("Use --resume PATH with matching settings, or start a new run.")
+            return 1
         if args.verbose:
             logger.exception("Evaluation failed.")
         else:
@@ -261,14 +359,22 @@ def _build_base_parser_layout(
     _add_and_track(core_group, "--env-args", help='Environment arguments as JSON object (e.g., \'{"key": "value"}\').')
     _add_and_track(core_group, "--env-dir-path", "-p", default="./environments", help="Path to environments directory.")
     _add_and_track(
-        core_group, "--endpoints-path", "-e", default="./configs/endpoints.py", help="Path to API endpoints registry."
+        core_group,
+        "--endpoints-path",
+        "-e",
+        default=str(DEFAULT_ENDPOINTS_PATH),
+        help="Path to API endpoints registry (TOML preferred).",
     )
     _add_and_track(core_group, "--model", "-m", default="gpt-4.1-mini", help="Model identifier to evaluate.")
     _add_and_track(
-        core_group, "--api-key-var", "-k", default="OPENAI_API_KEY", help="Environment variable name for the API key."
+        core_group,
+        "--api-key-var",
+        "-k",
+        default=DEFAULT_API_KEY_VAR,
+        help="Environment variable name for the API key.",
     )
     _add_and_track(
-        core_group, "--api-base-url", "-b", default="https://api.openai.com/v1", help="Base URL for the inference API."
+        core_group, "--api-base-url", "-b", default=DEFAULT_API_BASE_URL, help="Base URL for the inference API."
     )
     _add_and_track(
         core_group,
@@ -299,14 +405,14 @@ def _build_base_parser_layout(
         "--max-concurrent-generation",
         type=int,
         default=None,
-        help="Maximum number of concurrent generation requests.",
+        help="Deprecated: ignored.",
     )
     _add_and_track(
         core_group,
         "--max-concurrent-scoring",
         type=int,
         default=None,
-        help="Maximum number of concurrent scoring requests.",
+        help="Deprecated: ignored.",
     )
     _add_and_track(
         core_group,
@@ -314,6 +420,34 @@ def _build_base_parser_layout(
         type=float,
         default=None,
         help="Override request timeout in seconds (defaults to the verifier client default).",
+    )
+    _add_and_track(
+        core_group,
+        "--http-max-retries",
+        type=int,
+        default=None,
+        help="HTTP/client-level retries for model calls (overrides model config max_retries).",
+    )
+    _add_and_track(
+        core_group,
+        "--rollout-max-retries",
+        type=int,
+        default=0,
+        help="Retry full rollout/group on retryable infra/invalid-response errors.",
+    )
+    _add_and_track(
+        core_group,
+        "--model-call-retries",
+        type=int,
+        default=None,
+        help="Per-model-call MedARC retry attempts (0 disables the monkeypatch).",
+    )
+    _add_and_track(
+        core_group,
+        "--enable-additional-retries",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Deprecated alias for --model-call-retries (true maps to 3 attempts).",
     )
     _add_and_track(
         core_group,
@@ -367,11 +501,24 @@ def _build_base_parser_layout(
     )
     _add_and_track(
         core_group,
+        "--resume",
+        nargs="?",
+        const=True,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Resume from PATH (must contain results.jsonl and metadata.json), or pass --resume with no PATH to "
+            "auto-discover the latest matching incomplete run. Resume requires matching env/model/rollouts; "
+            "num_examples may increase but cannot decrease."
+        ),
+    )
+    _add_and_track(
+        core_group,
         "--save-every",
         "-f",
         type=int,
         default=-1,
-        help="Save results every N rollouts when --save-results is set (-1 disables periodic saves).",
+        help="Deprecated: ignored.",
     )
     _add_and_track(
         core_group,
@@ -489,6 +636,41 @@ def extract_env_cli_args(
 def parse_state_columns_arg(value: str) -> list[str]:
     columns = [part.strip() for part in value.split(STATE_COLUMNS_SEPARATOR)]
     return [column for column in columns if column]
+
+
+def _option_was_provided(argv: Sequence[str], long_flag: str, short_flag: str | None = None) -> bool:
+    for token in argv:
+        if token == long_flag or token.startswith(f"{long_flag}="):
+            return True
+        if short_flag and (token == short_flag or token.startswith(f"{short_flag}=")):
+            return True
+        if short_flag and token.startswith(short_flag) and not token.startswith("--") and len(token) > len(short_flag):
+            return True
+    return False
+
+
+def _resolve_model_call_retries(model_call_retries: int | None, deprecated_toggle: bool | None) -> int:
+    if model_call_retries is not None:
+        if model_call_retries < 0:
+            raise ValueError("--model-call-retries must be >= 0.")
+        if deprecated_toggle is not None:
+            logger.warning(
+                "Ignoring deprecated --enable-additional-retries because --model-call-retries was explicitly set."
+            )
+        return model_call_retries
+
+    if deprecated_toggle is None:
+        return 0
+
+    logger.warning("Flag --enable-additional-retries is deprecated; use --model-call-retries <attempts> instead.")
+    return 3 if deprecated_toggle else 0
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve(strict=False) == right.resolve(strict=False)
+    except OSError:
+        return left == right
 
 
 def _print_env_first_error() -> None:
