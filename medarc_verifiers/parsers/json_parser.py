@@ -6,7 +6,12 @@ from typing import Any, Callable, Iterator
 
 from pydantic import BaseModel, ValidationError
 from verifiers.parsers.parser import Parser
-from verifiers.types import ChatMessage, Messages
+from verifiers.types import Messages
+
+try:
+    from verifiers.types import ChatMessage as TextMessage
+except ImportError:
+    from verifiers.types import TextMessage
 
 
 class JSONParser(Parser):
@@ -190,7 +195,7 @@ class JSONParser(Parser):
 
         return json.dumps(payload, ensure_ascii=False, indent=2)
 
-    def get_format_reward_func(self) -> Callable[[list[ChatMessage]], float]:
+    def get_format_reward_func(self) -> Callable[[list[TextMessage]], float]:
         """
         Return a reward function that checks if messages follow the expected format.
 
@@ -199,7 +204,7 @@ class JSONParser(Parser):
         - Fields from the schema are present with valid content
         """
 
-        def format_reward_func(completion: list[ChatMessage], **_: Any) -> float:
+        def format_reward_func(completion: list[TextMessage], **_: Any) -> float:
             messages = self.get_assistant_messages(completion)
             if not messages:
                 return 0.0
