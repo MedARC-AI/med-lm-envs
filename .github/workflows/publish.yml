@@ -32,8 +32,8 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "pyproject.toml"
 
-      - name: Install optimi
-        run: uv sync --group cpu
+      - name: Install
+        run: uv sync
 
       - name: Build
         run: uv build
