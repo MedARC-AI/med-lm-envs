@@ -2,7 +2,7 @@
 name = "medarc-verifiers"
 version = "0.1.0"
 description = "A collection of MedARC utilites for Prime Intellect's verifiers package"
-readme = "README.md"
+readme = "docs/README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
 dependencies = [
