@@ -12,7 +12,8 @@ from datasets.utils.logging import disable_progress_bar
 from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric
 from medarc_verifiers.utils import default_judge_api_key, download_file, judge_sampling_args_and_headers
 from openai import AsyncOpenAI
-from verifiers.types import Info, Messages, State
+from medarc_verifiers.types import Messages
+from verifiers.types import Info, State
 
 from medrbench.prompts import (
     DEFAULT_SYSTEM_PROMPT,

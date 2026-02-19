@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 import verifiers as vf
 from datasets import Dataset
 from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric
+from medarc_verifiers.types import Messages
 from medarc_verifiers.utils import default_judge_api_key, judge_sampling_args_and_headers
 from openai import AsyncOpenAI
 
@@ -329,7 +330,7 @@ class AgentClinicEnv(vf.MultiTurnEnv):
         last_text = extract_last_assistant_text(last_completion)
         return "DIAGNOSIS READY" in (last_text or "").upper()
 
-    async def env_response(self, messages: vf.Messages, state: vf.State, **kwargs: Any) -> vf.Messages:
+    async def env_response(self, messages: Messages, state: vf.State, **kwargs: Any) -> Messages:
         patient_agent: PatientAgent = state["_patient_agent"]
         measurement_agent: MeasurementAgent = state["_measurement_agent"]
 
@@ -476,7 +477,7 @@ def load_environment(
     )
     rubric = MultiJudgeRubric(multi_judge, parser=parser)
 
-    async def diagnosis_reward_func(completion: vf.Messages, info: vf.Info, state: vf.State, **_kwargs: Any) -> float:
+    async def diagnosis_reward_func(completion: Messages, info: vf.Info, state: vf.State, **_kwargs: Any) -> float:
         info.setdefault("turns_used", _turn_count(state))
         info.setdefault("exam_requests", state.get("num_exams_requested", 0))
         info.setdefault("test_requests", state.get("num_tests_requested", 0))

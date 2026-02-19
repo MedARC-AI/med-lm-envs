@@ -17,7 +17,8 @@ from datasets import load_dataset
 from datasets.utils.logging import disable_progress_bar
 from medarc_verifiers.parsers import JSONParser
 from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric
-from verifiers.types import Info, Messages, State
+from medarc_verifiers.types import Messages
+from verifiers.types import Info, State
 
 disable_progress_bar()  # suppress datasets progress bar
 

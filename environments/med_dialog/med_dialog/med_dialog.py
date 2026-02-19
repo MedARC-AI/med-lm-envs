@@ -9,7 +9,8 @@ from medarc_verifiers.parsers import JSONParser
 from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric
 from medarc_verifiers.rewards import normalize_helm_reward
 from medarc_verifiers.utils import download_file
-from verifiers.types import Info, Messages, State
+from medarc_verifiers.types import Messages
+from verifiers.types import Info, State
 
 from med_dialog.judge_prompts import JUDGE_OUTPUT_JSON, JUDGE_TEMPLATE
 

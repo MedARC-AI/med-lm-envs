@@ -9,7 +9,8 @@ from datasets import load_dataset
 from datasets.utils.logging import disable_progress_bar
 from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric
 from verifiers.envs.singleturn_env import SingleTurnEnv
-from verifiers.types import Info, Messages, State
+from medarc_verifiers.types import Messages
+from verifiers.types import Info, State
 
 HEALTHBENCH_DATASET_MAPPING = {
     "all": "neuralleap/healthbench-regular",

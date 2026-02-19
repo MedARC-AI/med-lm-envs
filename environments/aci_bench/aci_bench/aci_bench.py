@@ -8,7 +8,8 @@ from medarc_verifiers.parsers import JSONParser
 from medarc_verifiers.prompts import XML_SYSTEM_PROMPT, AnswerFormat
 from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric
 from medarc_verifiers.rewards import normalize_helm_reward
-from verifiers.types import Info, Messages, State
+from medarc_verifiers.types import Messages
+from verifiers.types import Info, State
 from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, extract_boxed_answer
 
 disable_progress_bar()  # suppress datasets progress indicators

@@ -12,7 +12,8 @@ from medarc_verifiers.utils import (
     medarc_cache_dir,
 )
 from medarc_verifiers.rewards import normalize_helm_reward
-from verifiers.types import Info, Messages, State
+from medarc_verifiers.types import Messages
+from verifiers.types import Info, State
 
 from medicationqa.judge_prompts import JUDGE_OUTPUT_JSON, JUDGE_TEMPLATE
 
