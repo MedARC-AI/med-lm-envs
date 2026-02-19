@@ -15,6 +15,7 @@ WINRATE_COMMAND = "winrate"
 
 DEFAULT_API_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_API_KEY_VAR = "OPENAI_API_KEY"
+DEFAULT_ENDPOINTS_PATH = Path("configs") / "endpoints.toml"
 DEFAULT_ENV_DIR = Path("environments")
 DEFAULT_ENV_CONFIG_ROOT = Path("configs") / "envs"
 DEFAULT_RUNS_RAW_DIR = Path("runs") / "raw"

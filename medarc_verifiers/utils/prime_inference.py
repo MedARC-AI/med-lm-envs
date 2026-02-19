@@ -30,8 +30,8 @@ def prime_inference_overrides(
     base_url: str | None,
     *,
     include_usage: bool | None = None,
-) -> tuple[dict[str, str], dict[str, Any], str | None]:
-    """Return Prime Inference-specific headers, sampling_args overrides, and api_key_var.
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """Return Prime Inference-specific headers and sampling_args overrides.
 
     Args:
         base_url: The API base URL. If it matches Prime Inference, overrides are returned.
@@ -39,27 +39,21 @@ def prime_inference_overrides(
             based on MEDARC_INCLUDE_USAGE env var or Prime Inference URL.
 
     Returns:
-        A tuple of (extra_headers, sampling_args_overrides, api_key_var).
+        A tuple of (extra_headers, sampling_args_overrides).
         - extra_headers: {"X-Prime-Team-ID": ...} if PRIME_TEAM_ID is set, else {}
         - sampling_args_overrides: {"extra_body": {"usage": {"include": True}}} if enabled, else {}
-        - api_key_var: "PRIME_API_KEY" if using Prime Inference and PRIME_API_KEY is set, else None
     """
     is_prime = base_url == PRIME_INFERENCE_URL
     extra_headers: dict[str, str] = {}
     sampling_overrides: dict[str, Any] = {}
-    api_key_var: str | None = None
 
     if is_prime:
         prime_team_id = os.environ.get("PRIME_TEAM_ID")
         if prime_team_id:
             extra_headers["X-Prime-Team-ID"] = prime_team_id
 
-        # Use PRIME_API_KEY if available
-        if os.environ.get("PRIME_API_KEY"):
-            api_key_var = "PRIME_API_KEY"
-
     effective_include_usage = _resolve_include_usage(include_usage, is_prime)
     if effective_include_usage:
         sampling_overrides["extra_body"] = {"usage": {"include": True}}
 
-    return extra_headers, sampling_overrides, api_key_var
+    return extra_headers, sampling_overrides

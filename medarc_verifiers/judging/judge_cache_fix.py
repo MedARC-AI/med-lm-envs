@@ -29,17 +29,6 @@ def _judge_cache_key(rubric) -> str:
     return f"{base_url_str}::{rubric.judge_model}"
 
 
-def _get_token_tracking_core():
-    try:
-        from medarc_verifiers.utils import token_tracker
-    except Exception:
-        return None
-
-    if getattr(token_tracker, "TOKEN_TRACKING_ENABLED", False):
-        return token_tracker.get_judge_core_with_tokens()
-    return None
-
-
 def install_cache_patch() -> bool:
     try:
         from verifiers.rubrics.judge_rubric import JudgeRubric
@@ -72,24 +61,13 @@ def install_cache_patch() -> bool:
             if judge_prompt in judge_cache:
                 return judge_cache[judge_prompt]
 
-            token_tracking_core = _get_token_tracking_core()
-            if token_tracking_core is not None:
-                response_text = await token_tracking_core(
-                    self.judge_client,
-                    self.judge_model,
-                    judge_prompt,
-                    self.judge_sampling_args,
-                    state,
-                    self.logger,
-                )
-            else:
-                response_text, _ = await call_judge_model(
-                    self.judge_client,
-                    self.judge_model,
-                    judge_prompt,
-                    self.judge_sampling_args,
-                    self.logger,
-                )
+            response_text, _ = await call_judge_model(
+                self.judge_client,
+                self.judge_model,
+                judge_prompt,
+                self.judge_sampling_args,
+                self.logger,
+            )
 
             # Write back without clobbering other concurrent updates:
             # we mutate the shared nested dict in-place.

@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from verifiers.types import ClientConfig, EvalConfig
+from verifiers.types import ClientConfig, EndpointClientConfig, EvalConfig
 
 from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, ModelConfigSchema
 from medarc_verifiers.cli.utils.endpoint_utils import (
@@ -23,7 +23,7 @@ from medarc_verifiers.cli.utils.shared import (
     resolve_env_identifier,
     resolve_max_concurrent,
 )
-from medarc_verifiers.utils.prime_inference import prime_inference_overrides
+from medarc_verifiers.utils.prime_inference import PRIME_INFERENCE_URL, prime_inference_overrides
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +33,10 @@ def build_client_config(
     *,
     endpoints: EndpointRegistry,
     default_api_key_var: str,
+    default_api_key_var_explicit: bool,
     default_api_base_url: str,
     api_base_url_override: str | None,
+    http_max_retries_override: int | None,
     timeout_override: float | None,
     headers: list[str] | dict[str, str] | None,
 ) -> tuple[str, ClientConfig, dict[str, Any]]:
@@ -51,8 +53,10 @@ def build_client_config(
     if not model_alias:
         raise ValueError("Model entries must define 'id' or 'model'.")
 
-    default_key_var = model_cfg.api_key_var or default_api_key_var
+    model_api_key_var_explicit = model_cfg.api_key_var is not None
+    default_key_var = model_cfg.api_key_var if model_api_key_var_explicit else default_api_key_var
     default_base_url = model_cfg.api_base_url or default_api_base_url
+    endpoint_group = endpoints.get(model_alias, [])
     resolved_model, api_key_var, api_base_url = resolve_model_endpoint(
         model_alias,
         endpoints,
@@ -63,18 +67,52 @@ def build_client_config(
         logger.debug("Forcing api_base_url override for model '%s'.", model_alias)
         api_base_url = api_base_url_override
 
-    # Get Prime Inference-specific overrides (headers, sampling args, api_key_var)
-    prime_headers, sampling_overrides, prime_api_key_var = prime_inference_overrides(api_base_url)
+    # Get Prime Inference-specific overrides (headers + sampling args).
+    prime_headers, sampling_overrides = prime_inference_overrides(api_base_url)
 
-    # Use Prime API key if auto-detected and user didn't explicitly override
-    effective_api_key_var = prime_api_key_var if prime_api_key_var else api_key_var
+    effective_api_key_var = api_key_var
+    # MedARC defaults to OPENAI_API_KEY. For Prime URLs, force PRIME_API_KEY only when
+    # neither model config nor CLI explicitly selected a key var, and no endpoint
+    # registry group resolved this alias (which may intentionally provide a custom key var).
+    if (
+        api_base_url == PRIME_INFERENCE_URL
+        and not model_api_key_var_explicit
+        and not default_api_key_var_explicit
+        and not endpoint_group
+    ):
+        effective_api_key_var = "PRIME_API_KEY"
 
     # Merge headers: user-provided headers take precedence over Prime auto-detected
     merged_headers = {**prime_headers, **(normalized_headers or {})}
 
+    endpoint_configs: list[EndpointClientConfig] = []
+    if api_base_url_override is None and len(endpoint_group) > 1:
+        first_entry = endpoint_group[0]
+        expected_model = first_entry.get("model", model_alias)
+        expected_key = first_entry.get("key", default_key_var)
+        for idx, endpoint in enumerate(endpoint_group[1:], start=1):
+            entry_model = endpoint.get("model", model_alias)
+            entry_key = endpoint.get("key", default_key_var)
+            if entry_model != expected_model or entry_key != expected_key:
+                raise ValueError(
+                    "Endpoint replicas for "
+                    f"'{model_alias}' must agree on 'model' and 'key'; "
+                    f"variant 0 has model={expected_model!r}, key={expected_key!r}, "
+                    f"variant {idx} has model={entry_model!r}, key={entry_key!r}."
+                )
+        endpoint_configs = [
+            EndpointClientConfig(
+                api_key_var=effective_api_key_var,
+                api_base_url=endpoint["url"],
+                extra_headers=merged_headers,
+            )
+            for endpoint in endpoint_group
+        ]
+
     client_kwargs: dict[str, Any] = {
         "api_key_var": effective_api_key_var,
         "api_base_url": api_base_url,
+        "endpoint_configs": endpoint_configs,
         "extra_headers": merged_headers,
     }
     timeout = timeout_override if timeout_override is not None else model_cfg.timeout
@@ -84,7 +122,9 @@ def build_client_config(
         client_kwargs["max_connections"] = model_cfg.max_connections
     if model_cfg.max_keepalive_connections is not None:
         client_kwargs["max_keepalive_connections"] = model_cfg.max_keepalive_connections
-    if model_cfg.max_retries is not None:
+    if http_max_retries_override is not None:
+        client_kwargs["max_retries"] = http_max_retries_override
+    elif model_cfg.max_retries is not None:
         client_kwargs["max_retries"] = model_cfg.max_retries
 
     return resolved_model, ClientConfig(**client_kwargs), sampling_overrides
@@ -105,6 +145,8 @@ def build_eval_config(
     max_concurrent_override: int | None,
     max_concurrent_generation: int | None,
     max_concurrent_scoring: int | None,
+    rollout_max_retries: int = 0,
+    resume_path: Path | None = None,
     default_max_concurrent: int = DEFAULT_BATCH_MAX_CONCURRENT,
     save_results: bool = True,
     save_to_hf_hub: bool = False,
@@ -136,14 +178,26 @@ def build_eval_config(
     merged_sampling = dict(sampling_args)
     merged_sampling = merge_sampling_overrides(merged_sampling, cli_sampling_args)
 
+    _warn_deprecated_eval_knobs(
+        env_cfg=env_cfg,
+        env_id=env_id,
+        job_label=job_label,
+        max_concurrent_generation=max_concurrent_generation,
+        max_concurrent_scoring=max_concurrent_scoring,
+    )
+
     max_concurrent = resolve_max_concurrent(
         cli_override=max_concurrent_override,
         model_max=model_cfg.max_concurrent,
         env_max=env_cfg.max_concurrent,
         default_max=default_max_concurrent,
     )
+    effective_save_results = save_results
+    if resume_path is not None and not effective_save_results:
+        logger.warning("Enabling save_results (required for resume support).")
+        effective_save_results = True
+
     verbose_flag = env_cfg.verbose if env_cfg.verbose is not None else verbose
-    save_every = env_cfg.save_every if env_cfg.save_every is not None else -1
     state_columns = list(env_cfg.state_columns) if env_cfg.state_columns else None
     eval_config_fields = _pydantic_field_names(EvalConfig)
 
@@ -157,16 +211,16 @@ def build_eval_config(
         "num_examples": env_cfg.num_examples,
         "rollouts_per_example": env_cfg.rollouts_per_example,
         "max_concurrent": max_concurrent,
-        "max_concurrent_generation": max_concurrent_generation,
-        "max_concurrent_scoring": max_concurrent_scoring,
-        "print_results": env_cfg.print_results,
         "verbose": verbose_flag,
         "state_columns": state_columns,
-        "save_results": save_results,
-        "save_every": save_every,
+        "save_results": effective_save_results,
         "save_to_hf_hub": save_to_hf_hub,
         "hf_hub_dataset_name": hf_hub_dataset_name,
     }
+    if "max_retries" in eval_config_fields:
+        eval_kwargs["max_retries"] = rollout_max_retries
+    if "resume_path" in eval_config_fields:
+        eval_kwargs["resume_path"] = resume_path
 
     independent_scoring = getattr(env_cfg, "independent_scoring", None)
     interleave_scoring = getattr(env_cfg, "interleave_scoring", None)
@@ -214,3 +268,39 @@ def _pydantic_field_names(model_type: type[Any]) -> set[str]:
     if isinstance(fields, dict):
         return set(fields.keys())
     return set()
+
+
+def _warn_deprecated_eval_knobs(
+    *,
+    env_cfg: Any,
+    env_id: str,
+    job_label: str | None,
+    max_concurrent_generation: int | None,
+    max_concurrent_scoring: int | None,
+) -> None:
+    env_fields_set = set(getattr(env_cfg, "model_fields_set", set()))
+
+    deprecated_env_knobs: list[str] = []
+    if "save_every" in env_fields_set and getattr(env_cfg, "save_every", None) is not None:
+        deprecated_env_knobs.append("save_every")
+    if "print_results" in env_fields_set:
+        deprecated_env_knobs.append("print_results")
+    if deprecated_env_knobs:
+        logger.warning(
+            "Environment '%s' sets deprecated eval knob(s): %s. These options are ignored.",
+            env_id,
+            ", ".join(sorted(deprecated_env_knobs)),
+        )
+
+    deprecated_concurrency_knobs: list[str] = []
+    if max_concurrent_generation is not None:
+        deprecated_concurrency_knobs.append("max_concurrent_generation")
+    if max_concurrent_scoring is not None:
+        deprecated_concurrency_knobs.append("max_concurrent_scoring")
+    if deprecated_concurrency_knobs:
+        label = job_label or env_id
+        logger.warning(
+            "Job '%s' sets deprecated eval knob(s): %s. These options are ignored.",
+            label,
+            ", ".join(sorted(deprecated_concurrency_knobs)),
+        )

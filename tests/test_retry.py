@@ -1,7 +1,8 @@
 import httpx
 import pytest
+from verifiers.errors import ModelError
 
-from medarc_verifiers.utils.retry import call_with_retries
+from medarc_verifiers.utils.retry import call_with_retries, should_retry_exception
 
 
 class DummyResponse:
@@ -88,3 +89,55 @@ async def test_call_with_retries_403_policy_violation_only_retries_once():
     with pytest.raises(DummyPolicyViolation403):
         await call_with_retries(always_bad, attempts=5, backoff_s=0)
     assert attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_call_with_retries_unwraps_verifiers_model_error_chain():
+    attempts = 0
+
+    async def flaky():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            request = httpx.Request("GET", "https://example.com")
+            response = httpx.Response(500, request=request)
+            try:
+                raise httpx.HTTPStatusError("server error", request=request, response=response)
+            except httpx.HTTPStatusError as exc:
+                raise ModelError("wrapped model error") from exc
+        return "ok"
+
+    result = await call_with_retries(flaky, attempts=2, backoff_s=0)
+    assert result == "ok"
+    assert attempts == 2
+
+
+def test_should_retry_exception_unwraps_verifiers_model_error_chain():
+    request = httpx.Request("GET", "https://example.com")
+    response = httpx.Response(429, request=request)
+    try:
+        raise httpx.HTTPStatusError("rate limited", request=request, response=response)
+    except httpx.HTTPStatusError as exc:
+        wrapped = ModelError("wrapped model error")
+        wrapped.__cause__ = exc
+
+    retry, code, _reason, _delay = should_retry_exception(wrapped)
+    assert retry is True
+    assert code == 429
+
+
+def test_should_retry_exception_unwraps_verifiers_model_error_with_wrapper_layer():
+    request = httpx.Request("GET", "https://example.com")
+    response = httpx.Response(429, request=request)
+    try:
+        raise httpx.HTTPStatusError("rate limited", request=request, response=response)
+    except httpx.HTTPStatusError as inner_exc:
+        try:
+            raise RuntimeError("intermediate wrapper") from inner_exc
+        except RuntimeError as wrapper_exc:
+            wrapped = ModelError("wrapped model error")
+            wrapped.__cause__ = wrapper_exc
+
+    retry, code, _reason, _delay = should_retry_exception(wrapped)
+    assert retry is True
+    assert code == 429

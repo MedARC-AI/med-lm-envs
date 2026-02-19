@@ -60,6 +60,12 @@ def _setup_run(tmp_path: Path) -> Path:
         "env_id": "demo-env-rollout3",
         "env_args": {},
         "sampling_args": {},
+        "version_info": {
+            "vf_version": "0.1.10",
+            "vf_commit": "abc123",
+            "env_version": "1.0.0",
+            "env_commit": None,
+        },
     }
     _write_json(results_dir / "metadata.json", metadata)
     results = [
@@ -176,6 +182,52 @@ def test_run_process_resolves_base_env_id(tmp_path: Path) -> None:
     assert group.env_id == "demo-env"
     assert group.base_env_id == "demo-env"
     assert group.model_id == "gpt-mini"
+
+
+def test_run_process_writes_version_info_column(tmp_path: Path) -> None:
+    runs_dir = _setup_run(tmp_path)
+    output_dir = tmp_path / "processed"
+    options = ProcessOptions(
+        runs_dir=runs_dir,
+        output_dir=output_dir,
+        dry_run=False,
+        max_workers=1,
+    )
+
+    result = run_process(options)
+    summary = result.env_summaries[0]
+    table = pq.read_table(summary.output_path)
+
+    assert "version_info" in table.column_names
+    encoded = table.column("version_info").to_pylist()[0]
+    assert isinstance(encoded, str)
+    payload = json.loads(encoded)
+    assert payload["vf_version"] == "0.1.10"
+
+
+def test_run_process_backward_compat_without_version_info(tmp_path: Path) -> None:
+    runs_dir = _write_run(
+        tmp_path,
+        run_id="run-no-version",
+        updated_at="2024-01-01T00:01:00Z",
+        reward=1.0,
+        env_id="demo-env-rollout3",
+        model_id="gpt-mini",
+    )
+    output_dir = tmp_path / "processed"
+    options = ProcessOptions(
+        runs_dir=runs_dir,
+        output_dir=output_dir,
+        dry_run=False,
+        max_workers=1,
+    )
+
+    result = run_process(options)
+    summary = result.env_summaries[0]
+    table = pq.read_table(summary.output_path)
+
+    assert "version_info" in table.column_names
+    assert table.column("version_info").to_pylist() == [None]
 
 
 def test_run_process_excludes_datasets(tmp_path: Path) -> None:

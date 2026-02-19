@@ -12,18 +12,18 @@ def test_load_endpoint_registry_uses_cache(monkeypatch, tmp_path: Path) -> None:
 
     def fake_loader(path: str):
         calls.append(path)
-        return {"alias": {"model": "resolved"}}
+        return {"alias": [{"model": "resolved", "key": "REGISTRY_KEY", "url": "https://registry.test"}]}
 
     monkeypatch.setattr(utils, "load_endpoints", fake_loader)
 
-    cache: dict[str, dict[str, dict[str, str]]] = {}
+    cache: dict[str, utils.EndpointRegistry] = {}
     endpoints_path = tmp_path / "endpoints.py"
     endpoints_path.write_text("# dummy")
 
     first = utils.load_endpoint_registry(endpoints_path, cache=cache)
     second = utils.load_endpoint_registry(endpoints_path, cache=cache)
 
-    assert first == {"alias": {"model": "resolved"}}
+    assert first == {"alias": [{"model": "resolved", "key": "REGISTRY_KEY", "url": "https://registry.test"}]}
     assert first is second  # Cached object returned
     assert len(calls) == 1
 
@@ -55,7 +55,7 @@ def test_load_env_metadata_uses_cache(monkeypatch) -> None:
     ],
 )
 def test_resolve_model_endpoint_handles_aliases(model: str, expected: tuple[str, str, str]) -> None:
-    registry = {"alias": {"model": "true-model", "key": "SPECIAL_KEY", "url": "https://example.test"}}
+    registry = {"alias": [{"model": "true-model", "key": "SPECIAL_KEY", "url": "https://example.test"}]}
 
     resolved = utils.resolve_model_endpoint(
         model,
@@ -65,3 +65,23 @@ def test_resolve_model_endpoint_handles_aliases(model: str, expected: tuple[str,
     )
 
     assert resolved == expected
+
+
+def test_resolve_model_endpoint_uses_first_variant_and_logs_variant_count(caplog: pytest.LogCaptureFixture) -> None:
+    registry = {
+        "alias": [
+            {"model": "primary-model", "key": "PRIMARY_KEY", "url": "https://primary.example/v1"},
+            {"model": "secondary-model", "key": "SECONDARY_KEY", "url": "https://secondary.example/v1"},
+        ]
+    }
+
+    with caplog.at_level("DEBUG"):
+        resolved = utils.resolve_model_endpoint(
+            "alias",
+            registry,
+            default_key_var="OPENAI_API_KEY",
+            default_base_url="https://api.openai.com/v1",
+        )
+
+    assert resolved == ("primary-model", "PRIMARY_KEY", "https://primary.example/v1")
+    assert "Endpoint id 'alias' has 2 variants configured." in caplog.text

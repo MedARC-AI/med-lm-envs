@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from medarc_verifiers.cli._constants import DEFAULT_ENDPOINTS_PATH
 from medarc_verifiers.cli._job_builder import ResolvedJob
-from medarc_verifiers.cli._job_executor import ExecutorSettings, JobExecutionResult, execute_jobs
+from medarc_verifiers.cli._job_executor import (
+    ExecutorSettings,
+    JobExecutionResult,
+    _load_endpoints_for_model,
+    execute_jobs,
+)
 from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, ModelConfigSchema
 from medarc_verifiers.cli.utils.env_args import EnvParam
 
@@ -37,6 +44,7 @@ def _settings(tmp_path: Path, **overrides: object) -> ExecutorSettings:
         output_dir=tmp_path / "runs",
         env_dir=tmp_path / "environments",
         endpoints_path=tmp_path / "endpoints.py",
+        endpoints_path_explicit=False,
         default_api_key_var="DEFAULT_KEY",
         default_api_base_url="https://api.default",
         log_level="INFO",
@@ -68,6 +76,17 @@ def _stub_results(value: float = 0.5) -> SimpleNamespace:
     return SimpleNamespace(metadata=metadata, reward=[value], metrics={"pass_rate": [value]})
 
 
+def _stub_results_metadata_only(value: float = 0.5) -> SimpleNamespace:
+    metadata = SimpleNamespace(
+        path_to_save="",
+        avg_reward=value,
+        num_examples=2,
+        rollouts_per_example=3,
+        avg_metrics={"pass_rate": value, "accuracy": value / 2},
+    )
+    return SimpleNamespace(metadata=metadata)
+
+
 def test_execute_jobs_invokes_run_evaluation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     captured = {}
 
@@ -79,7 +98,7 @@ def test_execute_jobs_invokes_run_evaluation(monkeypatch: pytest.MonkeyPatch, tm
     monkeypatch.setattr(
         "medarc_verifiers.cli._job_executor.load_endpoint_registry",
         lambda path, cache=None: {
-            "alias": {"model": "resolved-model", "key": "MODEL_KEY", "url": "https://api.resolved"}
+            "alias": [{"model": "resolved-model", "key": "MODEL_KEY", "url": "https://api.resolved"}]
         },
     )
     monkeypatch.setattr(
@@ -108,6 +127,7 @@ def test_execute_jobs_invokes_run_evaluation(monkeypatch: pytest.MonkeyPatch, tm
     assert "config" in captured
     config = captured["config"]
     assert config.model == "resolved-model"
+    assert Path(str(config.resume_path)) == (tmp_path / "runs" / "run-1" / job.job_id)
     assert config.client_config.api_key_var == "MODEL_KEY"
     assert config.client_config.api_base_url == "https://api.resolved"
     assert config.client_config.extra_headers == {"X-Test": "1"}
@@ -151,6 +171,210 @@ def test_execute_jobs_records_failures(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert "alias-medqa" in result.error
     assert "env=medqa" in result.error
     assert result.output_path == (tmp_path / "runs" / "run-1" / job.job_id)
+
+
+def test_materialize_results_noop_logs_debug_when_source_matches_job_dir(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def fake_run(config):
+        metadata = SimpleNamespace(
+            path_to_save=str(config.resume_path),
+            avg_reward=0.5,
+            num_examples=1,
+            rollouts_per_example=1,
+            avg_metrics={"pass_rate": 0.5},
+        )
+        return SimpleNamespace(metadata=metadata, reward=[0.5], metrics={"pass_rate": [0.5]})
+
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda path, cache=None: {})
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda env_id, cache=None: [])
+
+    job = ResolvedJob(
+        job_id="alias-medqa",
+        name="alias-medqa",
+        model=ModelConfigSchema(id="alias"),
+        env=EnvironmentConfigSchema(id="medqa"),
+        env_args={},
+        sampling_args={},
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        results = execute_jobs([job], _settings(tmp_path, log_level="DEBUG"))
+
+    assert results[0].status == "succeeded"
+    assert "Results already in job_dir; _materialize_results no-op" in caplog.text
+
+
+def test_forced_job_archives_and_resets_existing_job_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_run(config):
+        captured["resume_path"] = config.resume_path
+        metadata = SimpleNamespace(
+            path_to_save=str(config.resume_path),
+            avg_reward=0.5,
+            num_examples=1,
+            rollouts_per_example=1,
+            avg_metrics={"pass_rate": 0.5},
+        )
+        return SimpleNamespace(metadata=metadata, reward=[0.5], metrics={"pass_rate": [0.5]})
+
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda path, cache=None: {})
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda env_id, cache=None: [])
+
+    job = ResolvedJob(
+        job_id="alias-medqa",
+        name="alias-medqa",
+        model=ModelConfigSchema(id="alias"),
+        env=EnvironmentConfigSchema(id="medqa"),
+        env_args={},
+        sampling_args={},
+    )
+    run_dir = tmp_path / "runs" / "run-1"
+    job_dir = run_dir / job.job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "stale.txt").write_text("stale", encoding="utf-8")
+
+    results = execute_jobs([job], _settings(tmp_path, forced_job_ids={job.job_id}))
+
+    assert results[0].status == "succeeded"
+    assert Path(str(captured["resume_path"])) == job_dir
+    archived = sorted(run_dir.glob(f"{job.job_id}__old_*"))
+    assert len(archived) == 1
+    assert (archived[0] / "stale.txt").exists()
+    assert job_dir.exists()
+    assert not (job_dir / "stale.txt").exists()
+
+
+def test_non_forced_invalid_nonempty_job_dir_fails_prescriptively(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def fail_if_called(_config):
+        raise AssertionError("run_evaluation should not run when preflight fails")
+
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fail_if_called)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda path, cache=None: {})
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda env_id, cache=None: [])
+
+    job = ResolvedJob(
+        job_id="alias-medqa",
+        name="alias-medqa",
+        model=ModelConfigSchema(id="alias"),
+        env=EnvironmentConfigSchema(id="medqa"),
+        env_args={},
+        sampling_args={},
+    )
+    job_dir = tmp_path / "runs" / "run-1" / job.job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "orphan.log").write_text("invalid state", encoding="utf-8")
+
+    results = execute_jobs([job], _settings(tmp_path))
+
+    assert len(results) == 1
+    assert results[0].status == "failed"
+    assert results[0].error is not None
+    assert "not a valid evaluation results path" in results[0].error
+    assert "--force" in results[0].error
+    assert "new run_id" in results[0].error
+
+
+def test_batch_resume_mismatch_logs_saved_and_current_values(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    job = ResolvedJob(
+        job_id="alias-medqa",
+        name="alias-medqa",
+        model=ModelConfigSchema(id="alias"),
+        env=EnvironmentConfigSchema(id="medqa", num_examples=5, rollouts_per_example=3),
+        env_args={},
+        sampling_args={},
+    )
+    job_dir = tmp_path / "runs" / "run-1" / job.job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "results.jsonl").write_text("", encoding="utf-8")
+    (job_dir / "metadata.json").write_text(
+        ('{"env_id":"saved-env","model":"saved-model","rollouts_per_example":2,"num_examples":8}'),
+        encoding="utf-8",
+    )
+
+    async def fake_run(_config):
+        raise ValueError(
+            f"Cannot resume from {job_dir}: metadata mismatch (env_id: saved='saved-env', current='medqa')"
+        )
+
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda path, cache=None: {})
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda env_id, cache=None: [])
+
+    with caplog.at_level(logging.ERROR):
+        results = execute_jobs([job], _settings(tmp_path))
+
+    assert len(results) == 1
+    assert results[0].status == "failed"
+    assert results[0].error is not None
+    assert "incompatible prior results" in results[0].error
+    assert "Resume metadata mismatch for job 'alias-medqa'" in caplog.text
+    assert "env_id: saved='saved-env', current='medqa'" in caplog.text
+    assert "model: saved='saved-model', current='alias'" in caplog.text
+    assert "rollouts_per_example: saved=2, current=3" in caplog.text
+    assert "num_examples: saved=8, current=5 (current must be >= saved)" in caplog.text
+
+
+def test_execute_jobs_uses_metadata_averages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    class _ManifestStub:
+        def __init__(self) -> None:
+            self.started: list[str] = []
+            self.completed: list[dict[str, object]] = []
+
+        def record_job_start(self, job_id: str) -> None:
+            self.started.append(job_id)
+
+        def record_job_completion(self, job_id: str, **kwargs: object) -> None:
+            payload = {"job_id": job_id}
+            payload.update(kwargs)
+            self.completed.append(payload)
+
+        def record_job_failure(self, job_id: str, **kwargs: object) -> None:
+            raise AssertionError(f"Job should not fail: {job_id}, {kwargs}")
+
+    async def fake_run(config):
+        return _stub_results_metadata_only(0.8)
+
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda path, cache=None: {})
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda env_id, cache=None: [])
+
+    job = ResolvedJob(
+        job_id="alias-medqa",
+        name="alias-medqa",
+        model=ModelConfigSchema(id="alias"),
+        env=EnvironmentConfigSchema(id="medqa"),
+        env_args={},
+        sampling_args={},
+    )
+    manifest = _ManifestStub()
+
+    results = execute_jobs([job], _settings(tmp_path), manifest=manifest)
+
+    assert results[0].status == "succeeded"
+    assert manifest.started == ["alias-medqa"]
+    assert len(manifest.completed) == 1
+    completed = manifest.completed[0]
+    assert completed["job_id"] == "alias-medqa"
+    assert completed["avg_reward"] == pytest.approx(0.8)
+    metrics = completed["metrics"]
+    assert isinstance(metrics, dict)
+    assert metrics["pass_rate"] == pytest.approx(0.8)
+    assert metrics["accuracy"] == pytest.approx(0.4)
+    assert completed["num_examples"] == 2
+    assert completed["rollouts_per_example"] == 3
 
 
 def test_execute_jobs_respects_dry_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -388,3 +612,69 @@ def test_job_sleep_overrides_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 
     assert all(result.status == "succeeded" for result in results)
     assert sleep_calls == [pytest.approx(1.5)]
+
+
+def test_execute_jobs_warns_for_deprecated_eval_knobs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def fake_run(config):  # noqa: ARG001
+        return _stub_results()
+
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.run_evaluation", fake_run)
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_endpoint_registry", lambda path, cache=None: {})
+    monkeypatch.setattr("medarc_verifiers.cli._job_executor.load_env_metadata", lambda env_id, cache=None: [])
+
+    model_cfg = ModelConfigSchema(id="alias")
+    env_cfg = EnvironmentConfigSchema(
+        id="medqa",
+        save_every=5,
+        print_results=True,
+    )
+    job = ResolvedJob(
+        job_id="alias-medqa",
+        name="alias-medqa",
+        model=model_cfg,
+        env=env_cfg,
+        env_args={},
+        sampling_args={},
+    )
+
+    with caplog.at_level(logging.WARNING):
+        results = execute_jobs(
+            [job],
+            _settings(
+                tmp_path,
+                max_concurrent_generation=2,
+                max_concurrent_scoring=3,
+            ),
+        )
+
+    assert results[0].status == "succeeded"
+    assert "Environment 'medqa' sets deprecated eval knob(s): print_results, save_every" in caplog.text
+    assert (
+        "Job 'alias-medqa' sets deprecated eval knob(s): max_concurrent_generation, max_concurrent_scoring"
+        in caplog.text
+    )
+
+
+def test_load_endpoints_for_model_missing_default_path_is_non_fatal(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    settings = _settings(tmp_path, endpoints_path=Path(DEFAULT_ENDPOINTS_PATH), endpoints_path_explicit=False)
+    model_cfg = ModelConfigSchema(id="alias")
+
+    endpoints = _load_endpoints_for_model(model_cfg, settings, cache=None)
+
+    assert endpoints == {}
+
+
+def test_load_endpoints_for_model_missing_explicit_path_raises(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, endpoints_path=tmp_path / "missing.toml", endpoints_path_explicit=True)
+    model_cfg = ModelConfigSchema(id="alias")
+
+    with pytest.raises(FileNotFoundError):
+        _load_endpoints_for_model(model_cfg, settings, cache=None)

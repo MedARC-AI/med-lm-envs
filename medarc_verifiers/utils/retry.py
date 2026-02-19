@@ -9,6 +9,7 @@ from openai import BadRequestError, RateLimitError
 from openai.types.chat.chat_completion import ChatCompletion
 from openai.types.completion import Completion
 from typing_extensions import Protocol
+from verifiers.errors import ModelError as VerifiersModelError
 from verifiers.envs.environment import Environment
 
 ModelResponse = Completion | ChatCompletion | None
@@ -144,26 +145,73 @@ def _extract_error_type_code(exc: BaseException) -> tuple[str | None, str | None
     return (err_type if isinstance(err_type, str) else None, err_code if isinstance(err_code, str) else None)
 
 
+def _is_verifiers_model_error(exc: BaseException) -> bool:
+    return isinstance(exc, VerifiersModelError)
+
+
+def _iter_exception_chain(exc: BaseException):
+    seen: set[int] = set()
+    stack: list[BaseException] = [exc]
+    while stack:
+        current = stack.pop()
+        current_id = id(current)
+        if current_id in seen:
+            continue
+        seen.add(current_id)
+        yield current
+        cause = getattr(current, "__cause__", None)
+        context = getattr(current, "__context__", None)
+        if isinstance(cause, BaseException):
+            stack.append(cause)
+        if isinstance(context, BaseException):
+            stack.append(context)
+
+
+def _unwrap_retry_exception(exc: BaseException) -> BaseException:
+    if not _is_verifiers_model_error(exc):
+        return exc
+
+    preferred_types = (
+        httpx.HTTPStatusError,
+        RateLimitError,
+        BadRequestError,
+        AssertionError,
+    )
+    first_non_wrapper: BaseException | None = None
+
+    for candidate in _iter_exception_chain(exc):
+        if candidate is exc:
+            continue
+        if _is_verifiers_model_error(candidate):
+            continue
+        if isinstance(candidate, preferred_types):
+            return candidate
+        if first_non_wrapper is None:
+            first_non_wrapper = candidate
+    return first_non_wrapper or exc
+
+
 def should_retry_exception(exc: BaseException) -> tuple[bool, int | None, str | None, float | None]:
     """Identify retryable exceptions from model calls."""
-    if isinstance(exc, AssertionError):
-        message = str(exc)
+    retry_exc = _unwrap_retry_exception(exc)
+    if isinstance(retry_exc, AssertionError):
+        message = str(retry_exc)
         if "Response should always have one choice" in message:
             return True, None, message, None
-    status = _status_code(exc)
-    retry_delay = _extract_retry_delay(exc) if status == 429 else None
+    status = _status_code(retry_exc)
+    retry_delay = _extract_retry_delay(retry_exc) if status == 429 else None
     if status == 403:
-        err_type, err_code = _extract_error_type_code(exc)
+        err_type, err_code = _extract_error_type_code(retry_exc)
         if err_type == "policy_violation":
             return True, 403, f"HTTP 403 policy_violation: {err_code}", None
-    if isinstance(exc, (BadRequestError, httpx.HTTPStatusError)):
+    if isinstance(retry_exc, (BadRequestError, httpx.HTTPStatusError)):
         if status == 400:
             return True, 400, "HTTP 400 during model call", None
         if status == 429:
             return True, 429, f"HTTP 429 rate limited: {retry_delay}", retry_delay
         if status == 500:
             return True, 500, "HTTP 500 internal error", None
-    if isinstance(exc, RateLimitError):
+    if isinstance(retry_exc, RateLimitError):
         if status == 429:
             return True, 429, f"HTTP 429 too many tokens per minute: {retry_delay}", retry_delay
     if status == 429:

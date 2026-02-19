@@ -160,6 +160,7 @@ medarc-eval bench --config my-config.yaml --forced medqa,pubmedqa
 | Flag | Description |
 |------|-------------|
 | `--config PATH` | **Required.** Path to config YAML |
+| `--endpoints-path PATH` | Endpoint registry path (default: `configs/endpoints.toml`) |
 | `--job-id ID` | Run only specific job(s) by ID (repeatable) |
 | `--dry-run` | Show plan without executing |
 
@@ -216,6 +217,16 @@ models:
       extra_body:
         usage:
           include: false  # disable usage reporting
+```
+
+### Endpoints Registry Migration (`endpoints.py` -> `endpoints.toml`)
+
+Batch mode now defaults `--endpoints-path` to `configs/endpoints.toml`.
+
+If your project still uses a Python registry, pass it explicitly:
+
+```bash
+medarc-eval bench --config my-config.yaml --endpoints-path configs/endpoints.py
 ```
 
 ## Output Structure

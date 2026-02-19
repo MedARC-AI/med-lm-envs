@@ -26,6 +26,7 @@ medarc-eval medqa -m gpt-4.1-mini -n 25 --dry-run
 | Flag | Description |
 |------|-------------|
 | `-m`, `--model` | Model identifier (e.g., `gpt-4.1-mini`, `openai/gpt-4o`) |
+| `-e`, `--endpoints-path` | Endpoint registry path (default: `./configs/endpoints.toml`) |
 | `-b`, `--api-base-url` | API endpoint URL (default: OpenAI) |
 | `-k`, `--api-key-var` | Environment variable containing API key (default: `OPENAI_API_KEY`) |
 
@@ -52,7 +53,7 @@ medarc-eval medqa -m gpt-4.1-mini -n 25 --dry-run
 | Flag | Description |
 |------|-------------|
 | `--save-results` / `--no-save-results` | Save outputs (default: enabled) |
-| `--save-every N` | Save checkpoint every N rollouts |
+| `--save-every N` | Deprecated (accepted for compatibility; ignored) |
 | `-v`, `--verbose` | Enable debug logging |
 
 ### Prime Inference
@@ -67,6 +68,16 @@ When using Prime Inference (`https://api.pinference.ai/api/v1`), the CLI automat
 - Enables usage reporting in API requests
 
 Optionally set `MEDARC_INCLUDE_USAGE=true` to enable usage reporting for non-Prime endpoints instead of using `--include-usage`.
+
+### Endpoints Registry Migration (`endpoints.py` -> `endpoints.toml`)
+
+Single-run mode now defaults to `./configs/endpoints.toml` (upstream verifiers convention).
+
+If you still use a legacy Python registry, pass it explicitly:
+
+```bash
+medarc-eval medqa -e ./configs/endpoints.py -m alias-model
+```
 
 ## Environment-Specific Options
 
@@ -142,8 +153,7 @@ medarc-eval careqa \
 medarc-eval pubmedqa \
   -m gpt-4.1-mini \
   -n -1 \                    # All examples
-  --max-concurrent 20 \      # 20 parallel requests
-  --save-every 100           # Checkpoint every 100 samples
+  --max-concurrent 20        # 20 parallel requests
 ```
 
 ## Available Benchmarks

@@ -14,7 +14,7 @@ from typing import Any, Iterable as _Iterable
 from verifiers import setup_logging
 from medarc_verifiers.utils import sanitize_sampling_args_for_openai
 
-from .endpoint_utils import resolve_model_endpoint
+from .endpoint_utils import EndpointRegistry, resolve_model_endpoint
 from .env_args import (
     HEADER_SEPARATOR,
     MissingEnvParamError,
@@ -199,7 +199,7 @@ def flatten_state_columns(values: Iterable[Sequence[str]] | None) -> list[str]:
 
 def resolve_endpoint_selection(
     model: str,
-    endpoints: Mapping[str, Mapping[str, str]],
+    endpoints: EndpointRegistry,
     *,
     default_key_var: str,
     default_base_url: str,
