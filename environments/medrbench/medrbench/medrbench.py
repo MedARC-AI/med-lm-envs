@@ -548,7 +548,9 @@ def load_environment(
 
     rubric.add_reward_func(judge_rubric_reward, weight=1.0)
 
-    patient_agent_api_key = default_judge_api_key(patient_agent_base_url) if patient_agent_api_key is None else patient_agent_api_key
+    patient_agent_api_key = (
+        default_judge_api_key(patient_agent_base_url) if patient_agent_api_key is None else patient_agent_api_key
+    )
     _, patient_default_headers = judge_sampling_args_and_headers(patient_agent_model, patient_agent_base_url)
     patient_agent_client = AsyncOpenAI(
         base_url=patient_agent_base_url,
