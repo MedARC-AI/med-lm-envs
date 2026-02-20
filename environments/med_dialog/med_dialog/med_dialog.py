@@ -82,7 +82,7 @@ def _load_split_dataset(subsets: Sequence[str], split: str, cache_path: Path) ->
 def load_environment(
     use_think: bool = False,
     cache_dir: Path | str | None = None,
-    judge_model: str | list[str] = "gpt-4o-mini",
+    judge_model: str | list[str] = "openai/gpt-5-mini",
     judge_base_url: str | list[str] | None = None,
     judge_api_key: str | list[str] | None = None,
     **kwargs: Any,

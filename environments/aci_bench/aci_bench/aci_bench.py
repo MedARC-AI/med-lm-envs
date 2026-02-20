@@ -56,7 +56,7 @@ def load_environment(
     subset: str = "all",
     transcript_version: str = "all",
     answer_format: AnswerFormat | str = AnswerFormat.XML,
-    judge_model: str | list[str] = "gpt-5-mini",
+    judge_model: str | list[str] = "openai/gpt-5-mini",
     judge_base_url: str | list[str] | None = None,
     judge_api_key: str | list[str] | None = None,
     system_prompt: str | None = None,

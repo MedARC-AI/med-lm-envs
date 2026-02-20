@@ -24,7 +24,7 @@ XML_SYSTEM_PROMPT = (
 
 
 def load_environment(
-    judge_model: str = "gpt-4o-mini",
+    judge_model: str = "openai/gpt-5-mini",
     judge_base_url: str | None = None,
     judge_api_key: str | None = None,
     use_think: bool = False,

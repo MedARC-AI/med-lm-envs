@@ -84,7 +84,7 @@ def load_environment(
     shuffle_seed: int | None = 1618,
     answer_format: AnswerFormat | str = AnswerFormat.XML,
     category: Category | str = Category.ALL,
-    judge_model: str | list[str] = "gpt-5-mini",
+    judge_model: str | list[str] = "openai/gpt-5-mini",
     judge_base_url: str | list[str] | None = None,
     judge_api_key: str | list[str] | None = None,
 ) -> vf.Environment:
