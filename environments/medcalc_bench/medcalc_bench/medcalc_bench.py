@@ -322,7 +322,7 @@ def load_environment(
             system_prompt = system_prompt
 
     # -------- load dataset and convert to vf format --------
-    ds = load_dataset("ncbi/MedCalc-Bench-Verified")
+    ds = load_dataset("nsk7153/MedCalc-Bench-Verified")
     one_shot_examples = None
     if one_shot:
         # create mapping from calc id to one-shot example
