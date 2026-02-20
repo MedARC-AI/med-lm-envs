@@ -1,29 +1,47 @@
-# med-lm-eval
-Automated LLM evaluation suite for medical tasks
-# MetaMedQA Eval
+# MetaMedQA
 
-This repository provides an evaluation environment for the [MetaMedQA](https://huggingface.co/datasets/maximegmd/MetaMedQA).
+Evaluation environment for the MetaMedQA dataset.
 
-## Usage
+## Overview
+- **Environment ID**: `metamedqa`
+- **Short description**: Single-turn medical multiple-choice QA drawn from multiple medical exam sources
+- **Tags**: medical, single-turn, multiple-choice, eval
 
-To run an evaluation using [vf-eval](https://github.com/EleutherAI/vf-eval) with the Mistral API, use:
+## Datasets
+- **Primary dataset(s)**: MetaMedQA
+- **Source links**: [maximegmd/MetaMedQA](https://huggingface.co/datasets/maximegmd/MetaMedQA)
+- **Split sizes**: Uses provided test split
 
-```sh
-uv run vf-eval \
-	-m mistral-small-latest \
-	-b https://api.mistral.ai/v1 \
-	-k MISTRAL_API_KEY \
-	--env-args '{"split":"test"}' \
-	--num-examples 200 \
-	-s \
-	metamedqa
+## Task
+- **Type**: single-turn
+- **Rubric overview**: Binary scoring (1.0 / 0.0) based on correct letter or answer text match
+
+## Quickstart
+Run an evaluation with default settings:
+
+```bash
+prime eval run metamedqa -m "openai/gpt-5-mini" -n 5 -s
 ```
 
-Replace `MISTRAL_API_KEY` with your actual API key.
+Configure model and sampling:
 
-## Environment
+```bash
+medarc-eval metamedqa -m "openai/gpt-5-mini" -n 20 --shuffle-answers --shuffle-seed 1618
+```
 
-The evaluation environment is defined in `metamedqa.py` and uses the HuggingFace `maximegmd/MetaMedQA` dataset.
+## Environment Arguments
+
+| Arg | Type | Default | Description |
+| --- | ---- | ------- | ----------- |
+| `split` | str | `"test"` | Dataset split to use |
+| `shuffle_answers` | bool | `False` | Whether to shuffle answer choices |
+| `shuffle_seed` | int \| None | `1618` | Seed for deterministic answer shuffling |
+
+## Metrics
+
+| Metric | Meaning |
+| ------ | ------- |
+| `accuracy` | (weight 1.0): 1.0 if parsed letter matches the gold letter, else 0.0 |
 
 ## Authors
 This environment has been put together by:

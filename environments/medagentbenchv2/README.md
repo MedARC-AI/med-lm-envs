@@ -1,11 +1,11 @@
 # MedAgentBench V2
 
-### Overview
+## Overview
 - **Environment ID**: `medagentbenchv2`
 - **Short description**: Tool-calling evaluation environment for clinical EHR tasks using FHIR APIs
 - **Tags**: medical, ehr, tool-calling, multi-turn, clinical, evaluation
 
-### Dataset
+## Dataset
 - **Primary dataset**: MedAgentBench V2 evaluation tasks
 - **Source**: [MedAgentBench GitHub](https://github.com/stanfordmlgroup/MedAgentBench), [Paper](https://arxiv.org/abs/2501.14654)
 - **Task variants**:
@@ -14,24 +14,21 @@
   - `test_data_v2`: Extended evaluation dataset
 - **Task categories**: 10 task types covering various EHR operations (task1-task10)
 
-### Task
+## Task
 - **Type**: multi-turn tool-calling
-- **Parser**: Default parser (handles tool calls and finish tool)
 - **Rubric overview**: Binary scoring (0 or 1) based on successful task completion using category-specific evaluation functions
 
-### Note
+## Note
 
 This environment is a light verifiers wrapper around the original MedAgentBenchV2 code. The primary difference is the original code uses OpenAI's Responses API while this environment uses Chat Completions API through verifiers. The MedAgentBenchV2 prompts were lightly modified for generic tool calling versus the original's Responses API format examples.
 
-### Prerequisites
+## Prerequisites
 Before running evaluations, you must start the FHIR server:
 
 ```bash
 docker pull jyxsu6/medagentbench:latest
 docker tag jyxsu6/medagentbench:latest medagentbench
-docker run --platform linux/amd64 \
-  -e JAVA_TOOL_OPTIONS='-XX:+UseSerialGC -Xms256m -Xmx1024m' \
-  -p 8080:8080 medagentbench:latest
+docker run --platform linux/amd64 -e JAVA_TOOL_OPTIONS='-XX:+UseSerialGC -Xms256m -Xmx1024m' -p 8080:8080 medagentbench:latest
 ```
 
 **Important**:
@@ -39,37 +36,25 @@ docker run --platform linux/amd64 \
 - Replace `localhost` with your actual IP address if running on a remote server
 - Server connectivity is automatically verified before evaluation begins
 
-### Quickstart
+## Quickstart
 Run an evaluation with default settings (requires FHIR server):
 
 ```bash
-vf-eval medagentbenchv2 \
-  -a '{"fhir_api_base": "http://localhost:8080/fhir/"}'
+prime eval run medagentbenchv2 -m "openai/gpt-5-mini" -n 5 -s -a '{"fhir_api_base": "http://localhost:8080/fhir/"}'
 ```
 
 Run a small evaluation on specific task types:
 
 ```bash
-vf-eval medagentbenchv2 \
-  -n 5 \
-  -a '{"fhir_api_base": "http://localhost:8080/fhir/", "task_types": ["task1", "task2"]}'
-```
-
-Configure model and sampling:
-
-```bash
-vf-eval medagentbenchv2 \
-  -m gpt-4.1-mini \
-  -n 20 -r 1 -t 2048 -T 0 \
-  -a '{"fhir_api_base": "http://localhost:8080/fhir/", "max_turns": 10}'
+medarc-eval medagentbenchv2 -m "openai/gpt-5-mini" -n 5 -s --fhir-api-base http://localhost:8080/fhir/ --task-types task1 --task-types task2
 ```
 
 Notes:
-- Use `-a` / `--env-args` to pass environment-specific configuration as a JSON object
+- Use direct environment flags with `medarc-eval` (for example, `--split validation` or `--judge-model gpt-5-mini`).
 - The FHIR server must be accessible at the specified URL
 - Models should support tool calling for this environment
 
-### Environment Arguments
+## Environment Arguments
 
 | Arg | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
@@ -79,7 +64,7 @@ Notes:
 | `task_types` | list[str] | None | Optional list of task types to filter (e.g., `["task1", "task2"]`) |
 | `max_turns` | int | 8 | Maximum number of interaction turns per task |
 
-### Available Tools
+## Available Tools
 
 The environment provides FHIR-based tools for clinical operations:
 - `fhir_patient_search`: Search for patients in the EHR
@@ -93,13 +78,13 @@ The environment provides FHIR-based tools for clinical operations:
 - `fhir_service_request_create`: Create service requests
 - `finish`: Submit the final answer (required to complete tasks)
 
-### Metrics
+## Metrics
 
 | Metric | Meaning |
 | ------ | ------- |
 | `medagentbench_reward` | (weight 1.0): Binary score (1 if task correctly solved, 0 otherwise) |
 
-### Task Categories
+## Task Categories
 
 The environment evaluates 10 distinct task categories, each with specialized evaluation logic:
 - **task1-task10**: Various EHR operations including patient search, data retrieval, record creation, and clinical decision support

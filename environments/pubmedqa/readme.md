@@ -24,13 +24,13 @@ This should correspond to the 'pqal_test_set.json' (from the bigbio/pubmed_qa [p
 Run an evaluation with default settings:
 
 ```bash
-uv run vf-eval pubmedqa
+prime eval run pubmedqa -m "openai/gpt-5-mini" -n 5 -s
+```
 
-uv run test_pubmedqa.py --num_examples 4 --model mock-model
+Or use `medarc-eval` for named flags:
 
-# MISTRAL_API_KEY needs to be set 
-uv run test_pubmedqa.py --num_examples 4 --model mistral-small --no-mock
-
+```bash
+medarc-eval pubmedqa -m "openai/gpt-5-mini" -n 5 -s --shuffle-answers --shuffle-seed 1618
 ```
 
 ### Model Input Format

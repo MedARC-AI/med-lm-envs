@@ -1,50 +1,48 @@
 # medxpertqa
 
-
-### Overview
+## Overview
 - **Environment ID**: `medxpertqa`
 - **Short description**: MedXpertQA is a highly challenging and comprehensive benchmark designed to evaluate expert-level medical knowledge and advanced reasoning capabilities. We only use the text subset for now.
 - **Tags**: mcq
 
-### Datasets
+## Datasets
 - **Primary dataset(s)**: TsinghuaC3I/MedXpertQA
 - **Source links**: [HuggingFace](https://huggingface.co/datasets/TsinghuaC3I/MedXpertQA)
 - **Split sizes**: test subset - 2.45k rows
 
-### Task
+## Task
 - **Type**: single-turn
-- **Parser**: <e.g., custom
-- **Rubric overview**: a reward of 1.0 is awarded if the model chooses the corret option, else it is 0
+- **Rubric overview**: Binary scoring (1.0 / 0.0) based on correct letter or answer text match
 
-### Quickstart
+## Quickstart
 Run an evaluation with default settings:
 
 ```bash
-uv run vf-eval my-new-env
+prime eval run medxpertqa -m "openai/gpt-5-mini" -n 5 -s
 ```
 
 Configure model and sampling:
 
 ```bash
-uv run vf-eval my-new-env   -m gpt-4.1-mini   -n 20 -r 3 -t 1024 -T 0.7
+medarc-eval medxpertqa -m "openai/gpt-5-mini" -n 20 --answer-format boxed
 ```
 
 Notes:
-- Use `-a` / `--env-args` to pass environment-specific configuration as a JSON object.
+- Use direct environment flags with `medarc-eval` (for example, `--split validation` or `--judge-model gpt-5-mini`).
 
-### Environment Arguments
-Document any supported environment arguments and their meaning. Example:
+## Environment Arguments
 
 | Arg | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
-| `foo` | str | `"bar"` | What this controls |
-| `max_examples` | int | `-1` | Limit on dataset size (use -1 for all) |
+| `question_type` | str | `"all"` | Question subset to evaluate (e.g., all, text-only subset variants supported by the environment). |
+| `use_think` | bool | `False` | Whether to expect reasoning in `<think>...</think>` with boxed answers. |
+| `shuffle_answers` | bool | `False` | Whether to shuffle answer options per question. |
+| `shuffle_seed` | int \| None | `1618` | Seed for deterministic answer shuffling. |
+| `answer_format` | str | `"xml"` | Output format parser to use (`xml` or `boxed`). |
 
-### Metrics
-Summarize key metrics your rubric emits and how they’re interpreted.
+## Metrics
 
 | Metric | Meaning |
 | ------ | ------- |
 | `reward` | Main scalar reward (weighted sum of criteria) |
 | `accuracy` | Exact match on target answer |
-

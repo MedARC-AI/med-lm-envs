@@ -1,11 +1,11 @@
 # HealthBench
 
-### Overview
+## Overview
 - **Environment ID**: `healthbench`
 - **Short description**: HealthBench dataset from OpenAI
 ([Arora et al., 2025](https://cdn.openai.com/pdf/bd7a39d5-9e9f-47b3-903c-8b847ca650c7/healthbench_paper.pdf))
 
-### Datasets
+## Datasets
 - **Primary dataset(s)**:
   - `all`: [neuralleap/healthbench-regular](https://huggingface.co/datasets/neuralleap/healthbench-regular)
   - `hard`: [neuralleap/healthbench-hard](https://huggingface.co/datasets/neuralleap/healthbench-hard)
@@ -15,27 +15,27 @@
   - `hard`: 1000,
   - `consensus`: 3670
 
-### Task
+## Task
 - **Type**: Single-Turn
 - **Rubric overview**: LLM-as-a-judge evaluation (single or multi-judge)
 
-### Quickstart
+## Quickstart
 Run an evaluation with default settings:
 
 ```bash
-uv run vf-eval healthbench
+prime eval run healthbench -m "openai/gpt-5-mini" -n 5 -s
 ```
 
 Configure model and sampling:
 
 ```bash
-uv run vf-eval healthbench -m gpt-4.1-mini -n 20 -r 3 -t 1024 -T 0.7 -a '{"difficulty": "all", "make_dataset", "true"}'  # env-specific args as JSON
+medarc-eval healthbench -m "openai/gpt-5-mini" -n 20  --difficulty all --make-dataset
 ```
 
 Notes:
-- Use `-a` / `--env-args` to pass environment-specific configuration as a JSON object.
+- Use direct environment flags with `medarc-eval` (for example, `--split validation` or `--judge-model gpt-5-mini`).
 
-### Environment Arguments
+## Environment Arguments
 Document any supported environment arguments and their meaning. Example:
 
 | Arg | Type | Default | Description |
@@ -51,7 +51,7 @@ Document any supported environment arguments and their meaning. Example:
 > [!NOTE]
 > Total concurrent judge requests will scale roughly as `max_concurrent * max_parallel_judges * len(judge_model)`.
 
-### Results Dataset
+## Results Dataset
 The results dataset can report model performance by theme, axis and consensus
 criterion (where the example contains a consensus criterion).
 You can generate rubric-specific performance output by passing `make_dataset`
@@ -60,22 +60,22 @@ as `True` and calling `env.make_dataset` like below:
 # Call environment from inside evaluation script
 
 env = load_environment(
-    judge_model="gpt-4.1-mini",
-    judge_base_url="https://api.openai.com/v1/chat/completions",
-    judge_api_key=os.getenv("OPENAI_API_KEY"),
+    judge_model="openai/gpt-5-mini",
+    judge_base_url="https://api.pinference.ai/api/v1",
+    judge_api_key=os.getenv("JUDGE_API_KEY"),
     difficulty="all",
     make_dataset=True,
     max_parallel_judges=10
 )
 
 client = AsyncOpenAI(
-    base_url="https://api.openai.com/v1/chat/completions",
-    api_key=os.getenv("OPENAI_API_KEY"),
+    base_url="https://api.pinference.ai/api/v1",
+    api_key=os.getenv("JUDGE_API_KEY"),
 )
 
 results = env.evaluate(
     client=client,
-    model="gpt-4.1-mini",
+    model="openai/gpt-5-mini",
     num_examples=1,
     rollouts_per_example=1,
     max_concurrent=1,
@@ -88,15 +88,15 @@ dataset = env.make_dataset(
 
 dataset.save_to_disk("sample_results")
 ```
-### Results Dataset Structure
-#### Core Evaluation Fields
+## Results Dataset Structure
+### Core Evaluation Fields
 
 - **`prompt`** - The input conversation presented to the model (list of message objects with `role` and `content`)
 - **`completion`** - The model's generated response (list of message objects)
 - **`reward`** - Overall score from 0.0 to 1.0, calculated as (points earned / total possible points)
 - **`reward_healthbench`** - Same as `reward` (kept for compatibility)
 
-#### Example Metadata (`info`)
+### Example Metadata (`info`)
 Contains all the HealthBench-specific information about each prompt and its evaluation criteria:
 
 - **`prompt_id`** - Unique identifier for the prompt
@@ -115,7 +115,7 @@ Contains all the HealthBench-specific information about each prompt and its eval
   - `behavior_category` - Category of model behavior expected for the consensus criterion (e.g: "Helpful and safe", "Precise")
   - `criterion` - Consensus criterion (e.g., "Emergency behavior", "Context-seeking")
 
-#### Detailed Results (`performance_by_rubric`)
+### Detailed Results (`performance_by_rubric`)
 
 A list with one entry per evaluated criterion, containing:
 
@@ -124,7 +124,7 @@ A list with one entry per evaluated criterion, containing:
 
 This allows you to see exactly which criteria the model passed or failed, along with explanations.
 
-#### Example Record
+### Example Record
 
 ```json
 {
@@ -174,7 +174,7 @@ This allows you to see exactly which criteria the model passed or failed, along 
 }
 ```
 
-#### Notes
+### Notes
 
 - The `answer` and `task` fields are present for compatibility with the verifiers framework but are always `""` and `"default"` respectively for HealthBench
 - Arrays in `info` (criteria, points_list, axes, consensus_criteria) are all aligned by index - the first element of each corresponds to the first rubric criterion
