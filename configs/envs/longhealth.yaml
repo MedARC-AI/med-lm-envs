@@ -9,6 +9,7 @@
   matrix:
     task: [task1, task2]
   matrix_id_format: "{base}-{task}"
+  max_concurrent: 64
 
 # Shuffled variants with different seeds
 - id: longhealth
@@ -23,6 +24,7 @@
   matrix:
     task: [task1, task2]
   matrix_id_format: "{base}-{task}-rollout1618"
+  max_concurrent: 64
 
 # Shuffled variants with different seeds
 - id: longhealth
@@ -37,3 +39,4 @@
   matrix:
     task: [task1, task2]
   matrix_id_format: "{base}-{task}-rollout9331"
+  max_concurrent: 64

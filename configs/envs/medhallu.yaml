@@ -1,0 +1,8 @@
+- id: medhallu
+  module: medhallu
+  rollouts_per_example: 1
+  num_examples: -1
+  verbose: false
+  matrix:
+    difficulty: [easy, medium, hard]
+  matrix_id_format: "{base}-{difficulty}"
