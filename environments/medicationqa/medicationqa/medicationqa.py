@@ -77,7 +77,7 @@ def _extract_completion_text(completion: Messages) -> str:
 
 def load_environment(
     cache_dir: Path | str | None = None,
-    judge_model: str | list[str] = "gpt-4o-mini",
+    judge_model: str | list[str] = "openai/gpt-5-mini",
     judge_base_url: str | list[str] | None = None,
     judge_api_key: str | list[str] | None = None,
     **kwargs: Any,

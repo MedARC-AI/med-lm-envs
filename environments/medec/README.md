@@ -1,19 +1,15 @@
-# MEDEC Overview
+# MEDEC
 
-**Environment ID:** `medec`
-**Short Description:**
-A benchmark for medical error detection, extraction, and correction in clinical notes, based on the **MEDIQA-CORR 2024** shared task.
+Evaluation environment for the MEDEC dataset.
 
-**Tags:**
-`medical`, `clinical`, `error-detection`, `error-correction`, `single-turn`, `llm-as-judge`, `evaluation`, `metrics`
-
+## Overview
+- **Environment ID**: `medec`
+- **Short description**: A benchmark for medical error detection, extraction, and correction in clinical notes, based on the MEDIQA-CORR 2024 shared task.
+- **Tags**: medical, clinical, error-detection, error-correction, single-turn, llm-as-judge, evaluation, metrics
 
 ## Datasets
-
-**Source Links:**
-[Paper](https://arxiv.org/html/2412.19260v1), [Original GitHub](https://github.com/abachaa/MEDEC), [HF Dataset](https://huggingface.co/datasets/sauravlmx/MEDEC-MS)
-
-### Split Sizes
+- **Source links**: [Paper](https://arxiv.org/html/2412.19260v1), [Original GitHub](https://github.com/abachaa/MEDEC), [HF Dataset](https://huggingface.co/datasets/sauravlmx/MEDEC-MS)
+- **Split sizes**:
 
 | Split         | Count | Description                         |
 | ------------- | ----- | ----------------------------------- |
@@ -21,39 +17,16 @@ A benchmark for medical error detection, extraction, and correction in clinical 
 | validation_ms | 574   | MS Validation Set with Ground Truth |
 | test_ms       | 597   | MS Test Set with Ground Truth       |
 
-
 ## Task
-
-**Type:** `single-turn`
-**Parser:** `vf.XMLParser`
-**Fields:** `error_id`, `incorrect_sentence`, `correction`
-
-
-## Rubric Overview
-
-The environment supports two distinct evaluation modes, controlled by the `eval_method` argument:
-
-* **`"judge"` (Default Mode)**
-  Uses a **multi-part rubric** where the primary score is derived from a robust *LLM-as-a-Judge* evaluation using a No Free Labels inspired multi-axis judge rubric.
-
-* **`"metrics"` (Replication Mode)**
-
-  * Designed for **direct replication** of the paper's results.
-  * Disables the LLM-as-a-Judge and calculates ROUGE, BERTScore, and BLEURT.
-  * Primary score = **weighted average** of `flag_accuracy` and the paper’s original metrics.
-
-* **`"both"` (Combined Mode)**
-  * Computes both the LLM-as-a-Judge score and the ROUGE, BERTScore, and BLEURT replication metrics.
-    * These are assigned `weight=0` and **do not affect the primary score**.
-  * Recommended for **semantically nuanced evaluation**.
-  * Useful for **comprehensive analysis**.
-
+- **Type**: single-turn
+- **Rubric overview**: Supports three evaluation modes via `eval_method`:
+  - **`"judge"` (default)**: LLM-as-a-Judge multi-part rubric (No Free Labels inspired multi-axis judge)
+  - **`"metrics"` (replication)**: ROUGE, BERTScore, and BLEURT; primary score is weighted average of `flag_accuracy` and paper metrics
+  - **`"both"` (combined)**: Judge mode score + paper metrics at weight 0 for analysis
 
 ## Quickstart
 
 ### 1. Export API Key
-
-The default judge model is **GPT-4o-mini**, which expects the `OPENAI_API_KEY` environment variable.
 
 ```bash
 export OPENAI_API_KEY="your-openai-api-key"
@@ -61,34 +34,33 @@ export OPENAI_API_KEY="your-openai-api-key"
 
 ### 2. Run Evaluation (Default Judge Mode)
 
-Run an evaluation on **10 examples** from the `test_ms` split using the **LLM-as-a-Judge** for scoring.
+```bash
+prime eval run medec -m "openai/gpt-5-mini" -n 5 -s
+```
 
 ```bash
-uv run vf-eval medec -m gpt-4o-mini -n 10 -s
+medarc-eval medec -m "openai/gpt-5-mini" -n 10 -s --judge-model "openai/gpt-5-mini"
+```
+
+This environment supports multi-judge via the `medarc-verifiers` `MultiJudge` rubric. When multiple judge models are specified, each scores independently and the final reward is their mean. `judge_model`, `judge_base_url`, and `judge_api_key` are all list-valued and correspond positionally; if only one `judge_base_url` or `judge_api_key` is provided, it is used for all judge models.
+
+```bash
+medarc-eval medec -m "openai/gpt-5-mini" -n 10 -s --judge-model "openai/gpt-5-mini" --judge-model "google/gemini-3-flash-preview"
 ```
 
 ### 3. Run Evaluation (Paper Replication Mode)
 
-To replicate the paper’s scoring methodology, explicitly set the evaluation mode to `"metrics"`.
-
 ```bash
-uv run vf-eval medec -m gpt-4o-mini -a '{"eval_method": "metrics"}' -n 10 -s
+medarc-eval medec -m "openai/gpt-5-mini" --eval-method metrics -n 10 -s
 ```
 
 ### 4. Evaluate a Different Model (e.g., Anthropic)
-
-To evaluate an **Anthropic model** while using the default OpenAI judge:
 
 ```bash
 export OPENAI_API_KEY="your-openai-api-key"
 export ANTHROPIC_API_KEY="your-anthropic-api-key"
 
-uv run vf-eval medec \
-  -m "claude-3-5-sonnet-20240620" \
-  -b "https://api.anthropic.com/v1" \
-  -k ANTHROPIC_API_KEY \
-  --header "anthropic-version: 2023-06-01" \
-  -n 10 -s
+medarc-eval medec -m gpt-5-mini -b https://api.anthropic.com/v1 -k ANTHROPIC_API_KEY --header 'anthropic-version: 2023-06-01' -n 10 -s
 ```
 
 ## Environment Arguments
@@ -101,12 +73,9 @@ uv run vf-eval medec \
 | `eval_method`    | str  | `"judge"`       | Evaluation mode (`"judge"`, `"metrics"`, or `"both"`).                           |
 | `device`         | str  | `None`          | Device to use for metrics (`cpu`, `cuda:0`, etc.). Defaults to GPU if available. |
 
-
 ## Metrics
 
 ### Judge Mode (`eval_method="judge"`)
-
-The **primary reward score** is the weighted sum of three metrics:
 
 | Metric             | Weight | Meaning                                                                     |
 | ------------------ | ------ | --------------------------------------------------------------------------- |
@@ -115,8 +84,6 @@ The **primary reward score** is the weighted sum of three metrics:
 | `error_correction` | 1/3    | 1.0 if LLM judge deems `correction` medically equivalent; else 0.0.         |
 
 ### Metrics Mode (`eval_method="metrics"`)
-
-For replicating the paper's evaluation methodology:
 
 | Metric           | Weight | Meaning                                                               |
 | ---------------- | ------ | --------------------------------------------------------------------- |

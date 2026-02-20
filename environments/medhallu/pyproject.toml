@@ -5,6 +5,7 @@ tags = ["hallucination-detection", "medical", "classification", "eval"]
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
+    "medarc-verifiers>=0.1.0",
     "verifiers>=0.1.4",
 ]
 

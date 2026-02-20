@@ -2,7 +2,7 @@
 name = "med_halt"
 description = "Med-HALT (Reasoning) evaluation environment for medical LLMs"
 tags = ["medical", "hallucination", "single-turn", "multiple-choice", "reasoning", "test"]
-version = "0.1.0"
+version = "0.1.1"
 requires-python = ">=3.11"
 dependencies = [
     "datasets>=4.0.0",

@@ -1,9 +1,9 @@
 # MTSamples Procedures
 
-### Overview
+## Overview
 - **Environment ID**: `mtsamples_procedures`
 - **Short description**: MTSamples Procedures is a benchmark composed of transcribed operative notes, focused on documenting surgical procedures. Each example presents a brief patient case involving a surgical intervention, and the model is tasked with generating a coherent and clinically accurate procedural summary or treatment plan.
-### Dataset
+## Dataset
 - **Split sizes**:
   - Evaluation: ~90 examples (all used for evaluation)
   - Note: This is an evaluation-only benchmark with no predefined train/test splits
@@ -11,7 +11,7 @@
   - [MTSamples medical transcription repository](https://github.com/raulista1997/benchmarkdata/tree/main/mtsample_procedure)
   - Implementation based on [HELM's MTSamples Procedures scenario](https://github.com/stanford-crfm/helm/blob/51c3389f3820b940cca2fcb759dfe8f0b0160f46/src/helm/benchmark/scenarios/mtsamples_procedures_scenario.py)
 
-### Task
+## Task
 - **Type**: Single-Turn
 - **Rubric overview**: MultiJudgeRubric (LLM-as-a-Judge evaluation adapted from HELM's MTSamples Procedures Annotator)
 - **Task description**: Given patient notes (procedure note with PLAN/SUMMARY/FINDINGS sections removed), generate a reasonable treatment plan
@@ -21,30 +21,31 @@
   - **Completeness** (1-5): Does the response include all important aspects of patient care mentioned in the reference?
   - **Clarity** (1-5): Is the response written clearly and organized in a way that is easy to read for clinicians?
 
-### Quickstart
+## Quickstart
 Run an evaluation with default settings:
 
 ```bash
-uv run vf-eval mtsamples_procedures
+prime eval run mtsamples_procedures -m "openai/gpt-5-mini" -n 5 -s
 ```
 
-Use a custom judge model:
+Run a single-judge evaluation:
 
 ```bash
-uv run vf-eval mtsamples_procedures -m gpt-4.1-mini --env-args '{"judge_model": "gpt-5-mini"}'
+medarc-eval mtsamples_procedures -m "openai/gpt-5-mini" -n 5 --judge-model "openai/gpt-5-mini"
 ```
 
-Enable chain-of-thought prompting:
+This environment supports multi-judge via the `medarc-verifiers` `MultiJudge` rubric. When multiple judge models are specified, each scores independently and the final reward is their mean. `judge_model`, `judge_base_url`, and `judge_api_key` are all list-valued and correspond positionally; if only one `judge_base_url` or `judge_api_key` is provided, it is used for all judge models.
+
+Use configured default judges:
 
 ```bash
-uv run vf-eval mtsamples_procedures --env-args '{"use_think": true}'
+medarc-eval mtsamples_procedures -m "openai/gpt-5-mini" --judge-model "openai/gpt-5-mini" --judge-model "x-ai/grok-4.1-fast"
 ```
 
 Notes:
-- Use `-a` / `--env-args` to pass environment-specific configuration as a JSON object.
-- The environment defaults to using `gpt-4o-mini` as the judge model.
+- Use direct environment flags with `medarc-eval` (for example, `--split validation` or `--judge-model gpt-5-mini`).
 
-### Environment Arguments
+## Environment Arguments
 
 | Arg | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
@@ -54,14 +55,14 @@ Notes:
 | `judge_base_url` | str \| list[str] \| None | `None` | Custom API base URL(s) for judge model (defaults to OpenAI API) |
 | `judge_api_key` | str \| list[str] \| None | `None` | API key(s) for judge model. Falls back to `JUDGE_API_KEY` environment variable if not provided |
 
-### Results Dataset Structure
-#### Core Evaluation Fields
+## Results Dataset Structure
+### Core Evaluation Fields
 
 - **`prompt`** - The patient notes presented to the model (list of message objects with `role` and `content`)
 - **`completion`** - The model's generated treatment plan (list of message objects)
 - **`reward`** - Overall score from 0.0 to 1.0, calculated as the average of normalized dimension scores: `(accuracy/5 + completeness/5 + clarity/5) / 3`
 
-#### Example Metadata (`info`)
+### Example Metadata (`info`)
 Contains all the MTSamples-specific information about each procedure:
 
 - **`filename`** - Original filename from the GitHub repository
@@ -70,21 +71,21 @@ Contains all the MTSamples-specific information about each procedure:
 - **`reference_plan`** - Gold standard treatment plan/summary (same as `answer` field)
 - **`judge_feedback`** - List of judge evaluations with scores and explanations for each dimension
 
-#### Notes
+### Notes
 
 - The `question` field contains everything BEFORE the first PLAN/SUMMARY/FINDINGS section (HELM's exact approach)
 - The `answer` field contains the first line after the prioritized section header (PLAN > SUMMARY > FINDINGS)
 - Scores are normalized to 0-1 by dividing each dimension score (1-5) by 5 and averaging across dimensions
 - If judge response parsing fails, dimension scores default to `None` and do not contribute to the final reward
 
-### Data Processing
+## Data Processing
 
 Following HELM's exact approach:
 1. **Section Extraction**: Extracts the first line after `PLAN:`, `SUMMARY:`, or `FINDINGS:` headers (priority order: PLAN > SUMMARY > FINDINGS)
 2. **Input Cleaning**: Takes everything BEFORE the first section header found as the input
 3. **Reference**: The extracted section content becomes the gold standard answer
 
-### Dataset Examples
+## Dataset Examples
 
 **Example: AC Separation Revision & Hardware Removal**
 ```
@@ -111,7 +112,7 @@ Generated Treatment Plan:
 4. Follow-up: Schedule follow-up visits at 1-2 weeks post-op for wound check...
 ```
 
-### References
+## References
 
 
 **HELM MTSamples Implementation**

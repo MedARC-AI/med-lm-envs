@@ -130,7 +130,7 @@ def delete_from_text(text, target_idx):
 
 
 def load_environment(
-    judge_model: str | list[str] = "gpt-4o-mini",
+    judge_model: str | list[str] = "openai/gpt-5-mini",
     judge_base_url: str | list[str] | None = None,
     judge_api_key: str | list[str] | None = None,
     eval_method: str | EvalMethod = EvalMethod.JUDGE,

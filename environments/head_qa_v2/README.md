@@ -2,48 +2,41 @@
 
 Evaluation environment for the HEAD-QA v2 dataset.
 
-### Overview
+## Overview
 - **Environment ID**: `head-qa-v2`
 - **Short description**: Single-turn medical multiple-choice QA 
 - **Tags**: medical, single-turn, multiple-choice, eval
 
-### Datasets
+## Datasets
 - **Primary dataset(s)**: HEAD-QA v2 (HF datasets)
 - **Source links**: [alesi12/head_qa_v2](https://huggingface.co/datasets/alesi12/head_qa_v2) 
 - **Split sizes**: Uses the provided train split for evaluation
 
-### Task
+## Task
 - **Type**: Single-turn
-- **Parser**: `JSONParser`
 - **Rubric overview**: Binary scoring (1.0 / 0.0), based on correct answer
 - **Reward function:** `accuracy` — returns 1.0 if the predicted answer matches, else 0.0.
 
-### Quickstart
+## Quickstart
 Run an evaluation with default settings:
 
 ```bash
-uv run vf-eval head-qa-v2
+prime eval run head-qa-v2 -m "openai/gpt-5-mini" -n 5 -s
 ```
 
-### Usage
-To run an evaluation using vf-eval with the OpenAI API:
+## Usage
+To run an evaluation using medarc-eval:
 
 ```bash
-export OPENAI_API_KEY=sk-...
-uv run vf-eval \
-  -m gpt-4.1-mini \
-  -n 5 \
-  -s \
-  head_qa_v2
+medarc-eval head-qa-v2 -m "openai/gpt-5-mini" -n 5 -s --shuffle-answers --shuffle-seed 42
 ```
-Replace `OPENAI_API_KEY` with your actual API key.
 
-### Authors
+## Authors
 This environment has been put together by:
 
 Ratna Sagari Grandhi - ([@sagarigrandhi](https://github.com/sagarigrandhi))
 
-### Credits 
+## Credits 
 Dataset:
 ```bibtex
 @inproceedings{vilares-gomez-rodriguez-2019-head,

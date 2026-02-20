@@ -2,23 +2,23 @@
 
 Evaluation environment for the MEDMCQA dataset.
 
-### Overview
+## Overview
 - **Environment ID:** `med_mcqa`
 - **Short description:** Single-turn medical multiple-choice QA
 - **Tags:** medical, single-turn, multiple-choice, train, eval
 
-### Datasets
+## Datasets
 - **Primary dataset(s):** MedMCQA (HF datasets)
 - **Source links:** [lighteval/med_mcqa](https://huggingface.co/datasets/lighteval/med_mcqa)
 - **Split sizes:** Uses provided train and validation splits
 
-### Task
+## Task
 - **Type:** Single-turn
 - **Parser:** `Parser` (standard) or `ThinkParser` (if using reasoning mode) depending on `use_think`
 - **Rubric overview:** Binary scoring (1.0 / 0.0), based on correct letter or answer text match.  
 - **Reward function:** `accuracy` — returns 1.0 if the predicted answer matches, else 0.0.
 
-### Model Input Format
+## Model Input Format
 Each example is formatted as a single-turn user message: 
 
 ```
@@ -33,32 +33,31 @@ Answer:
 
 The model should respond with a letter choice (A–D).
 
-### Quickstart
+## Quickstart
 Run an evaluation with default settings:
 
 ```bash
-uv run vf-eval med_mcqa
+prime eval run med_mcqa -m "openai/gpt-5-mini" -n 5 -s
 ```
 
-### Usage
-To run an evaluation using `vf-eval` with the OpenAI API:
+## Usage
+To run an evaluation using `medarc-eval` with the OpenAI API:
 
 ```bash
 export OPENAI_API_KEY=sk-...
-uv run vf-eval \
-  -m gpt-4.1-mini \
-  -n 5 \
-  -s \
-  med_mcqa
+medarc-eval med_mcqa -m "openai/gpt-5-mini" -n 5 -s
+
+# Shuffled-answers example (seed 1618), with one change from defaults (`--use-think`).
+medarc-eval med_mcqa -m "openai/gpt-5-mini" -n 5 -s --shuffle-answers --shuffle-seed 1618 --use-think
 ```
 Replace `OPENAI_API_KEY` with your actual API key.
 
-### Authors
+## Authors
 This environment has been put together by:
 
 Ratna Sagari Grandhi - ([@sagarigrandhi](https://github.com/sagarigrandhi))
 
-### Credits 
+## Credits 
 Dataset:
 
 ```bibtex

@@ -2,7 +2,12 @@
 
 Evaluation environment for the [Joshua-Harris/PubHealthBench](https://huggingface.co/datasets/Joshua-Harris/PubHealthBench) dataset.
 
-## Dataset
+## Overview
+- **Environment ID**: `pubhealthbench`
+- **Short description**: Public health MCQ and free-form evaluation derived from UK Health Security Agency (UKHSA) guidance documents
+- **Tags**: medical, public-health, single-turn, multiple-choice, llm-judge, eval
+
+## Datasets
 
 PubHealthBench contains public health questions derived from UK Health Security Agency (UKHSA) guidance documents. Questions cover topics including:
 - Gastro/food safety
@@ -20,26 +25,46 @@ PubHealthBench contains public health questions derived from UK Health Security 
 | `freeform` | LLM-as-judge | 760 | Reviewed set with open-ended evaluation |
 | `freeform_valid` | LLM-as-judge | 161 | Validation set with open-ended evaluation |
 
-## Usage
+## Quickstart
+
+Install:
 
 ```bash
-# Install
 vf-install pubhealthbench
-
-# Run MCQ evaluation (default: reviewed split)
-vf-eval pubhealthbench -m gpt-5-mini -n 10
-
-# Use full test split
-uv run vf-eval pubhealthbench --split full -m gpt-5-mini -n 10
-
-# With answer shuffling
-uv run vf-eval pubhealthbench --shuffle-answers -m gpt-5-mini -n 10
-
-# Freeform (LLM-as-judge) evaluation
-uv run vf-eval pubhealthbench --split freeform -m gpt-5-mini -n 10
 ```
 
-## Parameters
+Run MCQ evaluation (default: reviewed split):
+
+```bash
+prime eval run pubhealthbench -m "openai/gpt-5-mini" -n 5 -s
+```
+
+Use full test split:
+
+```bash
+medarc-eval pubhealthbench --split full -m "openai/gpt-5-mini" -n 10
+```
+
+With answer shuffling:
+
+```bash
+medarc-eval pubhealthbench --shuffle-answers -m "openai/gpt-5-mini" -n 10
+```
+
+Freeform (LLM-as-judge) single-judge evaluation:
+
+```bash
+medarc-eval pubhealthbench --split freeform -m "openai/gpt-5-mini" -n 10 --judge-model "openai/gpt-5-mini"
+```
+
+This environment supports multi-judge via the `medarc-verifiers` `MultiJudge` rubric. When multiple judge models are specified, each scores independently and the final reward is their mean. `judge_model`, `judge_base_url`, and `judge_api_key` are all list-valued and correspond positionally; if only one `judge_base_url` or `judge_api_key` is provided, it is used for all judge models.
+
+
+```bash
+medarc-eval pubhealthbench --split freeform -m "openai/gpt-5-mini" -n 10 --judge-model "openai/gpt-5-mini" --judge-model "google/gemini-3-flash-preview"
+```
+
+## Environment Arguments
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -51,12 +76,12 @@ uv run vf-eval pubhealthbench --split freeform -m gpt-5-mini -n 10
 | `judge_base_url` | str \| list[str] | None | Base URL(s) for judge API |
 | `judge_api_key` | str \| list[str] | None | API key(s) for judge |
 
-### Authors
+## Authors
 This environment has been put together by:
 
 Benjamin Warner - ([@warner-benjamin](https://github.com/warner-benjamin))
 
-### Citation
+## Citation
 Dataset:
 ```bibtex
 @misc{harris2025healthyllmsbenchmarkingllm,
