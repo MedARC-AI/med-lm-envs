@@ -1,6 +1,7 @@
 import math
 import re
 from datetime import datetime
+from enum import StrEnum
 
 import numpy as np
 import verifiers as vf
@@ -28,6 +29,17 @@ from medcalc_bench.prompts import (
 from medcalc_bench.tools import SimpleToolEnv
 
 disable_progress_bar()  # suppress datasets progress indicators
+
+
+class Version(StrEnum):
+    V1_2 = "1.2"
+    VERIFIED = "verified"
+
+
+DATASET_VERSIONS: dict[Version, str] = {
+    Version.V1_2: "ncbi/MedCalc-Bench-v1.2",
+    Version.VERIFIED: "nsk7153/MedCalc-Bench-Verified",
+}
 
 
 def extract_boxed_answer_strict(text: str) -> str:
@@ -294,6 +306,7 @@ def load_environment(
     add_python_tool: bool = False,
     add_calculator_tool: bool = False,
     max_turns: int = 20,  # https://github.com/ncbi-nlp/MedCalc-Bench/blob/main/evaluation/generate_code_prompt.py#L145
+    version: Version | str = Version.VERIFIED,
     answer_format: AnswerFormat | str = AnswerFormat.XML,
     use_think: bool = False,
     system_prompt: str | None = None,
@@ -322,7 +335,8 @@ def load_environment(
             system_prompt = system_prompt
 
     # -------- load dataset and convert to vf format --------
-    ds = load_dataset("nsk7153/MedCalc-Bench-Verified")
+    version = Version(version) if isinstance(version, str) else version
+    ds = load_dataset(DATASET_VERSIONS[version])
     one_shot_examples = None
     if one_shot:
         # create mapping from calc id to one-shot example
