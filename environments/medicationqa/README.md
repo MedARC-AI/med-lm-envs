@@ -1,12 +1,12 @@
 # MedicationQA
 
-### Overview
+## Overview
 - **Environment ID**: `medicationqa`
 - **Short description**: MedicationQA (MedInfo 2019) is a benchmark of single-turn, consumer-style medication questions and expert answers. It evaluates how well models can provide safe, accurate, and complete responses to medication-related inquiries.
 
 ---
 
-### Dataset
+## Dataset
 - **Source**: [Medication_QA_MedInfo2019](https://github.com/abachaa/Medication_QA_MedInfo2019)
 - **Publication**: Abacha & Demner-Fushman, *MedInfo 2019* – “A Question-Answering Dataset for Medication Safety”
 - **Split sizes**:
@@ -17,7 +17,7 @@
 
 ---
 
-### Task
+## Task
 - **Type:** Single-Turn QA  
 - **Rubric:** LLM-as-a-Judge (adapted from MedHELM / MedDialog)  
 - **Evaluation dimensions:**
@@ -27,33 +27,32 @@
 
 ---
 
-### Quickstart
+## Quickstart
 
-Run an evaluation with the default (OpenAI) judge:
+Run an evaluation with default settings:
 
 ```bash
-uv run vf-eval medicationqa -m gpt-4o --num-examples 3 --save-results
+prime eval run medicationqa -m "openai/gpt-5-mini" -n 5 -s
 ```
 
-Use a local Ollama model (e.g. `llama3`) for both answering and judging:
+Judge examples:
 
 ```bash
-uv run vf-eval medicationqa \
-  -m llama3 \
-  --api-base-url http://localhost:11434/v1 \
-  --env-args '{"judge_model":"llama3","judge_base_url":"http://localhost:11434/v1","judge_api_key":"ollama"}' \
-  --num-examples 3 \
-  --save-results
+medarc-eval medicationqa -m "openai/gpt-5-mini" -n 10 -s --judge-model "openai/gpt-5-mini"
+```
+
+This environment supports multi-judge via the `medarc-verifiers` `MultiJudge` rubric. When multiple judge models are specified, each scores independently and the final reward is their mean. `judge_model`, `judge_base_url`, and `judge_api_key` are all list-valued and correspond positionally; if only one `judge_base_url` or `judge_api_key` is provided, it is used for all judge models.
+
+```bash
+medarc-eval medicationqa -m "openai/gpt-5-mini" -n 10 -s --judge-model "openai/gpt-5-mini" --judge-model "x-ai/grok-4.1-fast"
 ```
 
 **Notes**
-- Use `-a` / `--env-args` to pass environment-specific configuration as a JSON object.  
-- The environment defaults to using `"gpt-4o-mini"` as the judge model.  
-- Provide a list for `judge_model` (and optionally `judge_base_url`/`judge_api_key`) to enable multi-judge scoring.  
+- Use direct environment flags with `medarc-eval` (for example, `--split validation` or `--judge-model gpt-5-mini`).
 
 ---
 
-### Environment Arguments
+## Environment Arguments
 
 | Arg | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
@@ -64,15 +63,15 @@ uv run vf-eval medicationqa \
 
 ---
 
-### Results Dataset Structure
+## Results Dataset Structure
 
-#### Core Evaluation Fields
+### Core Evaluation Fields
 - **`prompt`** – The medication question presented to the model (either as plain text or a list of chat-style message objects with `role` and `content`).  
 - **`completion`** – The model-generated answer, represented as a list of message objects (e.g., `[{"role": "assistant", "content": "..."}]`).  
 - **`reward`** – Normalized score in `[0, 1]`, computed as the average of the three dimension scores: `(accuracy/5 + completeness/5 + clarity/5) / 3`.
 
 
-#### Example Metadata (`info`)
+### Example Metadata (`info`)
 - **`id`** – Unique identifier for each question (e.g. `medicationqa_42`).  
 - **`question`** – Consumer-style medication question.  
 - **`reference_answer`** – Gold reference answer from the MedInfo dataset.  
@@ -80,7 +79,7 @@ uv run vf-eval medicationqa \
 
 ---
 
-### Example
+## Example
 
 ```
 Question:
@@ -97,7 +96,7 @@ Your doctor may need to change the doses of your medications or monitor you care
 
 ---
 
-### References
+## References
 
 **MedicationQA Dataset**
 ```bibtex

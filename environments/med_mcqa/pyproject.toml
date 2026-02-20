@@ -3,7 +3,7 @@ name = "med_mcqa"
 description = "Med MCQA evaluation environment"
 readme = "README.md"
 tags = ["medical", "single-turn", "multiple-choice", "train", "eval"]
-version = "0.1.0"
+version = "0.1.1"
 requires-python = ">=3.10"
 authors = [
     { name = "Ratna Sagari Grandhi", email = "sagari.grandhi@gmail.com" },

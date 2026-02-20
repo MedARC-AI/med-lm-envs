@@ -40,7 +40,7 @@ Answer [yes/no].
 
 
 def load_environment(
-    judge_model: str = "gpt-4o-mini",
+    judge_model: str = "openai/gpt-5-nano",
     judge_base_url: str | None = None,
     judge_api_key: str | None = None,
 ) -> vf.Environment:

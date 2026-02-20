@@ -8,6 +8,7 @@ authors = [
     { name = "Kunal Bagga", email = "kunal@kunalb.com" },
 ]
 dependencies = [
+    "medarc-verifiers>=0.1.0",
     "verifiers>=0.1.2.post0",
     "datasets",
     "openai",

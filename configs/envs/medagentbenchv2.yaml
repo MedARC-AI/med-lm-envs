@@ -1,0 +1,6 @@
+- id: medagentbenchv2
+  module: medagentbenchv2
+  num_examples: -1
+  verbose: false
+  env_args:
+    fhir_api_base: http://localhost:8080/fhir/

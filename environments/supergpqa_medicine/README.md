@@ -1,11 +1,11 @@
 # SuperGPQA Medicine
 
-### Overview
+## Overview
 - **Environment ID**: `supergpqa_medicine`
 - **Short description**: Filtered medicine split from SuperGPQA
 - **Tags**: medicine, single-turn, multiple-choice, test, evaluation, supergpqa
 
-### Datasets
+## Datasets
 - **Primary dataset**: `m-a-p/SuperGPQA` (train split, Medicine discipline only)
 - **Source links**: [Paper](https://www.arxiv.org/abs/2502.14739), [GitHub](https://github.com/SuperGPQA/SuperGPQA), [HF Dataset](https://huggingface.co/datasets/m-a-p/SuperGPQA)
 - **Split sizes**: 
@@ -17,34 +17,30 @@
     | `middle`  | A-J    | **1629**  |
     | `hard`  | A-J    | **217**  |
 
-### Task
+## Task
 - **Type**: single-turn
-- **Parser**: `Parser` with `extract_fn=extract_boxed_answer` for strict letter-in-\boxed{}-format parsing
 - **Rubric overview**: Binary scoring based on correctly boxed letter choice and optional think tag formatting
 
-### Quickstart
+## Quickstart
 Run an evaluation with default settings:
 
 ```bash
-uv run vf-eval supergpqa_medicine
+prime eval run supergpqa_medicine -m "openai/gpt-5-mini" -n 5 -s
 ```
 
-Enable five-shot prompting, shuffle choices, and filter to a field/difficulty:
+Enable few-shot prompting and filter to a field/difficulty using `medarc-eval`:
 
 ```bash
-uv run vf-eval supergpqa_medicine \
-    -m gpt-5 \
-    -n -1 -r 3 -t 1024 -T 0.7  \
-    -a '{"num_few_shot": 5, "use_think": true, "shuffle_answers": true, "shuffle_seed": 1618, "field": "clinical_medicine", "difficulty": "hard"}'
+medarc-eval supergpqa_medicine -m "openai/gpt-5-mini" -n -1 --few-shot --field clinical_medicine --difficulty hard
 ```
 
 Notes:
-- Use `-a` / `--env-args` to pass environment-specific configuration as a JSON object.
+- Use direct environment flags with `medarc-eval` (for example, `--split validation` or `--judge-model gpt-5-mini`).
 - The dataset does have a `validation` split with 3 rows, but these are used as few-shot examples, following the official MMLU-Pro [eval code](https://github.com/TIGER-AI-Lab/MMLU-Pro/blob/main/evaluate_from_api.py#L173).
-- Setting `use_think` to `True` works best with `num_few_shot` of at least `1`, so that the LLM can learn exactly how it should format its answer.
+- Set `few_shot=true` to include the fixed five-shot examples from the official setup.
 
 
-### Environment Arguments
+## Environment Arguments
 
 | Arg        | Type / Choices                                                            | Default | Description |
 | ---------- | ------------------------------------------------------------------------- | ------- | ----------- |
@@ -55,7 +51,7 @@ Notes:
 | `shuffle_seed` | int or `null`                                                        | `1618` | Seed for deterministic shuffling when enabled. |
 | `jitter_age` | bool                                                                   | `False` | Add small decimal jitter (~±2 weeks) to age mentions. |
 
-### Metrics
+## Metrics
 
 | Metric    | Meaning                                                  |
 | --------- | -------------------------------------------------------- |

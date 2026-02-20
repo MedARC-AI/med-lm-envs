@@ -1,11 +1,3 @@
-# Full test set - single unshuffled run
-- id: pubhealthbench_full
-  module: pubhealthbench
-  num_examples: -1
-  verbose: false
-  env_args:
-    split: full
-
 # Reviewed set - shuffled with matrix
 - id: pubhealthbench_reviewed
   module: pubhealthbench

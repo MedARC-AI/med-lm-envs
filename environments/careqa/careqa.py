@@ -130,7 +130,7 @@ def load_environment(
     shuffle_answers: bool = False,
     shuffle_seed: int | None = 1618,
     # Open-ended specific options
-    judge_model: str | list[str] = "gpt-4o-mini",
+    judge_model: str | list[str] = "openai/gpt-5-mini",
     judge_base_url: str | list[str] | None = None,
     judge_api_key: str | list[str] | None = None,
     **kwargs,

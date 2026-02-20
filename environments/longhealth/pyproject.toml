@@ -2,7 +2,7 @@
 name = "longhealth"
 description = "LongHealth: A Question Answering Benchmark with Long Clinical Documents - 20 patients, 400 MCQ questions"
 tags = ["medical", "long-context"]
-version = "0.1.0"
+version = "0.1.1"
 requires-python = ">=3.10"
 authors = [
     { name = "Shamus Sim Zi Yang", email = "shamus.sim@monash.edu" },

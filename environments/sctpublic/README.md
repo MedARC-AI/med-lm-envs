@@ -2,51 +2,47 @@
 
 Evaluation environment for SCT-Bench public dataset.
 
-### Overview
+## Overview
 - **Environment ID**: `sctpublic`
 - **Short description**: Single-turn SCT dataset environment
 - **Tags**: medical, clinical, single-turn, eval
 
-### Datasets
+## Datasets
 - **Primary dataset(s)**: SCT-Bench public 
 - **Source links**: https://github.com/SCT-Bench/sctpublic
 - **Split sizes**: Evaluation only
 
-### Task
+## Task
 - **Type**: Single-turn clinical reasoning evaluation
-- **Parser**: Custom `SCTParser` for SCT numeric ratings (-2 to +2)
 - **Rubric overview**: Custom `sct_rubric` that normalizes the answer distribution so that the greatest score is always 1
 
-### Environment Parameters
-- **`reason`** (bool, default=False): If True, prompts include explanation requirement
-- **`few_shot`** (bool, default=False): If True, includes 5 example ratings in the prompt
+## Environment Arguments
 
-### Quickstart
+| Arg | Type | Default | Description |
+| --- | ---- | ------- | ----------- |
+| `reason` | bool | `False` | If True, prompts include an explanation requirement |
+| `few_shot` | bool | `False` | If True, includes 5 example ratings in the prompt |
+
+## Quickstart
 Run an evaluation with default settings:
 
 ```bash
-uv run vf-eval sctpublic
+prime eval run sctpublic -m "openai/gpt-5-mini" -n 5 -s
 ```
 
-### Usage
-To run an evaluation using vf-eval with the OpenAI API:
+## Usage
+To run an evaluation using `medarc-eval` with few-shot prompting and reasoning enabled:
 
 ```bash
-export OPENAI_API_KEY=sk-...
-uv run vf-eval \
-  -m gpt-4.1-mini \
-  -n 5 \
-  -s \
-  sctpublic
+medarc-eval sctpublic -m "openai/gpt-5-mini" -n 5 -s --reason --few-shot
 ```
-Replace `OPENAI_API_KEY` with your actual API key.
 
-### Authors
+## Authors
 This environment has been put together by:
 
 Ratna Sagari Grandhi - ([@sagarigrandhi](https://github.com/sagarigrandhi))
 
-### Credits 
+## Credits 
 Dataset:
 ```bibtex
 @article{mccoy2025assessment,

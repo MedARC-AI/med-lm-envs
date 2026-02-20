@@ -2,7 +2,7 @@
 
 Evaluation environment for consumer health question summarization: condensing verbose patient questions into concise summaries.
 
-### Overview
+## Overview
 - **Environment ID**: `meqsum`
 - **Short description**: Consumer health question summarization benchmark using the MeQSum dataset. This environment evaluates how well models can summarize verbose patient health queries into concise, focused questions.
 - **Tags**: medical, nlp, summarization, single-turn, llm-judge, nlg-metrics
@@ -10,7 +10,7 @@ Evaluation environment for consumer health question summarization: condensing ve
 
 ---
 
-### Dataset
+## Dataset
 - **Source**: [medarc/MeQSum-patient-consumer-health-questions](https://huggingface.co/datasets/medarc/MeQSum-patient-consumer-health-questions)
 - **Based on**: MeQSum corpus from [Ben Abacha & Demner-Fushman, ACL 2019](https://aclanthology.org/P19-1215/) - "On the Summarization of Consumer Health Questions"
 - **Split sizes**:
@@ -21,7 +21,7 @@ Evaluation environment for consumer health question summarization: condensing ve
 
 ---
 
-### Task
+## Task
 - **Type:** Single-Turn Summarization
 - **Input:** Consumer health question (verbose patient query)
 - **Output:** Concise question summary (≤15 words)
@@ -38,35 +38,26 @@ The implementation follows the pattern established in `medicationqa`, using mult
 
 ---
 
-### Quickstart
+## Quickstart
 
-**Basic evaluation with default settings:**
+Basic evaluation with default settings:
 ```bash
-python -m medarc_verifiers.cli.main meqsum -m gpt-4.1-mini -n 5 -r 1 --judge-model gpt-4.1-mini -s
+prime eval run meqsum -m "openai/gpt-5-mini" -n 5 -s
 ```
 
-**Run on validation split:**
+Run on validation split:
 ```bash
-python -m medarc_verifiers.cli.main meqsum --split validation -m gpt-4.1-mini -n 10 -r 1 --judge-model gpt-4.1-mini -s
+medarc-eval meqsum --split validation -m "openai/gpt-5-mini" -n 10 --judge-model "openai/gpt-5-mini" -s
 ```
 
-**Fast evaluation (without automatic metrics):**
+Fast evaluation (without automatic metrics):
 ```bash
-python -m medarc_verifiers.cli.main meqsum -m gpt-4.1-mini -n 10 -r 1 --judge-model gpt-4.1-mini --no-compute-auto-metrics -s
-```
-
-**Using a local model (e.g., Ollama):**
-```bash
-python -m medarc_verifiers.cli.main meqsum \
-  -m llama3 \
-  --api-base-url http://localhost:11434/v1 \
-  --env-args '{"judge_model":"llama3","judge_base_url":"http://localhost:11434/v1","judge_api_key":"ollama"}' \
-  -n 5 -r 1 -s
+medarc-eval meqsum -m "openai/gpt-5-mini" -n 10 --judge-model "openai/gpt-5-mini" --no-compute-auto-metrics -s
 ```
 
 ---
 
-### Environment Arguments
+## Environment Arguments
 
 | Arg | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
@@ -79,14 +70,14 @@ python -m medarc_verifiers.cli.main meqsum \
 
 ---
 
-### Metrics
+## Metrics
 
-#### Primary Metric (Reward)
+### Primary Metric (Reward)
 | Metric | Meaning |
 |--------|---------|
 | `reward` | Normalized LLM-judge score (0-1), averaged across correctness, completeness, and conciseness |
 
-#### LLM-Judge Dimensions (1-5 scale)
+### LLM-Judge Dimensions (1-5 scale)
 
 Criteria adapted from [Van Veen et al., Nature Medicine 2024](https://doi.org/10.1038/s41591-024-02855-5) (Methods - Reader study):
 
@@ -96,7 +87,7 @@ Criteria adapted from [Van Veen et al., Nature Medicine 2024](https://doi.org/10
 | `completeness` | Does the summary completely capture important information? Evaluates recall—important detail retained. |
 | `conciseness` | Does the summary contain non-important information? Evaluates brevity—penalizes superfluous information. Compares output length to reference. |
 
-#### Automatic Metrics
+### Automatic Metrics
 | Metric | Description |
 |--------|-------------|
 | `bleu` | BLEU score (n-gram precision) |
@@ -110,14 +101,14 @@ Criteria adapted from [Van Veen et al., Nature Medicine 2024](https://doi.org/10
 
 ---
 
-### Results Dataset Structure
+## Results Dataset Structure
 
-#### Core Evaluation Fields
+### Core Evaluation Fields
 - **`prompt`** – The consumer health question presented to the model.
 - **`completion`** – The model-generated summary.
 - **`reward`** – Normalized LLM-judge score in `[0, 1]`.
 
-#### Example Metadata (`info`)
+### Example Metadata (`info`)
 - **`idx`** – Original dataset index.
 - **`original_question`** – The input consumer health question text.
 - **`judge_feedback`** – Detailed LLM-judge evaluation with scores and reasoning.
@@ -126,7 +117,7 @@ Criteria adapted from [Van Veen et al., Nature Medicine 2024](https://doi.org/10
 
 ---
 
-### References
+## References
 
 **Dataset Source**
 - Ben Abacha, A. & Demner-Fushman, D. "On the Summarization of Consumer Health Questions." *Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics (ACL)*, pages 2228–2234, 2019. https://aclanthology.org/P19-1215/

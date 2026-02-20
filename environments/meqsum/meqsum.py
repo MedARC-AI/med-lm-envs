@@ -176,7 +176,7 @@ def _compute_normalized_judge_reward(scores: dict[str, dict[str, Any]]) -> float
 
 def load_environment(
     split: str = "test",
-    judge_model: str | list[str] = "gpt-4o-mini",
+    judge_model: str | list[str] = "openai/gpt-5-mini",
     judge_base_url: str | list[str] | None = None,
     judge_api_key: str | list[str] | None = None,
     compute_auto_metrics: bool = True,

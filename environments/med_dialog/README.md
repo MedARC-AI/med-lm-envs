@@ -1,10 +1,10 @@
 # MedDialog (English)
 
-### Overview
+## Overview
 - **Environment ID**: `med_dialog`
 - **Short description**: MedDialog is a benchmark of real-world doctor-patient conversations focused on health-related concerns and advice. Each dialogue is paired with a one-sentence summary that reflects the core patient question or exchange. The benchmark evaluates a model's ability to condense medical dialogue into concise, informative summaries.
 
-### Dataset
+## Dataset
 - **Split sizes**:
   - Train: 205,973
   - Valid: 25,746
@@ -14,7 +14,7 @@
   - Preprocessing by MedHELM following [BioBART](https://arxiv.org/abs/2204.03905) (Yuan et al., 2022)
   - Original dataset: [Medical-Dialogue-System](https://github.com/UCSD-AI4H/Medical-Dialogue-System) (Chen et al., 2020)
 
-### Task
+## Task
 - **Type**: Single-Turn
 - **Rubric overview**: LLM-as-a-judge evaluation using prompts adapted from MedHELM (single or multi-judge)
 - **Evaluation dimensions**:
@@ -22,24 +22,29 @@
   - **Completeness** (1-5): Does the summary include all important medical information?
   - **Clarity** (1-5): Is the summary easy to understand for clinical use?
 
-### Quickstart
+## Quickstart
 Run an evaluation with default settings:
 
 ```bash
-uv run vf-eval med_dialog
+prime eval run med_dialog -m "openai/gpt-5-mini" -n 5 -s
 ```
 
-Use a custom judge model:
+Judge examples:
 
 ```bash
-uv run vf-eval med_dialog -m gpt-4.1-mini --env-args '{"judge_model": "gpt-5-mini"}'
+medarc-eval med_dialog -m "openai/gpt-5-mini" -n 20 -s --judge-model "openai/gpt-5-mini"
+```
+
+This environment supports multi-judge via the `medarc-verifiers` `MultiJudge` rubric. When multiple judge models are specified, each scores independently and the final reward is their mean. `judge_model`, `judge_base_url`, and `judge_api_key` are all list-valued and correspond positionally; if only one `judge_base_url` or `judge_api_key` is provided, it is used for all judge models.
+
+```bash
+medarc-eval med_dialog -m "openai/gpt-5-mini" -n 20 -s --judge-model "openai/gpt-5-mini" --judge-model "x-ai/grok-4.1-fast"
 ```
 
 Notes:
-- Use `-a` / `--env-args` to pass environment-specific configuration as a JSON object.
-- The environment defaults to using `gpt-4o-mini` as the judge model.
+- Use direct environment flags with `medarc-eval` (for example, `--split validation` or `--judge-model gpt-5-mini`).
 
-### Environment Arguments
+## Environment Arguments
 Document any supported environment arguments and their meaning:
 
 | Arg | Type | Default | Description |
@@ -49,14 +54,14 @@ Document any supported environment arguments and their meaning:
 | `judge_base_url` | str \| list[str] \| None | `None` | Custom API base URL(s) for judge model (defaults to OpenAI API) |
 | `judge_api_key` | str \| list[str] \| None | `None` | API key(s) for judge model. Falls back to `JUDGE_API_KEY` environment variable if not provided |
 
-### Results Dataset Structure
-#### Core Evaluation Fields
+## Results Dataset Structure
+### Core Evaluation Fields
 
 - **`prompt`** - The input conversation presented to the model (list of message objects with `role` and `content`)
 - **`completion`** - The model's generated summary (list of message objects)
 - **`reward`** - Overall score from 0.0 to 1.0, calculated as the average of normalized dimension scores: `(accuracy/5 + completeness/5 + clarity/5) / 3`
 
-#### Example Metadata (`info`)
+### Example Metadata (`info`)
 Contains all the MedDialog-specific information about each dialogue:
 
 - **`id`** - Unique identifier for the dialogue
@@ -65,14 +70,14 @@ Contains all the MedDialog-specific information about each dialogue:
 - **`subset`** - Either `"healthcaremagic"` or `"icliniq"`
 - **`index`** - Original index in the source dataset
 
-#### Notes
+### Notes
 
 - The `question` field in the dataset maps to the full conversation text
 - The `answer` field contains the gold standard summary (also available as `reference_response` in `info`)
 - Scores are normalized to 0-1 by dividing each dimension score (1-5) by 5 and averaging across dimensions
 - If judge response parsing fails, dimension scores default to `None` and do not contribute to the final reward
 
-### Dataset Examples
+## Dataset Examples
 
 ```
 Patient: I get cramps on top of my left forearm and hand and it causes my hand and
@@ -101,7 +106,7 @@ left knee joint effusion...
 Summary: My friend has excruciating knee pain. Please interpret his MRI report
 ```
 
-### References
+## References
 
 **MedDialog Dataset**
 ```bibtex

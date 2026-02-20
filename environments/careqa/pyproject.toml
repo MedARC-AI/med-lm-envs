@@ -2,7 +2,7 @@
 name = "careqa"
 description = "Evaluation environment for the HPAI-BSC/CareQA MCQ dataset"
 tags = ["healthcare", "medical-qa", "mcq", "clinical", "single-turn", "open-ended"]
-version = "0.1.0"
+version = "0.1.1"
 requires-python = ">=3.11"
 dependencies = [
     "verifiers>=0.1.4",
