@@ -80,8 +80,6 @@ def get_tool_description(allow_python: bool, allow_calculator: bool) -> str:
 # modified to remove instructions to only write python string and not perform calculations
 tool_use_prompt = """\
 You are a helpful assistant. Your task is to read a patient note and compute a medical value based on the following question.
-If there are multiple values for a given measurement or attribute, then please use the value recorded based on when the patient note was written. You should not be using values that the patient had post-treatment or values from a patient's history in the past.
-Additionally, if the problem doesn't directly imply or provide information regarding a particular patient attribute, assume the patient does not have it.
 {tool_description}
 Note that all of the necessary information is provided in the patient note and you should not need to prompt the user for any information.
 When you are finished with all computations, please write your final answer value without any units, using the following formats inside the indicated answer tag:
@@ -103,8 +101,6 @@ Question:
 
 tool_use_one_shot_prompt = """\
 You are a helpful assistant. Your task is to read a patient note and compute a medical value based on the following question.
-If there are multiple values for a given measurement or attribute, then please use the value recorded based on when the patient note was written. You should not be using values that the patient had post-treatment or values from a patient's history in the past.
-Additionally, if the problem doesn't directly imply or provide information regarding a particular patient attribute, assume the patient does not have it.
 {tool_description}
 Note that all of the necessary information is provided in the patient note and you should not need to prompt the user for any information.
 When you are finished with all computations, please write your final answer value without any units, using the following formats inside the indicated answer tag:

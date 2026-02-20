@@ -2,18 +2,22 @@
 
 ### Overview
 - **Environment ID**: `medcalc-bench`
-- **Short description**: Evaluate clinical calculator reasoning and numeric/date outputs.
+- **Short description**: Evaluate clinical calculator reasoning and numeric/date outputs. Optionally equips the model with a Python execution tool or a calculator tool.
 - **Tags**: medical, clinical, single-turn, numeric, date, evaluation
 
 ### Dataset
-- **Primary dataset**: `ncbi/MedCalc-Bench-v1.2`
-- Each example includes `Patient Note`, `Question`, `Calculator ID`, `Ground Truth`, `Lower Bound`, `Upper Bound`.
-- Mapped fields in env: `question` (formatted prompt), `calc_id`, `ground_truth`, `lower_bound`, `upper_bound`.
 
-    | Split | Count |
-    | ----- | ----- |
-    | train | 10543 |
-    | test  | 1100  |
+Two dataset variants are available:
+
+- `verified` (default): `nsk7153/MedCalc-Bench-Verified`
+- `v1.2`: `ncbi/MedCalc-Bench-v1.2`
+
+| Split | `v1.2` | `verified` |
+| ----- | ------ | ---------- |
+| train | 10,543 | 10,538 |
+| test  | 1,100  | 1,100  |
+
+Each example includes a `Patient Note`, `Question`, `Calculator ID`, `Ground Truth`, `Lower Bound`, and `Upper Bound`.
 
 ### Task
 - **Type**: single-turn, multi-turn with tool use
@@ -55,6 +59,7 @@ Notes:
 | `add_python_tool` | bool | `False` | Add the Python code execution tool (uses restricted Python with limited builtins) |
 | `add_calculator_tool` | bool | `False` | Add the calculator tool (uses simple eval with safe math operations) |
 | `max_turns` | int | `20` | Maximum number of turns in tool use environment |
+| `version` | str | `"verified"` | Dataset variant: `"verified"` (default) or `"1.2"` |
 | `answer_format` | str | `"xml"` | Answer format: `"xml"` (default) or `"boxed"` |
 | `use_think` | bool | `False` | Whether to instruct `<think>...</think>` formatting |
 | `system_prompt` | str | `None` | Custom system prompt (defaults to standard XML/BOXED prompt based on `answer_format`) |
@@ -75,11 +80,12 @@ Adjusted the prompt to output the step-by-step thinking and final answer with th
 
 ```bibtex
 @misc{khandekar2024medcalcbench,
-      title={MedCalc-Bench: Evaluating Large Language Models for Medical Calculations}, 
+      title={MedCalc-Bench: Evaluating Large Language Models for Medical Calculations},
       author={Nikhil Khandekar and Qiao Jin and Guangzhi Xiong and Soren Dunn and Serina S Applebaum and Zain Anwar and Maame Sarfo-Gyamfi and Conrad W Safranek and Abid A Anwar and Andrew Zhang and Aidan Gilson and Maxwell B Singer and Amisha Dave and Andrew Taylor and Aidong Zhang and Qingyu Chen and Zhiyong Lu},
       year={2024},
       eprint={2406.12036},
       archivePrefix={arXiv},
-      primaryClass={id='cs.CL' full_name='Computation and Language' is_active=True alt_name='cmp-lg' in_archive='cs' is_general=False description='Covers natural language processing. Roughly includes material in ACM Subject Class I.2.7. Note that work on artificial languages (programming languages, logics, formal systems) that does not explicitly address natural-language issues broadly construed (natural-language processing, computational linguistics, speech, text retrieval, etc.) is not appropriate for this area.'}
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2406.12036},
 }
 ```
