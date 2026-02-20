@@ -2,7 +2,7 @@
 name = "medxpertqa"
 description = "MedXpertQA is a highly challenging and comprehensive benchmark designed to evaluate expert-level medical knowledge and advanced reasoning capabilities. We use the text subset for now."
 tags = ["eval"]
-version = "0.1.0"
+version = "0.1.1"
 requires-python = ">=3.11"
 dependencies = [
     "verifiers>=0.1.4",

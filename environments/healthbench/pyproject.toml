@@ -5,6 +5,7 @@ tags = ["medical", "communication", "single-turn", "llm-judge"]
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
+    "medarc-verifiers>=0.1.0",
     "verifiers>=0.1.4",
     "datasets>=4.1.1",
     "openai>=2.1.0",

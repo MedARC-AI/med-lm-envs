@@ -4,6 +4,7 @@ description = "A realistic virtual EHR environment to benchmark medical LLM agen
 tags = ["medical", "ehr", "multi-turn", "clinical", "evaluation"]
 version = "0.1.2"
 dependencies = [
+    "medarc-verifiers>=0.1.0",
     "datasets",
     "verifiers>=0.1.2.post1",
 ]

@@ -5,6 +5,7 @@ description = "MedAgentBench V2 environment for tool-calling evaluation."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
+    "medarc-verifiers>=0.1.0",
     "verifiers<0.1.8",
     "datasets",
     "requests",
