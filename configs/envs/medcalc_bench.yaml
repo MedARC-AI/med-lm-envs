@@ -3,6 +3,8 @@
   rollouts_per_example: 1
   verbose: false
   num_examples: -1
+  env_args:
+    version: "1.2"
 
   export:
     extra_columns: [lower_bound, upper_bound]
