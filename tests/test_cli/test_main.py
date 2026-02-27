@@ -1876,11 +1876,16 @@ def test_winrate_cli_applies_config_defaults(monkeypatch: pytest.MonkeyPatch, tm
         }
         return SimpleNamespace(
             output_path=tmp_path / "out.json",
+            output_paths=[tmp_path / "out.json"],
             result={"models": {}},
             datasets=[("demo-env", [Path("demo-env.parquet")])],
         )
 
+    def fake_sync_files_to_hub(**kwargs):
+        captured["upload"] = kwargs
+
     monkeypatch.setattr(main, "run_winrate", fake_run_winrate)
+    monkeypatch.setattr(main, "sync_files_to_hub", fake_sync_files_to_hub)
     monkeypatch.setattr(main, "print_winrate_summary_markdown", lambda *_args, **_kwargs: None)
 
     exit_code = main.main(["winrate", "--config", str(cfg_path), "--processed-at", "2024-01-01T00:00:00Z"])
@@ -1895,6 +1900,12 @@ def test_winrate_cli_applies_config_defaults(monkeypatch: pytest.MonkeyPatch, tm
     assert cfg.weight_cap == 99
     assert cfg.include_models == ("alpha", "beta")
     assert cfg.exclude_models == ("gamma",)
+    assert captured["run_kwargs"]["hf_config"] is not None
+    assert captured["run_kwargs"]["hf_config"].repo_id == "medarc/demo"
+    upload = captured.get("upload")
+    assert upload is not None
+    assert upload["repo_id"] == "medarc/demo"
+    assert upload["path_in_repo_prefix"] == "winrate"
 
     exit_code = main.main(
         [
@@ -1936,9 +1947,8 @@ def test_process_cli_runs_winrate_post_step(monkeypatch: pytest.MonkeyPatch, tmp
         output_dir: winrate-out
         output_name: from-config
         missing_policy: zero
-        hf_processed_repo: ignored/also
-        hf_winrate_repo: medarc/winrate
-        hf_token: secret-token
+        hf:
+          winrate_dir: winrate-post
         """,
         encoding="utf-8",
     )
@@ -1981,6 +1991,7 @@ def test_process_cli_runs_winrate_post_step(monkeypatch: pytest.MonkeyPatch, tmp
             "message": message,
             "branch": branch,
             "dry_run": dry_run,
+            **_kw,
         }
 
     monkeypatch.setattr(main, "run_process", fake_run_process)
@@ -1997,6 +2008,10 @@ def test_process_cli_runs_winrate_post_step(monkeypatch: pytest.MonkeyPatch, tmp
             str(tmp_path / "processed"),
             "--winrate",
             str(cfg_path),
+            "--hf-repo",
+            "medarc/shared",
+            "--hf-token",
+            "secret-token",
         ]
     )
     assert exit_code == 0
@@ -2006,9 +2021,10 @@ def test_process_cli_runs_winrate_post_step(monkeypatch: pytest.MonkeyPatch, tmp
     assert captured["run_kwargs"]["hf_processed_pull"] is False
     upload = captured.get("upload")
     assert upload is not None
-    assert upload["repo_id"] == "medarc/winrate"
+    assert upload["repo_id"] == "medarc/shared"
     assert upload["token"] == "secret-token"
     assert upload["files"] == ["winrate.json"]
+    assert upload["path_in_repo_prefix"] == "winrate-post"
 
 
 def test_process_config_sets_winrate_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

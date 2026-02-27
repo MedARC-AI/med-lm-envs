@@ -161,7 +161,7 @@ medarc-eval winrate --weight-policy ln
 
 ```bash
 medarc-eval winrate \
-  --hf-processed-repo your-org/processed-benchmarks \
+  --hf-repo your-org/processed-benchmarks \
   --hf-processed-pull \
   --hf-token $HF_TOKEN
 ```
@@ -170,7 +170,8 @@ medarc-eval winrate \
 
 ```bash
 medarc-eval winrate \
-  --hf-winrate-repo your-org/winrate-results \
+  --hf-repo your-org/processed-benchmarks \
+  --hf-winrate-dir winrate \
   --hf-token $HF_TOKEN \
   --hf-private
 ```
@@ -186,8 +187,8 @@ missing_policy: neg-inf
 weight_policy: ln
 
 hf:
-  repo: your-org/processed-data          # Pull processed from here
-  winrate_repo: your-org/winrate-results # Upload results here
+  repo: your-org/processed-data # Pull processed from here; upload winrate here
+  winrate_dir: winrate          # Subdirectory in repo for winrate artifacts (default: winrate)
   branch: main
   token: ${HF_TOKEN}
   private: true

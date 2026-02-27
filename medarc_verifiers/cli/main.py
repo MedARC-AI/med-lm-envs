@@ -47,6 +47,7 @@ from medarc_verifiers.cli.utils.shared import (
     slugify,
     validate_simple_name,
 )
+from medarc_verifiers.utils.pathing import resolve_under
 from medarc_verifiers.cli.winrate import (
     WinrateConfig,
     _resolve_source,
@@ -465,7 +466,7 @@ def build_winrate_parser() -> argparse.ArgumentParser:
             "per-model uses the legacy behavior where each model may be averaged over a different dataset set."
         ),
     )
-    parser.add_argument("--hf-processed-repo", help="Hugging Face repo id for processed dataset download.")
+    parser.add_argument("--hf-repo", help="Hugging Face repo id used for processed download and winrate upload.")
     parser.add_argument(
         "--hf-processed-pull",
         action="store_true",
@@ -474,7 +475,11 @@ def build_winrate_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--hf-branch", help="Target HF branch or revision for processed download.")
     parser.add_argument("--hf-token", help="Auth token for HF operations.")
-    parser.add_argument("--hf-winrate-repo", help="Hugging Face repo id for winrate artifact upload.")
+    parser.add_argument(
+        "--hf-winrate-dir",
+        default=None,
+        help="Path under the HF repo where winrate artifacts are uploaded (default: winrate).",
+    )
     parser.add_argument(
         "--hf-private",
         action=argparse.BooleanOptionalAction,
@@ -665,7 +670,7 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         if winrate_args is None:
             winrate_args = _build_winrate_args_from_config(Path(args.winrate), parser=parser)
         winrate_args.processed_dir = options.output_dir
-        winrate_args.hf_processed_repo = None
+        winrate_args.hf_repo = None
         winrate_args.hf_processed_pull = False
         winrate_cfg = WinrateConfig(
             missing_policy=winrate_args.missing_policy,
@@ -697,13 +702,15 @@ def _run_process_mode(argv: Sequence[str]) -> int:
             "Computed win rates for %d dataset(s): %s", len(winrate_result.datasets), winrate_result.output_path
         )
         print_winrate_summary_markdown(winrate_result.result)
-        if winrate_args.hf_winrate_repo:
+        if options.hf_config and options.hf_config.repo_id:
             _upload_winrate_outputs(
                 output_dir=winrate_args.output_dir,
                 output_paths=winrate_result.output_paths,
-                repo_id=winrate_args.hf_winrate_repo,
-                token=winrate_args.hf_token,
-                private=bool(winrate_args.hf_private),
+                repo_id=options.hf_config.repo_id,
+                token=options.hf_config.token,
+                branch=options.hf_config.branch,
+                private=bool(options.hf_config.private),
+                winrate_dir=winrate_args.hf_winrate_dir,
                 assume_yes=bool(args.yes),
             )
 
@@ -750,12 +757,18 @@ def _load_config_payload(path: Path, *, mode: Literal["process", "winrate"]) -> 
 
 
 def _normalize_mode_payload(payload: dict[str, Any], *, mode: Literal["process", "winrate"]) -> None:
+    if mode == "winrate":
+        if "hf_processed_repo" in payload and "hf_repo" not in payload:
+            payload["hf_repo"] = payload["hf_processed_repo"]
+        if "hf_winrate_repo" in payload:
+            raise ValueError("Winrate config field 'hf_winrate_repo' was removed; use 'hf.repo' and 'hf.winrate_dir'.")
+
     hf_payload = payload.get("hf")
     if isinstance(hf_payload, Mapping):
         for key, value in hf_payload.items():
             if mode == "winrate":
                 if key == "repo":
-                    payload.setdefault("hf_processed_repo", value)
+                    payload.setdefault("hf_repo", value)
                     continue
                 if key == "branch":
                     payload.setdefault("hf_branch", value)
@@ -766,6 +779,10 @@ def _normalize_mode_payload(payload: dict[str, Any], *, mode: Literal["process",
                 if key == "private":
                     payload.setdefault("hf_private", value)
                     continue
+                if key == "winrate_repo":
+                    raise ValueError(
+                        "Winrate config field 'hf.winrate_repo' was removed; use 'hf.repo' and 'hf.winrate_dir'."
+                    )
             payload.setdefault(f"hf_{key}", value)
 
     if "exclude_datasets" not in payload and "exclude_dataset" in payload:
@@ -783,9 +800,9 @@ def _load_and_apply_config(
 ) -> None:
     try:
         payload = _load_config_payload(path, mode=mode)
+        _normalize_mode_payload(payload, mode=mode)
     except (FileNotFoundError, ValueError) as exc:
         parser.error(str(exc))
-    _normalize_mode_payload(payload, mode=mode)
 
     path_fields = {
         "process": {
@@ -811,8 +828,8 @@ def _load_and_apply_config(
             "weight_policy": "weight_policy",
             "partial_datasets": "partial_datasets",
             "dataset_coverage": "dataset_coverage",
-            "hf_processed_repo": "hf_processed_repo",
-            "hf_winrate_repo": "hf_winrate_repo",
+            "hf_repo": "hf_repo",
+            "hf_winrate_dir": "hf_winrate_dir",
             "hf_branch": "hf_branch",
             "hf_token": "hf_token",
         },
@@ -891,9 +908,9 @@ def _build_winrate_args_from_config(path: Path, *, parser: argparse.ArgumentPars
         exclude_model=None,
         exclude_dataset=None,
         partial_datasets=None,
-        hf_processed_repo=None,
+        hf_repo=None,
         hf_processed_pull=None,
-        hf_winrate_repo=None,
+        hf_winrate_dir=None,
         hf_branch=None,
         hf_token=None,
         hf_private=None,
@@ -935,6 +952,7 @@ def _finalize_config_args(args: argparse.Namespace, *, mode: Literal["process", 
             "exclude_dataset": [],
             "partial_datasets": "strict",
             "hf_processed_pull": False,
+            "hf_winrate_dir": "winrate",
             "hf_private": False,
             "yes": False,
         },
@@ -955,10 +973,18 @@ def _upload_winrate_outputs(
     output_paths: Sequence[Path],
     repo_id: str,
     token: str | None,
+    branch: str | None,
     private: bool,
+    winrate_dir: str | None,
     assume_yes: bool = False,
 ) -> None:
     if not output_paths:
+        return
+    raw_dir = "winrate" if winrate_dir is None else str(winrate_dir).strip()
+    if not raw_dir:
+        raw_dir = "winrate"
+    if resolve_under(Path("."), raw_dir) is None:
+        logger.error("Invalid winrate_dir '%s'; skipping upload.", winrate_dir)
         return
     output_dir = Path(output_dir)
     files: list[str] = []
@@ -981,6 +1007,8 @@ def _upload_winrate_outputs(
         token=token,
         private=private,
         message=message,
+        branch=branch,
+        path_in_repo_prefix=raw_dir,
         is_tty=sys.stdin.isatty(),
         assume_yes=assume_yes,
         prompt_func=input,
@@ -996,17 +1024,17 @@ def _run_winrate_mode(argv: Sequence[str]) -> int:
     _finalize_config_args(args, mode="winrate")
 
     hf_config = HFSyncConfig.from_cli(
-        repo=args.hf_processed_repo,
+        repo=args.hf_repo,
         branch=args.hf_branch,
         token=args.hf_token,
-        private=False,
+        private=bool(args.hf_private),
         dry_run=False,
     )
 
     if args.list_models:
         source_dir, datasets, source_desc = _resolve_source(
             args.processed_dir,
-            hf_config=hf_config if args.hf_processed_repo else None,
+            hf_config=hf_config if args.hf_repo else None,
             hf_processed_pull=bool(args.hf_processed_pull),
         )
         if args.exclude_dataset:
@@ -1054,13 +1082,15 @@ def _run_winrate_mode(argv: Sequence[str]) -> int:
 
     logger.info("Computed win rates for %d dataset(s): %s", len(winrate_result.datasets), winrate_result.output_path)
     print_winrate_summary_markdown(winrate_result.result)
-    if args.hf_winrate_repo:
+    if args.hf_repo:
         _upload_winrate_outputs(
             output_dir=args.output_dir,
             output_paths=winrate_result.output_paths,
-            repo_id=args.hf_winrate_repo,
+            repo_id=args.hf_repo,
             token=args.hf_token,
+            branch=args.hf_branch,
             private=bool(args.hf_private),
+            winrate_dir=args.hf_winrate_dir,
             assume_yes=bool(args.yes),
         )
     return 0

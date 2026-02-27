@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Sequence
 
+from medarc_verifiers.utils.pathing import resolve_under
+
 if TYPE_CHECKING:
     from medarc_verifiers.cli.process.writer import EnvWriteSummary
 
@@ -166,6 +168,7 @@ def sync_files_to_hub(
     request_timeout_s: float | None = None,
     retries: int = 3,
     max_files_per_commit: int | None = None,
+    path_in_repo_prefix: str | None = None,
     is_tty: bool = False,
     assume_yes: bool = False,
     prompt_func: Callable[[str], str] | None = None,
@@ -195,6 +198,7 @@ def sync_files_to_hub(
         _configure_hf_http_timeout(float(request_timeout_s))
 
     api = HfApi(token=token)
+    repo_prefix = _normalize_repo_path_prefix(path_in_repo_prefix)
 
     if max_files_per_commit is None or max_files_per_commit <= 0:
         batches = [file_list]
@@ -207,7 +211,10 @@ def sync_files_to_hub(
 
     for batch_index, batch_files in enumerate(batches, start=1):
         operations = [
-            CommitOperationAdd(path_in_repo=rel_path, path_or_fileobj=str(output_dir / rel_path))
+            CommitOperationAdd(
+                path_in_repo=_join_repo_path(repo_prefix, rel_path),
+                path_or_fileobj=str(output_dir / rel_path),
+            )
             for rel_path in batch_files
         ]
         commit_message = message
@@ -262,6 +269,26 @@ def sync_files_to_hub(
                     delay,
                 )
                 time.sleep(delay)
+
+
+def _normalize_repo_path_prefix(value: str | None) -> str | None:
+    if value is None:
+        return None
+    raw = str(value).strip().replace("\\", "/").strip("/")
+    if not raw:
+        return None
+    candidate = resolve_under(Path("."), raw)
+    if candidate is None:
+        raise ValueError(f"Invalid path_in_repo_prefix: {value!r}")
+    normalized = candidate.as_posix().lstrip("./")
+    return normalized or None
+
+
+def _join_repo_path(prefix: str | None, rel_path: str) -> str:
+    rel = rel_path.strip().replace("\\", "/").lstrip("/")
+    if not prefix:
+        return rel
+    return f"{prefix}/{rel}" if rel else prefix
 
 
 def sync_to_hub(
