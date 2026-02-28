@@ -93,6 +93,8 @@ def _write_run(
     reward: float,
     env_id: str = "demo-env-rollout3",
     model_id: str = "gpt-mini",
+    status: str = "completed",
+    results_text: str | None = None,
 ) -> Path:
     runs_dir = tmp_path / "runs"
     run_dir = runs_dir / run_id
@@ -110,10 +112,10 @@ def _write_run(
         "env_templates": {"demo-env-template": {"module": env_id}},
         "summary": {
             "total": 1,
-            "completed": 1,
+            "completed": 1 if status == "completed" else 0,
             "pending": 0,
             "running": 0,
-            "failed": 0,
+            "failed": 1 if status == "failed" else 0,
             "skipped": 0,
         },
         "jobs": [
@@ -126,6 +128,7 @@ def _write_run(
                 "env_args": {},
                 "results_dir": "demo-job",
             }
+                "status": status,
         ],
     }
     _write_json(run_dir / "run_manifest.json", manifest)
@@ -137,8 +140,10 @@ def _write_run(
     _write_json(results_dir / "metadata.json", metadata)
     results_path = results_dir / "results.jsonl"
     results_path.parent.mkdir(parents=True, exist_ok=True)
-    row = {"example_id": f"ex-{run_id}", "reward": reward}
-    results_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    if results_text is None:
+        row = {"example_id": f"ex-{run_id}", "reward": reward}
+        results_text = json.dumps(row) + "\n"
+    results_path.write_text(results_text, encoding="utf-8")
     return runs_dir
 
 
@@ -539,6 +544,62 @@ def test_process_latest_only_selects_latest_and_delta_skips(tmp_path: Path) -> N
     result_repeat = run_process(options)
     assert result_repeat.env_summaries == []
     assert result_repeat.rows_processed == 0
+
+def test_process_ignores_invalid_superseded_run(tmp_path: Path) -> None:
+    runs_dir = _write_run(
+        tmp_path,
+        run_id="run-1",
+        updated_at="2024-01-01T00:00:00Z",
+        reward=0.1,
+        results_text='{"example_id": ',
+    )
+    _write_run(tmp_path, run_id="run-2", updated_at="2024-01-02T00:00:00Z", reward=0.9)
+    output_dir = tmp_path / "processed"
+
+    result = run_process(ProcessOptions(runs_dir=runs_dir, output_dir=output_dir, dry_run=False, max_workers=1))
+
+    assert result.env_summaries
+    table = pq.read_table(result.env_summaries[0].output_path)
+    assert table.column("reward").to_pylist() == [0.9]
+
+
+def test_process_ignores_invalid_incomplete_run_by_default(tmp_path: Path) -> None:
+    runs_dir = _write_run(
+        tmp_path,
+        run_id="run-1",
+        updated_at="2024-01-01T00:00:00Z",
+        reward=0.1,
+        status="running",
+        results_text='{"example_id": ',
+    )
+    _write_run(tmp_path, run_id="run-2", updated_at="2024-01-02T00:00:00Z", reward=0.9, env_id="other-env")
+    output_dir = tmp_path / "processed"
+
+    result = run_process(ProcessOptions(runs_dir=runs_dir, output_dir=output_dir, dry_run=False, max_workers=1))
+
+    assert {summary.env_id for summary in result.env_summaries} == {"other-env"}
+
+
+def test_process_selected_invalid_results_still_fail(tmp_path: Path) -> None:
+    runs_dir = _write_run(
+        tmp_path,
+        run_id="run-1",
+        updated_at="2024-01-01T00:00:00Z",
+        reward=0.1,
+        results_text='{"example_id": ',
+    )
+
+    with pytest.raises(ValueError, match="Failed to parse JSONL line 1"):
+        run_process(ProcessOptions(runs_dir=runs_dir, output_dir=tmp_path / "processed", dry_run=False, max_workers=1))
+
+
+def test_process_selected_missing_results_still_fail(tmp_path: Path) -> None:
+    runs_dir = _setup_run(tmp_path)
+    missing_results = runs_dir / "run-1" / "demo-job" / "results.jsonl"
+    missing_results.unlink()
+
+    with pytest.raises(FileNotFoundError, match="Missing results.jsonl"):
+        run_process(ProcessOptions(runs_dir=runs_dir, output_dir=tmp_path / "processed", dry_run=False, max_workers=1))
 
 
 def test_process_clean_clears_outputs(tmp_path: Path) -> None:

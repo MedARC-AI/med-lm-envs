@@ -28,8 +28,10 @@ def load_rows(
     """Load results.jsonl rows and attach manifest metadata."""
     record = metadata.record
     if not record.has_results:
-        logger.debug("Run %s missing results.jsonl; skipping.", record.job_id)
-        return []
+        raise FileNotFoundError(
+            "Missing results.jsonl for selected run "
+            f"(job_run_id={record.manifest.job_run_id}, job_id={record.job_id}, path={record.results_path})"
+        )
 
     results_path = record.results_path
     extras_keys = {column for column in extra_columns or () if column}

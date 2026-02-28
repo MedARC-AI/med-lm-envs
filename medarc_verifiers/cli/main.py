@@ -33,7 +33,6 @@ from medarc_verifiers.cli._job_builder import ResolvedJob, build_jobs
 from medarc_verifiers.cli._job_executor import ExecutorSettings, JobExecutionResult, execute_jobs
 from medarc_verifiers.cli._manifest import MANIFEST_FILENAME, ManifestJobEntry, RunManifest, compute_snapshot_checksum
 from medarc_verifiers.cli._manifest_planner import ManifestPlanner
-from medarc_verifiers.cli._manifest_tools import format_validation_issues, validate_manifests_in_runs
 from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, EnvironmentExportConfig
 from medarc_verifiers.cli._single_run import run_single_mode
 from medarc_verifiers.cli.hf import HFSyncConfig, sync_files_to_hub
@@ -287,18 +286,6 @@ def build_process_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--processed-at", default=None, help="Override processed_at timestamp (ISO8601).")
     parser.add_argument("--dry-run", action="store_true", default=None, help="Plan processing without writing outputs.")
-    parser.add_argument(
-        "--validate-manifest",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Validate run manifests before processing (default: enabled).",
-    )
-    parser.add_argument(
-        "--strict-manifest",
-        action="store_true",
-        default=None,
-        help="Treat manifest validation problems as errors.",
-    )
     parser.add_argument(
         "--process-incomplete",
         dest="process_incomplete",
@@ -610,8 +597,6 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         "exclude_models": args.exclude_model or [],
         "dry_run": bool(args.dry_run),
         "clean": bool(args.clean),
-        "validate_manifest": bool(args.validate_manifest),
-        "strict_manifest": bool(args.strict_manifest),
         "only_complete_runs": not bool(args.process_incomplete),
         "hf_repo": args.hf_repo,
         "hf_pull_policy": args.hf_pull_policy,
@@ -637,23 +622,6 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         hf_pull_policy=args.hf_pull_policy,
         max_workers=args.max_workers,
     )
-
-    if args.validate_manifest:
-        validation = validate_manifests_in_runs(options.runs_dir, strict=bool(args.strict_manifest))
-        for line in format_validation_issues(validation.issues):
-            if line.startswith("[ERROR]"):
-                logger.error("%s", line)
-            else:
-                logger.warning("%s", line)
-        logger.info(
-            "Manifest preflight: checked %d manifest(s), %d job(s), %d issue(s).",
-            validation.manifests_checked,
-            validation.jobs_checked,
-            len(validation.issues),
-        )
-        if validation.has_errors:
-            logger.error("Manifest validation failed in strict mode; aborting process.")
-            return 1
 
     try:
         result = run_process(options, env_export_map=env_export_map)
@@ -840,8 +808,6 @@ def _load_and_apply_config(
             "clean": "clean",
             "yes": "yes",
             "process_incomplete": "process_incomplete",
-            "validate_manifest": "validate_manifest",
-            "strict_manifest": "strict_manifest",
             "hf_private": "hf_private",
         },
         "winrate": {"hf_processed_pull": "hf_processed_pull", "hf_private": "hf_private"},
@@ -933,8 +899,6 @@ def _finalize_config_args(args: argparse.Namespace, *, mode: Literal["process", 
             "clean": False,
             "yes": False,
             "process_incomplete": False,
-            "validate_manifest": True,
-            "strict_manifest": False,
             "exclude_dataset": [],
             "exclude_model": [],
         },

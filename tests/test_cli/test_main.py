@@ -2178,7 +2178,7 @@ def test_process_cli_allows_cli_override_of_malformed_numeric_config(
     monkeypatch.setattr(main, "run_process", fake_run)
 
     exit_code = main.main(
-        ["process", "--config", str(cfg_path), "--max-workers", "2", "--dry-run", "--no-validate-manifest"]
+        ["process", "--config", str(cfg_path), "--max-workers", "2", "--dry-run"]
     )
     assert exit_code == 0
     assert captured["options"].max_workers == 2
