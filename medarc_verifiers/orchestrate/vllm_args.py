@@ -5,6 +5,44 @@ from __future__ import annotations
 from typing import Mapping
 
 
+def normalize_volume_mounts(volumes: object) -> list[str]:
+    if volumes is None:
+        return []
+    if isinstance(volumes, Mapping):
+        mounts: list[str] = []
+        for host, target in volumes.items():
+            if not isinstance(host, str) or not isinstance(target, Mapping):
+                raise ValueError("orchestrate.vllm-container.volumes mapping entries must be host -> mapping.")
+            bind = str(target.get("bind", "")).strip()
+            mode = str(target.get("mode", "rw")).strip()
+            if not bind:
+                raise ValueError(f"Invalid volume mount for host {host!r}: missing bind path.")
+            if mode not in {"ro", "rw"}:
+                raise ValueError(f"Invalid volume mount mode for host {host!r}: expected ro/rw.")
+            mounts.append(f"{host}:{bind}:{mode}")
+        return mounts
+    if not isinstance(volumes, list):
+        raise ValueError("orchestrate.vllm-container.volumes must be a list of mount strings or a mapping.")
+    mounts: list[str] = []
+    for entry in volumes:
+        if not entry:
+            continue
+        if not isinstance(entry, str):
+            raise ValueError("orchestrate.vllm-container.volumes entries must be strings like host:container[:mode].")
+        parts = entry.split(":")
+        if len(parts) < 2 or len(parts) > 3:
+            raise ValueError(f"Invalid volume mount: {entry!r} (expected host:container[:mode])")
+        host = parts[0].strip()
+        container_path = parts[1].strip()
+        mode = parts[2].strip() if len(parts) == 3 else "rw"
+        if not host or not container_path:
+            raise ValueError(f"Invalid volume mount: {entry!r} (host and container path required)")
+        if mode not in {"ro", "rw"}:
+            raise ValueError(f"Invalid volume mount mode: {entry!r} (expected ro/rw)")
+        mounts.append(f"{host}:{container_path}:{mode}")
+    return mounts
+
+
 def build_container_args(model_id: str, *, tensor_parallel_size: int | None, serve: Mapping[str, object]) -> list[str]:
     _validate_serve_config(serve)
     args = ["--model", model_id]
@@ -95,4 +133,4 @@ def _validate_serve_config(serve: Mapping[str, object]) -> None:
         raise ValueError(f"Unknown limit_mm_per_prompt keys: {unknown_subkeys}")
 
 
-__all__ = ["build_container_args"]
+__all__ = ["build_container_args", "normalize_volume_mounts"]

@@ -25,16 +25,14 @@ from medarc_verifiers.orchestrate.bench import (
 from medarc_verifiers.orchestrate.config import PlanConfig, TaskSpec
 from medarc_verifiers.orchestrate.dashboard import ACTIVE_STATES, OrchestratorDashboard
 from medarc_verifiers.orchestrate.docker_vllm import (
-    DockerLaunchError,
     DockerRuntimeAdapter,
-    normalize_volume_mounts,
     sanitize_container_name,
     wait_for_readiness_async,
     write_container_request,
 )
 from medarc_verifiers.orchestrate.pyxis_vllm import PyxisRuntimeAdapter
 from medarc_verifiers.orchestrate.resources import ResourceManager
-from medarc_verifiers.orchestrate.runtime import LogStreamer, RuntimeAdapter, RuntimeHandle
+from medarc_verifiers.orchestrate.runtime import LogStreamer, RuntimeAdapter, RuntimeHandle, RuntimeLaunchError
 from medarc_verifiers.orchestrate.scheduler import Allocation, TaskScheduler
 from medarc_verifiers.orchestrate.state import (
     JobState,
@@ -45,7 +43,7 @@ from medarc_verifiers.orchestrate.state import (
     write_task_result,
     write_text,
 )
-from medarc_verifiers.orchestrate.vllm_args import build_container_args
+from medarc_verifiers.orchestrate.vllm_args import build_container_args, normalize_volume_mounts
 
 COMMAND_TEMPLATE = "uv run medarc-eval bench --config {job_config_path} --api-base-url {base_url} --on-complete exit"
 
@@ -189,7 +187,7 @@ class OrchestratorRunner:
                         )
                         await asyncio.sleep(5)
                         continue
-                    if isinstance(exc, DockerLaunchError):
+                    if isinstance(exc, RuntimeLaunchError):
                         manifest.failure_reason = "serve_launch_failed"
                     else:
                         manifest.failure_reason = "unexpected_exception"
@@ -287,10 +285,10 @@ class OrchestratorRunner:
                 ipc_mode=ipc_mode,
                 srun_extra_args=list(pyxis_cfg.get("srun_extra_args", [])) if pyxis_cfg else [],
             )
-        except DockerLaunchError:
+        except RuntimeLaunchError:
             raise
         except Exception as exc:
-            raise DockerLaunchError(str(exc)) from exc
+            raise RuntimeLaunchError(str(exc)) from exc
         manifest.container_id = handle.identifier
         self._active_handles[task.task_id] = handle
 
@@ -622,7 +620,7 @@ def _load_env_file(path: object, *, base_dir: Path) -> dict[str, str]:
     if not env_path.is_absolute():
         env_path = (base_dir / env_path).resolve()
     if not env_path.exists():
-        raise DockerLaunchError(
+        raise RuntimeLaunchError(
             f"env_file not found: {env_path} (set orchestrate.vllm-container.env_file relative to {base_dir})"
         )
     values = dotenv_values(env_path)
@@ -648,7 +646,7 @@ def _register_signal_handlers(loop: asyncio.AbstractEventLoop, handler) -> None:
 
 def _is_transient_error(exc: Exception) -> bool:
     message = str(exc).lower()
-    if isinstance(exc, DockerLaunchError):
+    if isinstance(exc, RuntimeLaunchError):
         return (
             "port" in message
             or "bind" in message

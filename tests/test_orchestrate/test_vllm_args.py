@@ -1,6 +1,6 @@
 import pytest
 
-from medarc_verifiers.orchestrate.vllm_args import build_container_args
+from medarc_verifiers.orchestrate.vllm_args import build_container_args, normalize_volume_mounts
 
 
 def test_build_container_args_rejects_unknown_serve_keys() -> None:
@@ -39,3 +39,14 @@ def test_build_container_args_renders_tensor_parallel_and_flags() -> None:
         "8192",
         "--enable-prefix-caching",
     ]
+
+
+def test_normalize_volume_mounts_parses_mount_strings() -> None:
+    mounts = normalize_volume_mounts(["/host/cache:/root/.cache/huggingface:ro", "/host/data:/data"])
+
+    assert mounts == ["/host/cache:/root/.cache/huggingface:ro", "/host/data:/data:rw"]
+
+
+def test_normalize_volume_mounts_rejects_invalid_entries() -> None:
+    with pytest.raises(ValueError):
+        normalize_volume_mounts(["/host/only"])

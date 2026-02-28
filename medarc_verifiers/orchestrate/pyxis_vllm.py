@@ -9,11 +9,10 @@ import time
 from pathlib import Path
 from typing import Iterable, Mapping
 
-from medarc_verifiers.orchestrate.docker_vllm import DockerLaunchError
-from medarc_verifiers.orchestrate.runtime import RuntimeHandle
+from medarc_verifiers.orchestrate.runtime import RuntimeHandle, RuntimeLaunchError
 
 
-class PyxisLaunchError(DockerLaunchError):
+class PyxisLaunchError(RuntimeLaunchError):
     """Raised when Pyxis launch fails."""
 
 
@@ -157,6 +156,10 @@ class PyxisRuntimeAdapter:
         if volume_mounts:
             command.append(f"--container-mounts={_render_container_mounts(volume_mounts)}")
         command.extend(_render_hygiene_flags(extra_args))
+        # --container-env overrides container-image env with host values.
+        # Vars from .env files are already in proc_env (srun inherits them).
+        # We only need --container-env for vars also present on the host,
+        # where the image might have a conflicting default.
         container_env_vars = sorted(name for name in env if os.environ.get(name) is not None)
         if container_env_vars:
             command.append(f"--container-env={','.join(container_env_vars)}")
@@ -176,14 +179,7 @@ class PyxisRuntimeAdapter:
 
 
 def _render_container_mounts(volume_mounts: list[str]) -> str:
-    rendered: list[str] = []
-    for mount in volume_mounts:
-        parts = mount.split(":")
-        if len(parts) != 3:
-            raise PyxisLaunchError(f"Invalid mount for Pyxis runtime: {mount!r}")
-        host, target, mode = parts
-        rendered.append(f"{host}:{target}:{mode}")
-    return ",".join(rendered)
+    return ",".join(volume_mounts)
 
 
 def _render_hygiene_flags(extra_args: list[str]) -> list[str]:
