@@ -87,6 +87,7 @@ orchestrate:
         tasks = expand_tasks(load_plan(plan_path))
 
     assert tasks[0].orchestrate["vllm-container"]["image"] == "vllm/vllm-openai:latest"
+    assert "vllm-docker" not in tasks[0].orchestrate
     assert any("deprecated orchestrate.vllm-docker" in str(item.message) for item in caught)
 
 

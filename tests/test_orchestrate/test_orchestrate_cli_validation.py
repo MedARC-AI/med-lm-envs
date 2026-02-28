@@ -4,7 +4,7 @@ import pytest
 
 from medarc_verifiers.orchestrate.cli import _validate_schedule, build_parser, main
 from medarc_verifiers.orchestrate.config import TaskSpec
-from medarc_verifiers.orchestrate.resources import GpuInfo, ResourceError
+from medarc_verifiers.orchestrate.resources import GpuInfo, PortOnlyResourceManager, ResourceError
 from medarc_verifiers.orchestrate.run import OrchestratorRunner
 
 
@@ -110,3 +110,11 @@ runtime: docker
 
     assert rc == 0
     assert captured["runtime"] == "pyxis"
+
+
+def test_port_only_resource_manager_skips_gpus() -> None:
+    rm = PortOnlyResourceManager(port_range=(9000, 9010))
+
+    assert rm.available_gpus() == []
+    assert rm.reserve_gpus("task-1", count=4) == []
+    rm.release_gpus([0, 1, 2, 3])

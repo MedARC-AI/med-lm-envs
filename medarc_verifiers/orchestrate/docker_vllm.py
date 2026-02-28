@@ -13,11 +13,11 @@ import time
 
 import httpx
 
-from medarc_verifiers.orchestrate.runtime import RuntimeHandle
-from medarc_verifiers.orchestrate.vllm_args import build_container_args
+from medarc_verifiers.orchestrate.runtime import RuntimeHandle, RuntimeLaunchError
+from medarc_verifiers.orchestrate.vllm_args import build_container_args, normalize_volume_mounts
 
 
-class DockerLaunchError(RuntimeError):
+class DockerLaunchError(RuntimeLaunchError):
     """Raised when container launch fails."""
 
 
@@ -36,49 +36,13 @@ class ReadinessResult:
 ORCHESTRATOR_LABEL_KEY = "orchestrator.managed"
 
 
-def normalize_volume_mounts(volumes: object) -> list[str]:
-    if volumes is None:
-        return []
-    if isinstance(volumes, Mapping):
-        mounts: list[str] = []
-        for host, target in volumes.items():
-            if not isinstance(host, str) or not isinstance(target, Mapping):
-                raise DockerLaunchError("orchestrate.vllm-container.volumes mapping entries must be host -> mapping.")
-            bind = str(target.get("bind", "")).strip()
-            mode = str(target.get("mode", "rw")).strip()
-            if not bind:
-                raise DockerLaunchError(f"Invalid volume mount for host {host!r}: missing bind path.")
-            if mode not in {"ro", "rw"}:
-                raise DockerLaunchError(f"Invalid volume mount mode for host {host!r}: expected ro/rw.")
-            mounts.append(f"{host}:{bind}:{mode}")
-        return mounts
-    if not isinstance(volumes, list):
-        raise DockerLaunchError("orchestrate.vllm-container.volumes must be a list of mount strings or a mapping.")
-    mounts: list[str] = []
-    for entry in volumes:
-        if not entry:
-            continue
-        if not isinstance(entry, str):
-            raise DockerLaunchError(
-                "orchestrate.vllm-container.volumes entries must be strings like host:container[:mode]."
-            )
-        parts = entry.split(":")
-        if len(parts) < 2 or len(parts) > 3:
-            raise DockerLaunchError(f"Invalid volume mount: {entry!r} (expected host:container[:mode])")
-        host = parts[0].strip()
-        container_path = parts[1].strip()
-        mode = parts[2].strip() if len(parts) == 3 else "rw"
-        if not host or not container_path:
-            raise DockerLaunchError(f"Invalid volume mount: {entry!r} (host and container path required)")
-        if mode not in {"ro", "rw"}:
-            raise DockerLaunchError(f"Invalid volume mount mode: {entry!r} (expected ro/rw)")
-        mounts.append(f"{host}:{container_path}:{mode}")
-    return mounts
-
-
 def normalize_volumes(volumes: object) -> dict[str, dict[str, str]]:
     mounts: dict[str, dict[str, str]] = {}
-    for entry in normalize_volume_mounts(volumes):
+    try:
+        normalized_mounts = normalize_volume_mounts(volumes)
+    except ValueError as exc:
+        raise DockerLaunchError(str(exc)) from exc
+    for entry in normalized_mounts:
         host, container_path, mode = entry.split(":")
         mounts[host] = {"bind": container_path, "mode": mode}
     return mounts

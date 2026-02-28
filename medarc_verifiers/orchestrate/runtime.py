@@ -7,6 +7,10 @@ from pathlib import Path
 from typing import Mapping, Protocol
 
 
+class RuntimeLaunchError(RuntimeError):
+    """Raised when a serve runtime fails to launch."""
+
+
 @dataclass(frozen=True)
 class RuntimeHandle:
     """Opaque handle returned after launching a serve runtime."""
@@ -46,4 +50,4 @@ class RuntimeAdapter(Protocol):
     def teardown(self, handle: RuntimeHandle) -> None: ...
 
 
-__all__ = ["LogStreamer", "RuntimeAdapter", "RuntimeHandle"]
+__all__ = ["LogStreamer", "RuntimeAdapter", "RuntimeHandle", "RuntimeLaunchError"]

@@ -154,6 +154,7 @@ def _extract_orchestrate_config(payload: Mapping[str, Any], *, model_key: str, s
             stacklevel=2,
         )
         normalized["vllm-container"] = orchestrate["vllm-docker"]
+        del normalized["vllm-docker"]
     return normalized
 
 
