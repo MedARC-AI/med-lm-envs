@@ -32,6 +32,7 @@ class _MetadataPayload(BaseModel):
 class NormalizedMetadata:
     """Normalized view of metadata.json merged with manifest discovery data."""
 
+    identity: "RunIdentity"
     record: RunRecord
     metadata_path: Path | None
     raw_metadata: Mapping[str, Any]
@@ -45,6 +46,18 @@ class NormalizedMetadata:
     sampling_args: Mapping[str, Any]
     num_examples: int | None
     rollouts_per_example: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class RunIdentity:
+    """Canonical identity for selecting and exporting a discovered run record."""
+
+    model_id: str
+    manifest_env_id: str
+    base_env_id: str
+    rollout_index: int | None
+    job_run_id: str
+    output_env_id: str
 
 
 def load_normalized_metadata(
@@ -81,20 +94,36 @@ def load_normalized_metadata(
             rollout_index = alt_index
 
     model_id = record.model_id or metadata_model
+    if not model_id:
+        raise RuntimeError(
+            "Missing model_id for run "
+            f"(job_run_id={record.manifest.job_run_id}, job_id={record.job_id}, "
+            f"results_dir={record.results_dir}, manifest={record.manifest.manifest_path})"
+        )
+    resolved_rollout_index = rollout_index if rollout_index != 0 or manifest_env_id != base_env_id else None
+    identity = RunIdentity(
+        model_id=model_id,
+        manifest_env_id=manifest_env_id,
+        base_env_id=base_env_id,
+        rollout_index=resolved_rollout_index,
+        job_run_id=record.manifest.job_run_id,
+        output_env_id=base_env_id or manifest_env_id or record.job_id,
+    )
     num_examples = record.num_examples or (metadata_payload.num_examples if metadata_payload else None)
     rollouts_per_example = record.rollouts_per_example or (
         metadata_payload.rollouts_per_example if metadata_payload else None
     )
 
     return NormalizedMetadata(
+        identity=identity,
         record=record,
         metadata_path=record.metadata_path if record.has_metadata else None,
         raw_metadata=raw_metadata,
         manifest_env_id=manifest_env_id,
         metadata_env_id=metadata_env_id,
         base_env_id=base_env_id,
-        rollout_index=rollout_index,
-        model_id=model_id,
+        rollout_index=identity.rollout_index or 0,
+        model_id=identity.model_id,
         metadata_model=metadata_model,
         env_args=env_args,
         sampling_args=sampling_args,
@@ -164,4 +193,4 @@ def _extract_env_config_id(env_config: Mapping[str, Any] | None) -> str | None:
     return None
 
 
-__all__ = ["NormalizedMetadata", "load_normalized_metadata"]
+__all__ = ["NormalizedMetadata", "RunIdentity", "load_normalized_metadata"]

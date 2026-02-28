@@ -127,8 +127,8 @@ def _write_run(
                 "env_variant_id": env_id,
                 "env_args": {},
                 "results_dir": "demo-job",
-            }
                 "status": status,
+            }
         ],
     }
     _write_json(run_dir / "run_manifest.json", manifest)
@@ -521,7 +521,7 @@ def test_run_process_empty_runs_returns_result(tmp_path: Path) -> None:
     assert result.hf_summary is None
 
 
-def test_process_latest_only_selects_latest_and_delta_skips(tmp_path: Path) -> None:
+def test_process_latest_only_selects_latest_and_skips_existing_outputs(tmp_path: Path) -> None:
     runs_dir = _write_run(tmp_path, run_id="run-1", updated_at="2024-01-01T00:00:00Z", reward=0.1)
     _write_run(tmp_path, run_id="run-2", updated_at="2024-01-02T00:00:00Z", reward=0.9)
     output_dir = tmp_path / "processed"
@@ -544,6 +544,151 @@ def test_process_latest_only_selects_latest_and_delta_skips(tmp_path: Path) -> N
     result_repeat = run_process(options)
     assert result_repeat.env_summaries == []
     assert result_repeat.rows_processed == 0
+
+    _write_run(tmp_path, run_id="run-3", updated_at="2024-01-04T00:00:00Z", reward=0.4)
+    result_newer_raw = run_process(options)
+    assert result_newer_raw.env_summaries == []
+    assert result_newer_raw.rows_processed == 0
+
+
+def test_process_replace_model_rebuilds_existing_output(tmp_path: Path) -> None:
+    runs_dir = _write_run(
+        tmp_path,
+        run_id="run-1",
+        updated_at="2024-01-01T00:00:00Z",
+        reward=0.1,
+        env_id="demo-env",
+        model_id="model-a",
+    )
+    _write_run(
+        tmp_path,
+        run_id="run-2",
+        updated_at="2024-01-01T00:00:00Z",
+        reward=0.2,
+        env_id="demo-env",
+        model_id="model-b",
+    )
+    output_dir = tmp_path / "processed"
+
+    run_process(ProcessOptions(runs_dir=runs_dir, output_dir=output_dir, dry_run=False, max_workers=1))
+    _write_run(
+        tmp_path,
+        run_id="run-3",
+        updated_at="2024-01-03T00:00:00Z",
+        reward=0.9,
+        env_id="demo-env",
+        model_id="model-a",
+    )
+    _write_run(
+        tmp_path,
+        run_id="run-4",
+        updated_at="2024-01-03T00:00:00Z",
+        reward=0.8,
+        env_id="demo-env",
+        model_id="model-b",
+    )
+
+    result = run_process(
+        ProcessOptions(
+            runs_dir=runs_dir,
+            output_dir=output_dir,
+            replace_models=("model-a",),
+            dry_run=False,
+            max_workers=1,
+        )
+    )
+
+    rebuilt = {summary.model_id for summary in result.env_summaries}
+    assert rebuilt == {"model-a"}
+    model_a_table = pq.read_table(output_dir / "model-a" / "demo-env.parquet")
+    model_b_table = pq.read_table(output_dir / "model-b" / "demo-env.parquet")
+    assert model_a_table.column("reward").to_pylist() == [0.9]
+    assert model_b_table.column("reward").to_pylist() == [0.2]
+
+
+def test_process_replace_model_and_env_rebuild_only_intersection(tmp_path: Path) -> None:
+    runs_dir = _write_run(
+        tmp_path,
+        run_id="run-1",
+        updated_at="2024-01-01T00:00:00Z",
+        reward=0.1,
+        env_id="env-a",
+        model_id="model-a",
+    )
+    _write_run(
+        tmp_path,
+        run_id="run-2",
+        updated_at="2024-01-01T00:00:00Z",
+        reward=0.2,
+        env_id="env-b",
+        model_id="model-a",
+    )
+    _write_run(
+        tmp_path,
+        run_id="run-3",
+        updated_at="2024-01-01T00:00:00Z",
+        reward=0.3,
+        env_id="env-a",
+        model_id="model-b",
+    )
+    output_dir = tmp_path / "processed"
+    run_process(ProcessOptions(runs_dir=runs_dir, output_dir=output_dir, dry_run=False, max_workers=1))
+
+    _write_run(
+        tmp_path,
+        run_id="run-4",
+        updated_at="2024-01-03T00:00:00Z",
+        reward=0.7,
+        env_id="env-a",
+        model_id="model-a",
+    )
+    _write_run(
+        tmp_path,
+        run_id="run-5",
+        updated_at="2024-01-03T00:00:00Z",
+        reward=0.8,
+        env_id="env-b",
+        model_id="model-a",
+    )
+    _write_run(
+        tmp_path,
+        run_id="run-6",
+        updated_at="2024-01-03T00:00:00Z",
+        reward=0.9,
+        env_id="env-a",
+        model_id="model-b",
+    )
+
+    result = run_process(
+        ProcessOptions(
+            runs_dir=runs_dir,
+            output_dir=output_dir,
+            replace_models=("model-a",),
+            replace_envs=("env-a",),
+            dry_run=False,
+            max_workers=1,
+        )
+    )
+
+    assert {(summary.model_id, summary.env_id) for summary in result.env_summaries} == {("model-a", "env-a")}
+    assert pq.read_table(output_dir / "model-a" / "env-a.parquet").column("reward").to_pylist() == [0.7]
+    assert pq.read_table(output_dir / "model-a" / "env-b.parquet").column("reward").to_pylist() == [0.2]
+    assert pq.read_table(output_dir / "model-b" / "env-a.parquet").column("reward").to_pylist() == [0.3]
+
+
+def test_process_fails_fast_on_existing_row_count_mismatch(tmp_path: Path) -> None:
+    runs_dir = _setup_run(tmp_path)
+    output_dir = tmp_path / "processed"
+    result = run_process(ProcessOptions(runs_dir=runs_dir, output_dir=output_dir, dry_run=False, max_workers=1))
+    summary = result.env_summaries[0]
+    rel_path = summary.output_path.relative_to(output_dir).as_posix()
+    payload = json.loads((output_dir / "env_index.json").read_text(encoding="utf-8"))
+    payload["files"][rel_path]["row_count"] = summary.row_count + 1
+    (output_dir / "env_index.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="env_index.json records"):
+        run_process(ProcessOptions(runs_dir=runs_dir, output_dir=output_dir, dry_run=False, max_workers=1))
+
 
 def test_process_ignores_invalid_superseded_run(tmp_path: Path) -> None:
     runs_dir = _write_run(

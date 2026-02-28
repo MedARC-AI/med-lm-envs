@@ -1,4 +1,4 @@
-"""Top-level pipeline wiring discovery, row loading, aggregation, and writing."""
+"""Top-level pipeline wiring discovery, selection, row loading, aggregation, and writing."""
 
 from __future__ import annotations
 
@@ -10,20 +10,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
-from medarc_verifiers.cli._schemas import EnvironmentExportConfig
+import pyarrow.parquet as pq
+
 from medarc_verifiers.cli import hf as hf_sync
-from medarc_verifiers.cli.process import (
-    aggregate,
-    discovery,
-    env_index,
-    metadata,
-    rows,
-    rollout,
-    writer,
-    workspace,
-)
-from medarc_verifiers.cli.process.aggregate import AggregatedEnvRows
+from medarc_verifiers.cli._schemas import EnvironmentExportConfig
 from medarc_verifiers.cli.hf import HFSyncConfig, HFSyncSummary
+from medarc_verifiers.cli.process import aggregate, discovery, env_index, metadata, rollout, rows, workspace, writer
+from medarc_verifiers.cli.process.aggregate import AggregatedEnvRows
+from medarc_verifiers.cli.process.metadata import RunIdentity
 from medarc_verifiers.cli.process.writer import EnvWriteSummary, WriterConfig
 from medarc_verifiers.cli.utils.shared import (
     dataset_is_excluded,
@@ -44,6 +38,8 @@ class ProcessOptions:
     only_complete_runs: bool = True
     exclude_datasets: Sequence[str] = field(default_factory=tuple)
     exclude_models: Sequence[str] = field(default_factory=tuple)
+    replace_models: Sequence[str] = field(default_factory=tuple)
+    replace_envs: Sequence[str] = field(default_factory=tuple)
     processed_at: str | None = None
     processed_with_args: Mapping[str, Any] = field(default_factory=dict)
     status_filter: Sequence[str] = field(default_factory=tuple)
@@ -63,6 +59,8 @@ class ProcessOptions:
         self.status_filter = tuple(str(status) for status in self.status_filter)
         self.exclude_datasets = tuple(str(value) for value in self.exclude_datasets if str(value).strip())
         self.exclude_models = tuple(str(value) for value in self.exclude_models if str(value).strip())
+        self.replace_models = tuple(str(value) for value in self.replace_models if str(value).strip())
+        self.replace_envs = tuple(str(value) for value in self.replace_envs if str(value).strip())
 
 
 @dataclass(slots=True)
@@ -76,8 +74,8 @@ class ProcessResult:
     hf_summary: HFSyncSummary | None
 
 
-@dataclass(slots=True)
-class _RecordWork:
+@dataclass(frozen=True, slots=True)
+class PlannedRecord:
     """Per-record settings for row loading."""
 
     normalized: metadata.NormalizedMetadata
@@ -86,26 +84,24 @@ class _RecordWork:
     answer_column: str | None
 
 
-@dataclass(slots=True)
-class _NormalizedRecord:
-    record: discovery.RunRecord
-    normalized: metadata.NormalizedMetadata
-    extra_columns: Sequence[str]
-    drop_columns: Sequence[str]
-    answer_column: str | None
-    model_key: str
-    env_key: str
-    job_run_id: str
-    run_timestamp: str
+@dataclass(frozen=True, slots=True)
+class PlannedWorkItem:
+    """A single selected (model, env) output to process."""
+
+    identity: RunIdentity
+    records: list[PlannedRecord]
+    env_export_config: EnvironmentExportConfig
 
 
-@dataclass(slots=True)
-class _EnvGroupSelection:
-    model_key: str
-    env_key: str
-    job_run_id: str
-    run_timestamp: str
-    records: list[_NormalizedRecord]
+@dataclass(frozen=True, slots=True)
+class SelectionResult:
+    """Complete output of the selection phase."""
+
+    work_items: list[PlannedWorkItem]
+    skipped_incomplete: int
+    skipped_by_delta: int
+    skipped_by_exclusion: int
+    total_discovered: int
 
 
 def run_process(
@@ -134,84 +130,42 @@ def run_process(
                 prompt_func=input,
             )
 
-        index_version, index_runs = env_index.read_env_index_runs(options.output_dir)
-        index_files = env_index.read_env_index_files(options.output_dir)
-        if options.clean:
-            index_version = 0
-            index_runs = {}
-            index_files = {}
-
+        index_files = {} if options.clean else env_index.read_env_index_files(options.output_dir)
         discovered = discovery.discover_run_records(
             options.runs_dir,
             filter_status=options.status_filter or None,
             only_complete_runs=False,
         )
-
-        use_delta = index_version == 2 and not options.clean
-        if index_version != 2 and not options.clean:
-            logger.info("Delta processing disabled: missing or legacy env_index.json; running full reprocess.")
-        records: list[discovery.RunRecord] = list(discovered)
-        if options.only_complete_runs:
-            records = [
-                record
-                for record in records
-                if not (
-                    record.manifest.summary_total_known
-                    and record.manifest.summary_completed != record.manifest.summary_total
-                )
-            ]
-        normalized_records = _normalize_records(records, env_export_map)
-        env_groups = _select_latest_env_groups(normalized_records)
-        if use_delta:
-            env_groups = _filter_env_groups_by_delta(
-                env_groups,
-                index_runs,
-                index_files,
-                output_dir=options.output_dir,
-            )
-        if options.exclude_datasets:
-            env_groups = _filter_env_groups_by_exclusion(env_groups, options.exclude_datasets)
-        if options.exclude_models:
-            env_groups = _filter_env_groups_by_model_exclusion(env_groups, options.exclude_models)
-        records = [item.record for group in env_groups for item in group.records]
-
+        selection = select_work_items(
+            discovered,
+            options=options,
+            env_export_map=env_export_map,
+            index_files=index_files,
+        )
+        selected_records = [planned.normalized.record for item in selection.work_items for planned in item.records]
         _print_records_table(
             discovered,
-            records,
+            selected_records,
             options.only_complete_runs,
             exclude_datasets=options.exclude_datasets,
             exclude_models=options.exclude_models,
+            skipped_incomplete=selection.skipped_incomplete,
+            skipped_by_delta=selection.skipped_by_delta,
+            skipped_by_exclusion=selection.skipped_by_exclusion,
         )
 
-        grouped: dict[tuple[str, str], list[_RecordWork]] = {}
         run_metadata: dict[str, dict[str, Any]] = {}
-        record_items = [item for group in env_groups for item in group.records]
-        record_iter: Iterable[_NormalizedRecord] = record_items
-        try:
-            from rich.progress import track
-
-            record_iter = track(record_items, description="Reading run outputs", transient=True)
-        except Exception:
-            pass
-
-        for record in record_iter:
-            normalized = record.normalized
-            grouped.setdefault((record.model_key, record.env_key), []).append(
-                _RecordWork(
-                    normalized=normalized,
-                    extra_columns=record.extra_columns,
-                    drop_columns=record.drop_columns,
-                    answer_column=record.answer_column,
+        for item in selection.work_items:
+            for planned in item.records:
+                record = planned.normalized.record
+                run_metadata.setdefault(
+                    record.manifest.job_run_id,
+                    {
+                        "created_at": record.manifest.created_at,
+                        "updated_at": _source_updated_at(record),
+                        "config_checksum": record.manifest.config_checksum,
+                    },
                 )
-            )
-            run_metadata.setdefault(
-                record.job_run_id,
-                {
-                    "created_at": record.record.manifest.created_at,
-                    "updated_at": _source_updated_at(record.record),
-                    "config_checksum": record.record.manifest.config_checksum,
-                },
-            )
 
         writer_config = WriterConfig(
             output_dir=options.output_dir,
@@ -223,20 +177,20 @@ def run_process(
         env_groups: list[AggregatedEnvRows] = []
         env_summaries: list[EnvWriteSummary] = []
         rows_processed = 0
+        work_items = sorted(selection.work_items, key=lambda item: (item.identity.model_id, item.identity.output_env_id))
 
-        env_items = sorted(grouped.items())
         try:
-            if options.max_workers <= 1 or len(env_items) <= 1:
-                env_iter: Iterable[tuple[tuple[str, str], list[_RecordWork]]] = env_items
+            if options.max_workers <= 1 or len(work_items) <= 1:
+                work_iter: Iterable[PlannedWorkItem] = work_items
                 try:
                     from rich.progress import track
 
-                    env_iter = track(env_items, description="Processing datasets", transient=True)
+                    work_iter = track(work_items, description="Processing datasets", transient=True)
                 except Exception:
-                    env_iter = env_items
+                    work_iter = work_items
 
-                for _, work_items in env_iter:
-                    aggregated, row_count = _process_env_group(work_items)
+                for item in work_iter:
+                    aggregated, row_count = _process_env_group(item)
                     rows_processed += row_count
                     env_groups.extend(aggregated)
                     summaries = writer.write_env_groups(aggregated, writer_config, write_index=False)
@@ -249,8 +203,8 @@ def run_process(
                 futures = []
                 try:
                     executor = ProcessPoolExecutor(max_workers=options.max_workers)
-                    for _, work_items in env_items:
-                        futures.append(executor.submit(_process_env_group, work_items))
+                    for item in work_items:
+                        futures.append(executor.submit(_process_env_group, item))
 
                     future_iter: Iterable[Any] = as_completed(futures)
                     try:
@@ -273,8 +227,8 @@ def run_process(
                                 group.rows.clear()
                 except KeyboardInterrupt:
                     logger.warning("Processing cancelled by user; shutting down workers.")
-                    for f in futures:
-                        f.cancel()
+                    for future in futures:
+                        future.cancel()
                     if executor is not None:
                         executor.shutdown(cancel_futures=True)
                     raise
@@ -310,7 +264,7 @@ def run_process(
             env_groups = [_strip_env_group_rows(group) for group in env_groups]
 
         return ProcessResult(
-            records_processed=len(records),
+            records_processed=len(selected_records),
             rows_processed=rows_processed,
             env_groups=env_groups,
             env_summaries=env_summaries,
@@ -323,22 +277,229 @@ def run_process(
     return _run_pipeline()
 
 
+def select_work_items(
+    discovered: Sequence[discovery.RunRecord],
+    *,
+    options: ProcessOptions,
+    env_export_map: Mapping[str, EnvironmentExportConfig],
+    index_files: Mapping[str, Mapping[str, Any]],
+) -> SelectionResult:
+    """Filter discovered runs down to selected work items before row loading begins."""
+    eligible_records: list[discovery.RunRecord] = []
+    skipped_incomplete = 0
+    for record in discovered:
+        if options.only_complete_runs and not _manifest_is_complete(record.manifest):
+            skipped_incomplete += 1
+            continue
+        eligible_records.append(record)
+
+    planned_records = [_plan_record(record, env_export_map) for record in eligible_records]
+    work_items = _select_latest_work_items(planned_records)
+
+    work_items, skipped_by_exclusion = _apply_exclusions(
+        work_items,
+        exclude_datasets=options.exclude_datasets,
+        exclude_models=options.exclude_models,
+    )
+    _validate_replace_targets(work_items, options)
+    work_items, skipped_by_delta = _apply_additive_delta(work_items, options=options, index_files=index_files)
+
+    return SelectionResult(
+        work_items=work_items,
+        skipped_incomplete=skipped_incomplete,
+        skipped_by_delta=skipped_by_delta,
+        skipped_by_exclusion=skipped_by_exclusion,
+        total_discovered=len(discovered),
+    )
+
+
 def _resolve_env_export(
     manifest_env_id: str | None,
     env_export_map: Mapping[str, EnvironmentExportConfig],
-) -> EnvironmentExportConfig | None:
+) -> EnvironmentExportConfig:
     if not manifest_env_id:
-        return None
+        return EnvironmentExportConfig()
     if manifest_env_id in env_export_map:
         return env_export_map[manifest_env_id]
     base_env_id, _ = rollout.derive_base_env_id(manifest_env_id)
     if base_env_id and base_env_id in env_export_map:
         return env_export_map[base_env_id]
-    return None
+    return EnvironmentExportConfig()
 
 
 def _resolve_columns(env_columns: Sequence[str]) -> Sequence[str]:
     return tuple(str(column).strip() for column in env_columns if str(column).strip())
+
+
+def _plan_record(
+    record: discovery.RunRecord,
+    env_export_map: Mapping[str, EnvironmentExportConfig],
+) -> PlannedRecord:
+    env_export = _resolve_env_export(record.manifest_env_id, env_export_map)
+    normalized = metadata.load_normalized_metadata(record, combine_rollouts=bool(env_export.combine_rollouts))
+    return PlannedRecord(
+        normalized=normalized,
+        extra_columns=_resolve_columns(env_export.extra_columns),
+        drop_columns=_resolve_columns(env_export.drop_columns),
+        answer_column=env_export.answer_column,
+    )
+
+
+def _select_latest_work_items(records: Sequence[PlannedRecord]) -> list[PlannedWorkItem]:
+    grouped: dict[tuple[str, str], dict[str, list[PlannedRecord]]] = {}
+    run_timestamps: dict[str, str] = {}
+
+    for planned in records:
+        identity = planned.normalized.identity
+        group_key = (identity.model_id, identity.output_env_id)
+        grouped.setdefault(group_key, {}).setdefault(identity.job_run_id, []).append(planned)
+        run_timestamps.setdefault(identity.job_run_id, _source_updated_at(planned.normalized.record))
+
+    selected: list[PlannedWorkItem] = []
+    for _, run_groups in grouped.items():
+        latest_run_id = max(run_groups.keys(), key=lambda run_id: _run_sort_key(run_timestamps.get(run_id, ""), run_id))
+        latest_records = run_groups[latest_run_id]
+        representative = latest_records[0]
+        selected.append(
+            PlannedWorkItem(
+                identity=representative.normalized.identity,
+                records=list(latest_records),
+                env_export_config=EnvironmentExportConfig(),
+            )
+        )
+    return selected
+
+
+def _apply_exclusions(
+    work_items: Sequence[PlannedWorkItem],
+    *,
+    exclude_datasets: Sequence[str],
+    exclude_models: Sequence[str],
+) -> tuple[list[PlannedWorkItem], int]:
+    exclude_dataset_set = normalize_dataset_ids(exclude_datasets, label="process exclude dataset")
+    exclude_model_set = normalize_model_ids(exclude_models, label="process exclude model")
+    filtered: list[PlannedWorkItem] = []
+    skipped = 0
+    for item in work_items:
+        if exclude_dataset_set and _env_is_excluded(item.identity.output_env_id, exclude_dataset_set):
+            skipped += 1
+            continue
+        if exclude_model_set and model_is_excluded(item.identity.model_id, exclude_model_set):
+            skipped += 1
+            continue
+        filtered.append(item)
+    return filtered, skipped
+
+
+def _validate_replace_targets(work_items: Sequence[PlannedWorkItem], options: ProcessOptions) -> None:
+    if not options.replace_models and not options.replace_envs:
+        return
+
+    if options.replace_models:
+        matched_models = {item.identity.model_id for item in work_items if item.identity.model_id in options.replace_models}
+        if not matched_models:
+            raise RuntimeError(
+                "No selected processed outputs match --replace-model values: "
+                f"{', '.join(sorted(options.replace_models))}."
+            )
+    if options.replace_envs:
+        matched_envs = {item.identity.output_env_id for item in work_items if item.identity.output_env_id in options.replace_envs}
+        if not matched_envs:
+            raise RuntimeError(
+                "No selected processed outputs match --replace-env values: "
+                f"{', '.join(sorted(options.replace_envs))}."
+            )
+    if options.replace_models and options.replace_envs:
+        intersection = [
+            item
+            for item in work_items
+            if item.identity.model_id in options.replace_models and item.identity.output_env_id in options.replace_envs
+        ]
+        if not intersection:
+            raise RuntimeError(
+                "No selected processed outputs match the intersection of --replace-model and --replace-env."
+            )
+
+
+def _apply_additive_delta(
+    work_items: Sequence[PlannedWorkItem],
+    *,
+    options: ProcessOptions,
+    index_files: Mapping[str, Mapping[str, Any]],
+) -> tuple[list[PlannedWorkItem], int]:
+    if options.clean:
+        return list(work_items), 0
+
+    filtered: list[PlannedWorkItem] = []
+    skipped = 0
+    for item in work_items:
+        output_path = writer.build_output_path(
+            options.output_dir,
+            model_id=item.identity.model_id,
+            env_id=item.identity.output_env_id,
+        )
+        if not output_path.exists():
+            filtered.append(item)
+            continue
+        if _should_replace_existing_output(item.identity, options):
+            filtered.append(item)
+            continue
+        _validate_existing_output_integrity(output_path, output_dir=options.output_dir, index_files=index_files)
+        skipped += 1
+    return filtered, skipped
+
+
+def _should_replace_existing_output(identity: RunIdentity, options: ProcessOptions) -> bool:
+    if options.clean:
+        return True
+    has_model_filter = bool(options.replace_models)
+    has_env_filter = bool(options.replace_envs)
+    if not has_model_filter and not has_env_filter:
+        return False
+    if has_model_filter and has_env_filter:
+        return identity.model_id in options.replace_models and identity.output_env_id in options.replace_envs
+    if has_model_filter:
+        return identity.model_id in options.replace_models
+    return identity.output_env_id in options.replace_envs
+
+
+def _validate_existing_output_integrity(
+    output_path: Path,
+    *,
+    output_dir: Path,
+    index_files: Mapping[str, Mapping[str, Any]],
+) -> None:
+    try:
+        metadata_obj = pq.ParquetFile(output_path).metadata
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(
+            f"Existing processed output {output_path} is unreadable. "
+            "Rebuild it with --replace-model/--replace-env or re-run with --clean."
+        ) from exc
+
+    if metadata_obj is None:
+        raise RuntimeError(
+            f"Existing processed output {output_path} is missing parquet footer metadata. "
+            "Rebuild it with --replace-model/--replace-env or re-run with --clean."
+        )
+
+    rel_key = output_path.relative_to(output_dir).as_posix()
+    index_entry = index_files.get(rel_key)
+    if not isinstance(index_entry, Mapping):
+        return
+    expected_row_count = index_entry.get("row_count")
+    if expected_row_count is None:
+        return
+    try:
+        expected = int(expected_row_count)
+    except (TypeError, ValueError):
+        return
+    actual = int(metadata_obj.num_rows)
+    if actual != expected:
+        raise RuntimeError(
+            f"Existing processed output {output_path} has {actual} parquet rows but env_index.json records {expected}. "
+            "Rebuild it with --replace-model/--replace-env or re-run with --clean."
+        )
 
 
 def _print_records_table(
@@ -348,6 +509,9 @@ def _print_records_table(
     *,
     exclude_datasets: Sequence[str] = (),
     exclude_models: Sequence[str] = (),
+    skipped_incomplete: int = 0,
+    skipped_by_delta: int = 0,
+    skipped_by_exclusion: int = 0,
 ) -> None:
     """Pretty-print job discovery vs planned processing."""
     exclude_set = normalize_dataset_ids(exclude_datasets, label="process exclude dataset")
@@ -373,47 +537,53 @@ def _print_records_table(
         selected_by_model[model_id] = selected_by_model.get(model_id, 0) + 1
 
     models = sorted(set(total_by_model.keys()) | set(selected_by_model.keys()))
-    selected_models = sorted(m for m, c in selected_by_model.items() if c > 0)
-    discovered_jobs_total = sum(total_by_model.get(m, 0) for m in models)
-    selected_jobs_total = sum(selected_by_model.get(m, 0) for m in models)
+    selected_models = sorted(model_id for model_id, count in selected_by_model.items() if count > 0)
+    discovered_jobs_total = sum(total_by_model.get(model_id, 0) for model_id in models)
+    selected_jobs_total = sum(selected_by_model.get(model_id, 0) for model_id in models)
 
     try:
         from rich.console import Console
-        from rich.table import Table
         from rich.markup import escape
+        from rich.table import Table
     except Exception:
         suffix = " (complete runs only)" if only_complete_runs else ""
         logger.info(
-            "Processing %d job(s) across %d model(s)%s (found %d job(s) across %d model(s)).",
+            "Processing %d job(s) across %d model(s)%s (found %d job(s) across %d model(s)); "
+            "skipped incomplete=%d excluded=%d existing=%d.",
             selected_jobs_total,
             len(selected_models),
             suffix,
             discovered_jobs_total,
             len(models),
+            skipped_incomplete,
+            skipped_by_exclusion,
+            skipped_by_delta,
         )
         for model_id in models:
-            comp = completed_by_model.get(model_id, 0)
-            tot = total_by_model.get(model_id, 0)
-            sel = selected_by_model.get(model_id, 0)
-            logger.info("  - %s: selected=%d; %d/%d completed", model_id, sel, comp, tot)
+            completed = completed_by_model.get(model_id, 0)
+            total = total_by_model.get(model_id, 0)
+            selected_count = selected_by_model.get(model_id, 0)
+            logger.info("  - %s: selected=%d; %d/%d completed", model_id, selected_count, completed, total)
         return
 
     console = Console()
     title = f"Processing {selected_jobs_total} job(s) across {len(selected_models)} model(s)"
     if only_complete_runs:
         title += " (complete runs only)"
-    found_suffix = "after filters" if (exclude_set or only_complete_runs) else "pre-aggregation"
-    title += f" [dim](found {discovered_jobs_total} job(s) across {len(models)} model(s); {found_suffix})[/dim]"
+    title += (
+        f" [dim](found {discovered_jobs_total} eligible job(s); skipped incomplete={skipped_incomplete}, "
+        f"excluded={skipped_by_exclusion}, existing={skipped_by_delta})[/dim]"
+    )
     table = Table(title=title, show_header=True, header_style="bold cyan", caption=None)
     table.add_column("Model", style="magenta")
     table.add_column("Jobs (completed/total)", style="green", justify="right")
     table.add_column("Selected", style="cyan", justify="right")
 
     for model_id in models:
-        comp = completed_by_model.get(model_id, 0)
-        tot = total_by_model.get(model_id, 0)
-        sel = selected_by_model.get(model_id, 0)
-        table.add_row(escape(str(model_id)), f"{comp}/{tot}", str(sel))
+        completed = completed_by_model.get(model_id, 0)
+        total = total_by_model.get(model_id, 0)
+        selected_count = selected_by_model.get(model_id, 0)
+        table.add_row(escape(str(model_id)), f"{completed}/{total}", str(selected_count))
 
     console.print(table)
 
@@ -434,29 +604,23 @@ def _record_is_excluded(record: discovery.RunRecord, exclude_set: set[str]) -> b
 
 
 def _record_model_is_excluded(record: discovery.RunRecord, exclude_model_set: set[str]) -> bool:
-    model_id = str(record.model_id or "").strip()
-    return model_is_excluded(model_id, exclude_model_set)
+    return model_is_excluded(str(record.model_id or "").strip(), exclude_model_set)
 
 
-__all__ = ["ProcessOptions", "ProcessResult", "run_process"]
-
-
-def _process_env_group(
-    work_items: Sequence[_RecordWork],
-) -> tuple[list[AggregatedEnvRows], int]:
-    """Load and aggregate all rows for a single environment."""
+def _process_env_group(item: PlannedWorkItem) -> tuple[list[AggregatedEnvRows], int]:
+    """Load and aggregate all rows for a single selected dataset."""
     row_buffer: list[dict[str, Any]] = []
-    for work in work_items:
+    identities: list[RunIdentity] = []
+    for planned in item.records:
         row_batch = rows.load_rows(
-            work.normalized,
-            extra_columns=work.extra_columns,
-            drop_columns=work.drop_columns,
-            answer_column=work.answer_column,
+            planned.normalized,
+            extra_columns=planned.extra_columns,
+            drop_columns=planned.drop_columns,
+            answer_column=planned.answer_column,
         )
         row_buffer.extend(row_batch)
-    aggregated = aggregate.aggregate_rows_by_env(
-        row_buffer,
-    )
+        identities.append(planned.normalized.identity)
+    aggregated = aggregate.aggregate_rows_by_env(row_buffer, identities=identities)
     return aggregated, len(row_buffer)
 
 
@@ -464,79 +628,10 @@ def _source_updated_at(record: discovery.RunRecord) -> str:
     return record.manifest.updated_at or record.manifest.created_at or ""
 
 
-def _filter_env_groups_by_delta(
-    env_groups: Sequence[_EnvGroupSelection],
-    index_runs: Mapping[str, Mapping[str, Any]],
-    index_files: Mapping[str, Mapping[str, Any]],
-    *,
-    output_dir: Path,
-) -> list[_EnvGroupSelection]:
-    filtered: list[_EnvGroupSelection] = []
-    for group in env_groups:
-        expected_path = writer.build_output_path(output_dir, model_id=group.model_key, env_id=group.env_key)
-        expected_rel = expected_path.relative_to(output_dir).as_posix()
-        prior_file = index_files.get(expected_rel, {})
-        if not prior_file:
-            filtered.append(group)
-            continue
-        prior_updated_at = str(prior_file.get("updated_at") or prior_file.get("created_at") or "")
-        if group.job_run_id not in index_runs:
-            filtered.append(group)
-            continue
-        if _is_newer_timestamp(group.run_timestamp, prior_updated_at):
-            filtered.append(group)
-            continue
-    return filtered
-
-
-def _filter_env_groups_by_exclusion(
-    env_groups: Sequence[_EnvGroupSelection],
-    exclude_datasets: Sequence[str],
-) -> list[_EnvGroupSelection]:
-    exclude_set = normalize_dataset_ids(exclude_datasets, label="process exclude dataset")
-    if not exclude_set:
-        return list(env_groups)
-    filtered: list[_EnvGroupSelection] = []
-    for group in env_groups:
-        if _env_is_excluded(str(group.env_key or ""), exclude_set):
-            continue
-        filtered.append(group)
-    return filtered
-
-
-def _filter_env_groups_by_model_exclusion(
-    env_groups: Sequence[_EnvGroupSelection],
-    exclude_models: Sequence[str],
-) -> list[_EnvGroupSelection]:
-    exclude_set = normalize_model_ids(exclude_models, label="process exclude model")
-    if not exclude_set:
-        return list(env_groups)
-    filtered: list[_EnvGroupSelection] = []
-    for group in env_groups:
-        model_id = str(group.model_key or "").strip()
-        if model_is_excluded(model_id, exclude_set):
-            continue
-        filtered.append(group)
-    return filtered
-
-
 def _env_is_excluded(env_id: str, exclude_set: set[str]) -> bool:
     env_identifier = str(env_id or "").strip()
     base_env_id, _ = rollout.derive_base_env_id(env_identifier)
     return dataset_is_excluded(env_identifier, exclude_set, base_dataset_id=base_env_id)
-
-
-def _is_newer_timestamp(current: str, prior: str) -> bool:
-    if not prior:
-        return True if current else False
-    if not current:
-        return False
-    try:
-        current_dt = datetime.fromisoformat(current.replace("Z", "+00:00"))
-        prior_dt = datetime.fromisoformat(prior.replace("Z", "+00:00"))
-    except Exception:
-        return current != prior
-    return current_dt > prior_dt
 
 
 def _strip_env_group_rows(group: AggregatedEnvRows) -> AggregatedEnvRows:
@@ -548,72 +643,6 @@ def _strip_env_group_rows(group: AggregatedEnvRows) -> AggregatedEnvRows:
         column_names=group.column_names,
         job_run_ids=group.job_run_ids,
     )
-
-
-def _normalize_records(
-    records: Sequence[discovery.RunRecord],
-    env_export_map: Mapping[str, EnvironmentExportConfig],
-) -> list[_NormalizedRecord]:
-    normalized_records: list[_NormalizedRecord] = []
-    for record in records:
-        env_export = _resolve_env_export(record.manifest_env_id, env_export_map)
-        extra_columns = _resolve_columns(env_export.extra_columns if env_export else ())
-        drop_columns = _resolve_columns(env_export.drop_columns if env_export else ())
-        answer_column = env_export.answer_column if env_export else None
-
-        normalized = metadata.load_normalized_metadata(record)
-        model_id = normalized.model_id
-        if not model_id:
-            raise RuntimeError(
-                "Missing model_id for run "
-                f"(job_run_id={record.manifest.job_run_id}, job_id={record.job_id}, "
-                f"results_dir={record.results_dir}, manifest={record.manifest.manifest_path})"
-            )
-
-        env_key = normalized.base_env_id or normalized.manifest_env_id or record.manifest_env_id or record.job_id
-        normalized_records.append(
-            _NormalizedRecord(
-                record=record,
-                normalized=normalized,
-                extra_columns=extra_columns,
-                drop_columns=drop_columns,
-                answer_column=answer_column,
-                model_key=model_id,
-                env_key=env_key,
-                job_run_id=record.manifest.job_run_id,
-                run_timestamp=_source_updated_at(record),
-            )
-        )
-    return normalized_records
-
-
-def _select_latest_env_groups(
-    records: Sequence[_NormalizedRecord],
-) -> list[_EnvGroupSelection]:
-    env_groups: dict[tuple[str, str], dict[str, list[_NormalizedRecord]]] = {}
-    run_timestamps: dict[str, str] = {}
-    for record in records:
-        env_groups.setdefault((record.model_key, record.env_key), {}).setdefault(record.job_run_id, []).append(record)
-        run_timestamps.setdefault(record.job_run_id, record.run_timestamp)
-
-    selected: list[_EnvGroupSelection] = []
-    for (model_key, env_key), run_groups in env_groups.items():
-        if not run_groups:
-            continue
-        latest_run_id = max(
-            run_groups.keys(),
-            key=lambda run_id: _run_sort_key(run_timestamps.get(run_id, ""), run_id),
-        )
-        selected.append(
-            _EnvGroupSelection(
-                model_key=model_key,
-                env_key=env_key,
-                job_run_id=latest_run_id,
-                run_timestamp=run_timestamps.get(latest_run_id, ""),
-                records=run_groups[latest_run_id],
-            )
-        )
-    return selected
 
 
 def _run_sort_key(timestamp: str, job_run_id: str) -> tuple[int, datetime, str]:
@@ -644,3 +673,14 @@ def _confirm_clean_process(
         raise RuntimeError("Aborted clean process.") from None
     if response != "clean":
         raise RuntimeError("Aborted clean process.")
+
+
+__all__ = [
+    "PlannedRecord",
+    "PlannedWorkItem",
+    "ProcessOptions",
+    "ProcessResult",
+    "SelectionResult",
+    "run_process",
+    "select_work_items",
+]

@@ -213,19 +213,18 @@ def _attach_metadata(
     version_info_json: str | None,
 ) -> MutableMapping[str, Any]:
     record = metadata.record
+    identity = metadata.identity
 
     error_value = record.reason if record.status == "failed" else None
 
-    env_identifier = metadata.base_env_id or metadata.manifest_env_id
-
     row.update(
         {
-            "env_id": env_identifier,
-            "manifest_env_id": metadata.manifest_env_id,
-            "base_env_id": metadata.base_env_id,
+            "env_id": identity.output_env_id,
+            "manifest_env_id": identity.manifest_env_id,
+            "base_env_id": identity.base_env_id,
             "job_run_id": record.manifest.job_run_id,
             "run_id": record.job_id,
-            "model_id": metadata.model_id,
+            "model_id": identity.model_id,
             "version_info": version_info_json,
             "status": record.status,
             "error": error_value,

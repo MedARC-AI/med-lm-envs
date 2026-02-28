@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
+from medarc_verifiers.cli.process.metadata import RunIdentity
 from medarc_verifiers.cli.process.rollout import derive_base_env_id
 
 logger = logging.getLogger(__name__)
@@ -25,9 +26,17 @@ class AggregatedEnvRows:
 
 def aggregate_rows_by_env(
     rows: Iterable[Mapping[str, Any]],
+    *,
+    identities: Iterable[RunIdentity] | None = None,
 ) -> list[AggregatedEnvRows]:
     """Group enriched rows by (model_id, base_env_id), capturing unioned schemas."""
     groups: dict[tuple[str, str], dict[str, Any]] = {}
+    identity_list = list(identities or ())
+    fake_rollout_groups = {
+        (identity.model_id, identity.output_env_id)
+        for identity in identity_list
+        if identity.rollout_index is not None
+    }
 
     for row in rows:
         base_env_id = str(row.get("base_env_id") or row.get("env_id") or "")
@@ -68,7 +77,15 @@ def aggregate_rows_by_env(
         # processing "fake rollouts" that are created by running separate jobs with rollout suffixes
         # (e.g., env-a-rollout7) and then combining them under a shared base_env_id.
         normalized_rows: list[Mapping[str, Any]] = list(group["rows"])  # shallow copy
-        if _group_uses_rollout_suffixes(normalized_rows, base_env_id=group["base_env_id"] or key[1]):
+        if key in fake_rollout_groups:
+            _ensure_rollout_index_from_identities(
+                normalized_rows,
+                identities=identity_list,
+                model_id=group["model_id"],
+                base_env_id=group["base_env_id"] or key[1],
+            )
+            _normalize_rollout_indices(normalized_rows)
+        elif _group_uses_rollout_suffixes(normalized_rows, base_env_id=group["base_env_id"] or key[1]):
             _ensure_rollout_index_from_suffix(normalized_rows, base_env_id=group["base_env_id"] or key[1])
             _normalize_rollout_indices(normalized_rows)
         candidate_env_id = group["env_id"] or group["base_env_id"] or ""
@@ -83,6 +100,40 @@ def aggregate_rows_by_env(
             )
         )
     return aggregated
+
+
+def _ensure_rollout_index_from_identities(
+    rows: list[Mapping[str, Any]],
+    *,
+    identities: list[RunIdentity],
+    model_id: str,
+    base_env_id: str,
+) -> None:
+    rollout_by_manifest_env: dict[str, int] = {}
+    for identity in identities:
+        if identity.model_id != model_id or identity.output_env_id != base_env_id:
+            continue
+        if identity.rollout_index is None:
+            continue
+        rollout_by_manifest_env[identity.manifest_env_id] = identity.rollout_index
+
+    if not rollout_by_manifest_env:
+        return
+
+    for row in rows:
+        value = row.get("rollout_index")
+        if _coerce_rollout_index(value) is not None:
+            continue
+        manifest_env_id = row.get("manifest_env_id")
+        if not isinstance(manifest_env_id, str):
+            continue
+        resolved = rollout_by_manifest_env.get(manifest_env_id)
+        if resolved is None:
+            continue
+        try:
+            row["rollout_index"] = resolved
+        except TypeError:
+            continue
 
 
 def _group_uses_rollout_suffixes(rows: list[Mapping[str, Any]], *, base_env_id: str) -> bool:
