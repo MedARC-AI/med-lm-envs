@@ -769,6 +769,53 @@ def test_process_clean_clears_outputs(tmp_path: Path) -> None:
     assert (output_dir / "env_index.json").exists()
 
 
+def test_run_process_reads_local_index_after_workspace_prep(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runs_dir = _setup_run(tmp_path)
+    output_dir = tmp_path / "processed"
+    observed: list[str] = []
+
+    def fake_prepare_output_workspace(**kwargs):
+        observed.append("workspace")
+        model_dir = kwargs["output_dir"] / "gpt-mini"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        existing_path = model_dir / "demo-env.parquet"
+        existing_path.write_text("placeholder", encoding="utf-8")
+        (kwargs["output_dir"] / "env_index.json").write_text(
+            json.dumps(
+                {
+                    "version": 2,
+                    "files": {
+                        "gpt-mini/demo-env.parquet": {
+                            "env_id": "demo-env",
+                            "model_id": "gpt-mini",
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def fake_read_env_index_files(processed_dir: Path):
+        observed.append("index")
+        assert observed == ["workspace", "index"]
+        return {"gpt-mini/demo-env.parquet": {"env_id": "demo-env", "model_id": "gpt-mini"}}
+
+    monkeypatch.setattr("medarc_verifiers.cli.process.workspace.prepare_output_workspace", fake_prepare_output_workspace)
+    monkeypatch.setattr("medarc_verifiers.cli.process.env_index.read_env_index_files", fake_read_env_index_files)
+    monkeypatch.setattr(
+        "medarc_verifiers.cli.process.pipeline._validate_existing_output_integrity",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = run_process(ProcessOptions(runs_dir=runs_dir, output_dir=output_dir, dry_run=False, max_workers=1))
+
+    assert observed == ["workspace", "index"]
+    assert result.env_summaries == []
+
+
 def test_run_process_ignores_legacy_run_output_path(tmp_path: Path) -> None:
     runs_dir = _setup_run(tmp_path)
     run_dir = runs_dir / "run-1"

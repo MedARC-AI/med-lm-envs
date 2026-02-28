@@ -21,6 +21,12 @@ class BaselineResult:
     snapshot_dir: Path | None = None
 
 
+@dataclass(slots=True)
+class WorkspacePreparationResult:
+    cleaned: bool = False
+    baseline_result: BaselineResult | None = None
+
+
 def ensure_output_dir(output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -31,6 +37,37 @@ def is_nonempty_dir(path: Path) -> bool:
     for entry in path.iterdir():
         return True
     return False
+
+
+def prepare_output_workspace(
+    *,
+    output_dir: Path,
+    hf_config: HFSyncConfig | None,
+    pull_policy: str | None,
+    clean: bool,
+    assume_yes: bool,
+    is_tty: bool,
+    prompt_func: Callable[[str], str] | None = None,
+) -> WorkspacePreparationResult:
+    """Prepare local processed outputs before selection reads local inventory state."""
+    ensure_output_dir(output_dir)
+
+    if clean:
+        confirm_clean_output_dir(output_dir, assume_yes=assume_yes, is_tty=is_tty, prompt_func=prompt_func)
+        clear_output_dir(output_dir)
+        return WorkspacePreparationResult(cleaned=True)
+
+    if hf_config and hf_config.repo_id:
+        baseline_result = prepare_hf_baseline(
+            output_dir=output_dir,
+            hf_config=hf_config,
+            pull_policy=pull_policy,
+            is_tty=is_tty,
+            prompt_func=prompt_func,
+        )
+        return WorkspacePreparationResult(cleaned=False, baseline_result=baseline_result)
+
+    return WorkspacePreparationResult(cleaned=False)
 
 
 def prepare_hf_baseline(
@@ -105,6 +142,26 @@ def prepare_hf_baseline(
         return result
 
     raise ValueError(f"Unsupported HF pull policy: {policy}")
+
+
+def confirm_clean_output_dir(
+    output_dir: Path,
+    *,
+    assume_yes: bool,
+    is_tty: bool,
+    prompt_func: Callable[[str], str] | None,
+) -> None:
+    if assume_yes:
+        return
+    if not is_tty or prompt_func is None:
+        raise RuntimeError("Refusing to clean processed outputs without confirmation. Re-run with --yes to confirm.")
+    prompt = f"--clean will delete all contents of {output_dir} and rebuild from runs. Type 'clean' to continue: "
+    try:
+        response = prompt_func(prompt).strip().lower()
+    except (EOFError, KeyboardInterrupt):  # noqa: PERF203
+        raise RuntimeError("Aborted clean process.") from None
+    if response != "clean":
+        raise RuntimeError("Aborted clean process.")
 
 
 def _resolve_pull_policy(pull_policy: str | None, *, is_tty: bool) -> str:
@@ -228,8 +285,11 @@ def clear_output_dir(output_dir: Path) -> None:
 
 __all__ = [
     "BaselineResult",
+    "WorkspacePreparationResult",
     "clear_output_dir",
+    "confirm_clean_output_dir",
     "ensure_output_dir",
     "is_nonempty_dir",
+    "prepare_output_workspace",
     "prepare_hf_baseline",
 ]

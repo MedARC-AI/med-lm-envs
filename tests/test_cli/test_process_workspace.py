@@ -50,6 +50,69 @@ def test_prepare_hf_baseline_pull_copies_missing(monkeypatch: pytest.MonkeyPatch
     assert copied in result.files_copied
 
 
+def test_prepare_output_workspace_clean_skips_hf_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    sentinel = output_dir / "stale.txt"
+    sentinel.write_text("stale", encoding="utf-8")
+
+    def _fail_prepare_hf_baseline(**_kwargs) -> workspace.BaselineResult:
+        raise AssertionError("prepare_hf_baseline should not run when clean=True")
+
+    monkeypatch.setattr(workspace, "prepare_hf_baseline", _fail_prepare_hf_baseline)
+
+    result = workspace.prepare_output_workspace(
+        output_dir=output_dir,
+        hf_config=HFSyncConfig(repo_id="demo/repo"),
+        pull_policy="pull",
+        clean=True,
+        assume_yes=True,
+        is_tty=False,
+        prompt_func=None,
+    )
+
+    assert result.cleaned is True
+    assert result.baseline_result is None
+    assert not sentinel.exists()
+
+
+def test_prepare_output_workspace_runs_hf_baseline_before_local_reads(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "output"
+    snapshot_dir = tmp_path / "snapshot"
+    snapshot_dir.mkdir()
+    parquet_path = _write_snapshot(snapshot_dir)
+
+    def _fake_prepare_hf_baseline(**_kwargs) -> workspace.BaselineResult:
+        copied = output_dir / parquet_path.relative_to(snapshot_dir)
+        copied.parent.mkdir(parents=True, exist_ok=True)
+        copied.write_text(parquet_path.read_text(encoding="utf-8"), encoding="utf-8")
+        (output_dir / "env_index.json").write_text((snapshot_dir / "env_index.json").read_text(encoding="utf-8"))
+        return workspace.BaselineResult(policy="pull", files_copied=[copied], snapshot_dir=snapshot_dir)
+
+    monkeypatch.setattr(workspace, "prepare_hf_baseline", _fake_prepare_hf_baseline)
+
+    result = workspace.prepare_output_workspace(
+        output_dir=output_dir,
+        hf_config=HFSyncConfig(repo_id="demo/repo"),
+        pull_policy="pull",
+        clean=False,
+        assume_yes=False,
+        is_tty=False,
+        prompt_func=None,
+    )
+
+    assert result.cleaned is False
+    assert result.baseline_result is not None
+    assert (output_dir / "env_index.json").exists()
+    assert (output_dir / "model-a" / "env-a.parquet").exists()
+
+
 def test_prepare_hf_baseline_pull_keeps_unrelated_local(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     snapshot_dir = tmp_path / "snapshot"
     snapshot_dir.mkdir()

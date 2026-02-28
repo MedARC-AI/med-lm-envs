@@ -8,7 +8,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 import pyarrow.parquet as pq
 
@@ -113,19 +113,13 @@ def run_process(
     env_export_map = env_export_map or {}
 
     def _run_pipeline() -> ProcessResult:
-        if not options.dry_run and options.clean:
-            _confirm_clean_process(
-                options.output_dir,
-                assume_yes=options.assume_yes,
-                is_tty=sys.stdin.isatty(),
-                prompt_func=input,
-            )
-            workspace.clear_output_dir(options.output_dir)
-        if not options.dry_run and options.hf_config and options.hf_config.repo_id and not options.clean:
-            workspace.prepare_hf_baseline(
+        if not options.dry_run:
+            workspace.prepare_output_workspace(
                 output_dir=options.output_dir,
                 hf_config=options.hf_config,
                 pull_policy=options.hf_pull_policy,
+                clean=options.clean,
+                assume_yes=options.assume_yes,
                 is_tty=sys.stdin.isatty(),
                 prompt_func=input,
             )
@@ -653,26 +647,6 @@ def _run_sort_key(timestamp: str, job_run_id: str) -> tuple[int, datetime, str]:
         return (1, parsed, job_run_id)
     except Exception:
         return (0, datetime.min.replace(tzinfo=UTC), job_run_id)
-
-
-def _confirm_clean_process(
-    output_dir: Path,
-    *,
-    assume_yes: bool,
-    is_tty: bool,
-    prompt_func: Callable[[str], str] | None,
-) -> None:
-    if assume_yes:
-        return
-    if not is_tty or prompt_func is None:
-        raise RuntimeError("Refusing to clean processed outputs without confirmation. Re-run with --yes to confirm.")
-    prompt = f"--clean will delete all contents of {output_dir} and rebuild from runs. Type 'clean' to continue: "
-    try:
-        response = prompt_func(prompt).strip().lower()
-    except (EOFError, KeyboardInterrupt):  # noqa: PERF203
-        raise RuntimeError("Aborted clean process.") from None
-    if response != "clean":
-        raise RuntimeError("Aborted clean process.")
 
 
 __all__ = [
