@@ -4,8 +4,9 @@ from pathlib import Path
 import pytest
 
 from medarc_verifiers.orchestrate.config import PlanConfig, TaskSpec
-from medarc_verifiers.orchestrate.resources import ResourceError
+from medarc_verifiers.orchestrate.resources import ResourceError, ResourceManager
 from medarc_verifiers.orchestrate.run import OrchestratorOptions, OrchestratorRunner
+from medarc_verifiers.orchestrate.runtime import RuntimeHandle
 
 
 class DummyResourceManager:
@@ -40,62 +41,103 @@ class DummyResourceManager:
     def release_port(self, port: int) -> None:
         return None
 
-    def cooldown_gpus(self, seconds: float = 5.0) -> None:
+
+class PortOnlyDummyResourceManager:
+    def __init__(self) -> None:
+        self._next_port = 8000
+
+    def reserve_gpus(
+        self,
+        task_id: str,
+        *,
+        count: int,
+        min_free_gb=None,
+        require_contiguous: bool = False,
+    ):
+        return []
+
+    def reserve_port(self, task_id: str) -> int:
+        port = self._next_port
+        self._next_port += 1
+        return port
+
+    def release_gpus(self, indices):
+        return None
+
+    def release_port(self, port: int) -> None:
         return None
 
 
-class FakeContainer:
-    def __init__(self, name: str):
-        self.id = f"fake-{name}"
-
-    def logs(self, stream: bool, follow: bool):
-        return iter(())
-
-    def wait(self, timeout: float | None = None):
-        return {"StatusCode": 0}
-
-    def stop(self, timeout: float = 10):
+class FakeLogStreamer:
+    def start(self) -> None:
         return None
 
-    def remove(self, v: bool = True, force: bool = True):
+    def stop(self, *, timeout: float = 2.0) -> None:
         return None
+
+    def is_alive(self) -> bool:
+        return False
+
+
+class FakeRuntimeAdapter:
+    def __init__(self) -> None:
+        self.launch_calls: list[dict[str, object]] = []
+
+    def launch(self, **kwargs) -> RuntimeHandle:
+        self.launch_calls.append(kwargs)
+        port = int(kwargs["server_port"])
+        task_id = str(kwargs["task_id"])
+        return RuntimeHandle(base_url=f"http://127.0.0.1:{port}/v1", identifier=f"handle-{task_id}")
+
+    def stream_logs(self, handle: RuntimeHandle, sink: Path) -> FakeLogStreamer:
+        return FakeLogStreamer()
+
+    def teardown(self, handle: RuntimeHandle) -> None:
+        return None
+
+
+def _task(tmp_path: Path, task_id: str) -> TaskSpec:
+    return TaskSpec(
+        task_id=task_id,
+        job_config_path=tmp_path / f"{task_id}.yaml",
+        model_key="foo",
+        model_id=f"Foo/{task_id}",
+        orchestrate={
+            "vllm-container": {"image": "fake"},
+            "foo": {"gpus": 2, "tensor_parallel_size": 2, "serve": {}},
+        },
+    )
 
 
 @pytest.mark.asyncio
-async def test_parallel_launch_runs_concurrently(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("runtime", "resource_manager"),
+    [("docker", DummyResourceManager()), ("pyxis", PortOnlyDummyResourceManager())],
+)
+async def test_parallel_launch_runs_concurrently(
+    tmp_path: Path,
+    monkeypatch,
+    runtime: str,
+    resource_manager: ResourceManager,
+) -> None:
     plan = PlanConfig(job_configs=[tmp_path / "job-1.yaml", tmp_path / "job-2.yaml"])
-    tasks = [
-        TaskSpec(
-            task_id="task-1",
-            job_config_path=tmp_path / "job-1.yaml",
-            model_key="foo",
-            model_id="Foo/Bar",
-            orchestrate={
-                "vllm-docker": {"image": "fake"},
-                "foo": {"gpus": 2, "tensor_parallel_size": 2, "serve": {}},
-            },
-        ),
-        TaskSpec(
-            task_id="task-2",
-            job_config_path=tmp_path / "job-2.yaml",
-            model_key="foo",
-            model_id="Foo/Baz",
-            orchestrate={
-                "vllm-docker": {"image": "fake"},
-                "foo": {"gpus": 2, "tensor_parallel_size": 2, "serve": {}},
-            },
-        ),
-    ]
+    tasks = [_task(tmp_path, "task-1"), _task(tmp_path, "task-2")]
     options = OrchestratorOptions(
         run_id="run-1",
         output_root=tmp_path / "outputs",
         readiness_timeout_s=1,
         max_parallel=2,
     )
-    runner = OrchestratorRunner(plan, tasks, DummyResourceManager(), options=options, use_dashboard=False)
-
-    def fake_create_and_start_container(**kwargs):
-        return FakeContainer(kwargs["name"])
+    adapter = FakeRuntimeAdapter()
+    runner = OrchestratorRunner(
+        plan,
+        tasks,
+        resource_manager,
+        options=options,
+        runtime=runtime,
+        runtime_adapter=adapter,
+        use_dashboard=False,
+    )
 
     first_readiness_started = asyncio.Event()
     first_readiness_done = asyncio.Event()
@@ -121,10 +163,6 @@ async def test_parallel_launch_runs_concurrently(tmp_path: Path, monkeypatch) ->
 
         return Result()
 
-    async def fake_to_thread(func, /, *args, **kwargs):
-        await asyncio.sleep(0.2)
-        return func(*args, **kwargs)
-
     async def fake_start_benchmark(*args, **kwargs):
         class Proc:
             pass
@@ -139,20 +177,16 @@ async def test_parallel_launch_runs_concurrently(tmp_path: Path, monkeypatch) ->
 
         return Result()
 
-    monkeypatch.setattr("medarc_verifiers.orchestrate.run.create_and_start_container", fake_create_and_start_container)
+    async def fake_to_thread(func, /, *args, **kwargs):
+        return func(*args, **kwargs)
+
     monkeypatch.setattr("medarc_verifiers.orchestrate.run.wait_for_readiness_async", fake_wait_for_readiness_async)
     monkeypatch.setattr("medarc_verifiers.orchestrate.run.start_benchmark", fake_start_benchmark)
     monkeypatch.setattr("medarc_verifiers.orchestrate.run.wait_benchmark", fake_wait_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.run._register_signal_handlers", lambda loop, handler: None)
     monkeypatch.setattr("medarc_verifiers.orchestrate.run.asyncio.to_thread", fake_to_thread)
-    monkeypatch.setattr(
-        "medarc_verifiers.orchestrate.docker_vllm.create_and_start_container",
-        fake_create_and_start_container,
-    )
-    monkeypatch.setattr(
-        "medarc_verifiers.orchestrate.docker_vllm.wait_for_readiness_async",
-        fake_wait_for_readiness_async,
-    )
 
     await runner._run_async()
 
     assert readiness_overlapped
+    assert [call["server_port"] for call in adapter.launch_calls] == [8000, 8001]

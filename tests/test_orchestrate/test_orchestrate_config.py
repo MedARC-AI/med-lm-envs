@@ -1,4 +1,7 @@
+import warnings
 from pathlib import Path
+
+import pytest
 
 from medarc_verifiers.orchestrate.config import expand_tasks, load_plan
 
@@ -14,7 +17,7 @@ models:
     model: Foo/Bar
 orchestrate:
   restart: runs/raw/example-run
-  vllm-docker:
+  vllm-container:
     image: vllm/vllm-openai:latest
   foo:
     gpus: 1
@@ -57,3 +60,56 @@ kill_orphans: false
     tasks = expand_tasks(plan)
     assert tasks[0].job_config_path == job_cfg.resolve()
     assert tasks[0].orchestrate.get("restart") == "runs/raw/example-run"
+    assert "vllm-container" in tasks[0].orchestrate
+
+
+def test_expand_tasks_accepts_deprecated_vllm_docker_with_warning(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    job_cfg.write_text(
+        """
+models:
+  foo:
+    model: Foo/Bar
+orchestrate:
+  vllm-docker:
+    image: vllm/vllm-openai:latest
+  foo:
+    gpus: 1
+    serve: {}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    plan_path = tmp_path / "plan.yaml"
+    plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\n", encoding="utf-8")
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        tasks = expand_tasks(load_plan(plan_path))
+
+    assert tasks[0].orchestrate["vllm-container"]["image"] == "vllm/vllm-openai:latest"
+    assert any("deprecated orchestrate.vllm-docker" in str(item.message) for item in caught)
+
+
+def test_expand_tasks_rejects_ambiguous_container_keys(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    job_cfg.write_text(
+        """
+models:
+  foo:
+    model: Foo/Bar
+orchestrate:
+  vllm-container:
+    image: new
+  vllm-docker:
+    image: old
+  foo:
+    gpus: 1
+    serve: {}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    plan_path = tmp_path / "plan.yaml"
+    plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="defines both orchestrate.vllm-container and orchestrate.vllm-docker"):
+        expand_tasks(load_plan(plan_path))

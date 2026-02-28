@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
+import warnings
 
 from omegaconf import OmegaConf
 from pydantic import BaseModel, Field, ValidationError
@@ -16,6 +17,7 @@ class PlanConfig(BaseModel):
     name: str | None = None
     job_configs: list[Path] = Field(..., min_length=1)
     env_file: Path | None = None
+    runtime: str | None = None
     gpu_range: str | None = None
     port_range: str | None = None
     run_id: str | None = None
@@ -131,11 +133,28 @@ def _extract_orchestrate_config(payload: Mapping[str, Any], *, model_key: str, s
     orchestrate = payload.get("orchestrate")
     if not isinstance(orchestrate, Mapping):
         raise ValueError(f"Job config {source} must define a top-level orchestrate mapping.")
-    if "vllm-docker" not in orchestrate:
-        raise ValueError(f"Job config {source} must define orchestrate.vllm-docker settings.")
+    has_container = "vllm-container" in orchestrate
+    has_docker = "vllm-docker" in orchestrate
+    if has_container and has_docker:
+        raise ValueError(
+            f"Job config {source} defines both orchestrate.vllm-container and orchestrate.vllm-docker."
+        )
+    if not has_container and not has_docker:
+        raise ValueError(f"Job config {source} must define orchestrate.vllm-container settings.")
     if model_key not in orchestrate:
         raise ValueError(f"Job config {source} must define orchestrate.{model_key} settings.")
-    return orchestrate
+    normalized = dict(orchestrate)
+    if has_docker:
+        warnings.warn(
+            (
+                f"Job config {source} uses deprecated orchestrate.vllm-docker; "
+                "rename it to orchestrate.vllm-container."
+            ),
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        normalized["vllm-container"] = orchestrate["vllm-docker"]
+    return normalized
 
 
 __all__ = ["ConfigFormatError", "PlanConfig", "TaskSpec", "expand_tasks", "load_job_config", "load_plan"]
