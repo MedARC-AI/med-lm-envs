@@ -25,7 +25,6 @@ from medarc_verifiers.cli._constants import (
     DEFAULT_ENV_DIR,
     DEFAULT_PROCESSED_DIR,
     DEFAULT_RUNS_RAW_DIR,
-    DEFAULT_WINRATE_DIR,
     PROCESS_COMMAND,
     WINRATE_COMMAND,
 )
@@ -287,7 +286,6 @@ def build_process_parser() -> argparse.ArgumentParser:
     parser.add_argument("--processed-at", default=None, help="Override processed_at timestamp (ISO8601).")
     parser.add_argument("--dry-run", action="store_true", default=None, help="Plan processing without writing outputs.")
     parser.add_argument(
-    parser.add_argument(
         "--replace-model",
         action="append",
         default=None,
@@ -299,6 +297,7 @@ def build_process_parser() -> argparse.ArgumentParser:
         default=None,
         help="Rebuild existing processed outputs for these env ids (repeatable; comma-separated values allowed).",
     )
+    parser.add_argument(
         "--process-incomplete",
         dest="process_incomplete",
         action="store_true",
@@ -309,7 +308,7 @@ def build_process_parser() -> argparse.ArgumentParser:
         "--winrate",
         type=Path,
         default=None,
-        help="Run winrate after processing using the provided winrate config file.",
+        help="Run winrate after processing using the provided config file. If omitted, an embedded winrate section in --config is used.",
     )
     parser.add_argument(
         "--max-workers",
@@ -376,7 +375,7 @@ def build_winrate_parser() -> argparse.ArgumentParser:
         "--output-dir",
         type=Path,
         default=None,
-        help=f"Directory to store winrate outputs (default: {DEFAULT_WINRATE_DIR}).",
+        help="Directory to store winrate outputs (default: <processed-dir>/winrate).",
     )
     parser.add_argument(
         "--output",
@@ -565,30 +564,8 @@ def _run_batch_mode(argv: Sequence[str]) -> int:
 
 
 def _run_process_mode(argv: Sequence[str]) -> int:
-    parser = build_process_parser()
-    args = parser.parse_args(argv)
-
-    if args.config:
-        _load_and_apply_config(args, args.config, mode="process", parser=parser)
-    _finalize_config_args(args, mode="process")
-    try:
-        if args.exclude_dataset:
-            normalize_dataset_ids(args.exclude_dataset, label="process exclude dataset")
-        if args.exclude_model:
-            normalize_model_ids(args.exclude_model, label="process exclude model")
-    for flag, attr in (("--replace-model", "replace_model"), ("--replace-env", "replace_env")):
-        if _option_was_provided(argv, flag) and not getattr(args, attr, None):
-            parser.error(f"{flag} requires at least one non-empty value.")
-
-    except ValueError as exc:
-        parser.error(str(exc))
-    winrate_args: argparse.Namespace | None = None
-    if args.winrate:
-        winrate_path = Path(args.winrate).expanduser()
-        if not winrate_path.exists():
-            parser.error(f"Winrate config path '{winrate_path}' does not exist.")
-        args.winrate = winrate_path
-        winrate_args = _build_winrate_args_from_config(winrate_path, parser=parser)
+    parser, args = _resolve_process_args(argv)
+    winrate_args = _resolve_embedded_winrate(args, parser=parser)
 
     try:
         env_export_map = _load_env_export_map(args.env_config_root)
@@ -596,6 +573,48 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         logger.warning("Failed to load environment export configs: %s", exc)
         env_export_map = {}
 
+    options = _build_process_options(args)
+
+    try:
+        result = run_process(options, env_export_map=env_export_map)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Process pipeline failed: %s", exc)
+        return 1
+
+    _log_process_result(result)
+    return _run_process_post_steps(args, parser=parser, options=options, winrate_args=winrate_args)
+
+
+def _resolve_process_args(argv: Sequence[str]) -> tuple[argparse.ArgumentParser, argparse.Namespace]:
+    parser = build_process_parser()
+    args = parser.parse_args(argv)
+
+    if args.config:
+        _load_and_apply_config(args, args.config, mode="process", parser=parser)
+    _finalize_config_args(args, mode="process")
+    _validate_process_args(args, argv=argv, parser=parser)
+    return parser, args
+
+
+def _validate_process_args(
+    args: argparse.Namespace,
+    *,
+    argv: Sequence[str],
+    parser: argparse.ArgumentParser,
+) -> None:
+    for flag, attr in (("--replace-model", "replace_model"), ("--replace-env", "replace_env")):
+        if _option_was_provided(argv, flag) and not getattr(args, attr, None):
+            parser.error(f"{flag} requires at least one non-empty value.")
+    try:
+        if args.exclude_dataset:
+            normalize_dataset_ids(args.exclude_dataset, label="process exclude dataset")
+        if args.exclude_model:
+            normalize_model_ids(args.exclude_model, label="process exclude model")
+    except ValueError as exc:
+        parser.error(str(exc))
+
+
+def _build_process_options(args: argparse.Namespace) -> ProcessOptions:
     hf_config = HFSyncConfig.from_cli(
         repo=args.hf_repo,
         branch=args.hf_branch,
@@ -606,13 +625,12 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         retries=args.hf_retries,
         max_files_per_commit=args.hf_max_files_per_commit,
     )
-
     processed_with_args = {
         "status": args.status or [],
         "exclude_datasets": args.exclude_dataset or [],
+        "exclude_models": args.exclude_model or [],
         "replace_models": args.replace_model or [],
         "replace_envs": args.replace_env or [],
-        "exclude_models": args.exclude_model or [],
         "dry_run": bool(args.dry_run),
         "clean": bool(args.clean),
         "only_complete_runs": not bool(args.process_incomplete),
@@ -623,8 +641,7 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         "hf_max_files_per_commit": args.hf_max_files_per_commit,
         "max_workers": args.max_workers,
     }
-
-    options = ProcessOptions(
+    return ProcessOptions(
         runs_dir=args.runs_dir,
         output_dir=args.output_dir,
         exclude_datasets=tuple(args.exclude_dataset or ()),
@@ -643,65 +660,94 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         max_workers=args.max_workers,
     )
 
-    try:
-        result = run_process(options, env_export_map=env_export_map)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Process pipeline failed: %s", exc)
-        return 1
 
-    _log_process_result(result)
+def _resolve_embedded_winrate(
+    args: argparse.Namespace,
+    *,
+    parser: argparse.ArgumentParser,
+) -> argparse.Namespace | None:
+    embedded_winrate = False
+    if args.config and args.winrate is None:
+        try:
+            embedded_winrate = _config_has_embedded_winrate(Path(args.config).expanduser())
+        except (FileNotFoundError, ValueError) as exc:
+            parser.error(str(exc))
 
     if args.winrate:
-        if options.dry_run:
-            logger.info("Skipping winrate post-step for dry-run process.")
-            return 0
-        if winrate_args is None:
-            winrate_args = _build_winrate_args_from_config(Path(args.winrate), parser=parser)
-        winrate_args.processed_dir = options.output_dir
-        winrate_args.hf_repo = None
-        winrate_args.hf_processed_pull = False
-        winrate_cfg = WinrateConfig(
-            missing_policy=winrate_args.missing_policy,
-            epsilon=winrate_args.epsilon,
-            min_common=winrate_args.min_common,
-            weight_policy=winrate_args.weight_policy,
-            weight_cap=winrate_args.weight_cap,
-            dataset_coverage=winrate_args.dataset_coverage,
-            include_models=tuple(winrate_args.include_model or ()),
-            exclude_models=tuple(winrate_args.exclude_model or ()),
-            exclude_datasets=tuple(winrate_args.exclude_dataset or ()),
-            partial_datasets=winrate_args.partial_datasets,
-        )
-        try:
-            winrate_result = run_winrate(
-                processed_dir=options.output_dir,
-                output_dir=winrate_args.output_dir,
-                output_path=winrate_args.output,
-                output_name=winrate_args.output_name,
-                config=winrate_cfg,
-                processed_at=winrate_args.processed_at,
-                hf_config=None,
-                hf_processed_pull=False,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Win rate computation failed: %s", exc)
-            return 1
-        logger.info(
-            "Computed win rates for %d dataset(s): %s", len(winrate_result.datasets), winrate_result.output_path
-        )
-        print_winrate_summary_markdown(winrate_result.result)
-        if options.hf_config and options.hf_config.repo_id:
-            _upload_winrate_outputs(
-                output_dir=winrate_args.output_dir,
-                output_paths=winrate_result.output_paths,
-                repo_id=options.hf_config.repo_id,
-                token=options.hf_config.token,
-                branch=options.hf_config.branch,
-                private=bool(options.hf_config.private),
-                winrate_dir=winrate_args.hf_winrate_dir,
-                assume_yes=bool(args.yes),
-            )
+        winrate_path = Path(args.winrate).expanduser()
+        if not winrate_path.exists():
+            parser.error(f"Winrate config path '{winrate_path}' does not exist.")
+        args.winrate = winrate_path
+        return _build_winrate_args_from_config(winrate_path, parser=parser)
 
+    if embedded_winrate:
+        args.winrate = Path(args.config).expanduser()
+        return _build_winrate_args_from_config(Path(args.config).expanduser(), parser=parser)
+    return None
+
+
+def _run_process_post_steps(
+    args: argparse.Namespace,
+    *,
+    parser: argparse.ArgumentParser,
+    options: ProcessOptions,
+    winrate_args: argparse.Namespace | None,
+) -> int:
+    if not args.winrate:
+        return 0
+    if options.dry_run:
+        logger.info("Skipping winrate post-step for dry-run process.")
+        return 0
+
+    if winrate_args is None:
+        winrate_args = _build_winrate_args_from_config(Path(args.winrate), parser=parser)
+    winrate_args.processed_dir = options.output_dir
+    if not getattr(winrate_args, "_output_dir_explicit", False):
+        winrate_args.output_dir = _default_winrate_output_dir(options.output_dir)
+    winrate_args.hf_repo = None
+    winrate_args.hf_processed_pull = False
+
+    winrate_cfg = WinrateConfig(
+        missing_policy=winrate_args.missing_policy,
+        epsilon=winrate_args.epsilon,
+        min_common=winrate_args.min_common,
+        weight_policy=winrate_args.weight_policy,
+        weight_cap=winrate_args.weight_cap,
+        dataset_coverage=winrate_args.dataset_coverage,
+        include_models=tuple(winrate_args.include_model or ()),
+        exclude_models=tuple(winrate_args.exclude_model or ()),
+        exclude_datasets=tuple(winrate_args.exclude_dataset or ()),
+        partial_datasets=winrate_args.partial_datasets,
+    )
+    try:
+        winrate_result = run_winrate(
+            processed_dir=options.output_dir,
+            output_dir=winrate_args.output_dir,
+            output_path=winrate_args.output,
+            output_name=winrate_args.output_name,
+            config=winrate_cfg,
+            processed_at=winrate_args.processed_at,
+            hf_config=None,
+            hf_processed_pull=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Win rate computation failed: %s", exc)
+        return 1
+
+    logger.info("Computed win rates for %d dataset(s): %s", len(winrate_result.datasets), winrate_result.output_path)
+    print_winrate_summary_markdown(winrate_result.result)
+
+    if options.hf_config and options.hf_config.repo_id:
+        _upload_winrate_outputs(
+            output_dir=winrate_args.output_dir,
+            output_paths=winrate_result.output_paths,
+            repo_id=options.hf_config.repo_id,
+            token=options.hf_config.token,
+            branch=options.hf_config.branch,
+            private=bool(options.hf_config.private),
+            winrate_dir=winrate_args.hf_winrate_dir,
+            assume_yes=bool(args.yes),
+        )
     return 0
 
 
@@ -741,7 +787,147 @@ def _set_if_unset(args: argparse.Namespace, attr: str, value: Any) -> None:
 
 def _load_config_payload(path: Path, *, mode: Literal["process", "winrate"]) -> dict[str, Any]:
     label = "Process config" if mode == "process" else "Winrate config"
-    return dict(load_mapping_file(path, label=label))
+    raw_payload = dict(load_mapping_file(path, label=label))
+    return _expand_embedded_pipeline_config(raw_payload, mode=mode)
+
+
+def _expand_embedded_pipeline_config(payload: dict[str, Any], *, mode: Literal["process", "winrate"]) -> dict[str, Any]:
+    expanded = dict(payload)
+    process_section = payload.get("process")
+    if isinstance(process_section, Mapping):
+        _merge_process_section(expanded, process_section, mode=mode)
+
+    process_output_dir = _resolve_processed_dir_from_payload(expanded, mode=mode)
+
+    winrate_section = payload.get("winrate")
+    if isinstance(winrate_section, Mapping):
+        if mode == "process":
+            expanded.pop("winrate", None)
+        if mode == "winrate":
+            _merge_winrate_section(expanded, winrate_section, process_output_dir=process_output_dir)
+    elif isinstance(winrate_section, bool) and mode == "process":
+        expanded.pop("winrate", None)
+
+    if mode == "winrate" and "processed_dir" not in expanded and process_output_dir is not None:
+        expanded["processed_dir"] = process_output_dir
+
+    return expanded
+
+
+def _merge_process_section(
+    expanded: dict[str, Any],
+    process_section: Mapping[str, Any],
+    *,
+    mode: Literal["process", "winrate"],
+) -> None:
+    resolved = None
+    if "dir" in process_section:
+        resolved = _resolve_process_dir_value(process_section["dir"], runs_dir=expanded.get("runs_dir"))
+        if mode == "process" and "output_dir" not in expanded and resolved is not None:
+            expanded["output_dir"] = resolved
+        if mode == "winrate" and "processed_dir" not in expanded and resolved is not None:
+            expanded["processed_dir"] = resolved
+    if mode == "winrate" and "processed_dir" not in expanded and "output_dir" in process_section:
+        expanded["processed_dir"] = process_section["output_dir"]
+    key_map = {"runs_dir": "runs_dir"}
+    if mode == "process":
+        key_map.update(
+            {
+                "output_dir": "output_dir",
+                "env_config_root": "env_config_root",
+                "processed_at": "processed_at",
+                "status": "status",
+                "exclude_datasets": "exclude_datasets",
+                "exclude_models": "exclude_models",
+                "replace_models": "replace_models",
+                "replace_envs": "replace_envs",
+                "dry_run": "dry_run",
+                "clean": "clean",
+                "yes": "yes",
+                "process_incomplete": "process_incomplete",
+                "max_workers": "max_workers",
+            }
+        )
+    for key, target in key_map.items():
+        if key in process_section and target not in expanded:
+            expanded[target] = process_section[key]
+
+
+def _merge_winrate_section(
+    expanded: dict[str, Any],
+    winrate_section: Mapping[str, Any],
+    *,
+    process_output_dir: Path | None,
+) -> None:
+    if "dir" in winrate_section and "output_dir" not in expanded:
+        resolved = _resolve_winrate_dir_value(winrate_section["dir"], process_output_dir=process_output_dir)
+        if resolved is not None:
+            expanded["output_dir"] = resolved
+    key_map = {
+        "processed_dir": "processed_dir",
+        "output_dir": "output_dir",
+        "output_name": "output_name",
+        "processed_at": "processed_at",
+        "missing_policy": "missing_policy",
+        "epsilon": "epsilon",
+        "min_common": "min_common",
+        "weight_policy": "weight_policy",
+        "weight_cap": "weight_cap",
+        "dataset_coverage": "dataset_coverage",
+        "include_model": "include_models",
+        "include_models": "include_models",
+        "exclude_model": "exclude_models",
+        "exclude_models": "exclude_models",
+        "exclude_dataset": "exclude_datasets",
+        "exclude_datasets": "exclude_datasets",
+        "partial_datasets": "partial_datasets",
+        "hf_processed_pull": "hf_processed_pull",
+        "hf_winrate_dir": "hf_winrate_dir",
+    }
+    for key, target in key_map.items():
+        if key in winrate_section and target not in expanded:
+            expanded[target] = winrate_section[key]
+
+
+def _resolve_processed_dir_from_payload(payload: Mapping[str, Any], *, mode: Literal["process", "winrate"]) -> Path | None:
+    if "processed_dir" in payload and payload["processed_dir"] is not None:
+        return Path(str(payload["processed_dir"]))
+    if mode == "process" and "output_dir" in payload and payload["output_dir"] is not None:
+        return Path(str(payload["output_dir"]))
+    process_section = payload.get("process")
+    if isinstance(process_section, Mapping) and "dir" in process_section:
+        return _resolve_process_dir_value(process_section["dir"], runs_dir=payload.get("runs_dir"))
+    return None
+
+
+def _resolve_process_dir_value(value: Any, *, runs_dir: Any | None) -> Path | None:
+    raw = str(value).strip()
+    if not raw:
+        return None
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        return candidate
+    runs_base = Path(str(runs_dir)).parent if runs_dir is not None else DEFAULT_RUNS_RAW_DIR.parent
+    return runs_base / candidate
+
+
+def _resolve_winrate_dir_value(value: Any, *, process_output_dir: Path | None) -> Path | None:
+    raw = str(value).strip()
+    if not raw:
+        return None
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        return candidate
+    base = process_output_dir if process_output_dir is not None else DEFAULT_PROCESSED_DIR
+    return base / candidate
+
+
+def _config_has_embedded_winrate(path: Path) -> bool:
+    payload = dict(load_mapping_file(path, label="Process config"))
+    winrate_payload = payload.get("winrate")
+    if isinstance(winrate_payload, Mapping):
+        return bool(winrate_payload.get("enabled", True))
+    return bool(winrate_payload) if isinstance(winrate_payload, bool) else False
 
 
 def _normalize_mode_payload(payload: dict[str, Any], *, mode: Literal["process", "winrate"]) -> None:
@@ -845,12 +1031,16 @@ def _load_and_apply_config(
         "winrate": {"epsilon": "epsilon"},
     }[mode]
     repeatable_fields = {
-        "process": {"status": "status", "exclude_datasets": "exclude_dataset", "exclude_models": "exclude_model"},
-        "winrate": {
-            "include_models": "include_model",
+        "process": {
+            "status": "status",
+            "exclude_datasets": "exclude_dataset",
             "exclude_models": "exclude_model",
             "replace_models": "replace_model",
             "replace_envs": "replace_env",
+        },
+        "winrate": {
+            "include_models": "include_model",
+            "exclude_models": "exclude_model",
             "exclude_datasets": "exclude_dataset",
         },
     }[mode]
@@ -904,6 +1094,7 @@ def _build_winrate_args_from_config(path: Path, *, parser: argparse.ArgumentPars
         hf_private=None,
     )
     _load_and_apply_config(args, path, mode="winrate", parser=parser)
+    args._output_dir_explicit = args.output_dir is not None
     _finalize_config_args(args, mode="winrate")
     return args
 
@@ -923,10 +1114,11 @@ def _finalize_config_args(args: argparse.Namespace, *, mode: Literal["process", 
             "process_incomplete": False,
             "exclude_dataset": [],
             "exclude_model": [],
+            "replace_model": [],
+            "replace_env": [],
         },
         "winrate": {
             "processed_dir": DEFAULT_PROCESSED_DIR,
-            "output_dir": DEFAULT_WINRATE_DIR,
             "missing_policy": "neg-inf",
             "epsilon": 1e-9,
             "min_common": 0,
@@ -946,26 +1138,30 @@ def _finalize_config_args(args: argparse.Namespace, *, mode: Literal["process", 
     for attr, default in defaults.items():
         if getattr(args, attr, None) is None:
             setattr(args, attr, default)
+    if mode == "winrate" and getattr(args, "output_dir", None) is None:
+        args.output_dir = _default_winrate_output_dir(Path(args.processed_dir))
 
     if hasattr(args, "exclude_dataset"):
         args.exclude_dataset = _parse_repeatable_csv(args.exclude_dataset)
     if mode == "process" and hasattr(args, "exclude_model"):
         args.exclude_model = _parse_repeatable_csv(args.exclude_model)
+    if mode == "process" and hasattr(args, "replace_model"):
+        args.replace_model = _parse_repeatable_csv(args.replace_model)
+    if mode == "process" and hasattr(args, "replace_env"):
+        args.replace_env = _parse_repeatable_csv(args.replace_env)
+
+
+def _default_winrate_output_dir(processed_dir: Path) -> Path:
+    return Path(processed_dir) / "winrate"
 
 
 def _upload_winrate_outputs(
     *,
     output_dir: Path,
-    if mode == "process" and hasattr(args, "replace_model"):
-        args.replace_model = _parse_repeatable_csv(args.replace_model)
-    if mode == "process" and hasattr(args, "replace_env"):
-        args.replace_env = _parse_repeatable_csv(args.replace_env)
     output_paths: Sequence[Path],
     repo_id: str,
     token: str | None,
     branch: str | None,
-            "replace_model": [],
-            "replace_env": [],
     private: bool,
     winrate_dir: str | None,
     assume_yes: bool = False,
@@ -1013,6 +1209,7 @@ def _run_winrate_mode(argv: Sequence[str]) -> int:
 
     if args.config:
         _load_and_apply_config(args, args.config, mode="winrate", parser=parser)
+    args._output_dir_explicit = args.output_dir is not None
     _finalize_config_args(args, mode="winrate")
 
     hf_config = HFSyncConfig.from_cli(
