@@ -6,7 +6,7 @@ import pytest
 from medarc_verifiers.orchestrate.docker_vllm import (
     ContainerLogStreamer,
     DockerLaunchError,
-    build_container_args,
+    DockerRuntimeAdapter,
     normalize_volumes,
 )
 
@@ -22,25 +22,6 @@ def test_normalize_volumes_parses_mount_strings():
 def test_normalize_volumes_rejects_bad_mount_string():
     with pytest.raises(DockerLaunchError):
         normalize_volumes(["/host/only"])
-
-
-def test_build_container_args_rejects_unknown_serve_keys():
-    with pytest.raises(ValueError):
-        build_container_args(
-            "some/model",
-            tensor_parallel_size=None,
-            serve={"dtype": "bfloat16", "unknown_flag": True},
-        )
-
-
-def test_build_container_args_rejects_unknown_limit_mm_subkeys():
-    with pytest.raises(ValueError):
-        build_container_args(
-            "some/model",
-            tensor_parallel_size=None,
-            serve={"dtype": "bfloat16", "limit_mm_per_prompt": {"audio": 0}},
-        )
-
 
 def test_container_log_streamer_stop_does_not_hang(tmp_path):
     class BlockingStream:
@@ -80,3 +61,41 @@ def test_container_log_streamer_stop_does_not_hang(tmp_path):
 
     assert streamer.is_alive() is False
     assert sink_path.read_text(encoding="utf-8") == "hello\n"
+
+
+def test_docker_runtime_adapter_returns_local_base_url(monkeypatch) -> None:
+    class FakeContainer:
+        id = "abc123"
+
+    captured: dict[str, object] = {}
+
+    def fake_create_and_start_container(**kwargs):
+        captured.update(kwargs)
+        return FakeContainer()
+
+    monkeypatch.setattr(
+        "medarc_verifiers.orchestrate.docker_vllm.create_and_start_container",
+        fake_create_and_start_container,
+    )
+    adapter = DockerRuntimeAdapter()
+
+    handle = adapter.launch(
+        task_id="task-1",
+        model_id="Foo/Bar",
+        container_args=["--model", "Foo/Bar"],
+        image="fake",
+        container_port=8000,
+        volume_mounts=["/cache:/root/.cache/huggingface:ro"],
+        gpus_required=1,
+        gpu_ids=[0],
+        server_port=8123,
+        env={"OPENAI_API_KEY": "x"},
+        labels={"orchestrator.task_id": "task-1"},
+        name="container-name",
+        ipc_mode="host",
+    )
+
+    assert handle.base_url == "http://127.0.0.1:8123/v1"
+    assert handle.identifier == "abc123"
+    assert captured["host_port"] == 8123
+    assert captured["volumes"] == ["/cache:/root/.cache/huggingface:ro"]
