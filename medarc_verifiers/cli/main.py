@@ -287,6 +287,18 @@ def build_process_parser() -> argparse.ArgumentParser:
     parser.add_argument("--processed-at", default=None, help="Override processed_at timestamp (ISO8601).")
     parser.add_argument("--dry-run", action="store_true", default=None, help="Plan processing without writing outputs.")
     parser.add_argument(
+    parser.add_argument(
+        "--replace-model",
+        action="append",
+        default=None,
+        help="Rebuild existing processed outputs for these model ids (repeatable; comma-separated values allowed).",
+    )
+    parser.add_argument(
+        "--replace-env",
+        action="append",
+        default=None,
+        help="Rebuild existing processed outputs for these env ids (repeatable; comma-separated values allowed).",
+    )
         "--process-incomplete",
         dest="process_incomplete",
         action="store_true",
@@ -564,6 +576,10 @@ def _run_process_mode(argv: Sequence[str]) -> int:
             normalize_dataset_ids(args.exclude_dataset, label="process exclude dataset")
         if args.exclude_model:
             normalize_model_ids(args.exclude_model, label="process exclude model")
+    for flag, attr in (("--replace-model", "replace_model"), ("--replace-env", "replace_env")):
+        if _option_was_provided(argv, flag) and not getattr(args, attr, None):
+            parser.error(f"{flag} requires at least one non-empty value.")
+
     except ValueError as exc:
         parser.error(str(exc))
     winrate_args: argparse.Namespace | None = None
@@ -594,6 +610,8 @@ def _run_process_mode(argv: Sequence[str]) -> int:
     processed_with_args = {
         "status": args.status or [],
         "exclude_datasets": args.exclude_dataset or [],
+        "replace_models": args.replace_model or [],
+        "replace_envs": args.replace_env or [],
         "exclude_models": args.exclude_model or [],
         "dry_run": bool(args.dry_run),
         "clean": bool(args.clean),
@@ -611,6 +629,8 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         output_dir=args.output_dir,
         exclude_datasets=tuple(args.exclude_dataset or ()),
         exclude_models=tuple(args.exclude_model or ()),
+        replace_models=tuple(args.replace_model or ()),
+        replace_envs=tuple(args.replace_env or ()),
         processed_at=args.processed_at,
         processed_with_args=processed_with_args,
         status_filter=args.status or (),
@@ -829,6 +849,8 @@ def _load_and_apply_config(
         "winrate": {
             "include_models": "include_model",
             "exclude_models": "exclude_model",
+            "replace_models": "replace_model",
+            "replace_envs": "replace_env",
             "exclude_datasets": "exclude_dataset",
         },
     }[mode]
@@ -934,10 +956,16 @@ def _finalize_config_args(args: argparse.Namespace, *, mode: Literal["process", 
 def _upload_winrate_outputs(
     *,
     output_dir: Path,
+    if mode == "process" and hasattr(args, "replace_model"):
+        args.replace_model = _parse_repeatable_csv(args.replace_model)
+    if mode == "process" and hasattr(args, "replace_env"):
+        args.replace_env = _parse_repeatable_csv(args.replace_env)
     output_paths: Sequence[Path],
     repo_id: str,
     token: str | None,
     branch: str | None,
+            "replace_model": [],
+            "replace_env": [],
     private: bool,
     winrate_dir: str | None,
     assume_yes: bool = False,
