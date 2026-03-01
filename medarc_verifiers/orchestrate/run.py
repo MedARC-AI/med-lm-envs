@@ -24,13 +24,6 @@ from medarc_verifiers.orchestrate.bench import (
 )
 from medarc_verifiers.orchestrate.config import PlanConfig, TaskSpec
 from medarc_verifiers.orchestrate.dashboard import ACTIVE_STATES, OrchestratorDashboard
-from medarc_verifiers.orchestrate.docker_vllm import (
-    DockerRuntimeAdapter,
-    sanitize_container_name,
-    wait_for_readiness_async,
-    write_container_request,
-)
-from medarc_verifiers.orchestrate.pyxis_vllm import PyxisRuntimeAdapter
 from medarc_verifiers.orchestrate.resources import ResourceManager
 from medarc_verifiers.orchestrate.runtime import LogStreamer, RuntimeAdapter, RuntimeHandle, RuntimeLaunchError
 from medarc_verifiers.orchestrate.scheduler import Allocation, TaskScheduler
@@ -607,6 +600,35 @@ def _get_mapping(value: object, label: str) -> dict:
     return value
 
 
+def sanitize_container_name(value: str, *, max_len: int = 128) -> str:
+    from medarc_verifiers.orchestrate.docker_vllm import sanitize_container_name as _sanitize_container_name
+
+    return _sanitize_container_name(value, max_len=max_len)
+
+
+async def wait_for_readiness_async(
+    base_url: str,
+    *,
+    model_id: str | None = None,
+    timeout_s: float = 1800,
+    poll_interval_s: float = 5.0,
+):
+    from medarc_verifiers.orchestrate.docker_vllm import wait_for_readiness_async as _wait_for_readiness_async
+
+    return await _wait_for_readiness_async(
+        base_url,
+        model_id=model_id,
+        timeout_s=timeout_s,
+        poll_interval_s=poll_interval_s,
+    )
+
+
+def write_container_request(path: str, payload: dict[str, object]) -> None:
+    from medarc_verifiers.orchestrate.docker_vllm import write_container_request as _write_container_request
+
+    _write_container_request(path, payload)
+
+
 def _get_optional_mapping(value: object, label: str) -> dict:
     if value is None:
         return {}
@@ -669,8 +691,12 @@ def _normalize_runtime(value: str) -> str:
 
 def _build_runtime_adapter(runtime: str) -> RuntimeAdapter:
     if runtime == "docker":
+        from medarc_verifiers.orchestrate.docker_vllm import DockerRuntimeAdapter
+
         return DockerRuntimeAdapter()
     if runtime == "pyxis":
+        from medarc_verifiers.orchestrate.pyxis_vllm import PyxisRuntimeAdapter
+
         return PyxisRuntimeAdapter()
     raise ValueError(f"Unsupported runtime {runtime!r}.")
 
