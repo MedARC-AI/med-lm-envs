@@ -360,6 +360,48 @@ def test_partial_datasets_include_uses_consistent_canonical_labels(tmp_path: Pat
     assert payload["models"]["Model_A"]["vs"]["Model_B"]["n_datasets"] == 2
 
 
+def test_compute_dataset_missingness_counts_null_rewards() -> None:
+    df_avg = pl.DataFrame(
+        {
+            "example_id": ["q1", "q2", "q3", "q1", "q2", "q3"],
+            "model_id": ["model_a", "model_a", "model_a", "model_b", "model_b", "model_b"],
+            "reward_mean": [1.0, 0.5, 0.0, 0.8, None, 0.2],
+        }
+    )
+
+    rows = winrate_api._compute_dataset_missingness("dataset", df_avg, ["model_a", "model_b"])
+    by_model = {row.model: row for row in rows}
+
+    assert by_model["model_a"].expected_n == 3
+    assert by_model["model_a"].present_nonnull_n == 3
+    assert by_model["model_a"].missing_count == 0
+    assert by_model["model_a"].missing_pct == pytest.approx(0.0)
+    assert by_model["model_b"].expected_n == 3
+    assert by_model["model_b"].present_nonnull_n == 2
+    assert by_model["model_b"].missing_count == 1
+    assert by_model["model_b"].missing_pct == pytest.approx(100 / 3)
+
+
+def test_compute_dataset_missingness_marks_absent_included_model_fully_missing() -> None:
+    df_avg = pl.DataFrame(
+        {
+            "example_id": ["q1", "q2"],
+            "model_id": ["model_a", "model_a"],
+            "reward_mean": [1.0, 0.5],
+        }
+    )
+
+    rows = winrate_api._compute_dataset_missingness("dataset", df_avg, ["model_a", "model_b"])
+    by_model = {row.model: row for row in rows}
+
+    assert by_model["model_a"].missing_count == 0
+    assert by_model["model_a"].missing_pct == pytest.approx(0.0)
+    assert by_model["model_b"].expected_n == 2
+    assert by_model["model_b"].present_nonnull_n == 0
+    assert by_model["model_b"].missing_count == 2
+    assert by_model["model_b"].missing_pct == pytest.approx(100.0)
+
+
 def test_filter_models_is_case_insensitive() -> None:
     filtered = winrate_api._filter_models(
         ["Model_A", "Model_B", "Model_C"],

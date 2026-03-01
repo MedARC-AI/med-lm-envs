@@ -34,6 +34,9 @@ For each pair of models (A, B) on each benchmark:
 
 The final win rate aggregates across all benchmarks using configurable weighting.
 
+Winrate also emits a missingness summary so partial dataset coverage is visible. The report counts missing
+`(dataset, model)` pairs after rollout averaging, including both absent rows and null reward values.
+
 ## Output Files
 
 ```
