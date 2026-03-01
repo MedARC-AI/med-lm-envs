@@ -5,7 +5,7 @@ Convert raw benchmark outputs into analysis-ready parquet files. This step prepa
 ## Quick Start
 
 ```bash
-# Process all completed runs (uses defaults)
+# Process all completed jobs (uses defaults)
 medarc-eval process
 
 # Specify directories explicitly
@@ -17,7 +17,7 @@ medarc-eval process --dry-run
 
 ## What Processing Does
 
-1. **Discovers** completed jobs in `runs/raw/`
+1. **Discovers** jobs in `runs/raw/` and filters by manifest status (default: `completed`)
 2. **Extracts** results from each job's output files
 3. **Normalizes** data into a consistent schema
 4. **Writes** parquet files organized by environment and model
@@ -43,7 +43,7 @@ runs/processed/
 |------|-------------|---------|
 | `--runs-dir PATH` | Directory containing raw runs | `runs/raw` |
 | `--output-dir PATH` | Where to write processed files | `runs/processed` |
-| `--max-workers N` | Parallel processing threads | 4 |
+| `--max-workers N` | Parallel worker processes | 4 |
 | `--dry-run` | Show what would be processed | - |
 | `--yes` | Skip confirmation prompts | - |
 | `--exclude-dataset NAME` | Skip processing specific datasets/env ids (repeatable) | - |
@@ -53,11 +53,9 @@ runs/processed/
 
 ### By Completion Status
 
-By default, `medarc-eval process` only selects runs whose manifest status is one of:
+By default, `medarc-eval process` only selects jobs whose manifest status is `completed`.
 
-- `completed`
-- `succeeded`
-- `success`
+Note: successful jobs are written to `run_manifest.json` with `status: completed`.
 
 To override that default, pass one or more explicit status filters:
 
@@ -251,12 +249,14 @@ When both flags are present, processing only rebuilds outputs that match both fi
 
 Check that:
 1. `--runs-dir` points to the correct location
-2. Runs have completed (check `run_manifest.json` status)
-3. Use `--process-incomplete` if runs are still in progress
+2. Runs have completed (check `run_manifest.json` `jobs[*].status` and `summary.completed` / `summary.total`)
+3. Use `--status pending` or `--status running` to include non-completed jobs
 
 ### Missing data in output
 
-By default, only jobs with `completed` status are included. Use `--process-incomplete` to include partial results.
+By default, only jobs with `completed` status are included. In addition, `--max-run-missing-pct` skips run directories missing more than 2.5% of their expected job outputs (model/env combinations), based on `run_manifest.json` `summary.completed` / `summary.total`. This is a manifest-level gate; it does not validate `results.jsonl` row counts.
+
+Use `--max-run-missing-pct 100` to disable the gate, or pass explicit `--status` values to include other statuses.
 
 ### Integrity-check failures for existing parquet files
 

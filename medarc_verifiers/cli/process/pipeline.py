@@ -27,7 +27,7 @@ from medarc_verifiers.cli.utils.shared import (
 )
 
 logger = logging.getLogger(__name__)
-PROCESS_DEFAULT_STATUS_FILTER: tuple[str, ...] = ("completed", "succeeded", "success")
+PROCESS_DEFAULT_STATUS_FILTER: tuple[str, ...] = ("completed",)
 
 
 @dataclass(slots=True)
@@ -599,11 +599,10 @@ def _print_records_table(
     total_by_model: dict[str, int] = {}
     completed_by_model: dict[str, int] = {}
     selected_by_model: dict[str, int] = {}
-    completed_statuses = {"completed", "succeeded", "success"}
     for rec in eligible_discovered:
         model_id = rec.model_id or "unknown"
         total_by_model[model_id] = total_by_model.get(model_id, 0) + 1
-        if (rec.status or "").lower() in completed_statuses:
+        if (rec.status or "").lower() in PROCESS_DEFAULT_STATUS_FILTER:
             completed_by_model[model_id] = completed_by_model.get(model_id, 0) + 1
     for rec in selected:
         model_id = rec.model_id or "unknown"

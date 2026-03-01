@@ -2022,8 +2022,8 @@ def test_process_cli_defaults_status_filter_to_completed(monkeypatch: pytest.Mon
 
     assert exit_code == 0
     options = captured["options"]
-    assert options.status_filter == ("completed", "succeeded", "success")
-    assert options.processed_with_args["status"] == ["completed", "succeeded", "success"]
+    assert options.status_filter == ("completed",)
+    assert options.processed_with_args["status"] == ["completed"]
     assert options.max_run_missing_pct == pytest.approx(2.5)
     assert options.processed_with_args["max_run_missing_pct"] == pytest.approx(2.5)
 
@@ -2108,8 +2108,8 @@ def test_process_config_empty_status_uses_default_filter(
 
     assert exit_code == 0
     options = captured["options"]
-    assert options.status_filter == ("completed", "succeeded", "success")
-    assert options.processed_with_args["status"] == ["completed", "succeeded", "success"]
+    assert options.status_filter == ("completed",)
+    assert options.processed_with_args["status"] == ["completed"]
 
 
 def test_process_cli_runs_embedded_winrate_post_step(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
