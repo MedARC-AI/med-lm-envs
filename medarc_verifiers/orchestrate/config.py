@@ -28,6 +28,7 @@ class PlanConfig(BaseModel):
     rerun_failed: bool = False
     kill_orphans: bool = False
     prune_logs_on_success: bool = False
+    uv_run: bool = True
 
 
 @dataclass(frozen=True)
