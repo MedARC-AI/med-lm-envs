@@ -147,6 +147,19 @@ def _write_run(
     return runs_dir
 
 
+def _remove_model_id(tmp_path: Path, run_id: str) -> None:
+    manifest_path = tmp_path / "runs" / run_id / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["jobs"][0]["model_id"] = None
+    manifest["models"] = {}
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    metadata_path = tmp_path / "runs" / run_id / "demo-job" / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata.pop("model", None)
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+
 def test_run_process_respects_env_export_defaults(tmp_path: Path) -> None:
     runs_dir = _setup_run(tmp_path)
     options = ProcessOptions(
@@ -706,6 +719,26 @@ def test_process_ignores_invalid_superseded_run(tmp_path: Path) -> None:
     assert result.env_summaries
     table = pq.read_table(result.env_summaries[0].output_path)
     assert table.column("reward").to_pylist() == [0.9]
+
+
+def test_process_ignores_superseded_run_missing_model_id(tmp_path: Path) -> None:
+    runs_dir = _write_run(tmp_path, run_id="run-1", updated_at="2024-01-01T00:00:00Z", reward=0.1)
+    _remove_model_id(tmp_path, "run-1")
+    _write_run(tmp_path, run_id="run-2", updated_at="2024-01-02T00:00:00Z", reward=0.9)
+
+    result = run_process(ProcessOptions(runs_dir=runs_dir, output_dir=tmp_path / "processed", dry_run=False, max_workers=1))
+
+    table = pq.read_table(result.env_summaries[0].output_path)
+    assert table.column("reward").to_pylist() == [0.9]
+
+
+def test_process_latest_missing_model_id_fails_clearly(tmp_path: Path) -> None:
+    runs_dir = _write_run(tmp_path, run_id="run-1", updated_at="2024-01-01T00:00:00Z", reward=0.1)
+    _write_run(tmp_path, run_id="run-2", updated_at="2024-01-02T00:00:00Z", reward=0.9)
+    _remove_model_id(tmp_path, "run-2")
+
+    with pytest.raises(RuntimeError, match=r"Missing model_id for run \(job_run_id=run-2, job_id=demo-job,"):
+        run_process(ProcessOptions(runs_dir=runs_dir, output_dir=tmp_path / "processed", dry_run=False, max_workers=1))
 
 
 def test_process_ignores_invalid_incomplete_run_by_default(tmp_path: Path) -> None:

@@ -90,7 +90,26 @@ class PlannedWorkItem:
 
     identity: RunIdentity
     records: list[PlannedRecord]
-    env_export_config: EnvironmentExportConfig
+
+
+@dataclass(frozen=True, slots=True)
+class SelectionRecord:
+    """Selection-time record settings before full normalization."""
+
+    record: discovery.RunRecord
+    identity: metadata.ResolvedRunIdentity
+    combine_rollouts: bool
+    extra_columns: Sequence[str]
+    drop_columns: Sequence[str]
+    answer_column: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SelectionWorkItem:
+    """A selected work item before metadata normalization."""
+
+    identity: metadata.ResolvedRunIdentity
+    records: list[SelectionRecord]
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,8 +306,9 @@ def select_work_items(
             continue
         eligible_records.append(record)
 
-    planned_records = [_plan_record(record, env_export_map) for record in eligible_records]
-    work_items = _select_latest_work_items(planned_records)
+    planned_records = [_plan_selection_record(record, env_export_map) for record in eligible_records]
+    _raise_for_latest_invalid_selection(planned_records)
+    work_items = _materialize_work_items(_select_latest_work_items([record for record in planned_records if record.identity.model_id]))
 
     work_items, skipped_by_exclusion = _apply_exclusions(
         work_items,
@@ -325,43 +345,95 @@ def _resolve_columns(env_columns: Sequence[str]) -> Sequence[str]:
     return tuple(str(column).strip() for column in env_columns if str(column).strip())
 
 
-def _plan_record(
+def _plan_selection_record(
     record: discovery.RunRecord,
     env_export_map: Mapping[str, EnvironmentExportConfig],
-) -> PlannedRecord:
+) -> SelectionRecord:
     env_export = _resolve_env_export(record.manifest_env_id, env_export_map)
-    normalized = metadata.load_normalized_metadata(record, combine_rollouts=bool(env_export.combine_rollouts))
-    return PlannedRecord(
-        normalized=normalized,
+    combine_rollouts = bool(env_export.combine_rollouts)
+    identity = metadata.resolve_run_identity(record, combine_rollouts=combine_rollouts)
+    return SelectionRecord(
+        record=record,
+        identity=identity,
+        combine_rollouts=combine_rollouts,
         extra_columns=_resolve_columns(env_export.extra_columns),
         drop_columns=_resolve_columns(env_export.drop_columns),
         answer_column=env_export.answer_column,
     )
 
 
-def _select_latest_work_items(records: Sequence[PlannedRecord]) -> list[PlannedWorkItem]:
-    grouped: dict[tuple[str, str], dict[str, list[PlannedRecord]]] = {}
+def _raise_for_latest_invalid_selection(records: Sequence[SelectionRecord]) -> None:
+    latest_by_env: dict[str, SelectionRecord] = {}
+    for planned in records:
+        output_env_id = planned.identity.output_env_id
+        current = latest_by_env.get(output_env_id)
+        if current is None or _run_sort_key(
+            _source_updated_at(planned.record),
+            planned.record.manifest.job_run_id,
+        ) > _run_sort_key(_source_updated_at(current.record), current.record.manifest.job_run_id):
+            latest_by_env[output_env_id] = planned
+
+    invalid_latest = [
+        planned for planned in latest_by_env.values() if not planned.identity.model_id
+    ]
+    if not invalid_latest:
+        return
+
+    failing = sorted(
+        invalid_latest,
+        key=lambda planned: (
+            planned.identity.output_env_id,
+            _run_sort_key(_source_updated_at(planned.record), planned.record.manifest.job_run_id),
+        ),
+    )[-1]
+    raise RuntimeError(metadata.format_missing_model_id_error(failing.record))
+
+
+def _select_latest_work_items(records: Sequence[SelectionRecord]) -> list[SelectionWorkItem]:
+    grouped: dict[tuple[str, str], dict[str, list[SelectionRecord]]] = {}
     run_timestamps: dict[str, str] = {}
 
     for planned in records:
-        identity = planned.normalized.identity
+        identity = planned.identity
+        if not identity.model_id:
+            continue
         group_key = (identity.model_id, identity.output_env_id)
         grouped.setdefault(group_key, {}).setdefault(identity.job_run_id, []).append(planned)
-        run_timestamps.setdefault(identity.job_run_id, _source_updated_at(planned.normalized.record))
+        run_timestamps.setdefault(identity.job_run_id, _source_updated_at(planned.record))
 
-    selected: list[PlannedWorkItem] = []
+    selected: list[SelectionWorkItem] = []
     for _, run_groups in grouped.items():
         latest_run_id = max(run_groups.keys(), key=lambda run_id: _run_sort_key(run_timestamps.get(run_id, ""), run_id))
         latest_records = run_groups[latest_run_id]
         representative = latest_records[0]
         selected.append(
-            PlannedWorkItem(
-                identity=representative.normalized.identity,
+            SelectionWorkItem(
+                identity=representative.identity,
                 records=list(latest_records),
-                env_export_config=EnvironmentExportConfig(),
             )
         )
     return selected
+
+
+def _materialize_work_items(items: Sequence[SelectionWorkItem]) -> list[PlannedWorkItem]:
+    materialized: list[PlannedWorkItem] = []
+    for item in items:
+        records: list[PlannedRecord] = []
+        for selected in item.records:
+            normalized = metadata.load_normalized_metadata(
+                selected.record,
+                combine_rollouts=selected.combine_rollouts,
+            )
+            records.append(
+                PlannedRecord(
+                    normalized=normalized,
+                    extra_columns=selected.extra_columns,
+                    drop_columns=selected.drop_columns,
+                    answer_column=selected.answer_column,
+                )
+            )
+        materialized.append(PlannedWorkItem(identity=records[0].normalized.identity, records=records))
+    return materialized
 
 
 def _apply_exclusions(

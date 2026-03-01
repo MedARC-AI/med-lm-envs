@@ -60,12 +60,101 @@ class RunIdentity:
     output_env_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class ResolvedRunIdentity:
+    """Selection-time identity that tolerates missing model ids."""
+
+    model_id: str | None
+    manifest_env_id: str
+    base_env_id: str
+    rollout_index: int | None
+    job_run_id: str
+    output_env_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedMetadataContext:
+    raw_metadata: Mapping[str, Any]
+    manifest_env_id: str
+    metadata_env_id: str | None
+    base_env_id: str
+    rollout_index: int
+    model_id: str | None
+    metadata_model: str | None
+    env_args: Mapping[str, Any]
+    sampling_args: Mapping[str, Any]
+    num_examples: int | None
+    rollouts_per_example: int | None
+
+
+def resolve_run_identity(
+    record: RunRecord,
+    *,
+    combine_rollouts: bool = True,
+) -> ResolvedRunIdentity:
+    """Resolve a run identity for selection without requiring model_id."""
+    context = _resolve_metadata_context(record, combine_rollouts=combine_rollouts)
+    resolved_rollout_index = (
+        context.rollout_index
+        if context.rollout_index != 0 or context.manifest_env_id != context.base_env_id
+        else None
+    )
+    return ResolvedRunIdentity(
+        model_id=context.model_id,
+        manifest_env_id=context.manifest_env_id,
+        base_env_id=context.base_env_id,
+        rollout_index=resolved_rollout_index,
+        job_run_id=record.manifest.job_run_id,
+        output_env_id=context.base_env_id or context.manifest_env_id or record.job_id,
+    )
+
+
 def load_normalized_metadata(
     record: RunRecord,
     *,
     combine_rollouts: bool = True,
 ) -> NormalizedMetadata:
     """Merge manifest fields with metadata.json (when present)."""
+    context = _resolve_metadata_context(record, combine_rollouts=combine_rollouts)
+    if not context.model_id:
+        raise RuntimeError(format_missing_model_id_error(record))
+    resolved_rollout_index = (
+        context.rollout_index
+        if context.rollout_index != 0 or context.manifest_env_id != context.base_env_id
+        else None
+    )
+    identity = RunIdentity(
+        model_id=context.model_id,
+        manifest_env_id=context.manifest_env_id,
+        base_env_id=context.base_env_id,
+        rollout_index=resolved_rollout_index,
+        job_run_id=record.manifest.job_run_id,
+        output_env_id=context.base_env_id or context.manifest_env_id or record.job_id,
+    )
+
+    return NormalizedMetadata(
+        identity=identity,
+        record=record,
+        metadata_path=record.metadata_path if record.has_metadata else None,
+        raw_metadata=context.raw_metadata,
+        manifest_env_id=context.manifest_env_id,
+        metadata_env_id=context.metadata_env_id,
+        base_env_id=context.base_env_id,
+        rollout_index=identity.rollout_index or 0,
+        model_id=identity.model_id,
+        metadata_model=context.metadata_model,
+        env_args=context.env_args,
+        sampling_args=context.sampling_args,
+        num_examples=context.num_examples,
+        rollouts_per_example=context.rollouts_per_example,
+    )
+
+
+def _resolve_metadata_context(
+    record: RunRecord,
+    *,
+    combine_rollouts: bool,
+) -> _ResolvedMetadataContext:
     metadata_payload, raw_metadata = _load_metadata(record)
     metadata_env_id = metadata_payload.env_id if metadata_payload else None
     metadata_model = metadata_payload.model if metadata_payload else None
@@ -77,7 +166,6 @@ def load_normalized_metadata(
         primary=record.sampling_args,
         fallback=metadata_payload.sampling_args if metadata_payload else None,
     )
-
     manifest_env_id = (
         _extract_env_config_id(record.env_config) or record.manifest_env_id or metadata_env_id or record.job_id
     )
@@ -85,50 +173,31 @@ def load_normalized_metadata(
         manifest_env_id,
         combine_rollouts=combine_rollouts,
     )
-    # If we didn't capture a rollout index from the manifest env id,
-    # try to derive it from the results directory name (common when
-    # manifests keep base env id, but the on-disk folder encodes the rollout).
     if rollout_index == 0 and record.results_dir_name:
         alt_index = extract_rollout_index(record.results_dir_name)
         if alt_index:
             rollout_index = alt_index
-
-    model_id = record.model_id or metadata_model
-    if not model_id:
-        raise RuntimeError(
-            "Missing model_id for run "
-            f"(job_run_id={record.manifest.job_run_id}, job_id={record.job_id}, "
-            f"results_dir={record.results_dir}, manifest={record.manifest.manifest_path})"
-        )
-    resolved_rollout_index = rollout_index if rollout_index != 0 or manifest_env_id != base_env_id else None
-    identity = RunIdentity(
-        model_id=model_id,
-        manifest_env_id=manifest_env_id,
-        base_env_id=base_env_id,
-        rollout_index=resolved_rollout_index,
-        job_run_id=record.manifest.job_run_id,
-        output_env_id=base_env_id or manifest_env_id or record.job_id,
-    )
-    num_examples = record.num_examples or (metadata_payload.num_examples if metadata_payload else None)
-    rollouts_per_example = record.rollouts_per_example or (
-        metadata_payload.rollouts_per_example if metadata_payload else None
-    )
-
-    return NormalizedMetadata(
-        identity=identity,
-        record=record,
-        metadata_path=record.metadata_path if record.has_metadata else None,
+    return _ResolvedMetadataContext(
         raw_metadata=raw_metadata,
         manifest_env_id=manifest_env_id,
         metadata_env_id=metadata_env_id,
         base_env_id=base_env_id,
-        rollout_index=identity.rollout_index or 0,
-        model_id=identity.model_id,
+        rollout_index=rollout_index,
+        model_id=record.model_id or metadata_model,
         metadata_model=metadata_model,
         env_args=env_args,
         sampling_args=sampling_args,
-        num_examples=num_examples,
-        rollouts_per_example=rollouts_per_example,
+        num_examples=record.num_examples or (metadata_payload.num_examples if metadata_payload else None),
+        rollouts_per_example=record.rollouts_per_example
+        or (metadata_payload.rollouts_per_example if metadata_payload else None),
+    )
+
+
+def format_missing_model_id_error(record: RunRecord) -> str:
+    return (
+        "Missing model_id for run "
+        f"(job_run_id={record.manifest.job_run_id}, job_id={record.job_id}, "
+        f"results_dir={record.results_dir}, manifest={record.manifest.manifest_path})"
     )
 
 
@@ -193,4 +262,11 @@ def _extract_env_config_id(env_config: Mapping[str, Any] | None) -> str | None:
     return None
 
 
-__all__ = ["NormalizedMetadata", "RunIdentity", "load_normalized_metadata"]
+__all__ = [
+    "NormalizedMetadata",
+    "ResolvedRunIdentity",
+    "RunIdentity",
+    "format_missing_model_id_error",
+    "load_normalized_metadata",
+    "resolve_run_identity",
+]
