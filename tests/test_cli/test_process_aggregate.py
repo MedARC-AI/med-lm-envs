@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from medarc_verifiers.cli.process.metadata import RunIdentity
 from medarc_verifiers.cli.process.aggregate import (
     AggregatedEnvRows,
     aggregate_rows_by_env,
@@ -116,4 +117,47 @@ def test_aggregate_rows_fills_missing_rollout_index_from_suffix() -> None:
 
     grouped = aggregate_rows_by_env(rows)
 
+    assert sorted({row["rollout_index"] for row in grouped[0].rows}) == [0, 1]
+
+
+def test_aggregate_rows_use_attached_identities_for_fake_rollouts() -> None:
+    rows = [
+        {
+            "env_id": "env-a",
+            "base_env_id": "env-a",
+            "manifest_env_id": "env-a-rollout7",
+            "model_id": "model-a",
+            "job_run_id": "run-1",
+        },
+        {
+            "env_id": "env-a",
+            "base_env_id": "env-a",
+            "manifest_env_id": "env-a-rollout3",
+            "model_id": "model-a",
+            "job_run_id": "run-2",
+        },
+    ]
+    identities = [
+        RunIdentity(
+            model_id="model-a",
+            manifest_env_id="env-a-rollout7",
+            base_env_id="env-a",
+            rollout_index=7,
+            job_run_id="run-1",
+            output_env_id="env-a",
+        ),
+        RunIdentity(
+            model_id="model-a",
+            manifest_env_id="env-a-rollout3",
+            base_env_id="env-a",
+            rollout_index=3,
+            job_run_id="run-2",
+            output_env_id="env-a",
+        ),
+    ]
+
+    grouped = aggregate_rows_by_env(rows, identities=identities)
+
+    assert len(grouped) == 1
+    assert grouped[0].env_id == "env-a"
     assert sorted({row["rollout_index"] for row in grouped[0].rows}) == [0, 1]

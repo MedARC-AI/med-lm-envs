@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
 from medarc_verifiers.cli.process.metadata import RunIdentity
-from medarc_verifiers.cli.process.rollout import derive_base_env_id
+from medarc_verifiers.cli.process.rollout import extract_rollout_index
 
 logger = logging.getLogger(__name__)
 
@@ -141,8 +141,8 @@ def _group_uses_rollout_suffixes(rows: list[Mapping[str, Any]], *, base_env_id: 
         manifest_env_id = row.get("manifest_env_id")
         if not isinstance(manifest_env_id, str) or not manifest_env_id:
             continue
-        derived_base, _ = derive_base_env_id(manifest_env_id)
-        if derived_base and derived_base == base_env_id and manifest_env_id != derived_base:
+        row_base_env_id = str(row.get("base_env_id") or base_env_id or "")
+        if row_base_env_id and manifest_env_id != row_base_env_id:
             return True
     return False
 
@@ -155,8 +155,11 @@ def _ensure_rollout_index_from_suffix(rows: list[Mapping[str, Any]], *, base_env
         manifest_env_id = row.get("manifest_env_id")
         if not isinstance(manifest_env_id, str) or not manifest_env_id:
             continue
-        derived_base, derived_index = derive_base_env_id(manifest_env_id)
-        if not derived_base or derived_base != base_env_id:
+        row_base_env_id = str(row.get("base_env_id") or base_env_id or "")
+        if not row_base_env_id or manifest_env_id == row_base_env_id:
+            continue
+        derived_index = extract_rollout_index(manifest_env_id)
+        if derived_index <= 0:
             continue
         try:
             row["rollout_index"] = derived_index
