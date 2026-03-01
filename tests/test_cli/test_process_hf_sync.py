@@ -174,3 +174,61 @@ def test_sync_files_to_hub_creates_repo_with_confirmation(monkeypatch: pytest.Mo
     assert captured.get("create_repo") is not None
     assert captured.get("create_commit") is True
     assert captured["create_commit_calls"] == 2
+
+
+def test_sync_files_to_hub_skips_when_repo_creation_declined(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    (tmp_path / "artifact.json").write_text("{}", encoding="utf-8")
+
+    captured: dict[str, object] = {"create_commit_calls": 0}
+
+    class FakeResponse:
+        status_code = 404
+
+    class FakeRepoNotFound(Exception):
+        def __init__(self) -> None:
+            super().__init__("Repository Not Found")
+            self.response = FakeResponse()
+
+    class FakeOp:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            captured["op"] = (args, kwargs)
+
+    class FakeApi:
+        def __init__(self, token: str | None = None) -> None:
+            captured["token"] = token
+
+        def create_repo(self, **kwargs: object) -> None:
+            captured["create_repo"] = kwargs
+
+        def create_commit(self, **_kwargs: object) -> None:
+            captured["create_commit_calls"] = int(captured["create_commit_calls"]) + 1
+            raise FakeRepoNotFound()
+
+    import sys
+    import types
+
+    fake_module = types.SimpleNamespace(CommitOperationAdd=FakeOp, HfApi=FakeApi)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_module)
+
+    with caplog.at_level("WARNING"):
+        uploaded = hf_sync.sync_files_to_hub(
+            repo_id="local/missing",
+            output_dir=tmp_path,
+            files=["artifact.json"],
+            token="secret-token",
+            private=True,
+            message="msg",
+            dry_run=False,
+            is_tty=True,
+            assume_yes=False,
+            prompt_func=lambda _prompt: "n",
+        )
+
+    assert uploaded is False
+    assert captured["create_commit_calls"] == 1
+    assert captured.get("create_repo") is None
+    assert "skipping upload because repo creation was declined" in caplog.text

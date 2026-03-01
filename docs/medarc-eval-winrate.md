@@ -12,7 +12,7 @@ medarc-eval winrate
 medarc-eval winrate --list-models
 
 # Specify directories
-medarc-eval winrate --processed-dir runs/processed --output-dir runs/winrate
+medarc-eval winrate --processed-dir runs/processed --output-dir runs/processed/winrate
 ```
 
 ## Prerequisites
@@ -37,7 +37,7 @@ The final win rate aggregates across all benchmarks using configurable weighting
 ## Output Files
 
 ```
-runs/winrate/
+runs/processed/winrate/
 ├── winrates-2026-01-14T12-00-00.json    # Timestamped results
 ├── winrates-2026-01-14T12-00-00.csv     # Spreadsheet-friendly
 ├── latest.json                           # Always points to newest
@@ -95,29 +95,34 @@ The JSON output includes:
 ## Using a Config File
 
 ```yaml
-# winrate-config.yaml
-processed_dir: runs/processed
-output_dir: runs/winrate
+# process-config.yaml
+runs_dir: runs/raw
 
-# Calculation settings
-missing_policy: neg-inf
-epsilon: 1.0e-9
-min_common: 10
-weight_policy: ln
+process:
+  dir: processed
 
-# Model filtering
-exclude_model:
-  - baseline-model
-  - deprecated-v1
-
-# Dataset filtering
-exclude_datasets:
-  - med_dialog
+winrate:
+  dir: winrate
+  missing_policy: neg-inf
+  epsilon: 1.0e-9
+  min_common: 10
+  weight_policy: ln
+  exclude_model:
+    - baseline-model
+    - deprecated-v1
+  exclude_datasets:
+    - med_dialog
 ```
 
 ```bash
-medarc-eval winrate --config winrate-config.yaml
+medarc-eval winrate --config process-config.yaml
 ```
+
+Supported config schema for `medarc-eval winrate`:
+
+- Top-level `process:` can provide `dir` or `output_dir`; this becomes the default `processed_dir`.
+- Top-level `winrate:` provides winrate-specific defaults.
+- Top-level `hf:` provides shared HF settings. Use `hf.winrate_dir` to control where winrate artifacts upload inside the repo.
 
 ## Example Workflows
 
@@ -179,12 +184,16 @@ medarc-eval winrate \
 ### Full Config with HF
 
 ```yaml
-# winrate-config.yaml
-processed_dir: runs/processed
-output_dir: runs/winrate
+# process-config.yaml
+runs_dir: runs/raw
 
-missing_policy: neg-inf
-weight_policy: ln
+process:
+  dir: processed
+
+winrate:
+  dir: winrate
+  missing_policy: neg-inf
+  weight_policy: ln
 
 hf:
   repo: your-org/processed-data # Pull processed from here; upload winrate here
@@ -193,6 +202,8 @@ hf:
   token: ${HF_TOKEN}
   private: true
 ```
+
+`hf.winrate_dir` and `--hf-winrate-dir` both set the path inside the HF repo where `latest.json`, `latest.csv`, and timestamped winrate outputs are uploaded.
 
 ## Interpreting Results
 

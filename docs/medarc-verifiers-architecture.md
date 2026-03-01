@@ -16,7 +16,7 @@ At a high level, everything funnels into a three-stage workflow:
 
 1. **Run** evals (single or batch) → `runs/raw/<run_id>/...`
 2. **Process** raw outputs → `runs/processed/<model>/<env>.parquet` + `env_index.json`
-3. **Winrate** on processed outputs → `runs/winrate/*.json` and `*.csv`
+3. **Winrate** on processed outputs → `runs/processed/winrate/*.json` and `*.csv`
 
 ## Important side effects (auto-installed patches)
 

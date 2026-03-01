@@ -27,7 +27,7 @@ medarc-eval winrate
    (bench or single)       (process)               (winrate)
         |                      |                        |
         v                      v                        v
-    runs/raw/           runs/processed/          runs/winrate/
+    runs/raw/           runs/processed/    runs/processed/winrate/
 ```
 
 ## Commands

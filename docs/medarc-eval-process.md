@@ -28,12 +28,12 @@ medarc-eval process --dry-run
 ```
 runs/processed/
 ├── env_index.json              # Dataset inventory for winrate/analysis
-├── medqa/
-│   ├── gpt-4o.parquet
-│   └── gpt-4o-mini.parquet
-├── pubmedqa/
-│   ├── gpt-4o.parquet
-│   └── gpt-4o-mini.parquet
+├── gpt-4o/
+│   ├── medqa.parquet
+│   └── pubmedqa.parquet
+├── gpt-4o-mini/
+│   ├── medqa.parquet
+│   └── pubmedqa.parquet
 └── ...
 ```
 
@@ -86,13 +86,19 @@ Store common options in a YAML file:
 ```yaml
 # process-config.yaml
 runs_dir: runs/raw
-output_dir: runs/processed
-max_workers: 8
-process_incomplete: false
-exclude_datasets:
-  - med_dialog
-exclude_models:
-  - deprecated-v1
+
+process:
+  dir: processed
+  max_workers: 8
+  process_incomplete: false
+  exclude_datasets:
+    - med_dialog
+  exclude_models:
+    - deprecated-v1
+
+winrate:
+  enabled: true
+  dir: winrate
 ```
 
 ```bash
@@ -101,6 +107,35 @@ medarc-eval process --config process-config.yaml
 
 CLI flags override config values.
 
+Supported config schema for `medarc-eval process`:
+
+- Top-level `runs_dir`: raw run root.
+- Top-level `process:`: process-specific defaults.
+- Optional top-level `winrate:`: embedded post-process winrate step.
+- Optional top-level `hf:`: shared HF settings. For embedded winrate uploads, use `hf.winrate_dir`.
+
+Path shortcuts:
+
+- `process.dir` is shorthand for `process.output_dir`, resolved relative to the parent of `runs_dir`.
+- `winrate.dir` is shorthand for the embedded winrate output directory, resolved under the processed output dir.
+
+Example:
+
+```yaml
+runs_dir: runs/raw
+
+process:
+  dir: processed
+  max_workers: 8
+
+winrate:
+  dir: scorecards
+
+hf:
+  repo: your-org/medical-benchmarks
+  winrate_dir: scorecards/latest
+```
+
 ## Hugging Face Integration
 
 Sync processed datasets to/from the Hugging Face Hub:
@@ -108,7 +143,8 @@ Sync processed datasets to/from the Hugging Face Hub:
 ```yaml
 # process-config.yaml
 runs_dir: runs/raw
-output_dir: runs/processed
+process:
+  dir: processed
 
 hf:
   repo: your-org/medical-benchmarks
@@ -139,10 +175,10 @@ When `--hf-repo` is set, processed files are automatically uploaded after comple
 Process and compute win rates in one step:
 
 ```bash
-medarc-eval process --winrate winrate-config.yaml
+medarc-eval process --config process-config.yaml
 ```
 
-This runs `medarc-eval winrate` automatically after processing completes.
+This runs `medarc-eval winrate` automatically after processing completes when the config contains a `winrate:` section.
 
 ## Example Workflows
 
@@ -180,6 +216,23 @@ medarc-eval process
 # env_index.json tracks what's already processed
 ```
 
+### Replace Existing Outputs
+
+Rebuild existing outputs for specific models or datasets without using `--clean`:
+
+```bash
+# Rebuild every processed dataset for one model
+medarc-eval process --replace-model gpt-4o
+
+# Rebuild every model for one dataset
+medarc-eval process --replace-env medqa
+
+# Rebuild only the intersection
+medarc-eval process --replace-model gpt-4o --replace-env medqa
+```
+
+When both flags are present, processing only rebuilds outputs that match both filters.
+
 ## Troubleshooting
 
 ### "No runs found"
@@ -192,6 +245,26 @@ Check that:
 ### Missing data in output
 
 By default, only jobs with `completed` status are included. Use `--process-incomplete` to include partial results.
+
+### Integrity-check failures for existing parquet files
+
+If processing stops with an error like:
+
+```text
+Existing processed output ... has N parquet rows but env_index.json records M.
+```
+
+the local processed snapshot is inconsistent. Fix it by rebuilding the affected output:
+
+```bash
+medarc-eval process --replace-model gpt-4o --replace-env medqa
+```
+
+Or rebuild everything:
+
+```bash
+medarc-eval process --clean --yes
+```
 
 ## Next Steps
 

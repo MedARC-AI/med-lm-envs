@@ -172,11 +172,14 @@ def sync_files_to_hub(
     is_tty: bool = False,
     assume_yes: bool = False,
     prompt_func: Callable[[str], str] | None = None,
-) -> None:
-    """Upload explicit file paths from output_dir to a HF dataset repo."""
+) -> bool:
+    """Upload explicit file paths from output_dir to a HF dataset repo.
+
+    Returns False only when upload is skipped because repo creation was declined.
+    """
     if not repo_id:
         logger.debug("HF sync skipped: no repo_id provided.")
-        return
+        return True
     file_list = []
     for path in files:
         rel_path = Path(path).as_posix() if not isinstance(path, str) else Path(path).as_posix()
@@ -184,10 +187,10 @@ def sync_files_to_hub(
             file_list.append(rel_path)
     if not file_list:
         logger.debug("HF sync skipped: no files provided.")
-        return
+        return True
     if dry_run:
         logger.debug("HF sync dry-run; skipping push.")
-        return
+        return True
 
     try:
         from huggingface_hub import CommitOperationAdd, HfApi  # type: ignore[import-not-found]
@@ -241,9 +244,11 @@ def sync_files_to_hub(
                         prompt_func=prompt_func,
                     )
                     if not should_create:
-                        raise RuntimeError(
-                            f"HF dataset repo '{repo_id}' not found. Create it on the Hub or re-run with --yes to allow creation."
-                        ) from exc
+                        logger.warning(
+                            "HF dataset repo '%s' not found; skipping upload because repo creation was declined.",
+                            repo_id,
+                        )
+                        return False
                     api.create_repo(
                         repo_id=repo_id,
                         repo_type="dataset",
@@ -269,6 +274,7 @@ def sync_files_to_hub(
                     delay,
                 )
                 time.sleep(delay)
+    return True
 
 
 def _normalize_repo_path_prefix(value: str | None) -> str | None:
@@ -345,7 +351,7 @@ def sync_to_hub(
     )
 
     message = f"Update {summary.total_files} file(s) from medarc-eval process"
-    sync_files_to_hub(
+    uploaded = sync_files_to_hub(
         repo_id=config.repo_id,
         output_dir=output_dir,
         files=files,
@@ -361,6 +367,8 @@ def sync_to_hub(
         assume_yes=assume_yes,
         prompt_func=prompt_func,
     )
+    if not uploaded:
+        return None
     return summary
 
 

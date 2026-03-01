@@ -1859,6 +1859,7 @@ def test_winrate_cli_applies_config_defaults(monkeypatch: pytest.MonkeyPatch, tm
           repo: medarc/demo
           branch: main
           token: secret-token
+          winrate_dir: scorecards/latest
         """,
         encoding="utf-8",
     )
@@ -1910,7 +1911,7 @@ def test_winrate_cli_applies_config_defaults(monkeypatch: pytest.MonkeyPatch, tm
     upload = captured.get("upload")
     assert upload is not None
     assert upload["repo_id"] == "medarc/demo"
-    assert upload["path_in_repo_prefix"] == "winrate"
+    assert upload["path_in_repo_prefix"] == "scorecards/latest"
 
     exit_code = main.main(
         [
@@ -1926,6 +1927,61 @@ def test_winrate_cli_applies_config_defaults(monkeypatch: pytest.MonkeyPatch, tm
     assert exit_code == 0
     cfg = captured["run_kwargs"]["config"]
     assert cfg.epsilon == pytest.approx(0.5)
+
+
+def test_expand_embedded_process_config_promotes_process_section() -> None:
+    payload = {
+        "runs_dir": "runs/raw",
+        "process": {
+            "dir": "processed",
+            "max_workers": 8,
+            "replace_models": ["model-a"],
+        },
+        "winrate": {"dir": "scorecards"},
+    }
+
+    expanded = main._expand_embedded_pipeline_config(payload, mode="process")
+
+    assert expanded["runs_dir"] == "runs/raw"
+    assert expanded["output_dir"] == Path("runs/processed")
+    assert expanded["max_workers"] == 8
+    assert expanded["replace_models"] == ["model-a"]
+    assert "winrate" not in expanded
+    assert payload["process"]["dir"] == "processed"
+
+
+def test_expand_embedded_winrate_config_resolves_relative_dirs() -> None:
+    payload = {
+        "runs_dir": "artifacts/raw",
+        "process": {"dir": "processed"},
+        "winrate": {
+            "dir": "scorecards",
+            "missing_policy": "zero",
+            "hf_winrate_dir": "uploads/winrate",
+        },
+    }
+
+    expanded = main._expand_embedded_pipeline_config(payload, mode="winrate")
+
+    assert expanded["processed_dir"] == Path("artifacts/processed")
+    assert expanded["output_dir"] == Path("artifacts/processed/scorecards")
+    assert expanded["missing_policy"] == "zero"
+    assert expanded["hf_winrate_dir"] == "uploads/winrate"
+
+
+def test_expand_embedded_winrate_config_keeps_explicit_dirs() -> None:
+    payload = {
+        "processed_dir": "custom/processed",
+        "output_dir": "custom/winrate",
+        "runs_dir": "artifacts/raw",
+        "process": {"dir": "processed"},
+        "winrate": {"dir": "scorecards"},
+    }
+
+    expanded = main._expand_embedded_pipeline_config(payload, mode="winrate")
+
+    assert expanded["processed_dir"] == "custom/processed"
+    assert expanded["output_dir"] == "custom/winrate"
 
 
 def test_process_cli_requires_winrate_config_path(tmp_path: Path) -> None:
