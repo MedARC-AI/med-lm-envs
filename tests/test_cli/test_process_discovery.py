@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from medarc_verifiers.cli.process.discovery import discover_run_records
+from medarc_verifiers.cli.process.discovery import RunManifestInfo, discover_run_records
+from medarc_verifiers.cli.process.pipeline import _manifest_missing_pct, _manifest_within_missing_pct
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -31,6 +32,23 @@ def _base_manifest(
         "jobs": job_payloads,
         "summary": {"completed": 1},
     }
+
+
+def _manifest_info(*, completed: int, total: int, total_known: bool) -> RunManifestInfo:
+    return RunManifestInfo(
+        job_run_id="job-run-123",
+        run_name="example-run",
+        summary_completed=completed,
+        summary_total=total,
+        summary_total_known=total_known,
+        manifest_path=Path("/tmp/run_manifest.json"),
+        run_dir=Path("/tmp/job-run-123"),
+        created_at="2024-01-01T00:00:00Z",
+        updated_at="2024-01-01T00:05:00Z",
+        config_source="configs/example.yaml",
+        config_checksum="abc123",
+        run_summary_path=Path("/tmp/run_summary.json"),
+    )
 
 
 def test_discover_run_records_basic(tmp_path: Path) -> None:
@@ -129,32 +147,25 @@ def test_discover_run_records_filters_status(tmp_path: Path) -> None:
     assert filtered_none == []
 
 
-def test_discover_run_records_only_complete_runs_missing_total(tmp_path: Path) -> None:
-    runs_dir = tmp_path / "runs"
-    run_dir = runs_dir / "job-run-123"
-    results_dir = run_dir / "model-env-job"
+def test_manifest_missing_pct_skips_when_above_threshold() -> None:
+    manifest = _manifest_info(completed=97, total=100, total_known=True)
 
-    manifest_payload = _base_manifest(
-        [
-            {
-                "job_id": "model-env-job",
-                "model_id": "gpt-4",
-                "env_id": "demo-env-module",
-                "env_template_id": "demo-env-template",
-                "env_variant_id": "demo-env",
-                "env_args": {},
-                "results_relpath": "model-env-job/results.jsonl",
-            }
-        ],
-        models={"gpt-4": {"sampling_args": {}}},
-        env_templates={"demo-env-template": {"module": "demo-env-module"}},
-    )
-    _write_json(run_dir / "run_manifest.json", manifest_payload)
-    results_dir.mkdir(parents=True, exist_ok=True)
-    (results_dir / "results.jsonl").write_text("{}", encoding="utf-8")
+    assert _manifest_missing_pct(manifest) == 3.0
+    assert _manifest_within_missing_pct(manifest, 0.0) is False
 
-    records = discover_run_records(runs_dir, only_complete_runs=True)
-    assert len(records) == 1
+
+def test_manifest_missing_pct_keeps_runs_within_threshold() -> None:
+    manifest = _manifest_info(completed=39, total=40, total_known=True)
+
+    assert _manifest_missing_pct(manifest) == 2.5
+    assert _manifest_within_missing_pct(manifest, 2.5) is True
+
+
+def test_manifest_missing_pct_unknown_total_is_permissive() -> None:
+    manifest = _manifest_info(completed=0, total=0, total_known=False)
+
+    assert _manifest_missing_pct(manifest) is None
+    assert _manifest_within_missing_pct(manifest, 0.0) is True
 
 
 def test_discover_run_records_missing_summary_uses_manifest_status(tmp_path: Path) -> None:

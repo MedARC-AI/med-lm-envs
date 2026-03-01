@@ -27,6 +27,7 @@ from medarc_verifiers.cli.utils.shared import (
 )
 
 logger = logging.getLogger(__name__)
+PROCESS_DEFAULT_STATUS_FILTER: tuple[str, ...] = ("completed", "succeeded", "success")
 
 
 @dataclass(slots=True)
@@ -35,7 +36,7 @@ class ProcessOptions:
 
     runs_dir: Path
     output_dir: Path
-    only_complete_runs: bool = True
+    max_run_missing_pct: float = 2.5
     exclude_datasets: Sequence[str] = field(default_factory=tuple)
     exclude_models: Sequence[str] = field(default_factory=tuple)
     replace_models: Sequence[str] = field(default_factory=tuple)
@@ -53,6 +54,7 @@ class ProcessOptions:
     def __post_init__(self) -> None:
         self.runs_dir = Path(self.runs_dir)
         self.output_dir = Path(self.output_dir)
+        self.max_run_missing_pct = float(self.max_run_missing_pct)
         self.max_workers = max(1, int(self.max_workers))
         if not self.processed_at:
             self.processed_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -117,7 +119,7 @@ class SelectionResult:
     """Complete output of the selection phase."""
 
     work_items: list[PlannedWorkItem]
-    skipped_incomplete: int
+    skipped_by_missing_pct: int
     skipped_by_delta: int
     skipped_by_exclusion: int
     total_discovered: int
@@ -159,10 +161,10 @@ def run_process(
         _print_records_table(
             discovered,
             selected_records,
-            options.only_complete_runs,
+            options.max_run_missing_pct,
             exclude_datasets=options.exclude_datasets,
             exclude_models=options.exclude_models,
-            skipped_incomplete=selection.skipped_incomplete,
+            skipped_by_missing_pct=selection.skipped_by_missing_pct,
             skipped_by_delta=selection.skipped_by_delta,
             skipped_by_exclusion=selection.skipped_by_exclusion,
         )
@@ -299,10 +301,10 @@ def select_work_items(
 ) -> SelectionResult:
     """Filter discovered runs down to selected work items before row loading begins."""
     eligible_records: list[discovery.RunRecord] = []
-    skipped_incomplete = 0
+    skipped_by_missing_pct = 0
     for record in discovered:
-        if options.only_complete_runs and not _manifest_is_complete(record.manifest):
-            skipped_incomplete += 1
+        if not _manifest_within_missing_pct(record.manifest, options.max_run_missing_pct):
+            skipped_by_missing_pct += 1
             continue
         eligible_records.append(record)
 
@@ -320,7 +322,7 @@ def select_work_items(
 
     return SelectionResult(
         work_items=work_items,
-        skipped_incomplete=skipped_incomplete,
+        skipped_by_missing_pct=skipped_by_missing_pct,
         skipped_by_delta=skipped_by_delta,
         skipped_by_exclusion=skipped_by_exclusion,
         total_discovered=len(discovered),
@@ -571,11 +573,11 @@ def _validate_existing_output_integrity(
 def _print_records_table(
     discovered: Sequence[discovery.RunRecord],
     selected: Sequence[discovery.RunRecord],
-    only_complete_runs: bool,
+    max_run_missing_pct: float,
     *,
     exclude_datasets: Sequence[str] = (),
     exclude_models: Sequence[str] = (),
-    skipped_incomplete: int = 0,
+    skipped_by_missing_pct: int = 0,
     skipped_by_delta: int = 0,
     skipped_by_exclusion: int = 0,
 ) -> None:
@@ -585,7 +587,7 @@ def _print_records_table(
     eligible_discovered = [
         rec
         for rec in discovered
-        if (not only_complete_runs or _manifest_is_complete(rec.manifest))
+        if _manifest_within_missing_pct(rec.manifest, max_run_missing_pct)
         and not (exclude_set and _record_is_excluded(rec, exclude_set))
         and not (exclude_model_set and _record_model_is_excluded(rec, exclude_model_set))
     ]
@@ -612,16 +614,15 @@ def _print_records_table(
         from rich.markup import escape
         from rich.table import Table
     except Exception:
-        suffix = " (complete runs only)" if only_complete_runs else ""
         logger.info(
-            "Processing %d job(s) across %d model(s)%s (found %d job(s) across %d model(s)); "
-            "skipped incomplete=%d excluded=%d existing=%d.",
+            "Processing %d job(s) across %d model(s) (max_run_missing_pct=%s; found %d job(s) across %d model(s)); "
+            "skipped by missing pct=%d excluded=%d existing=%d.",
             selected_jobs_total,
             len(selected_models),
-            suffix,
+            _format_missing_pct(max_run_missing_pct),
             discovered_jobs_total,
             len(models),
-            skipped_incomplete,
+            skipped_by_missing_pct,
             skipped_by_exclusion,
             skipped_by_delta,
         )
@@ -633,11 +634,12 @@ def _print_records_table(
         return
 
     console = Console()
-    title = f"Processing {selected_jobs_total} job(s) across {len(selected_models)} model(s)"
-    if only_complete_runs:
-        title += " (complete runs only)"
+    title = (
+        f"Processing {selected_jobs_total} job(s) across {len(selected_models)} model(s) "
+        f"[dim](max_run_missing_pct={_format_missing_pct(max_run_missing_pct)})[/dim]"
+    )
     title += (
-        f" [dim](found {discovered_jobs_total} eligible job(s); skipped incomplete={skipped_incomplete}, "
+        f" [dim](found {discovered_jobs_total} eligible job(s); skipped by missing pct={skipped_by_missing_pct}, "
         f"excluded={skipped_by_exclusion}, existing={skipped_by_delta})[/dim]"
     )
     table = Table(title=title, show_header=True, header_style="bold cyan", caption=None)
@@ -654,8 +656,26 @@ def _print_records_table(
     console.print(table)
 
 
-def _manifest_is_complete(manifest: discovery.RunManifestInfo) -> bool:
-    return not (manifest.summary_total_known and manifest.summary_completed != manifest.summary_total)
+def _manifest_missing_pct(manifest: discovery.RunManifestInfo) -> float | None:
+    if not manifest.summary_total_known:
+        return None
+    total = int(manifest.summary_total or 0)
+    if total <= 0:
+        return None
+    completed = max(int(manifest.summary_completed or 0), 0)
+    missing = max(total - completed, 0)
+    return 100.0 * missing / total
+
+
+def _manifest_within_missing_pct(manifest: discovery.RunManifestInfo, max_missing_pct: float) -> bool:
+    missing_pct = _manifest_missing_pct(manifest)
+    if missing_pct is None:
+        return True
+    return missing_pct <= float(max_missing_pct)
+
+
+def _format_missing_pct(value: float) -> str:
+    return f"{float(value):g}"
 
 
 def _record_is_excluded(record: discovery.RunRecord, exclude_set: set[str]) -> bool:
@@ -722,6 +742,7 @@ def _run_sort_key(timestamp: str, job_run_id: str) -> tuple[int, datetime, str]:
 
 
 __all__ = [
+    "PROCESS_DEFAULT_STATUS_FILTER",
     "PlannedRecord",
     "PlannedWorkItem",
     "ProcessOptions",

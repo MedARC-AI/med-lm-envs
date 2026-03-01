@@ -2000,6 +2000,65 @@ def test_process_cli_requires_winrate_config_path(tmp_path: Path) -> None:
         )
 
 
+def test_process_cli_defaults_status_filter_to_completed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run_process(options, env_export_map):
+        captured["options"] = options
+        return ProcessResult(records_processed=0, rows_processed=0, env_groups=[], env_summaries=[], hf_summary=None)
+
+    monkeypatch.setattr(main, "run_process", fake_run_process)
+
+    exit_code = main.main(
+        [
+            "process",
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--output-dir",
+            str(tmp_path / "processed"),
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0
+    options = captured["options"]
+    assert options.status_filter == ("completed", "succeeded", "success")
+    assert options.processed_with_args["status"] == ["completed", "succeeded", "success"]
+    assert options.max_run_missing_pct == pytest.approx(2.5)
+    assert options.processed_with_args["max_run_missing_pct"] == pytest.approx(2.5)
+
+
+def test_process_cli_uses_explicit_status_filter(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run_process(options, env_export_map):
+        captured["options"] = options
+        return ProcessResult(records_processed=0, rows_processed=0, env_groups=[], env_summaries=[], hf_summary=None)
+
+    monkeypatch.setattr(main, "run_process", fake_run_process)
+
+    exit_code = main.main(
+        [
+            "process",
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--output-dir",
+            str(tmp_path / "processed"),
+            "--status",
+            "failed",
+            "--max-run-missing-pct",
+            "100",
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0
+    options = captured["options"]
+    assert options.status_filter == ("failed",)
+    assert options.processed_with_args["status"] == ["failed"]
+    assert options.max_run_missing_pct == pytest.approx(100.0)
+
+
 def test_process_cli_runs_embedded_winrate_post_step(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg_path = tmp_path / "process.yaml"
     cfg_path.write_text(
@@ -2205,6 +2264,7 @@ def test_process_cli_rejects_include_prompt_completion(tmp_path: Path) -> None:
     ("field", "value"),
     [
         ("max_workers", "not-an-int"),
+        ("max_run_missing_pct", "not-a-float"),
         ("hf_request_timeout", "not-a-float"),
         ("hf_retries", "not-an-int"),
         ("hf_max_files_per_commit", "not-an-int"),

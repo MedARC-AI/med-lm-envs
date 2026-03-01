@@ -53,14 +53,26 @@ runs/processed/
 
 ### By Completion Status
 
-By default, only completed jobs are processed:
+By default, `medarc-eval process` only selects runs whose manifest status is one of:
+
+- `completed`
+- `succeeded`
+- `success`
+
+To override that default, pass one or more explicit status filters:
 
 ```bash
-# Include incomplete runs
-medarc-eval process --process-incomplete
-
-# Filter by specific status
 medarc-eval process --status completed --status failed
+```
+
+You can also gate partially complete runs by their manifest summary totals:
+
+```bash
+# Default tolerance is 2.5 percent missing
+medarc-eval process --max-run-missing-pct 2.5
+
+# Effectively disable the gate
+medarc-eval process --max-run-missing-pct 100
 ```
 
 ### Latest Runs Only
@@ -90,7 +102,7 @@ runs_dir: runs/raw
 process:
   dir: processed
   max_workers: 8
-  process_incomplete: false
+  max_run_missing_pct: 2.5
   exclude_datasets:
     - med_dialog
   exclude_models:

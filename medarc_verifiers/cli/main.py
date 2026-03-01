@@ -35,7 +35,7 @@ from medarc_verifiers.cli._manifest_planner import ManifestPlanner
 from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, EnvironmentExportConfig
 from medarc_verifiers.cli._single_run import run_single_mode
 from medarc_verifiers.cli.hf import HFSyncConfig, sync_files_to_hub
-from medarc_verifiers.cli.process import ProcessOptions, ProcessResult, run_process
+from medarc_verifiers.cli.process import PROCESS_DEFAULT_STATUS_FILTER, ProcessOptions, ProcessResult, run_process
 from medarc_verifiers.cli.utils.config_io import load_mapping_file
 from medarc_verifiers.cli.utils.overrides import build_cli_override
 from medarc_verifiers.cli.utils.shared import (
@@ -298,11 +298,10 @@ def build_process_parser() -> argparse.ArgumentParser:
         help="Rebuild existing processed outputs for these env ids (repeatable; comma-separated values allowed).",
     )
     parser.add_argument(
-        "--process-incomplete",
-        dest="process_incomplete",
-        action="store_true",
+        "--max-run-missing-pct",
+        type=float,
         default=None,
-        help="Include runs where run_manifest.json summary has completed < total.",
+        help="Skip run directories whose manifest-level missing percentage exceeds this threshold (default: 2.5).",
     )
     parser.add_argument(
         "--winrate",
@@ -610,6 +609,10 @@ def _validate_process_args(
             normalize_dataset_ids(args.exclude_dataset, label="process exclude dataset")
         if args.exclude_model:
             normalize_model_ids(args.exclude_model, label="process exclude model")
+        if args.max_run_missing_pct is not None:
+            value = float(args.max_run_missing_pct)
+            if value < 0:
+                parser.error("--max-run-missing-pct must be non-negative.")
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -625,15 +628,16 @@ def _build_process_options(args: argparse.Namespace) -> ProcessOptions:
         retries=args.hf_retries,
         max_files_per_commit=args.hf_max_files_per_commit,
     )
+    status_filter = tuple(args.status) if args.status is not None else PROCESS_DEFAULT_STATUS_FILTER
     processed_with_args = {
-        "status": args.status or [],
+        "status": list(status_filter),
+        "max_run_missing_pct": float(args.max_run_missing_pct),
         "exclude_datasets": args.exclude_dataset or [],
         "exclude_models": args.exclude_model or [],
         "replace_models": args.replace_model or [],
         "replace_envs": args.replace_env or [],
         "dry_run": bool(args.dry_run),
         "clean": bool(args.clean),
-        "only_complete_runs": not bool(args.process_incomplete),
         "hf_repo": args.hf_repo,
         "hf_pull_policy": args.hf_pull_policy,
         "hf_request_timeout": args.hf_request_timeout,
@@ -650,8 +654,8 @@ def _build_process_options(args: argparse.Namespace) -> ProcessOptions:
         replace_envs=tuple(args.replace_env or ()),
         processed_at=args.processed_at,
         processed_with_args=processed_with_args,
-        status_filter=args.status or (),
-        only_complete_runs=not bool(args.process_incomplete),
+        status_filter=status_filter,
+        max_run_missing_pct=float(args.max_run_missing_pct),
         dry_run=bool(args.dry_run),
         clean=bool(args.clean),
         assume_yes=bool(args.yes),
@@ -844,8 +848,8 @@ def _merge_process_section(
                 "dry_run": "dry_run",
                 "clean": "clean",
                 "yes": "yes",
-                "process_incomplete": "process_incomplete",
                 "max_workers": "max_workers",
+                "max_run_missing_pct": "max_run_missing_pct",
             }
         )
     for key, target in key_map.items():
@@ -1013,7 +1017,6 @@ def _load_and_apply_config(
             "dry_run": "dry_run",
             "clean": "clean",
             "yes": "yes",
-            "process_incomplete": "process_incomplete",
             "hf_private": "hf_private",
         },
         "winrate": {"hf_processed_pull": "hf_processed_pull", "hf_private": "hf_private"},
@@ -1027,7 +1030,7 @@ def _load_and_apply_config(
         "winrate": {"min_common": "min_common", "weight_cap": "weight_cap"},
     }[mode]
     float_fields = {
-        "process": {"hf_request_timeout": "hf_request_timeout"},
+        "process": {"hf_request_timeout": "hf_request_timeout", "max_run_missing_pct": "max_run_missing_pct"},
         "winrate": {"epsilon": "epsilon"},
     }[mode]
     repeatable_fields = {
@@ -1111,7 +1114,7 @@ def _finalize_config_args(args: argparse.Namespace, *, mode: Literal["process", 
             "dry_run": False,
             "clean": False,
             "yes": False,
-            "process_incomplete": False,
+            "max_run_missing_pct": 2.5,
             "exclude_dataset": [],
             "exclude_model": [],
             "replace_model": [],
