@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import os
 import re
 import shlex
 import signal
@@ -38,7 +39,8 @@ from medarc_verifiers.orchestrate.state import (
 )
 from medarc_verifiers.orchestrate.vllm_args import build_container_args, normalize_volume_mounts
 
-COMMAND_TEMPLATE = "uv run medarc-eval bench --config {job_config_path} --api-base-url {base_url} --on-complete exit"
+_COMMAND_TEMPLATE_UV = "uv run medarc-eval bench --config {job_config_path} --api-base-url {base_url} --on-complete exit"
+_COMMAND_TEMPLATE_BARE = "medarc-eval bench --config {job_config_path} --api-base-url {base_url} --on-complete exit"
 
 _TASK_DIR_ALLOWED = re.compile(r"[^a-zA-Z0-9_.-]+")
 
@@ -92,6 +94,7 @@ class OrchestratorRunner:
         options: OrchestratorOptions,
         runtime: str = "docker",
         runtime_adapter: RuntimeAdapter | None = None,
+        uv_run: bool = True,
         use_dashboard: bool = True,
     ) -> None:
         self._runtime = _normalize_runtime(runtime or plan.runtime or "docker")
@@ -106,6 +109,7 @@ class OrchestratorRunner:
         self._resource_manager = resource_manager
         self._options = options
         self._runtime_adapter = runtime_adapter or _build_runtime_adapter(self._runtime)
+        self._command_template = _COMMAND_TEMPLATE_UV if uv_run else _COMMAND_TEMPLATE_BARE
         self._dashboard = OrchestratorDashboard(enabled=use_dashboard)
         self._manifests: dict[str, TaskManifest] = {}
         self._active_handles: dict[str, RuntimeHandle] = {}
@@ -323,7 +327,7 @@ class OrchestratorRunner:
                 "task_id": task.task_id,
                 "job_config_path": str(task.job_config_path),
             }
-            command = render_command(COMMAND_TEMPLATE, command_context)
+            command = render_command(self._command_template, command_context)
             restart_source = orchestrate.get("restart")
             if restart_source:
                 restart_value = str(restart_source)
@@ -332,10 +336,11 @@ class OrchestratorRunner:
             manifest.bench_command = shlex.join(command)
             self._dashboard.log(f"JOB bench-start task={task.task_id} cmd={_shorten(manifest.bench_command)}")
             self._set_state(manifest, paths, JobState.running)
+            bench_env = {**os.environ, "TQDM_DISABLE": "1"}
             bench_proc = await start_benchmark(
                 command,
                 cwd=repo_root,
-                env=None,
+                env=bench_env,
                 stdout_path=paths.stdout_path,
                 stderr_path=paths.stderr_path,
             )

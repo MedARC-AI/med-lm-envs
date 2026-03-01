@@ -75,6 +75,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Delete per-task serve/bench logs for completed tasks (kept for failures).",
     )
+    parser.add_argument(
+        "--no-uv-run",
+        action="store_true",
+        help="Run 'medarc-eval bench' directly instead of via 'uv run' (use when venv is pre-activated).",
+    )
     return parser
 
 
@@ -219,8 +224,9 @@ def main(argv: list[str] | None = None) -> int:
         resource_manager = ResourceManager(gpu_indices=gpu_indices, port_range=port_range)
     else:
         resource_manager = PortOnlyResourceManager(port_range=port_range)
+    uv_run = not args.no_uv_run and plan.uv_run
     runner = OrchestratorRunner(
-        plan, tasks, resource_manager, options=options, runtime=runtime
+        plan, tasks, resource_manager, options=options, runtime=runtime, uv_run=uv_run
     )
     runner.run()
     return 0
