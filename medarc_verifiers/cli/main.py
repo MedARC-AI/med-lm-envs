@@ -628,10 +628,12 @@ def _build_process_options(args: argparse.Namespace) -> ProcessOptions:
         retries=args.hf_retries,
         max_files_per_commit=args.hf_max_files_per_commit,
     )
-    status_filter = tuple(args.status) if args.status is not None else PROCESS_DEFAULT_STATUS_FILTER
+    status_values = list(args.status or [])
+    status_filter = tuple(status_values) if status_values else PROCESS_DEFAULT_STATUS_FILTER
+    max_run_missing_pct = float(args.max_run_missing_pct) if args.max_run_missing_pct is not None else 2.5
     processed_with_args = {
         "status": list(status_filter),
-        "max_run_missing_pct": float(args.max_run_missing_pct),
+        "max_run_missing_pct": max_run_missing_pct,
         "exclude_datasets": args.exclude_dataset or [],
         "exclude_models": args.exclude_model or [],
         "replace_models": args.replace_model or [],
@@ -655,7 +657,7 @@ def _build_process_options(args: argparse.Namespace) -> ProcessOptions:
         processed_at=args.processed_at,
         processed_with_args=processed_with_args,
         status_filter=status_filter,
-        max_run_missing_pct=float(args.max_run_missing_pct),
+        max_run_missing_pct=max_run_missing_pct,
         dry_run=bool(args.dry_run),
         clean=bool(args.clean),
         assume_yes=bool(args.yes),

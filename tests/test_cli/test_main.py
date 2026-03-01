@@ -2059,6 +2059,59 @@ def test_process_cli_uses_explicit_status_filter(monkeypatch: pytest.MonkeyPatch
     assert options.max_run_missing_pct == pytest.approx(100.0)
 
 
+def test_process_cli_rejects_negative_max_run_missing_pct(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        main.main(
+            [
+                "process",
+                "--runs-dir",
+                str(tmp_path / "runs"),
+                "--output-dir",
+                str(tmp_path / "processed"),
+                "--max-run-missing-pct",
+                "-1",
+            ]
+        )
+
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert "--max-run-missing-pct must be non-negative." in err
+
+
+def test_process_config_empty_status_uses_default_filter(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg_path = tmp_path / "process.yaml"
+    cfg_path.write_text(
+        """
+        runs_dir: runs/raw
+        process:
+          dir: processed
+          status: []
+        """,
+        encoding="utf-8",
+    )
+
+    captured: dict[str, Any] = {}
+
+    def fake_run_process(options, env_export_map):
+        captured["options"] = options
+        return ProcessResult(records_processed=0, rows_processed=0, env_groups=[], env_summaries=[], hf_summary=None)
+
+    monkeypatch.setattr(main, "run_process", fake_run_process)
+
+    exit_code = main.main(["process", "--config", str(cfg_path), "--dry-run"])
+
+    assert exit_code == 0
+    options = captured["options"]
+    assert options.status_filter == ("completed", "succeeded", "success")
+    assert options.processed_with_args["status"] == ["completed", "succeeded", "success"]
+
+
 def test_process_cli_runs_embedded_winrate_post_step(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg_path = tmp_path / "process.yaml"
     cfg_path.write_text(

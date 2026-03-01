@@ -9,6 +9,8 @@ import pyarrow.parquet as pq
 from medarc_verifiers.cli._manifest import MANIFEST_VERSION
 from medarc_verifiers.cli._schemas import EnvironmentExportConfig
 from medarc_verifiers.cli.process import ProcessOptions, run_process
+from medarc_verifiers.cli.process.discovery import RunManifestInfo, RunRecord
+from medarc_verifiers.cli.process.pipeline import select_work_items
 from medarc_verifiers.cli.winrate import WinrateConfig
 from medarc_verifiers.cli.winrate import discover_datasets, run_winrate
 from medarc_verifiers.cli.hf import HFSyncConfig
@@ -18,6 +20,77 @@ from medarc_verifiers.cli.process.writer import ALLOWED_COLUMNS
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _manifest_info(
+    *,
+    run_id: str,
+    completed: int,
+    total: int,
+    total_known: bool = True,
+    updated_at: str = "2024-01-01T00:00:00Z",
+) -> RunManifestInfo:
+    run_dir = Path("/tmp") / run_id
+    return RunManifestInfo(
+        job_run_id=run_id,
+        run_name=run_id,
+        summary_completed=completed,
+        summary_total=total,
+        summary_total_known=total_known,
+        manifest_path=run_dir / "run_manifest.json",
+        run_dir=run_dir,
+        created_at="2024-01-01T00:00:00Z",
+        updated_at=updated_at,
+        config_source="configs/demo.yaml",
+        config_checksum="abc123",
+        run_summary_path=run_dir / "run_summary.json",
+    )
+
+
+def _run_record(
+    *,
+    run_id: str,
+    job_id: str,
+    env_id: str,
+    model_id: str = "gpt-mini",
+    completed: int = 1,
+    total: int = 1,
+    total_known: bool = True,
+    updated_at: str = "2024-01-01T00:00:00Z",
+) -> RunRecord:
+    run_dir = Path("/tmp") / run_id
+    results_dir = run_dir / job_id
+    return RunRecord(
+        manifest=_manifest_info(
+            run_id=run_id,
+            completed=completed,
+            total=total,
+            total_known=total_known,
+            updated_at=updated_at,
+        ),
+        job_id=job_id,
+        model_id=model_id,
+        manifest_env_id=env_id,
+        results_dir_name=job_id,
+        results_dir=results_dir,
+        metadata_path=results_dir / "metadata.json",
+        results_path=results_dir / "results.jsonl",
+        summary_path=results_dir / "summary.json",
+        has_metadata=False,
+        has_results=True,
+        has_summary=True,
+        status="completed",
+        duration_seconds=1.0,
+        reason=None,
+        started_at="2024-01-01T00:00:00Z",
+        ended_at="2024-01-01T00:00:01Z",
+        num_examples=1,
+        rollouts_per_example=1,
+        env_args={},
+        sampling_args={},
+        env_config={"id": env_id, "module": env_id},
+        model_config={},
+    )
 
 
 def _setup_run(tmp_path: Path) -> Path:
@@ -276,6 +349,53 @@ def test_run_process_excludes_datasets(tmp_path: Path) -> None:
     assert result.records_processed == 1
     assert len(result.env_groups) == 1
     assert result.env_groups[0].base_env_id == "keep-env"
+
+
+def test_select_work_items_counts_missing_pct_skips_per_run_not_per_job() -> None:
+    discovered = [
+        _run_record(
+            run_id="run-skipped",
+            job_id="job-a",
+            env_id="demo-env-a",
+            completed=8,
+            total=10,
+        ),
+        _run_record(
+            run_id="run-skipped",
+            job_id="job-b",
+            env_id="demo-env-b",
+            completed=8,
+            total=10,
+        ),
+        _run_record(
+            run_id="run-kept",
+            job_id="job-c",
+            env_id="demo-env-c",
+            completed=10,
+            total=10,
+            updated_at="2024-01-01T00:05:00Z",
+        ),
+    ]
+    options = ProcessOptions(
+        runs_dir=Path("/tmp/runs"),
+        output_dir=Path("/tmp/processed"),
+        max_run_missing_pct=10.0,
+        dry_run=True,
+        max_workers=1,
+    )
+
+    selection = select_work_items(
+        discovered,
+        options=options,
+        env_export_map={},
+        index_files={},
+    )
+
+    assert selection.skipped_by_missing_pct == 1
+    assert selection.total_discovered == 3
+    assert len(selection.work_items) == 1
+    assert selection.work_items[0].identity.job_run_id == "run-kept"
+    assert selection.work_items[0].identity.output_env_id == "demo-env-c"
 
 
 def test_run_process_excludes_models(tmp_path: Path) -> None:

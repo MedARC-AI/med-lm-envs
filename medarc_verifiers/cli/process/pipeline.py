@@ -149,7 +149,6 @@ def run_process(
         discovered = discovery.discover_run_records(
             options.runs_dir,
             filter_status=options.status_filter or None,
-            only_complete_runs=False,
         )
         selection = select_work_items(
             discovered,
@@ -301,10 +300,16 @@ def select_work_items(
 ) -> SelectionResult:
     """Filter discovered runs down to selected work items before row loading begins."""
     eligible_records: list[discovery.RunRecord] = []
-    skipped_by_missing_pct = 0
+    skipped_run_ids_by_missing_pct: set[str] = set()
+    missing_pct_allowed_by_run_id: dict[str, bool] = {}
     for record in discovered:
-        if not _manifest_within_missing_pct(record.manifest, options.max_run_missing_pct):
-            skipped_by_missing_pct += 1
+        run_id = record.manifest.job_run_id
+        allow_run = missing_pct_allowed_by_run_id.get(run_id)
+        if allow_run is None:
+            allow_run = _manifest_within_missing_pct(record.manifest, options.max_run_missing_pct)
+            missing_pct_allowed_by_run_id[run_id] = allow_run
+        if not allow_run:
+            skipped_run_ids_by_missing_pct.add(run_id)
             continue
         eligible_records.append(record)
 
@@ -322,7 +327,7 @@ def select_work_items(
 
     return SelectionResult(
         work_items=work_items,
-        skipped_by_missing_pct=skipped_by_missing_pct,
+        skipped_by_missing_pct=len(skipped_run_ids_by_missing_pct),
         skipped_by_delta=skipped_by_delta,
         skipped_by_exclusion=skipped_by_exclusion,
         total_discovered=len(discovered),
@@ -615,8 +620,8 @@ def _print_records_table(
         from rich.table import Table
     except Exception:
         logger.info(
-            "Processing %d job(s) across %d model(s) (max_run_missing_pct=%s; found %d job(s) across %d model(s)); "
-            "skipped by missing pct=%d excluded=%d existing=%d.",
+            "Processing %d job(s) across %d model(s) (max_run_missing_pct=%s; found %d eligible job(s) across %d model(s)); "
+            "skipped run(s) by missing pct=%d excluded=%d existing=%d.",
             selected_jobs_total,
             len(selected_models),
             _format_missing_pct(max_run_missing_pct),
@@ -639,7 +644,7 @@ def _print_records_table(
         f"[dim](max_run_missing_pct={_format_missing_pct(max_run_missing_pct)})[/dim]"
     )
     title += (
-        f" [dim](found {discovered_jobs_total} eligible job(s); skipped by missing pct={skipped_by_missing_pct}, "
+        f" [dim](found {discovered_jobs_total} eligible job(s); skipped run(s) by missing pct={skipped_by_missing_pct}, "
         f"excluded={skipped_by_exclusion}, existing={skipped_by_delta})[/dim]"
     )
     table = Table(title=title, show_header=True, header_style="bold cyan", caption=None)
