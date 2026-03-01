@@ -1839,6 +1839,35 @@ def test_process_cli_applies_config_defaults(monkeypatch: pytest.MonkeyPatch, tm
     assert options.hf_config.token == "override"
 
 
+def test_process_cli_resolves_hf_token_env_reference(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    cfg_path = tmp_path / "process.yaml"
+    cfg_path.write_text(
+        """
+        runs_dir: runs/raw-from-config
+        process:
+          dir: processed
+        hf:
+          repo: medarc/demo
+          token: $HF_TOKEN
+        """,
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HF_TOKEN", "env-secret")
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(options, env_export_map):
+        captured["options"] = options
+        return ProcessResult(records_processed=0, rows_processed=0, env_groups=[], env_summaries=[], hf_summary=None)
+
+    monkeypatch.setattr("medarc_verifiers.cli.main.run_process", fake_run)
+
+    exit_code = main.main(["process", "--config", str(cfg_path), "--dry-run"])
+    assert exit_code == 0
+    assert captured["options"].hf_config is not None
+    assert captured["options"].hf_config.token == "env-secret"
+
+
 def test_winrate_cli_applies_config_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg_path = tmp_path / "winrate.yaml"
     cfg_path.write_text(
@@ -1927,6 +1956,71 @@ def test_winrate_cli_applies_config_defaults(monkeypatch: pytest.MonkeyPatch, tm
     assert exit_code == 0
     cfg = captured["run_kwargs"]["config"]
     assert cfg.epsilon == pytest.approx(0.5)
+
+
+def test_winrate_cli_resolves_hf_token_braced_env_reference(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg_path = tmp_path / "winrate.yaml"
+    cfg_path.write_text(
+        """
+        processed_dir: runs/processed
+        hf:
+          repo: medarc/demo
+          token: ${HF_TOKEN}
+        """,
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HF_TOKEN", "env-secret")
+
+    captured: dict[str, Any] = {}
+
+    def fake_run_winrate(
+        *, processed_dir, output_dir, output_path, output_name, config, processed_at, hf_config, hf_processed_pull
+    ):
+        captured["hf_config"] = hf_config
+        return SimpleNamespace(
+            output_path=tmp_path / "out.json",
+            output_paths=[tmp_path / "out.json"],
+            result={"models": {}},
+            datasets=[],
+        )
+
+    monkeypatch.setattr(main, "run_winrate", fake_run_winrate)
+    monkeypatch.setattr(main, "print_winrate_summary_markdown", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(main, "sync_files_to_hub", lambda **_kwargs: None)
+
+    exit_code = main.main(["winrate", "--config", str(cfg_path), "--processed-at", "2024-01-01T00:00:00Z"])
+    assert exit_code == 0
+    assert captured["hf_config"] is not None
+    assert captured["hf_config"].token == "env-secret"
+
+
+def test_process_cli_rejects_unset_hf_token_env_reference(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cfg_path = tmp_path / "process.yaml"
+    cfg_path.write_text(
+        """
+        runs_dir: runs/raw-from-config
+        process:
+          dir: processed
+        hf:
+          repo: medarc/demo
+          token: $HF_TOKEN
+        """,
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+
+    with pytest.raises(SystemExit) as excinfo:
+        main.main(["process", "--config", str(cfg_path), "--dry-run"])
+
+    assert excinfo.value.code == 2
+    assert "references unset environment variable 'HF_TOKEN'" in capsys.readouterr().err
 
 
 def test_expand_embedded_process_config_promotes_process_section() -> None:

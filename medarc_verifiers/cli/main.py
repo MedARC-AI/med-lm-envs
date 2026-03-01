@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 from textwrap import dedent
@@ -796,6 +797,27 @@ def _set_if_unset(args: argparse.Namespace, attr: str, value: Any) -> None:
         setattr(args, attr, value)
 
 
+def _resolve_config_string_value(key: str, value: Any) -> str:
+    resolved = str(value)
+    if key != "hf_token":
+        return resolved
+
+    trimmed = resolved.strip()
+    env_var: str | None = None
+    if trimmed.startswith("${") and trimmed.endswith("}") and len(trimmed) > 3:
+        env_var = trimmed[2:-1].strip()
+    elif trimmed.startswith("$") and len(trimmed) > 1:
+        env_var = trimmed[1:].strip()
+
+    if not env_var:
+        return resolved
+
+    env_value = os.getenv(env_var)
+    if env_value is None:
+        raise ValueError(f"Config field 'hf.token' references unset environment variable '{env_var}'.")
+    return env_value
+
+
 def _load_config_payload(path: Path, *, mode: Literal["process", "winrate"]) -> dict[str, Any]:
     label = "Process config" if mode == "process" else "Winrate config"
     raw_payload = dict(load_mapping_file(path, label=label))
@@ -1077,7 +1099,11 @@ def _load_and_apply_config(
             _set_if_unset(args, attr, Path(str(payload[key])))
     for key, attr in string_fields.items():
         if key in payload and _is_unset(args, attr):
-            _set_if_unset(args, attr, str(payload[key]))
+            try:
+                resolved = _resolve_config_string_value(key, payload[key])
+            except ValueError as exc:
+                parser.error(str(exc))
+            _set_if_unset(args, attr, resolved)
     for key, attr in boolean_fields.items():
         if key in payload and _is_unset(args, attr):
             _set_if_unset(args, attr, bool(payload[key]))

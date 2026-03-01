@@ -19,8 +19,8 @@ medarc-eval process --dry-run
 
 1. **Discovers** jobs in `runs/raw/` and filters by manifest status (default: `completed`)
 2. **Extracts** results from each job's output files
-3. **Normalizes** data into a consistent schema
-4. **Writes** parquet files organized by environment and model
+3. **Normalizes** data into a fixed output schema
+4. **Writes** parquet files organized by model and environment
 5. **Creates** an index (`env_index.json`) for downstream tools
 
 ### Output Structure
@@ -36,6 +36,8 @@ runs/processed/
 │   └── pubmedqa.parquet
 └── ...
 ```
+
+On-disk model and env path components are slugified, so filenames may not exactly match raw ids.
 
 ## Common Options
 
@@ -79,6 +81,8 @@ This gate uses manifest job metadata only:
 - `observed_rows = row_count`
 
 It is computed per selected job record and enforced only on the latest selected run for each processed model/environment output. It does not use manifest `summary.completed` / `summary.total`, and it does not fall back to older runs if the latest one is too incomplete.
+
+Selected records with missing `results.jsonl` fail processing immediately.
 
 ### Latest Runs Only
 
@@ -170,6 +174,8 @@ hf:
   private: true
 ```
 
+`hf.token` accepts either a literal token string or an environment reference like `$HF_TOKEN` / `${HF_TOKEN}`.
+
 ### Pull Before Processing
 
 ```bash
@@ -182,6 +188,8 @@ medarc-eval process --hf-repo your-org/data --hf-pull-policy pull
 # Start fresh (ignore remote)
 medarc-eval process --hf-repo your-org/data --hf-pull-policy clean
 ```
+
+`prompt` only prompts when the local processed dir is already non-empty. If the output dir is empty, process pulls the HF baseline immediately.
 
 ### Push After Processing
 
@@ -232,6 +240,8 @@ medarc-eval process
 
 # env_index.json tracks what's already processed
 ```
+
+Incremental skipping only reuses an existing parquet when its footer metadata `source_runs` still matches the newly selected run ids and the existing row count still matches `env_index.json`.
 
 ### Replace Existing Outputs
 

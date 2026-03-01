@@ -180,10 +180,11 @@ def _write_run(
     num_examples: int | None = 1,
     rollouts_per_example: int | None = 1,
     write_results: bool = True,
+    job_id: str = "demo-job",
 ) -> Path:
     runs_dir = tmp_path / "runs"
     run_dir = runs_dir / run_id
-    results_dir = run_dir / "demo-job"
+    results_dir = run_dir / job_id
     manifest = {
         "version": MANIFEST_VERSION,
         "run_id": run_id,
@@ -205,13 +206,13 @@ def _write_run(
         },
         "jobs": [
             {
-                "job_id": "demo-job",
+                "job_id": job_id,
                 "model_id": model_id,
                 "env_id": env_id,
                 "env_template_id": "demo-env-template",
                 "env_variant_id": env_id,
                 "env_args": {},
-                "results_dir": "demo-job",
+                "results_dir": job_id,
                 "status": status,
                 "row_count": row_count,
                 "num_examples": num_examples,
@@ -245,7 +246,8 @@ def _remove_model_id(tmp_path: Path, run_id: str) -> None:
     manifest["models"] = {}
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-    metadata_path = tmp_path / "runs" / run_id / "demo-job" / "metadata.json"
+    job_id = manifest["jobs"][0]["job_id"]
+    metadata_path = tmp_path / "runs" / run_id / job_id / "metadata.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     metadata.pop("model", None)
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
@@ -312,6 +314,24 @@ def test_run_process_writes_version_info_column(tmp_path: Path) -> None:
     assert isinstance(encoded, str)
     payload = json.loads(encoded)
     assert payload["vf_version"] == "0.1.10"
+
+
+def test_run_process_preserves_string_example_id_in_parquet(tmp_path: Path) -> None:
+    runs_dir = _setup_run(tmp_path)
+    output_dir = tmp_path / "processed"
+
+    result = run_process(
+        ProcessOptions(
+            runs_dir=runs_dir,
+            output_dir=output_dir,
+            dry_run=False,
+            max_workers=1,
+        )
+    )
+
+    table = pq.read_table(result.env_summaries[0].output_path)
+    assert table.column("example_id").to_pylist() == ["ex-1"]
+    assert str(table.schema.field("example_id").type) == "large_string"
 
 
 def test_run_process_backward_compat_without_version_info(tmp_path: Path) -> None:
@@ -1120,6 +1140,37 @@ def test_process_latest_missing_model_id_fails_clearly(tmp_path: Path) -> None:
     _remove_model_id(tmp_path, "run-2")
 
     with pytest.raises(RuntimeError, match=r"Missing model_id for run \(job_run_id=run-2, job_id=demo-job,"):
+        run_process(ProcessOptions(runs_dir=runs_dir, output_dir=tmp_path / "processed", dry_run=False, max_workers=1))
+
+
+def test_process_latest_missing_model_id_not_masked_by_newer_other_job(tmp_path: Path) -> None:
+    runs_dir = _write_run(
+        tmp_path,
+        run_id="run-model-a-old",
+        updated_at="2024-01-01T00:00:00Z",
+        reward=0.1,
+        model_id="model-a",
+        job_id="job-model-a",
+    )
+    _write_run(
+        tmp_path,
+        run_id="run-model-a-bad",
+        updated_at="2024-01-02T00:00:00Z",
+        reward=0.2,
+        model_id="model-a",
+        job_id="job-model-a",
+    )
+    _remove_model_id(tmp_path, "run-model-a-bad")
+    _write_run(
+        tmp_path,
+        run_id="run-model-b-good",
+        updated_at="2024-01-03T00:00:00Z",
+        reward=0.9,
+        model_id="model-b",
+        job_id="job-model-b",
+    )
+
+    with pytest.raises(RuntimeError, match=r"Missing model_id for run \(job_run_id=run-model-a-bad, job_id=job-model-a,"):
         run_process(ProcessOptions(runs_dir=runs_dir, output_dir=tmp_path / "processed", dry_run=False, max_workers=1))
 
 

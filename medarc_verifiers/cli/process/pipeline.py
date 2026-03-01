@@ -359,17 +359,17 @@ def _plan_selection_record(
 
 
 def _raise_for_latest_invalid_selection(records: Sequence[SelectionRecord]) -> None:
-    latest_by_env: dict[str, SelectionRecord] = {}
+    latest_by_target: dict[tuple[str, str], SelectionRecord] = {}
     for planned in records:
-        output_env_id = planned.identity.output_env_id
-        current = latest_by_env.get(output_env_id)
+        selection_key = (planned.identity.output_env_id, planned.record.job_id)
+        current = latest_by_target.get(selection_key)
         if current is None or _run_sort_key(
             _source_updated_at(planned.record),
             planned.record.manifest.job_run_id,
         ) > _run_sort_key(_source_updated_at(current.record), current.record.manifest.job_run_id):
-            latest_by_env[output_env_id] = planned
+            latest_by_target[selection_key] = planned
 
-    invalid_latest = [planned for planned in latest_by_env.values() if not planned.identity.model_id]
+    invalid_latest = [planned for planned in latest_by_target.values() if not planned.identity.model_id]
     if not invalid_latest:
         return
 
