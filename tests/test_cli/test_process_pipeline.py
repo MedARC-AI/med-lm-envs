@@ -9,7 +9,7 @@ import pyarrow.parquet as pq
 from medarc_verifiers.cli._manifest import MANIFEST_VERSION
 from medarc_verifiers.cli._schemas import EnvironmentExportConfig
 from medarc_verifiers.cli.process import ProcessOptions, run_process
-from medarc_verifiers.cli.process.discovery import RunManifestInfo, RunRecord
+from medarc_verifiers.cli.process.discovery import RunManifestInfo, RunRecord, discover_run_records
 from medarc_verifiers.cli.process.pipeline import select_work_items
 from medarc_verifiers.cli.winrate import WinrateConfig
 from medarc_verifiers.cli.winrate import discover_datasets, run_winrate
@@ -57,6 +57,9 @@ def _run_record(
     total: int = 1,
     total_known: bool = True,
     updated_at: str = "2024-01-01T00:00:00Z",
+    row_count: int | None = 1,
+    num_examples: int | None = 1,
+    rollouts_per_example: int | None = 1,
 ) -> RunRecord:
     run_dir = Path("/tmp") / run_id
     results_dir = run_dir / job_id
@@ -84,8 +87,9 @@ def _run_record(
         reason=None,
         started_at="2024-01-01T00:00:00Z",
         ended_at="2024-01-01T00:00:01Z",
-        num_examples=1,
-        rollouts_per_example=1,
+        num_examples=num_examples,
+        rollouts_per_example=rollouts_per_example,
+        row_count=row_count,
         env_args={},
         sampling_args={},
         env_config={"id": env_id, "module": env_id},
@@ -125,6 +129,10 @@ def _setup_run(tmp_path: Path) -> Path:
                 "env_variant_id": "demo-env-rollout3",
                 "env_args": {},
                 "results_dir": "demo-job",
+                "status": "completed",
+                "num_examples": 1,
+                "rollouts_per_example": 1,
+                "row_count": 1,
             }
         ],
     }
@@ -168,6 +176,10 @@ def _write_run(
     model_id: str = "gpt-mini",
     status: str = "completed",
     results_text: str | None = None,
+    row_count: int | None = 1,
+    num_examples: int | None = 1,
+    rollouts_per_example: int | None = 1,
+    write_results: bool = True,
 ) -> Path:
     runs_dir = tmp_path / "runs"
     run_dir = runs_dir / run_id
@@ -201,6 +213,9 @@ def _write_run(
                 "env_args": {},
                 "results_dir": "demo-job",
                 "status": status,
+                "row_count": row_count,
+                "num_examples": num_examples,
+                "rollouts_per_example": rollouts_per_example,
             }
         ],
     }
@@ -209,14 +224,17 @@ def _write_run(
         "env_id": env_id,
         "env_args": {},
         "sampling_args": {},
+        "num_examples": num_examples,
+        "rollouts_per_example": rollouts_per_example,
     }
     _write_json(results_dir / "metadata.json", metadata)
     results_path = results_dir / "results.jsonl"
-    results_path.parent.mkdir(parents=True, exist_ok=True)
-    if results_text is None:
-        row = {"example_id": f"ex-{run_id}", "reward": reward}
-        results_text = json.dumps(row) + "\n"
-    results_path.write_text(results_text, encoding="utf-8")
+    if write_results:
+        results_path.parent.mkdir(parents=True, exist_ok=True)
+        if results_text is None:
+            row = {"example_id": f"ex-{run_id}", "reward": reward}
+            results_text = json.dumps(row) + "\n"
+        results_path.write_text(results_text, encoding="utf-8")
     return runs_dir
 
 
@@ -351,51 +369,287 @@ def test_run_process_excludes_datasets(tmp_path: Path) -> None:
     assert result.env_groups[0].base_env_id == "keep-env"
 
 
-def test_select_work_items_counts_missing_pct_skips_per_run_not_per_job() -> None:
-    discovered = [
-        _run_record(
-            run_id="run-skipped",
-            job_id="job-a",
-            env_id="demo-env-a",
-            completed=8,
-            total=10,
-        ),
-        _run_record(
-            run_id="run-skipped",
-            job_id="job-b",
-            env_id="demo-env-b",
-            completed=8,
-            total=10,
-        ),
-        _run_record(
-            run_id="run-kept",
-            job_id="job-c",
-            env_id="demo-env-c",
-            completed=10,
-            total=10,
-            updated_at="2024-01-01T00:05:00Z",
-        ),
-    ]
+def test_process_allows_results_missing_pct_within_threshold(tmp_path: Path) -> None:
+    runs_dir = _write_run(
+        tmp_path,
+        run_id="run-98pct",
+        updated_at="2024-01-01T00:00:00Z",
+        reward=1.0,
+        row_count=98,
+        num_examples=100,
+        rollouts_per_example=1,
+    )
     options = ProcessOptions(
-        runs_dir=Path("/tmp/runs"),
-        output_dir=Path("/tmp/processed"),
-        max_run_missing_pct=10.0,
+        runs_dir=runs_dir,
+        output_dir=tmp_path / "processed",
+        max_results_missing_pct=2.5,
         dry_run=True,
         max_workers=1,
     )
 
-    selection = select_work_items(
-        discovered,
-        options=options,
-        env_export_map={},
-        index_files={},
+    result = run_process(options)
+
+    assert result.records_processed == 1
+    assert result.rows_processed == 1
+
+
+def test_process_rejects_results_missing_pct_above_threshold(tmp_path: Path) -> None:
+    runs_dir = _write_run(
+        tmp_path,
+        run_id="run-90pct",
+        updated_at="2024-01-01T00:00:00Z",
+        reward=1.0,
+        row_count=90,
+        num_examples=100,
+        rollouts_per_example=1,
+    )
+    options = ProcessOptions(
+        runs_dir=runs_dir,
+        output_dir=tmp_path / "processed",
+        max_results_missing_pct=2.5,
+        dry_run=True,
+        max_workers=1,
     )
 
-    assert selection.skipped_by_missing_pct == 1
-    assert selection.total_discovered == 3
-    assert len(selection.work_items) == 1
-    assert selection.work_items[0].identity.job_run_id == "run-kept"
-    assert selection.work_items[0].identity.output_env_id == "demo-env-c"
+    with pytest.raises(RuntimeError) as excinfo:
+        run_process(options)
+
+    message = str(excinfo.value)
+    assert "run-90pct" in message
+    assert "expected_rows=100" in message
+    assert "observed_rows=90" in message
+    assert "missing_pct=10.00" in message
+    assert "threshold=2.5" in message
+
+
+def test_process_allows_ungateable_record_when_expected_rows_unknown(tmp_path: Path) -> None:
+    runs_dir = _write_run(
+        tmp_path,
+        run_id="run-unknown-expected",
+        updated_at="2024-01-01T00:00:00Z",
+        reward=1.0,
+        row_count=10,
+        num_examples=None,
+        rollouts_per_example=1,
+    )
+    options = ProcessOptions(
+        runs_dir=runs_dir,
+        output_dir=tmp_path / "processed",
+        dry_run=True,
+        max_workers=1,
+    )
+
+    result = run_process(options)
+
+    assert result.records_processed == 1
+
+
+def test_process_allows_ungateable_record_when_row_count_unknown(tmp_path: Path) -> None:
+    runs_dir = _write_run(
+        tmp_path,
+        run_id="run-unknown-observed",
+        updated_at="2024-01-01T00:00:00Z",
+        reward=1.0,
+        row_count=None,
+        num_examples=100,
+        rollouts_per_example=1,
+    )
+    options = ProcessOptions(
+        runs_dir=runs_dir,
+        output_dir=tmp_path / "processed",
+        dry_run=True,
+        max_workers=1,
+    )
+
+    result = run_process(options)
+
+    assert result.records_processed == 1
+
+
+def test_process_latest_record_that_fails_gate_does_not_fall_back(tmp_path: Path) -> None:
+    _write_run(
+        tmp_path,
+        run_id="run-older-ok",
+        updated_at="2024-01-01T00:00:00Z",
+        reward=1.0,
+        row_count=100,
+        num_examples=100,
+        rollouts_per_example=1,
+    )
+    runs_dir = _write_run(
+        tmp_path,
+        run_id="run-newer-bad",
+        updated_at="2024-01-02T00:00:00Z",
+        reward=0.0,
+        row_count=90,
+        num_examples=100,
+        rollouts_per_example=1,
+    )
+    options = ProcessOptions(
+        runs_dir=runs_dir,
+        output_dir=tmp_path / "processed",
+        max_results_missing_pct=2.5,
+        dry_run=True,
+        max_workers=1,
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        run_process(options)
+
+    message = str(excinfo.value)
+    assert "run-newer-bad" in message
+    assert "run-older-ok" not in message
+
+
+def test_process_rejects_missing_results_jsonl_for_selected_latest_record(tmp_path: Path) -> None:
+    runs_dir = _write_run(
+        tmp_path,
+        run_id="run-missing-results",
+        updated_at="2024-01-02T00:00:00Z",
+        reward=1.0,
+        row_count=100,
+        num_examples=100,
+        rollouts_per_example=1,
+        write_results=False,
+    )
+    options = ProcessOptions(
+        runs_dir=runs_dir,
+        output_dir=tmp_path / "processed",
+        dry_run=True,
+        max_workers=1,
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        run_process(options)
+
+    message = str(excinfo.value)
+    assert "missing results.jsonl files" in message
+    assert "run-missing-results" in message
+
+
+def test_process_gate_ignores_excluded_record(tmp_path: Path) -> None:
+    runs_dir = _write_run(
+        tmp_path,
+        run_id="run-excluded-bad",
+        updated_at="2024-01-02T00:00:00Z",
+        reward=1.0,
+        env_id="skip-env",
+        row_count=90,
+        num_examples=100,
+        rollouts_per_example=1,
+    )
+    options = ProcessOptions(
+        runs_dir=runs_dir,
+        output_dir=tmp_path / "processed",
+        exclude_datasets=("skip-env",),
+        max_results_missing_pct=2.5,
+        dry_run=True,
+        max_workers=1,
+    )
+
+    result = run_process(options)
+
+    assert result.records_processed == 0
+
+
+def test_process_stale_delta_output_does_not_mask_newer_incomplete_run(tmp_path: Path) -> None:
+    runs_dir = _write_run(
+        tmp_path,
+        run_id="run-initial",
+        updated_at="2024-01-01T00:00:00Z",
+        reward=1.0,
+        row_count=100,
+        num_examples=100,
+        rollouts_per_example=1,
+    )
+    output_dir = tmp_path / "processed"
+    initial = run_process(ProcessOptions(runs_dir=runs_dir, output_dir=output_dir, dry_run=False, max_workers=1))
+    assert initial.records_processed == 1
+
+    _write_run(
+        tmp_path,
+        run_id="run-newer-bad",
+        updated_at="2024-01-02T00:00:00Z",
+        reward=0.0,
+        row_count=90,
+        num_examples=100,
+        rollouts_per_example=1,
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        run_process(
+            ProcessOptions(
+                runs_dir=runs_dir,
+                output_dir=output_dir,
+                max_results_missing_pct=2.5,
+                dry_run=False,
+                max_workers=1,
+            )
+        )
+
+    message = str(excinfo.value)
+    assert "run-newer-bad" in message
+    assert "missing_pct=10.00" in message
+
+
+def test_process_emits_single_warning_for_ungateable_selected_records(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runs_dir = _write_run(
+        tmp_path,
+        run_id="run-unknown-observed",
+        updated_at="2024-01-01T00:00:00Z",
+        reward=1.0,
+        row_count=None,
+        num_examples=100,
+        rollouts_per_example=1,
+    )
+    caplog.set_level("WARNING")
+
+    result = run_process(
+        ProcessOptions(
+            runs_dir=runs_dir,
+            output_dir=tmp_path / "processed",
+            dry_run=True,
+            max_workers=1,
+        )
+    )
+
+    assert result.records_processed == 1
+    warnings = [
+        record for record in caplog.records if "Results row completeness gate could not be applied" in record.msg
+    ]
+    assert len(warnings) == 1
+
+
+def test_select_work_items_rollout_gate_error_includes_output_and_manifest_ids(tmp_path: Path) -> None:
+    runs_dir = _write_run(
+        tmp_path,
+        run_id="run-rollout-bad",
+        updated_at="2024-01-02T00:00:00Z",
+        reward=1.0,
+        env_id="demo-env-rollout3",
+        row_count=90,
+        num_examples=100,
+        rollouts_per_example=1,
+    )
+    discovered = discover_run_records(runs_dir, filter_status=("completed",))
+    options = ProcessOptions(
+        runs_dir=runs_dir,
+        output_dir=tmp_path / "processed",
+        max_results_missing_pct=2.5,
+        dry_run=True,
+        max_workers=1,
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        select_work_items(discovered, options=options, env_export_map={}, index_files={})
+
+    message = str(excinfo.value)
+    assert "output_env_id=demo-env" in message
+    assert "manifest_env_id=demo-env-rollout3" in message
+    assert "job_id=demo-job" in message
 
 
 def test_run_process_excludes_models(tmp_path: Path) -> None:
@@ -680,8 +934,10 @@ def test_process_latest_only_selects_latest_and_skips_existing_outputs(tmp_path:
 
     _write_run(tmp_path, run_id="run-3", updated_at="2024-01-04T00:00:00Z", reward=0.4)
     result_newer_raw = run_process(options)
-    assert result_newer_raw.env_summaries == []
-    assert result_newer_raw.rows_processed == 0
+    assert result_newer_raw.env_summaries
+    newer_table = pq.read_table(result_newer_raw.env_summaries[0].output_path)
+    assert set(newer_table.column("job_run_id").to_pylist()) == {"run-3"}
+    assert newer_table.column("reward").to_pylist() == [0.4]
 
 
 def test_process_replace_model_rebuilds_existing_output(tmp_path: Path) -> None:
@@ -732,11 +988,11 @@ def test_process_replace_model_rebuilds_existing_output(tmp_path: Path) -> None:
     )
 
     rebuilt = {summary.model_id for summary in result.env_summaries}
-    assert rebuilt == {"model-a"}
+    assert rebuilt == {"model-a", "model-b"}
     model_a_table = pq.read_table(output_dir / "model-a" / "demo-env.parquet")
     model_b_table = pq.read_table(output_dir / "model-b" / "demo-env.parquet")
     assert model_a_table.column("reward").to_pylist() == [0.9]
-    assert model_b_table.column("reward").to_pylist() == [0.2]
+    assert model_b_table.column("reward").to_pylist() == [0.8]
 
 
 def test_process_replace_model_and_env_rebuild_only_intersection(tmp_path: Path) -> None:
@@ -803,10 +1059,14 @@ def test_process_replace_model_and_env_rebuild_only_intersection(tmp_path: Path)
         )
     )
 
-    assert {(summary.model_id, summary.env_id) for summary in result.env_summaries} == {("model-a", "env-a")}
+    assert {(summary.model_id, summary.env_id) for summary in result.env_summaries} == {
+        ("model-a", "env-a"),
+        ("model-a", "env-b"),
+        ("model-b", "env-a"),
+    }
     assert pq.read_table(output_dir / "model-a" / "env-a.parquet").column("reward").to_pylist() == [0.7]
-    assert pq.read_table(output_dir / "model-a" / "env-b.parquet").column("reward").to_pylist() == [0.2]
-    assert pq.read_table(output_dir / "model-b" / "env-a.parquet").column("reward").to_pylist() == [0.3]
+    assert pq.read_table(output_dir / "model-a" / "env-b.parquet").column("reward").to_pylist() == [0.8]
+    assert pq.read_table(output_dir / "model-b" / "env-a.parquet").column("reward").to_pylist() == [0.9]
 
 
 def test_process_fails_fast_on_existing_row_count_mismatch(tmp_path: Path) -> None:
@@ -846,7 +1106,9 @@ def test_process_ignores_superseded_run_missing_model_id(tmp_path: Path) -> None
     _remove_model_id(tmp_path, "run-1")
     _write_run(tmp_path, run_id="run-2", updated_at="2024-01-02T00:00:00Z", reward=0.9)
 
-    result = run_process(ProcessOptions(runs_dir=runs_dir, output_dir=tmp_path / "processed", dry_run=False, max_workers=1))
+    result = run_process(
+        ProcessOptions(runs_dir=runs_dir, output_dir=tmp_path / "processed", dry_run=False, max_workers=1)
+    )
 
     table = pq.read_table(result.env_summaries[0].output_path)
     assert table.column("reward").to_pylist() == [0.9]
@@ -896,7 +1158,7 @@ def test_process_selected_missing_results_still_fail(tmp_path: Path) -> None:
     missing_results = runs_dir / "run-1" / "demo-job" / "results.jsonl"
     missing_results.unlink()
 
-    with pytest.raises(FileNotFoundError, match="Missing results.jsonl"):
+    with pytest.raises(RuntimeError, match="Selected records are missing results.jsonl files:"):
         run_process(ProcessOptions(runs_dir=runs_dir, output_dir=tmp_path / "processed", dry_run=False, max_workers=1))
 
 
@@ -956,11 +1218,21 @@ def test_run_process_reads_local_index_after_workspace_prep(
         assert observed == ["workspace", "index"]
         return {"gpt-mini/demo-env.parquet": {"env_id": "demo-env", "model_id": "gpt-mini"}}
 
-    monkeypatch.setattr("medarc_verifiers.cli.process.workspace.prepare_output_workspace", fake_prepare_output_workspace)
+    monkeypatch.setattr(
+        "medarc_verifiers.cli.process.workspace.prepare_output_workspace", fake_prepare_output_workspace
+    )
     monkeypatch.setattr("medarc_verifiers.cli.process.env_index.read_env_index_files", fake_read_env_index_files)
+    monkeypatch.setattr(
+        "medarc_verifiers.cli.process.pipeline._read_existing_output_metadata",
+        lambda *_args, **_kwargs: object(),
+    )
     monkeypatch.setattr(
         "medarc_verifiers.cli.process.pipeline._validate_existing_output_integrity",
         lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "medarc_verifiers.cli.process.pipeline._existing_output_matches_selected_runs",
+        lambda *_args, **_kwargs: True,
     )
 
     result = run_process(ProcessOptions(runs_dir=runs_dir, output_dir=output_dir, dry_run=False, max_workers=1))

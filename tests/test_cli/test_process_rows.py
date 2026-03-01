@@ -54,6 +54,7 @@ def _build_record(tmp_path: Path, *, status: str = "completed", reason: str | No
         ended_at="2024-05-01T00:00:42Z",
         num_examples=10,
         rollouts_per_example=1,
+        row_count=1,
         env_args={"split": "dev", "extra_body": {}},
         sampling_args={"temperature": 0.2},
         env_config={},

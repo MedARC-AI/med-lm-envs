@@ -67,6 +67,7 @@ class RunRecord:
     ended_at: str | None
     num_examples: int | None
     rollouts_per_example: int | None
+    row_count: int | None
     env_args: Mapping[str, Any]
     sampling_args: Mapping[str, Any]
     env_config: Mapping[str, Any] | None
@@ -186,6 +187,7 @@ def _build_run_record(
         ended_at=job_entry.ended_at,
         num_examples=job_entry.num_examples,
         rollouts_per_example=job_entry.rollouts_per_example,
+        row_count=job_entry.row_count,
         env_args=env_args,
         sampling_args=sampling_args,
         env_config=env_config,

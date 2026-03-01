@@ -298,10 +298,15 @@ def build_process_parser() -> argparse.ArgumentParser:
         help="Rebuild existing processed outputs for these env ids (repeatable; comma-separated values allowed).",
     )
     parser.add_argument(
-        "--max-run-missing-pct",
+        "--max-results-missing-pct",
         type=float,
         default=None,
-        help="Skip run directories whose manifest-level missing percentage exceeds this threshold (default: 2.5).",
+        help=(
+            "Fail if a selected latest job record is missing more than this percentage of expected results.jsonl rows "
+            "based on manifest job fields (row_count, num_examples, rollouts_per_example). "
+            "Computed per selected job record and enforced only on the latest selected run; does not use "
+            "manifest summary.completed/summary.total or fall back to older runs (default: 2.5)."
+        ),
     )
     parser.add_argument(
         "--winrate",
@@ -609,10 +614,10 @@ def _validate_process_args(
             normalize_dataset_ids(args.exclude_dataset, label="process exclude dataset")
         if args.exclude_model:
             normalize_model_ids(args.exclude_model, label="process exclude model")
-        if args.max_run_missing_pct is not None:
-            value = float(args.max_run_missing_pct)
+        if args.max_results_missing_pct is not None:
+            value = float(args.max_results_missing_pct)
             if value < 0:
-                parser.error("--max-run-missing-pct must be non-negative.")
+                parser.error("--max-results-missing-pct must be non-negative.")
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -630,10 +635,10 @@ def _build_process_options(args: argparse.Namespace) -> ProcessOptions:
     )
     status_values = list(args.status or [])
     status_filter = tuple(status_values) if status_values else PROCESS_DEFAULT_STATUS_FILTER
-    max_run_missing_pct = float(args.max_run_missing_pct) if args.max_run_missing_pct is not None else 2.5
+    max_results_missing_pct = float(args.max_results_missing_pct) if args.max_results_missing_pct is not None else 2.5
     processed_with_args = {
         "status": list(status_filter),
-        "max_run_missing_pct": max_run_missing_pct,
+        "max_results_missing_pct": max_results_missing_pct,
         "exclude_datasets": args.exclude_dataset or [],
         "exclude_models": args.exclude_model or [],
         "replace_models": args.replace_model or [],
@@ -657,7 +662,7 @@ def _build_process_options(args: argparse.Namespace) -> ProcessOptions:
         processed_at=args.processed_at,
         processed_with_args=processed_with_args,
         status_filter=status_filter,
-        max_run_missing_pct=max_run_missing_pct,
+        max_results_missing_pct=max_results_missing_pct,
         dry_run=bool(args.dry_run),
         clean=bool(args.clean),
         assume_yes=bool(args.yes),
@@ -794,7 +799,19 @@ def _set_if_unset(args: argparse.Namespace, attr: str, value: Any) -> None:
 def _load_config_payload(path: Path, *, mode: Literal["process", "winrate"]) -> dict[str, Any]:
     label = "Process config" if mode == "process" else "Winrate config"
     raw_payload = dict(load_mapping_file(path, label=label))
+    if mode == "process":
+        _reject_removed_process_config_keys(raw_payload)
     return _expand_embedded_pipeline_config(raw_payload, mode=mode)
+
+
+def _reject_removed_process_config_keys(payload: Mapping[str, Any]) -> None:
+    if "max_run_missing_pct" in payload:
+        raise ValueError("Process config field 'max_run_missing_pct' was removed; use 'max_results_missing_pct'.")
+    process_section = payload.get("process")
+    if isinstance(process_section, Mapping) and "max_run_missing_pct" in process_section:
+        raise ValueError(
+            "Process config field 'process.max_run_missing_pct' was removed; use 'process.max_results_missing_pct'."
+        )
 
 
 def _expand_embedded_pipeline_config(payload: dict[str, Any], *, mode: Literal["process", "winrate"]) -> dict[str, Any]:
@@ -851,7 +868,7 @@ def _merge_process_section(
                 "clean": "clean",
                 "yes": "yes",
                 "max_workers": "max_workers",
-                "max_run_missing_pct": "max_run_missing_pct",
+                "max_results_missing_pct": "max_results_missing_pct",
             }
         )
     for key, target in key_map.items():
@@ -895,7 +912,9 @@ def _merge_winrate_section(
             expanded[target] = winrate_section[key]
 
 
-def _resolve_processed_dir_from_payload(payload: Mapping[str, Any], *, mode: Literal["process", "winrate"]) -> Path | None:
+def _resolve_processed_dir_from_payload(
+    payload: Mapping[str, Any], *, mode: Literal["process", "winrate"]
+) -> Path | None:
     if "processed_dir" in payload and payload["processed_dir"] is not None:
         return Path(str(payload["processed_dir"]))
     if mode == "process" and "output_dir" in payload and payload["output_dir"] is not None:
@@ -1032,7 +1051,10 @@ def _load_and_apply_config(
         "winrate": {"min_common": "min_common", "weight_cap": "weight_cap"},
     }[mode]
     float_fields = {
-        "process": {"hf_request_timeout": "hf_request_timeout", "max_run_missing_pct": "max_run_missing_pct"},
+        "process": {
+            "hf_request_timeout": "hf_request_timeout",
+            "max_results_missing_pct": "max_results_missing_pct",
+        },
         "winrate": {"epsilon": "epsilon"},
     }[mode]
     repeatable_fields = {
@@ -1116,7 +1138,7 @@ def _finalize_config_args(args: argparse.Namespace, *, mode: Literal["process", 
             "dry_run": False,
             "clean": False,
             "yes": False,
-            "max_run_missing_pct": 2.5,
+            "max_results_missing_pct": 2.5,
             "exclude_dataset": [],
             "exclude_model": [],
             "replace_model": [],

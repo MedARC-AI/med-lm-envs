@@ -95,9 +95,7 @@ def resolve_run_identity(
     """Resolve a run identity for selection without requiring model_id."""
     context = _resolve_metadata_context(record, combine_rollouts=combine_rollouts)
     resolved_rollout_index = (
-        context.rollout_index
-        if context.rollout_index != 0 or context.manifest_env_id != context.base_env_id
-        else None
+        context.rollout_index if context.rollout_index != 0 or context.manifest_env_id != context.base_env_id else None
     )
     return ResolvedRunIdentity(
         model_id=context.model_id,
@@ -119,9 +117,7 @@ def load_normalized_metadata(
     if not context.model_id:
         raise RuntimeError(format_missing_model_id_error(record))
     resolved_rollout_index = (
-        context.rollout_index
-        if context.rollout_index != 0 or context.manifest_env_id != context.base_env_id
-        else None
+        context.rollout_index if context.rollout_index != 0 or context.manifest_env_id != context.base_env_id else None
     )
     identity = RunIdentity(
         model_id=context.model_id,
@@ -187,9 +183,14 @@ def _resolve_metadata_context(
         metadata_model=metadata_model,
         env_args=env_args,
         sampling_args=sampling_args,
-        num_examples=record.num_examples or (metadata_payload.num_examples if metadata_payload else None),
-        rollouts_per_example=record.rollouts_per_example
-        or (metadata_payload.rollouts_per_example if metadata_payload else None),
+        num_examples=_prefer_manifest_value(
+            record.num_examples,
+            metadata_payload.num_examples if metadata_payload else None,
+        ),
+        rollouts_per_example=_prefer_manifest_value(
+            record.rollouts_per_example,
+            metadata_payload.rollouts_per_example if metadata_payload else None,
+        ),
     )
 
 
@@ -249,6 +250,12 @@ def _merge_mappings(
     if primary:
         result.update(primary)
     return result
+
+
+def _prefer_manifest_value(primary: int | None, fallback: int | None) -> int | None:
+    if primary is not None:
+        return primary
+    return fallback
 
 
 def _extract_env_config_id(env_config: Mapping[str, Any] | None) -> str | None:

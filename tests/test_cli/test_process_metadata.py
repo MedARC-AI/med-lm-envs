@@ -62,6 +62,7 @@ def _make_record(
         ended_at="2024-01-01T00:00:50Z",
         num_examples=num_examples,
         rollouts_per_example=rollouts_per_example,
+        row_count=1,
         env_args=env_args or {},
         sampling_args=sampling_args or {},
         env_config=env_config or {},
@@ -210,3 +211,54 @@ def test_load_normalized_metadata_validation_failure_sanitizes_raw_metadata(tmp_
         "endpoint_id": "cluster-a",
         "base_url": "https://example.invalid/v1",
     }
+
+
+def test_load_normalized_metadata_keeps_zero_num_examples_from_manifest(tmp_path: Path) -> None:
+    record = _make_record(tmp_path, manifest_env_id="demo-env", num_examples=0, rollouts_per_example=1)
+    _write_json(
+        record.metadata_path,
+        {
+            "env_id": "demo-env",
+            "num_examples": 20,
+            "rollouts_per_example": 3,
+        },
+    )
+
+    normalized = load_normalized_metadata(record)
+
+    assert normalized.num_examples == 0
+    assert normalized.rollouts_per_example == 1
+
+
+def test_load_normalized_metadata_keeps_zero_rollouts_from_manifest(tmp_path: Path) -> None:
+    record = _make_record(tmp_path, manifest_env_id="demo-env", num_examples=10, rollouts_per_example=0)
+    _write_json(
+        record.metadata_path,
+        {
+            "env_id": "demo-env",
+            "num_examples": 20,
+            "rollouts_per_example": 3,
+        },
+    )
+
+    normalized = load_normalized_metadata(record)
+
+    assert normalized.num_examples == 10
+    assert normalized.rollouts_per_example == 0
+
+
+def test_load_normalized_metadata_keeps_all_examples_sentinel_from_manifest(tmp_path: Path) -> None:
+    record = _make_record(tmp_path, manifest_env_id="demo-env", num_examples=-1, rollouts_per_example=1)
+    _write_json(
+        record.metadata_path,
+        {
+            "env_id": "demo-env",
+            "num_examples": 20,
+            "rollouts_per_example": 3,
+        },
+    )
+
+    normalized = load_normalized_metadata(record)
+
+    assert normalized.num_examples == -1
+    assert normalized.rollouts_per_example == 1

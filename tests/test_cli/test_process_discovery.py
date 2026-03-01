@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 from medarc_verifiers.cli.process.discovery import RunManifestInfo, discover_run_records
-from medarc_verifiers.cli.process.pipeline import _manifest_missing_pct, _manifest_within_missing_pct
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -73,6 +72,7 @@ def test_discover_run_records_basic(tmp_path: Path) -> None:
                 "ended_at": "2024-01-01T00:01:00Z",
                 "num_examples": 10,
                 "rollouts_per_example": 2,
+                "row_count": 20,
             }
         ],
         models={"gpt-4": {"sampling_args": {"temperature": 0.2}}},
@@ -108,6 +108,7 @@ def test_discover_run_records_basic(tmp_path: Path) -> None:
     assert record.has_summary is True
     assert record.env_args == {"fold": "dev"}
     assert record.sampling_args == {"temperature": 0.2}
+    assert record.row_count == 20
     assert record.manifest.job_run_id == "job-run-123"
 
 
@@ -145,27 +146,6 @@ def test_discover_run_records_filters_status(tmp_path: Path) -> None:
 
     filtered_none = discover_run_records(runs_dir, filter_status=("succeeded",))
     assert filtered_none == []
-
-
-def test_manifest_missing_pct_skips_when_above_threshold() -> None:
-    manifest = _manifest_info(completed=97, total=100, total_known=True)
-
-    assert _manifest_missing_pct(manifest) == 3.0
-    assert _manifest_within_missing_pct(manifest, 0.0) is False
-
-
-def test_manifest_missing_pct_keeps_runs_within_threshold() -> None:
-    manifest = _manifest_info(completed=39, total=40, total_known=True)
-
-    assert _manifest_missing_pct(manifest) == 2.5
-    assert _manifest_within_missing_pct(manifest, 2.5) is True
-
-
-def test_manifest_missing_pct_unknown_total_is_permissive() -> None:
-    manifest = _manifest_info(completed=0, total=0, total_known=False)
-
-    assert _manifest_missing_pct(manifest) is None
-    assert _manifest_within_missing_pct(manifest, 0.0) is True
 
 
 def test_discover_run_records_missing_summary_uses_manifest_status(tmp_path: Path) -> None:

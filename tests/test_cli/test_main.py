@@ -2024,8 +2024,8 @@ def test_process_cli_defaults_status_filter_to_completed(monkeypatch: pytest.Mon
     options = captured["options"]
     assert options.status_filter == ("completed",)
     assert options.processed_with_args["status"] == ["completed"]
-    assert options.max_run_missing_pct == pytest.approx(2.5)
-    assert options.processed_with_args["max_run_missing_pct"] == pytest.approx(2.5)
+    assert options.max_results_missing_pct == pytest.approx(2.5)
+    assert options.processed_with_args["max_results_missing_pct"] == pytest.approx(2.5)
 
 
 def test_process_cli_uses_explicit_status_filter(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -2046,7 +2046,7 @@ def test_process_cli_uses_explicit_status_filter(monkeypatch: pytest.MonkeyPatch
             str(tmp_path / "processed"),
             "--status",
             "failed",
-            "--max-run-missing-pct",
+            "--max-results-missing-pct",
             "100",
             "--dry-run",
         ]
@@ -2056,10 +2056,10 @@ def test_process_cli_uses_explicit_status_filter(monkeypatch: pytest.MonkeyPatch
     options = captured["options"]
     assert options.status_filter == ("failed",)
     assert options.processed_with_args["status"] == ["failed"]
-    assert options.max_run_missing_pct == pytest.approx(100.0)
+    assert options.max_results_missing_pct == pytest.approx(100.0)
 
 
-def test_process_cli_rejects_negative_max_run_missing_pct(
+def test_process_cli_rejects_negative_max_results_missing_pct(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -2071,14 +2071,14 @@ def test_process_cli_rejects_negative_max_run_missing_pct(
                 str(tmp_path / "runs"),
                 "--output-dir",
                 str(tmp_path / "processed"),
-                "--max-run-missing-pct",
+                "--max-results-missing-pct",
                 "-1",
             ]
         )
 
     assert excinfo.value.code == 2
     err = capsys.readouterr().err
-    assert "--max-run-missing-pct must be non-negative." in err
+    assert "--max-results-missing-pct must be non-negative." in err
 
 
 def test_process_config_empty_status_uses_default_filter(
@@ -2317,7 +2317,7 @@ def test_process_cli_rejects_include_prompt_completion(tmp_path: Path) -> None:
     ("field", "value"),
     [
         ("max_workers", "not-an-int"),
-        ("max_run_missing_pct", "not-a-float"),
+        ("max_results_missing_pct", "not-a-float"),
         ("hf_request_timeout", "not-a-float"),
         ("hf_retries", "not-an-int"),
         ("hf_max_files_per_commit", "not-an-int"),
@@ -2346,6 +2346,97 @@ def test_process_cli_rejects_invalid_typed_config_values(
     err = capsys.readouterr().err
     assert f"Invalid process config value for '{field}'" in err
     assert value in err
+
+
+def test_process_cli_rejects_removed_top_level_max_run_missing_pct_config_key(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cfg_path = tmp_path / "process-removed-top-level.yaml"
+    cfg_path.write_text(
+        """
+        runs_dir: runs/raw
+        output_dir: runs/processed
+        max_run_missing_pct: 2.5
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        main.main(["process", "--config", str(cfg_path)])
+
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert "Process config field 'max_run_missing_pct' was removed" in err
+    assert "max_results_missing_pct" in err
+
+
+def test_process_cli_rejects_removed_embedded_max_run_missing_pct_config_key(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cfg_path = tmp_path / "process-removed-embedded.yaml"
+    cfg_path.write_text(
+        """
+        runs_dir: runs/raw
+        process:
+          dir: processed
+          max_run_missing_pct: 2.5
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        main.main(["process", "--config", str(cfg_path)])
+
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert "Process config field 'process.max_run_missing_pct' was removed" in err
+    assert "process.max_results_missing_pct" in err
+
+
+def test_winrate_cli_ignores_removed_process_only_missing_pct_key(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg_path = tmp_path / "winrate-process-key.yaml"
+    cfg_path.write_text(
+        """
+        processed_dir: runs/processed
+        process:
+          max_run_missing_pct: 2.5
+        """,
+        encoding="utf-8",
+    )
+
+    captured: dict[str, Any] = {}
+
+    def fake_run_winrate(
+        *, processed_dir, output_dir, output_path, output_name, config, processed_at, hf_config, hf_processed_pull
+    ):
+        captured["processed_dir"] = processed_dir
+        return SimpleNamespace(
+            output_path=tmp_path / "out.json",
+            output_paths=[tmp_path / "out.json"],
+            result={"models": {}},
+            datasets=[],
+        )
+
+    monkeypatch.setattr(main, "run_winrate", fake_run_winrate)
+    monkeypatch.setattr(main, "print_winrate_summary_markdown", lambda *_args, **_kwargs: None)
+
+    exit_code = main.main(
+        [
+            "winrate",
+            "--config",
+            str(cfg_path),
+            "--processed-at",
+            "2024-01-01T00:00:00Z",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["processed_dir"] == Path("runs/processed")
 
 
 @pytest.mark.parametrize(
@@ -2403,9 +2494,7 @@ def test_process_cli_allows_cli_override_of_malformed_numeric_config(
     monkeypatch.setattr(main, "_load_env_export_map", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(main, "run_process", fake_run)
 
-    exit_code = main.main(
-        ["process", "--config", str(cfg_path), "--max-workers", "2", "--dry-run"]
-    )
+    exit_code = main.main(["process", "--config", str(cfg_path), "--max-workers", "2", "--dry-run"])
     assert exit_code == 0
     assert captured["options"].max_workers == 2
 

@@ -63,15 +63,22 @@ To override that default, pass one or more explicit status filters:
 medarc-eval process --status completed --status failed
 ```
 
-You can also gate partially complete runs by their manifest summary totals:
+You can also gate partially complete outputs by missing `results.jsonl` rows:
 
 ```bash
 # Default tolerance is 2.5 percent missing
-medarc-eval process --max-run-missing-pct 2.5
+medarc-eval process --max-results-missing-pct 2.5
 
 # Effectively disable the gate
-medarc-eval process --max-run-missing-pct 100
+medarc-eval process --max-results-missing-pct 100
 ```
+
+This gate uses manifest job metadata only:
+
+- `expected_rows = num_examples * rollouts_per_example`
+- `observed_rows = row_count`
+
+It is computed per selected job record and enforced only on the latest selected run for each processed model/environment output. It does not use manifest `summary.completed` / `summary.total`, and it does not fall back to older runs if the latest one is too incomplete.
 
 ### Latest Runs Only
 
@@ -100,7 +107,7 @@ runs_dir: runs/raw
 process:
   dir: processed
   max_workers: 8
-  max_run_missing_pct: 2.5
+  max_results_missing_pct: 2.5
   exclude_datasets:
     - med_dialog
   exclude_models:
@@ -249,14 +256,20 @@ When both flags are present, processing only rebuilds outputs that match both fi
 
 Check that:
 1. `--runs-dir` points to the correct location
-2. Runs have completed (check `run_manifest.json` `jobs[*].status` and `summary.completed` / `summary.total`)
+2. Runs have completed (check `run_manifest.json` `jobs[*].status`)
 3. Use `--status pending` or `--status running` to include non-completed jobs
 
 ### Missing data in output
 
-By default, only jobs with `completed` status are included. In addition, `--max-run-missing-pct` skips run directories missing more than 2.5% of their expected job outputs (model/env combinations), based on `run_manifest.json` `summary.completed` / `summary.total`. This is a manifest-level gate; it does not validate `results.jsonl` row counts.
+By default, only jobs with `completed` status are included. In addition, `--max-results-missing-pct` fails if a selected latest job record is missing more than 2.5% of its expected `results.jsonl` rows, using manifest job fields:
 
-Use `--max-run-missing-pct 100` to disable the gate, or pass explicit `--status` values to include other statuses.
+- `row_count`
+- `num_examples`
+- `rollouts_per_example`
+
+The gate is per selected record, not per whole run manifest. If the latest selected run for a model/dataset is too incomplete, processing fails fast instead of silently falling back to an older run. Records with unknown expected rows or unknown `row_count` are not gated.
+
+Use `--max-results-missing-pct 100` to disable the gate, or pass explicit `--status` values to include other statuses.
 
 ### Integrity-check failures for existing parquet files
 

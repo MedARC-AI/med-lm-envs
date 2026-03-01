@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -18,7 +19,7 @@ from medarc_verifiers.cli.hf import HFSyncConfig, HFSyncSummary
 from medarc_verifiers.cli.process import aggregate, discovery, env_index, metadata, rollout, rows, workspace, writer
 from medarc_verifiers.cli.process.aggregate import AggregatedEnvRows
 from medarc_verifiers.cli.process.metadata import RunIdentity
-from medarc_verifiers.cli.process.writer import EnvWriteSummary, WriterConfig
+from medarc_verifiers.cli.process.writer import EXPORTER_METADATA_KEY, EnvWriteSummary, WriterConfig
 from medarc_verifiers.cli.utils.shared import (
     dataset_is_excluded,
     model_is_excluded,
@@ -36,14 +37,14 @@ class ProcessOptions:
 
     runs_dir: Path
     output_dir: Path
-    max_run_missing_pct: float = 2.5
+    max_results_missing_pct: float = 2.5
     exclude_datasets: Sequence[str] = field(default_factory=tuple)
     exclude_models: Sequence[str] = field(default_factory=tuple)
     replace_models: Sequence[str] = field(default_factory=tuple)
     replace_envs: Sequence[str] = field(default_factory=tuple)
     processed_at: str | None = None
     processed_with_args: Mapping[str, Any] = field(default_factory=dict)
-    status_filter: Sequence[str] = field(default_factory=tuple)
+    status_filter: Sequence[str] = field(default_factory=lambda: PROCESS_DEFAULT_STATUS_FILTER)
     dry_run: bool = False
     clean: bool = False
     assume_yes: bool = False
@@ -54,7 +55,7 @@ class ProcessOptions:
     def __post_init__(self) -> None:
         self.runs_dir = Path(self.runs_dir)
         self.output_dir = Path(self.output_dir)
-        self.max_run_missing_pct = float(self.max_run_missing_pct)
+        self.max_results_missing_pct = float(self.max_results_missing_pct)
         self.max_workers = max(1, int(self.max_workers))
         if not self.processed_at:
             self.processed_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -119,7 +120,6 @@ class SelectionResult:
     """Complete output of the selection phase."""
 
     work_items: list[PlannedWorkItem]
-    skipped_by_missing_pct: int
     skipped_by_delta: int
     skipped_by_exclusion: int
     total_discovered: int
@@ -160,10 +160,9 @@ def run_process(
         _print_records_table(
             discovered,
             selected_records,
-            options.max_run_missing_pct,
+            options.max_results_missing_pct,
             exclude_datasets=options.exclude_datasets,
             exclude_models=options.exclude_models,
-            skipped_by_missing_pct=selection.skipped_by_missing_pct,
             skipped_by_delta=selection.skipped_by_delta,
             skipped_by_exclusion=selection.skipped_by_exclusion,
         )
@@ -191,7 +190,9 @@ def run_process(
         env_groups: list[AggregatedEnvRows] = []
         env_summaries: list[EnvWriteSummary] = []
         rows_processed = 0
-        work_items = sorted(selection.work_items, key=lambda item: (item.identity.model_id, item.identity.output_env_id))
+        work_items = sorted(
+            selection.work_items, key=lambda item: (item.identity.model_id, item.identity.output_env_id)
+        )
 
         try:
             if options.max_workers <= 1 or len(work_items) <= 1:
@@ -299,23 +300,11 @@ def select_work_items(
     index_files: Mapping[str, Mapping[str, Any]],
 ) -> SelectionResult:
     """Filter discovered runs down to selected work items before row loading begins."""
-    eligible_records: list[discovery.RunRecord] = []
-    skipped_run_ids_by_missing_pct: set[str] = set()
-    missing_pct_allowed_by_run_id: dict[str, bool] = {}
-    for record in discovered:
-        run_id = record.manifest.job_run_id
-        allow_run = missing_pct_allowed_by_run_id.get(run_id)
-        if allow_run is None:
-            allow_run = _manifest_within_missing_pct(record.manifest, options.max_run_missing_pct)
-            missing_pct_allowed_by_run_id[run_id] = allow_run
-        if not allow_run:
-            skipped_run_ids_by_missing_pct.add(run_id)
-            continue
-        eligible_records.append(record)
-
-    planned_records = [_plan_selection_record(record, env_export_map) for record in eligible_records]
+    planned_records = [_plan_selection_record(record, env_export_map) for record in discovered]
     _raise_for_latest_invalid_selection(planned_records)
-    work_items = _materialize_work_items(_select_latest_work_items([record for record in planned_records if record.identity.model_id]))
+    work_items = _materialize_work_items(
+        _select_latest_work_items([record for record in planned_records if record.identity.model_id])
+    )
 
     work_items, skipped_by_exclusion = _apply_exclusions(
         work_items,
@@ -324,10 +313,10 @@ def select_work_items(
     )
     _validate_replace_targets(work_items, options)
     work_items, skipped_by_delta = _apply_additive_delta(work_items, options=options, index_files=index_files)
+    _validate_selected_results_completeness(work_items, max_results_missing_pct=options.max_results_missing_pct)
 
     return SelectionResult(
         work_items=work_items,
-        skipped_by_missing_pct=len(skipped_run_ids_by_missing_pct),
         skipped_by_delta=skipped_by_delta,
         skipped_by_exclusion=skipped_by_exclusion,
         total_discovered=len(discovered),
@@ -380,9 +369,7 @@ def _raise_for_latest_invalid_selection(records: Sequence[SelectionRecord]) -> N
         ) > _run_sort_key(_source_updated_at(current.record), current.record.manifest.job_run_id):
             latest_by_env[output_env_id] = planned
 
-    invalid_latest = [
-        planned for planned in latest_by_env.values() if not planned.identity.model_id
-    ]
+    invalid_latest = [planned for planned in latest_by_env.values() if not planned.identity.model_id]
     if not invalid_latest:
         return
 
@@ -469,18 +456,21 @@ def _validate_replace_targets(work_items: Sequence[PlannedWorkItem], options: Pr
         return
 
     if options.replace_models:
-        matched_models = {item.identity.model_id for item in work_items if item.identity.model_id in options.replace_models}
+        matched_models = {
+            item.identity.model_id for item in work_items if item.identity.model_id in options.replace_models
+        }
         if not matched_models:
             raise RuntimeError(
                 "No selected processed outputs match --replace-model values: "
                 f"{', '.join(sorted(options.replace_models))}."
             )
     if options.replace_envs:
-        matched_envs = {item.identity.output_env_id for item in work_items if item.identity.output_env_id in options.replace_envs}
+        matched_envs = {
+            item.identity.output_env_id for item in work_items if item.identity.output_env_id in options.replace_envs
+        }
         if not matched_envs:
             raise RuntimeError(
-                "No selected processed outputs match --replace-env values: "
-                f"{', '.join(sorted(options.replace_envs))}."
+                f"No selected processed outputs match --replace-env values: {', '.join(sorted(options.replace_envs))}."
             )
     if options.replace_models and options.replace_envs:
         intersection = [
@@ -517,7 +507,16 @@ def _apply_additive_delta(
         if _should_replace_existing_output(item.identity, options):
             filtered.append(item)
             continue
-        _validate_existing_output_integrity(output_path, output_dir=options.output_dir, index_files=index_files)
+        parquet_metadata = _read_existing_output_metadata(output_path)
+        _validate_existing_output_integrity(
+            output_path,
+            output_dir=options.output_dir,
+            index_files=index_files,
+            parquet_metadata=parquet_metadata,
+        )
+        if not _existing_output_matches_selected_runs(item, parquet_metadata):
+            filtered.append(item)
+            continue
         skipped += 1
     return filtered, skipped
 
@@ -536,12 +535,7 @@ def _should_replace_existing_output(identity: RunIdentity, options: ProcessOptio
     return identity.output_env_id in options.replace_envs
 
 
-def _validate_existing_output_integrity(
-    output_path: Path,
-    *,
-    output_dir: Path,
-    index_files: Mapping[str, Mapping[str, Any]],
-) -> None:
+def _read_existing_output_metadata(output_path: Path) -> pq.FileMetaData:
     try:
         metadata_obj = pq.ParquetFile(output_path).metadata
     except Exception as exc:  # noqa: BLE001
@@ -555,6 +549,17 @@ def _validate_existing_output_integrity(
             f"Existing processed output {output_path} is missing parquet footer metadata. "
             "Rebuild it with --replace-model/--replace-env or re-run with --clean."
         )
+    return metadata_obj
+
+
+def _validate_existing_output_integrity(
+    output_path: Path,
+    *,
+    output_dir: Path,
+    index_files: Mapping[str, Mapping[str, Any]],
+    parquet_metadata: pq.FileMetaData | None = None,
+) -> None:
+    metadata_obj = parquet_metadata or _read_existing_output_metadata(output_path)
 
     rel_key = output_path.relative_to(output_dir).as_posix()
     index_entry = index_files.get(rel_key)
@@ -575,14 +580,39 @@ def _validate_existing_output_integrity(
         )
 
 
+def _existing_output_matches_selected_runs(item: PlannedWorkItem, parquet_metadata: pq.FileMetaData) -> bool:
+    existing_run_ids = _extract_exporter_source_runs(parquet_metadata)
+    if existing_run_ids is None:
+        return False
+    selected_run_ids = {planned.normalized.record.manifest.job_run_id for planned in item.records}
+    return existing_run_ids == selected_run_ids
+
+
+def _extract_exporter_source_runs(parquet_metadata: pq.FileMetaData) -> set[str] | None:
+    metadata_map = parquet_metadata.metadata
+    if not metadata_map:
+        return None
+    payload = metadata_map.get(EXPORTER_METADATA_KEY)
+    if not payload:
+        return None
+    try:
+        exporter_metadata = json.loads(payload.decode("utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+    source_runs = exporter_metadata.get("source_runs")
+    if not isinstance(source_runs, list):
+        return None
+    run_ids = {str(run_id).strip() for run_id in source_runs if str(run_id).strip()}
+    return run_ids or None
+
+
 def _print_records_table(
     discovered: Sequence[discovery.RunRecord],
     selected: Sequence[discovery.RunRecord],
-    max_run_missing_pct: float,
+    max_results_missing_pct: float,
     *,
     exclude_datasets: Sequence[str] = (),
     exclude_models: Sequence[str] = (),
-    skipped_by_missing_pct: int = 0,
     skipped_by_delta: int = 0,
     skipped_by_exclusion: int = 0,
 ) -> None:
@@ -592,8 +622,7 @@ def _print_records_table(
     eligible_discovered = [
         rec
         for rec in discovered
-        if _manifest_within_missing_pct(rec.manifest, max_run_missing_pct)
-        and not (exclude_set and _record_is_excluded(rec, exclude_set))
+        if not (exclude_set and _record_is_excluded(rec, exclude_set))
         and not (exclude_model_set and _record_model_is_excluded(rec, exclude_model_set))
     ]
     total_by_model: dict[str, int] = {}
@@ -619,14 +648,13 @@ def _print_records_table(
         from rich.table import Table
     except Exception:
         logger.info(
-            "Processing %d job(s) across %d model(s) (max_run_missing_pct=%s; found %d eligible job(s) across %d model(s)); "
-            "skipped run(s) by missing pct=%d excluded=%d existing=%d.",
+            "Processing %d job(s) across %d model(s) (max_results_missing_pct=%s; found %d eligible job(s) across %d model(s)); "
+            "excluded=%d existing=%d.",
             selected_jobs_total,
             len(selected_models),
-            _format_missing_pct(max_run_missing_pct),
+            _format_missing_pct(max_results_missing_pct),
             discovered_jobs_total,
             len(models),
-            skipped_by_missing_pct,
             skipped_by_exclusion,
             skipped_by_delta,
         )
@@ -640,11 +668,11 @@ def _print_records_table(
     console = Console()
     title = (
         f"Processing {selected_jobs_total} job(s) across {len(selected_models)} model(s) "
-        f"[dim](max_run_missing_pct={_format_missing_pct(max_run_missing_pct)})[/dim]"
+        f"[dim](max_results_missing_pct={_format_missing_pct(max_results_missing_pct)})[/dim]"
     )
     title += (
-        f" [dim](found {discovered_jobs_total} eligible job(s); skipped run(s) by missing pct={skipped_by_missing_pct}, "
-        f"excluded={skipped_by_exclusion}, existing={skipped_by_delta})[/dim]"
+        f" [dim](found {discovered_jobs_total} eligible job(s); excluded={skipped_by_exclusion}, "
+        f"existing={skipped_by_delta})[/dim]"
     )
     table = Table(title=title, show_header=True, header_style="bold cyan", caption=None)
     table.add_column("Model", style="magenta")
@@ -658,24 +686,6 @@ def _print_records_table(
         table.add_row(escape(str(model_id)), f"{completed}/{total}", str(selected_count))
 
     console.print(table)
-
-
-def _manifest_missing_pct(manifest: discovery.RunManifestInfo) -> float | None:
-    if not manifest.summary_total_known:
-        return None
-    total = int(manifest.summary_total or 0)
-    if total <= 0:
-        return None
-    completed = max(int(manifest.summary_completed or 0), 0)
-    missing = max(total - completed, 0)
-    return 100.0 * missing / total
-
-
-def _manifest_within_missing_pct(manifest: discovery.RunManifestInfo, max_missing_pct: float) -> bool:
-    missing_pct = _manifest_missing_pct(manifest)
-    if missing_pct is None:
-        return True
-    return missing_pct <= float(max_missing_pct)
 
 
 def _format_missing_pct(value: float) -> str:
@@ -695,6 +705,99 @@ def _record_is_excluded(record: discovery.RunRecord, exclude_set: set[str]) -> b
 
 def _record_model_is_excluded(record: discovery.RunRecord, exclude_model_set: set[str]) -> bool:
     return model_is_excluded(str(record.model_id or "").strip(), exclude_model_set)
+
+
+def _validate_selected_results_completeness(
+    work_items: Sequence[PlannedWorkItem],
+    *,
+    max_results_missing_pct: float,
+) -> None:
+    missing_files: list[str] = []
+    violations: list[str] = []
+    ungateable = 0
+
+    for item in work_items:
+        for planned in item.records:
+            normalized = planned.normalized
+            record = normalized.record
+            if not record.results_path.exists():
+                missing_files.append(
+                    "model_id={model_id} output_env_id={output_env_id} manifest_env_id={manifest_env_id} "
+                    "job_run_id={job_run_id} job_id={job_id} results_path={results_path}".format(
+                        model_id=item.identity.model_id,
+                        output_env_id=item.identity.output_env_id,
+                        manifest_env_id=normalized.manifest_env_id,
+                        job_run_id=record.manifest.job_run_id,
+                        job_id=record.job_id,
+                        results_path=record.results_path,
+                    )
+                )
+                continue
+
+            expected_rows = _expected_results_rows(normalized)
+            observed_rows = record.row_count
+            if expected_rows is None or observed_rows is None:
+                ungateable += 1
+                continue
+
+            missing_pct = _results_missing_pct(expected_rows=expected_rows, observed_rows=observed_rows)
+            if missing_pct > max_results_missing_pct:
+                violations.append(
+                    "model_id={model_id} output_env_id={output_env_id} manifest_env_id={manifest_env_id} "
+                    "job_run_id={job_run_id} job_id={job_id} expected_rows={expected_rows} "
+                    "observed_rows={observed_rows} missing_pct={missing_pct:.2f} threshold={threshold:g}".format(
+                        model_id=item.identity.model_id,
+                        output_env_id=item.identity.output_env_id,
+                        manifest_env_id=normalized.manifest_env_id,
+                        job_run_id=record.manifest.job_run_id,
+                        job_id=record.job_id,
+                        expected_rows=expected_rows,
+                        observed_rows=observed_rows,
+                        missing_pct=missing_pct,
+                        threshold=float(max_results_missing_pct),
+                    )
+                )
+
+    if ungateable:
+        logger.warning(
+            "Results row completeness gate could not be applied to %d selected record(s) because expected_rows "
+            "(num_examples * rollouts_per_example) or manifest row_count was unknown.",
+            ungateable,
+        )
+
+    if not missing_files and not violations:
+        return
+
+    message_parts: list[str] = []
+    if missing_files:
+        missing_lines = "\n".join(f"  - {line}" for line in missing_files)
+        message_parts.append("Selected records are missing results.jsonl files:\n" + missing_lines)
+    if violations:
+        violation_lines = "\n".join(f"  - {line}" for line in violations)
+        message_parts.append(
+            "Selected records exceeded --max-results-missing-pct based on manifest row_count and expected rows:\n"
+            + violation_lines
+        )
+    raise RuntimeError("\n\n".join(message_parts))
+
+
+def _expected_results_rows(normalized: metadata.NormalizedMetadata) -> int | None:
+    num_examples = normalized.num_examples
+    rollouts_per_example = normalized.rollouts_per_example
+    if num_examples is None or rollouts_per_example is None:
+        return None
+    if num_examples == -1:
+        return None
+    if num_examples <= 0 or rollouts_per_example <= 0:
+        return None
+    return int(num_examples) * int(rollouts_per_example)
+
+
+def _results_missing_pct(*, expected_rows: int, observed_rows: int) -> float:
+    if expected_rows <= 0:
+        return 0.0
+    missing_rows = max(int(expected_rows) - max(int(observed_rows), 0), 0)
+    return 100.0 * missing_rows / int(expected_rows)
 
 
 def _process_env_group(item: PlannedWorkItem) -> tuple[list[AggregatedEnvRows], int]:
