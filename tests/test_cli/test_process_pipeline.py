@@ -87,6 +87,7 @@ def _run_record(
         reason=None,
         started_at="2024-01-01T00:00:00Z",
         ended_at="2024-01-01T00:00:01Z",
+        avg_reward=1.0,
         num_examples=num_examples,
         rollouts_per_example=rollouts_per_example,
         row_count=row_count,
@@ -641,6 +642,37 @@ def test_process_emits_single_warning_for_ungateable_selected_records(
         record for record in caplog.records if "Results row completeness gate could not be applied" in record.msg
     ]
     assert len(warnings) == 1
+
+
+def test_process_uses_actual_results_rows_when_manifest_row_count_is_stale(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    results_text = "".join(json.dumps({"example_id": f"ex-{index}", "reward": 1.0}) + "\n" for index in range(100))
+    runs_dir = _write_run(
+        tmp_path,
+        run_id="run-stale-row-count",
+        updated_at="2024-01-01T00:00:00Z",
+        reward=1.0,
+        row_count=90,
+        num_examples=100,
+        rollouts_per_example=1,
+        results_text=results_text,
+    )
+    caplog.set_level("WARNING")
+
+    result = run_process(
+        ProcessOptions(
+            runs_dir=runs_dir,
+            output_dir=tmp_path / "processed",
+            dry_run=True,
+            max_workers=1,
+        )
+    )
+
+    assert result.records_processed == 1
+    assert "Manifest row_count mismatch for process input" in caplog.text
+    assert "manifest row_count=90 actual_rows=100" in caplog.text
 
 
 def test_select_work_items_rollout_gate_error_includes_output_and_manifest_ids(tmp_path: Path) -> None:

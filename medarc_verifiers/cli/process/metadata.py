@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping
@@ -21,6 +22,7 @@ class _MetadataPayload(BaseModel):
 
     env_id: str | None = None
     model: str | None = None
+    avg_reward: float | None = None
     version_info: dict[str, str | None] | None = None
     env_args: dict[str, Any] = Field(default_factory=dict)
     num_examples: int | None = None
@@ -152,6 +154,7 @@ def _resolve_metadata_context(
     combine_rollouts: bool,
 ) -> _ResolvedMetadataContext:
     metadata_payload, raw_metadata = _load_metadata(record)
+    _warn_manifest_metadata_result_mismatch(record, metadata_payload)
     metadata_env_id = metadata_payload.env_id if metadata_payload else None
     metadata_model = metadata_payload.model if metadata_payload else None
     env_args = _merge_mappings(
@@ -256,6 +259,44 @@ def _prefer_manifest_value(primary: int | None, fallback: int | None) -> int | N
     if primary is not None:
         return primary
     return fallback
+
+
+def _warn_manifest_metadata_result_mismatch(record: RunRecord, metadata_payload: _MetadataPayload | None) -> None:
+    if metadata_payload is None:
+        return
+
+    mismatches: list[str] = []
+    if _has_float_mismatch(record.avg_reward, metadata_payload.avg_reward):
+        mismatches.append(
+            f"avg_reward manifest={record.avg_reward!r} metadata={metadata_payload.avg_reward!r}"
+        )
+    if _has_int_mismatch(record.num_examples, metadata_payload.num_examples):
+        mismatches.append(
+            f"num_examples manifest={record.num_examples!r} metadata={metadata_payload.num_examples!r}"
+        )
+    if not mismatches:
+        return
+
+    logger.warning(
+        "Manifest/metadata result mismatch for process input "
+        "(job_run_id=%s, job_id=%s, metadata=%s): %s",
+        record.manifest.job_run_id,
+        record.job_id,
+        record.metadata_path,
+        "; ".join(mismatches),
+    )
+
+
+def _has_float_mismatch(left: float | None, right: float | None) -> bool:
+    if left is None or right is None:
+        return False
+    return not math.isclose(left, right, rel_tol=1e-9, abs_tol=1e-9)
+
+
+def _has_int_mismatch(left: int | None, right: int | None) -> bool:
+    if left is None or right is None:
+        return False
+    return left != right
 
 
 def _extract_env_config_id(env_config: Mapping[str, Any] | None) -> str | None:

@@ -65,6 +65,7 @@ class RunRecord:
     reason: str | None
     started_at: str | None
     ended_at: str | None
+    avg_reward: float | None
     num_examples: int | None
     rollouts_per_example: int | None
     row_count: int | None
@@ -185,6 +186,7 @@ def _build_run_record(
         reason=reason or job_entry.reason,
         started_at=job_entry.started_at,
         ended_at=job_entry.ended_at,
+        avg_reward=job_entry.avg_reward,
         num_examples=job_entry.num_examples,
         rollouts_per_example=job_entry.rollouts_per_example,
         row_count=job_entry.row_count,

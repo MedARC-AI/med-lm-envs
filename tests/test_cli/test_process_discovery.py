@@ -70,6 +70,7 @@ def test_discover_run_records_basic(tmp_path: Path) -> None:
                 "status": "completed",
                 "started_at": "2024-01-01T00:00:30Z",
                 "ended_at": "2024-01-01T00:01:00Z",
+                "avg_reward": 0.75,
                 "num_examples": 10,
                 "rollouts_per_example": 2,
                 "row_count": 20,
@@ -108,6 +109,7 @@ def test_discover_run_records_basic(tmp_path: Path) -> None:
     assert record.has_summary is True
     assert record.env_args == {"fold": "dev"}
     assert record.sampling_args == {"temperature": 0.2}
+    assert record.avg_reward == 0.75
     assert record.row_count == 20
     assert record.manifest.job_run_id == "job-run-123"
 

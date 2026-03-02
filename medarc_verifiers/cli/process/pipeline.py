@@ -21,6 +21,7 @@ from medarc_verifiers.cli.process.aggregate import AggregatedEnvRows
 from medarc_verifiers.cli.process.metadata import RunIdentity
 from medarc_verifiers.cli.process.writer import EXPORTER_METADATA_KEY, EnvWriteSummary, WriterConfig
 from medarc_verifiers.cli.utils.shared import (
+    count_jsonl_rows,
     dataset_is_excluded,
     model_is_excluded,
     normalize_dataset_ids,
@@ -735,7 +736,7 @@ def _validate_selected_results_completeness(
                 continue
 
             expected_rows = _expected_results_rows(normalized)
-            observed_rows = record.row_count
+            observed_rows = _completeness_observed_rows(record, expected_rows=expected_rows, threshold=max_results_missing_pct)
             if expected_rows is None or observed_rows is None:
                 ungateable += 1
                 continue
@@ -798,6 +799,37 @@ def _results_missing_pct(*, expected_rows: int, observed_rows: int) -> float:
         return 0.0
     missing_rows = max(int(expected_rows) - max(int(observed_rows), 0), 0)
     return 100.0 * missing_rows / int(expected_rows)
+
+
+def _completeness_observed_rows(
+    record: discovery.RunRecord,
+    *,
+    expected_rows: int | None,
+    threshold: float,
+) -> int | None:
+    observed_rows = record.row_count
+    if expected_rows is None or observed_rows is None:
+        return observed_rows
+
+    missing_pct = _results_missing_pct(expected_rows=expected_rows, observed_rows=observed_rows)
+    if missing_pct <= threshold:
+        return observed_rows
+
+    actual_rows = count_jsonl_rows(record.results_path)
+    if actual_rows is None or actual_rows == observed_rows:
+        return observed_rows
+
+    logger.warning(
+        "Manifest row_count mismatch for process input "
+        "(job_run_id=%s, job_id=%s, results_path=%s): manifest row_count=%s actual_rows=%s. "
+        "Using actual_rows for completeness validation.",
+        record.manifest.job_run_id,
+        record.job_id,
+        record.results_path,
+        observed_rows,
+        actual_rows,
+    )
+    return actual_rows
 
 
 def _process_env_group(item: PlannedWorkItem) -> tuple[list[AggregatedEnvRows], int]:

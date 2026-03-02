@@ -52,6 +52,7 @@ def _build_record(tmp_path: Path, *, status: str = "completed", reason: str | No
         reason=reason,
         started_at="2024-05-01T00:00:30Z",
         ended_at="2024-05-01T00:00:42Z",
+        avg_reward=0.5,
         num_examples=10,
         rollouts_per_example=1,
         row_count=1,
