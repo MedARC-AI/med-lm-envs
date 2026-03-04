@@ -187,9 +187,23 @@ medarc-eval process --hf-repo your-org/data --hf-pull-policy pull
 
 # Start fresh (ignore remote)
 medarc-eval process --hf-repo your-org/data --hf-pull-policy clean
+
+# Resume a previously failed HF upload without pulling or cleaning
+medarc-eval process --hf-repo your-org/data --hf-pull-policy continue-upload
 ```
 
 `prompt` only prompts when the local processed dir is already non-empty. If the output dir is empty, process pulls the HF baseline immediately.
+
+When `prompt` is used with a non-empty local processed dir, the menu may show:
+
+- `pull`: download missing baseline data without deleting local files
+- `clean`: redownload everything after deleting local files
+- `upload`: keep local processed outputs and resume/upload pending HF artifacts
+
+`upload` is shown only when local parquet files appear to be missing remotely or have a different remote `lfs.sha256`. Recovery uploads the union of:
+
+- parquet files that were already pending before the current run started
+- files touched by the current process run, including `env_index.json` and `dataset_infos.json` when rewritten
 
 ### Push After Processing
 

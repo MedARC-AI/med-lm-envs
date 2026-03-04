@@ -8,12 +8,13 @@ import pyarrow.parquet as pq
 
 from medarc_verifiers.cli._manifest import MANIFEST_VERSION
 from medarc_verifiers.cli._schemas import EnvironmentExportConfig
+from medarc_verifiers.cli.hf import HFSyncConfig
 from medarc_verifiers.cli.process import ProcessOptions, run_process
+from medarc_verifiers.cli.process import workspace
 from medarc_verifiers.cli.process.discovery import RunManifestInfo, RunRecord, discover_run_records
 from medarc_verifiers.cli.process.pipeline import select_work_items
 from medarc_verifiers.cli.winrate import WinrateConfig
 from medarc_verifiers.cli.winrate import discover_datasets, run_winrate
-from medarc_verifiers.cli.hf import HFSyncConfig
 from medarc_verifiers.cli.process.writer import ALLOWED_COLUMNS
 
 
@@ -415,6 +416,7 @@ def test_process_allows_results_missing_pct_within_threshold(tmp_path: Path) -> 
 
 
 def test_process_rejects_results_missing_pct_above_threshold(tmp_path: Path) -> None:
+    results_text = "".join(json.dumps({"example_id": f"ex-{index}", "reward": 1.0}) + "\n" for index in range(90))
     runs_dir = _write_run(
         tmp_path,
         run_id="run-90pct",
@@ -423,6 +425,7 @@ def test_process_rejects_results_missing_pct_above_threshold(tmp_path: Path) -> 
         row_count=90,
         num_examples=100,
         rollouts_per_example=1,
+        results_text=results_text,
     )
     options = ProcessOptions(
         runs_dir=runs_dir,
@@ -587,6 +590,7 @@ def test_process_stale_delta_output_does_not_mask_newer_incomplete_run(tmp_path:
     initial = run_process(ProcessOptions(runs_dir=runs_dir, output_dir=output_dir, dry_run=False, max_workers=1))
     assert initial.records_processed == 1
 
+    results_text = "".join(json.dumps({"example_id": f"ex-{index}", "reward": 0.0}) + "\n" for index in range(90))
     _write_run(
         tmp_path,
         run_id="run-newer-bad",
@@ -595,6 +599,7 @@ def test_process_stale_delta_output_does_not_mask_newer_incomplete_run(tmp_path:
         row_count=90,
         num_examples=100,
         rollouts_per_example=1,
+        results_text=results_text,
     )
 
     with pytest.raises(RuntimeError) as excinfo:
@@ -990,6 +995,125 @@ def test_process_latest_only_selects_latest_and_skips_existing_outputs(tmp_path:
     newer_table = pq.read_table(result_newer_raw.env_summaries[0].output_path)
     assert set(newer_table.column("job_run_id").to_pylist()) == {"run-3"}
     assert newer_table.column("reward").to_pylist() == [0.4]
+
+
+def test_run_process_continue_upload_syncs_pending_parquets_without_new_deltas(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runs_dir = _write_run(tmp_path, run_id="run-1", updated_at="2024-01-01T00:00:00Z", reward=0.1, env_id="demo-env")
+    output_dir = tmp_path / "processed"
+
+    first_result = run_process(
+        ProcessOptions(
+            runs_dir=runs_dir,
+            output_dir=output_dir,
+            dry_run=False,
+            max_workers=1,
+        )
+    )
+    pending_path = first_result.env_summaries[0].output_path.relative_to(output_dir).as_posix()
+    captured: dict[str, object] = {}
+
+    def fake_prepare_output_workspace(**_kwargs: object) -> workspace.WorkspacePreparationResult:
+        return workspace.WorkspacePreparationResult(
+            baseline_result=workspace.BaselineResult(
+                policy="continue-upload",
+                pending_parquet_uploads={pending_path},
+            )
+        )
+
+    def fake_sync_to_hub(
+        env_summaries,
+        config,
+        *,
+        output_dir,
+        metadata_paths=None,
+        files=None,
+        **_kwargs,
+    ):
+        captured["env_summaries"] = list(env_summaries)
+        captured["files"] = list(files or [])
+        return None
+
+    monkeypatch.setattr("medarc_verifiers.cli.process.pipeline.workspace.prepare_output_workspace", fake_prepare_output_workspace)
+    monkeypatch.setattr("medarc_verifiers.cli.process.pipeline.hf_sync.sync_to_hub", fake_sync_to_hub)
+
+    result = run_process(
+        ProcessOptions(
+            runs_dir=runs_dir,
+            output_dir=output_dir,
+            dry_run=False,
+            max_workers=1,
+            hf_config=HFSyncConfig(repo_id="demo/repo"),
+            hf_pull_policy="continue-upload",
+        )
+    )
+
+    assert result.env_summaries == []
+    assert captured["env_summaries"] == []
+    assert captured["files"] == [pending_path]
+
+
+def test_run_process_continue_upload_unions_pending_and_current_touched_files(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runs_dir = _write_run(tmp_path, run_id="run-1", updated_at="2024-01-01T00:00:00Z", reward=0.1, env_id="demo-env")
+    output_dir = tmp_path / "processed"
+    first_result = run_process(
+        ProcessOptions(
+            runs_dir=runs_dir,
+            output_dir=output_dir,
+            dry_run=False,
+            max_workers=1,
+        )
+    )
+    current_path = first_result.env_summaries[0].output_path.relative_to(output_dir).as_posix()
+    pending_path = "stale-model/stale-env.parquet"
+    stale_path = output_dir / pending_path
+    stale_path.parent.mkdir(parents=True, exist_ok=True)
+    stale_path.write_text("stale", encoding="utf-8")
+    _write_run(tmp_path, run_id="run-2", updated_at="2024-01-02T00:00:00Z", reward=0.9, env_id="demo-env")
+
+    captured: dict[str, object] = {}
+
+    def fake_prepare_output_workspace(**_kwargs: object) -> workspace.WorkspacePreparationResult:
+        return workspace.WorkspacePreparationResult(
+            baseline_result=workspace.BaselineResult(
+                policy="continue-upload",
+                pending_parquet_uploads={pending_path},
+            )
+        )
+
+    def fake_sync_to_hub(
+        env_summaries,
+        config,
+        *,
+        output_dir,
+        metadata_paths=None,
+        files=None,
+        **_kwargs,
+    ):
+        captured["files"] = list(files or [])
+        return None
+
+    monkeypatch.setattr("medarc_verifiers.cli.process.pipeline.workspace.prepare_output_workspace", fake_prepare_output_workspace)
+    monkeypatch.setattr("medarc_verifiers.cli.process.pipeline.hf_sync.sync_to_hub", fake_sync_to_hub)
+
+    result = run_process(
+        ProcessOptions(
+            runs_dir=runs_dir,
+            output_dir=output_dir,
+            dry_run=False,
+            max_workers=1,
+            hf_config=HFSyncConfig(repo_id="demo/repo"),
+            hf_pull_policy="continue-upload",
+        )
+    )
+
+    assert result.env_summaries
+    assert set(captured["files"]) == {pending_path, current_path, "dataset_infos.json", "env_index.json"}
 
 
 def test_process_replace_model_rebuilds_existing_output(tmp_path: Path) -> None:

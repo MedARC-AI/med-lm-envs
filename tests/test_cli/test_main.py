@@ -1838,6 +1838,11 @@ def test_process_cli_applies_config_defaults(monkeypatch: pytest.MonkeyPatch, tm
     assert options.hf_config is not None
     assert options.hf_config.token == "override"
 
+    exit_code = main.main(["process", "--config", str(cfg_path), "--hf-pull-policy", "continue-upload", "--dry-run"])
+    assert exit_code == 0
+    options = captured["options"]
+    assert options.hf_pull_policy == "continue-upload"
+
 
 def test_process_cli_resolves_hf_token_env_reference(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg_path = tmp_path / "process.yaml"

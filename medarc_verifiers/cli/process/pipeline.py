@@ -135,8 +135,9 @@ def run_process(
     env_export_map = env_export_map or {}
 
     def _run_pipeline() -> ProcessResult:
+        baseline_result: workspace.BaselineResult | None = None
         if not options.dry_run:
-            workspace.prepare_output_workspace(
+            preparation = workspace.prepare_output_workspace(
                 output_dir=options.output_dir,
                 hf_config=options.hf_config,
                 pull_policy=options.hf_pull_policy,
@@ -145,6 +146,8 @@ def run_process(
                 is_tty=sys.stdin.isatty(),
                 prompt_func=input,
             )
+            if preparation is not None:
+                baseline_result = preparation.baseline_result
 
         index_files = {} if options.clean else env_index.read_env_index_files(options.output_dir)
         discovered = discovery.discover_run_records(
@@ -266,11 +269,20 @@ def run_process(
 
         hf_summary: HFSyncSummary | None = None
         if options.hf_config:
+            files_to_upload: list[str] | None = None
+            if baseline_result is not None and baseline_result.policy == "continue-upload":
+                touched_files = hf_sync.collect_changed_output_files(
+                    env_summaries,
+                    output_dir=options.output_dir,
+                    metadata_paths=metadata_paths,
+                )
+                files_to_upload = sorted(set(baseline_result.pending_parquet_uploads) | set(touched_files))
             hf_summary = hf_sync.sync_to_hub(
                 env_summaries,
                 options.hf_config,
                 output_dir=options.output_dir,
                 metadata_paths=metadata_paths,
+                files=files_to_upload,
                 is_tty=sys.stdin.isatty(),
                 assume_yes=options.assume_yes,
                 prompt_func=input,

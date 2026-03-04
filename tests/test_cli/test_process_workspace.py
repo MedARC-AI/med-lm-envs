@@ -176,6 +176,7 @@ def test_prepare_hf_baseline_prompt_conflict_overwrite(monkeypatch: pytest.Monke
         return snapshot_dir
 
     monkeypatch.setattr(workspace, "download_hf_repo", _fake_download_hf_repo)
+    monkeypatch.setattr(workspace, "compute_pending_parquet_uploads", lambda **_kwargs: set())
     hf_config = HFSyncConfig(repo_id="demo/repo")
     output_dir = tmp_path / "output"
     output_dir.mkdir()
@@ -197,6 +198,190 @@ def test_prepare_hf_baseline_prompt_conflict_overwrite(monkeypatch: pytest.Monke
     )
 
     assert local_path.read_text(encoding="utf-8") == "remote"
+
+
+def test_prepare_hf_baseline_prompt_offers_upload_when_pending_exists(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    _write_snapshot(output_dir, content="local")
+
+    prompts: list[str] = []
+
+    def _prompt(message: str) -> str:
+        prompts.append(message)
+        return "upload"
+
+    def _fail_download(**_kwargs) -> Path:
+        raise AssertionError("download_hf_repo should not be called for upload recovery")
+
+    monkeypatch.setattr(workspace, "download_hf_repo", _fail_download)
+    monkeypatch.setattr(
+        workspace,
+        "compute_pending_parquet_uploads",
+        lambda **_kwargs: {"model-a/env-a.parquet"},
+    )
+
+    result = workspace.prepare_hf_baseline(
+        output_dir=output_dir,
+        hf_config=HFSyncConfig(repo_id="demo/repo"),
+        pull_policy="prompt",
+        is_tty=True,
+        prompt_func=_prompt,
+    )
+
+    assert result.policy == "continue-upload"
+    assert result.pending_parquet_uploads == {"model-a/env-a.parquet"}
+    assert prompts and "upload" in prompts[0]
+
+
+def test_prepare_hf_baseline_continue_upload_skips_download(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    _write_snapshot(output_dir, content="local")
+
+    def _fail_download(**_kwargs) -> Path:
+        raise AssertionError("download_hf_repo should not be called for continue-upload")
+
+    monkeypatch.setattr(workspace, "download_hf_repo", _fail_download)
+    monkeypatch.setattr(
+        workspace,
+        "compute_pending_parquet_uploads",
+        lambda **_kwargs: {"model-a/env-a.parquet"},
+    )
+
+    result = workspace.prepare_hf_baseline(
+        output_dir=output_dir,
+        hf_config=HFSyncConfig(repo_id="demo/repo"),
+        pull_policy="continue-upload",
+        is_tty=False,
+        prompt_func=None,
+    )
+
+    assert result.policy == "continue-upload"
+    assert result.pending_parquet_uploads == {"model-a/env-a.parquet"}
+
+
+def test_prepare_hf_baseline_prompt_hides_upload_when_recovery_check_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    _write_snapshot(output_dir, content="local")
+
+    prompts: list[str] = []
+
+    def _prompt(message: str) -> str:
+        prompts.append(message)
+        return "pull"
+
+    monkeypatch.setattr(
+        workspace,
+        "compute_pending_parquet_uploads",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("hf down")),
+    )
+    monkeypatch.setattr(workspace, "download_hf_repo", lambda **_kwargs: tmp_path / "snapshot")
+
+    with caplog.at_level("WARNING"):
+        result = workspace.prepare_hf_baseline(
+            output_dir=output_dir,
+            hf_config=HFSyncConfig(repo_id="demo/repo"),
+            pull_policy="prompt",
+            is_tty=True,
+            prompt_func=_prompt,
+        )
+
+    assert result.policy == "pull"
+    assert result.pending_parquet_uploads == set()
+    assert prompts and "upload" not in prompts[0]
+    assert "HF upload recovery check failed before prompt" in caplog.text
+
+
+def test_prepare_hf_baseline_continue_upload_empty_dir_warns_and_pulls(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    snapshot_dir = tmp_path / "snapshot"
+    snapshot_dir.mkdir()
+    _write_snapshot(snapshot_dir, content="remote")
+    monkeypatch.setattr(workspace, "download_hf_repo", lambda **_kwargs: snapshot_dir)
+
+    with caplog.at_level("WARNING"):
+        result = workspace.prepare_hf_baseline(
+            output_dir=tmp_path / "output",
+            hf_config=HFSyncConfig(repo_id="demo/repo"),
+            pull_policy="continue-upload",
+            is_tty=False,
+            prompt_func=None,
+        )
+
+    assert result.policy == "pull"
+    assert "falling back to pull" in caplog.text
+
+
+def test_prepare_hf_baseline_continue_upload_degrades_when_recovery_check_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    _write_snapshot(output_dir, content="local")
+
+    monkeypatch.setattr(
+        workspace,
+        "compute_pending_parquet_uploads",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("hf down")),
+    )
+
+    with caplog.at_level("WARNING"):
+        result = workspace.prepare_hf_baseline(
+            output_dir=output_dir,
+            hf_config=HFSyncConfig(repo_id="demo/repo"),
+            pull_policy="continue-upload",
+            is_tty=False,
+            prompt_func=None,
+        )
+
+    assert result.policy == "continue-upload"
+    assert result.pending_parquet_uploads == set()
+    assert "uploading only current touched files" in caplog.text
+
+
+@pytest.mark.parametrize("exc_type", [EOFError, KeyboardInterrupt])
+def test_prepare_hf_baseline_prompt_aborts_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    exc_type: type[BaseException],
+) -> None:
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    _write_snapshot(output_dir, content="local")
+    monkeypatch.setattr(
+        workspace,
+        "compute_pending_parquet_uploads",
+        lambda **_kwargs: {"model-a/env-a.parquet"},
+    )
+
+    def _prompt(_message: str) -> str:
+        raise exc_type
+
+    with pytest.raises(RuntimeError, match="Aborted HF baseline selection."):
+        workspace.prepare_hf_baseline(
+            output_dir=output_dir,
+            hf_config=HFSyncConfig(repo_id="demo/repo"),
+            pull_policy="prompt",
+            is_tty=True,
+            prompt_func=_prompt,
+        )
 
 
 def test_prepare_hf_baseline_pull_skips_when_local_baseline_present(

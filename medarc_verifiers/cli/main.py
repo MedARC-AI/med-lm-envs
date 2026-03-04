@@ -325,7 +325,7 @@ def build_process_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hf-repo", default=None, help="Hugging Face repo id for dataset sync.")
     parser.add_argument(
         "--hf-pull-policy",
-        choices=("prompt", "pull", "clean"),
+        choices=("prompt", "pull", "clean", "continue-upload"),
         default=None,
         help="Baseline policy when output dir is non-empty in HF mode.",
     )
