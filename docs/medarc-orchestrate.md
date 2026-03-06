@@ -1,7 +1,7 @@
 ## vLLM orchestrator (Docker or Pyxis)
 
 This repo includes an experimental vLLM orchestrator for running `medarc-eval` against
-locally hosted vLLM servers with GPU/port scheduling.
+locally hosted vLLM containers with GPU/port scheduling.
 
 ### Requirements
 
