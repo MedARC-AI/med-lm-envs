@@ -158,6 +158,31 @@ def write_summary(path: Path, tasks: list[TaskManifest]) -> None:
     _write_json_atomic(path, payload)
 
 
+def upsert_summary_entry(path: Path, task: TaskManifest) -> None:
+    existing_entries: dict[str, dict[str, Any]] = {}
+    if path.exists():
+        loaded = load_summary(path)
+        entries = loaded.get("tasks")
+        if isinstance(entries, list):
+            for entry in entries:
+                if isinstance(entry, Mapping) and entry.get("task_id") is not None:
+                    existing_entries[str(entry["task_id"])] = dict(entry)
+    existing_entries[task.task_id] = {
+        "task_id": task.task_id,
+        "state": task.state,
+        "model_key": task.model_key,
+        "model_id": task.model_id,
+        "config_path": task.config_path,
+        "failure_reason": task.failure_reason,
+        "error": task.error,
+    }
+    payload = {
+        "updated_at": _now(),
+        "tasks": list(existing_entries.values()),
+    }
+    _write_json_atomic(path, payload)
+
+
 def load_summary(path: Path) -> Mapping[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Summary not found: {path}")
@@ -196,6 +221,7 @@ __all__ = [
     "TaskPaths",
     "filter_tasks_for_resume",
     "load_summary",
+    "upsert_summary_entry",
     "write_summary",
     "write_task_manifest",
     "write_task_result",

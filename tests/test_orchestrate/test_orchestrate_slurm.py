@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from medarc_verifiers.orchestrate.bundle import load_run_bundle_manifest, load_runtime_state
+from medarc_verifiers.orchestrate.bundle import load_run_bundle_manifest, load_runtime_state, load_task_spec
 from medarc_verifiers.orchestrate.cli import main as orchestrate_main
 from medarc_verifiers.orchestrate.config import TaskSpec, expand_tasks, load_job_config, load_plan
 from medarc_verifiers.orchestrate.slurm.manifest import SlurmBundleManifest
@@ -208,7 +208,10 @@ def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
     assert "#SBATCH --partition=gpu" in script
     assert "#SBATCH --requeue" in script
     assert "--runtime pyxis" in script
-    assert "--resume" in script
+    assert "medarc-orchestrate worker" in script
+    assert "--task" in script
+    assert "--allocation" in script
+    assert "--resume" not in script
     assert f'ACTIVATE_SCRIPT="${{ACTIVATE_SCRIPT:-{tmp_path / ".venv" / "bin" / "activate"}}}"' in script
     assert 'source "$ACTIVATE_SCRIPT"' in script
     assert "Missing activation script:" in script
@@ -220,6 +223,10 @@ def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
     assert bundled_payload["orchestrate"]["foo"]["gpus"] == 8
     assert bundled_payload["orchestrate"]["foo"]["data_parallel_size"] == 4
     assert "restart" not in bundled_payload["orchestrate"]
+    task_spec = load_task_spec(Path(entry.task_spec_path))
+    assert task_spec.gpus == 8
+    assert task_spec.tensor_parallel_size == 2
+    assert task_spec.data_parallel_size == 4
     assert Path(entry.task_spec_path).name == "task.yaml"
     assert Path(entry.script_path).name == "submit.sh"
 

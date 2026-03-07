@@ -5,7 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 import shlex
 
-from medarc_verifiers.orchestrate.bundle import ExecutionAllocation, PlannedTaskBundle, ensure_run_bundle
+from medarc_verifiers.orchestrate.bundle import (
+    ExecutionAllocation,
+    PlannedTaskBundle,
+    ensure_run_bundle,
+    write_execution_allocation,
+)
 
 from .manifest import SlurmBundleManifest, SlurmTaskEntry
 from .plan import PlannedSlurmTask, placeholder_dependency
@@ -43,6 +48,7 @@ def render_bundle(
         task.task.task_id: ExecutionAllocation(
             task_id=task.task.task_id,
             allocated_gpus=node_gpus,
+            server_port=8000,
             require_contiguous_gpus=node_gpus > 1,
             slurm_job_id=(existing_entries.get(task.task.task_id).slurm_job_id if existing_entries.get(task.task.task_id) else None),
             constraints={"scheduler": "slurm", "node_gpus": node_gpus},
@@ -65,6 +71,7 @@ def render_bundle(
         existing_entry = existing_entries.get(planned_task.task.task_id)
         bundle = bundle_plan.tasks[planned_task.task.task_id]
         bundle_entry = bundle_entries[planned_task.task.task_id]
+        write_execution_allocation(bundle.paths.allocation_path, allocation_defaults[planned_task.task.task_id])
         rendered = render_task_artifacts(
             planned_task=planned_task,
             task_bundle=bundle,
@@ -186,14 +193,15 @@ def write_script(
 
     command = [
         "medarc-orchestrate",
-        "--job-config",
-        task_bundle.spec.bundled_eval_config_path,
+        "worker",
+        "--task",
+        task_bundle.spec.output_paths.task_spec_path,
+        "--allocation",
+        task_bundle.spec.output_paths.allocation_path,
         "--runtime",
         "pyxis",
         "--run-id",
         planned_task.inner_run_id,
-        "--output-dir",
-        str(Path(task_bundle.spec.output_paths.root) / "orchestrator"),
         "--no-uv-run",
     ]
     if env_file is not None:
@@ -202,8 +210,6 @@ def write_script(
         command.extend(["--readiness-timeout-s", str(readiness_timeout_s)])
     if prune_logs_on_success:
         command.append("--prune-logs-on-success")
-    if planned_task.options.slurm_resume:
-        command.append("--resume")
 
     body_lines = [
         "",
@@ -213,12 +219,6 @@ def write_script(
         f'ACTIVATE_SCRIPT="${{ACTIVATE_SCRIPT:-{activate_script}}}"',
         "",
         'cd "$SOURCE_DIR"',
-        "",
-        'if [ -f "$SOURCE_DIR/.env" ]; then',
-        '    set -a',
-        '    source "$SOURCE_DIR/.env"',
-        '    set +a',
-        "fi",
         "",
         'if [ ! -f "$ACTIVATE_SCRIPT" ]; then',
         '    echo "Missing activation script: $ACTIVATE_SCRIPT" >&2',

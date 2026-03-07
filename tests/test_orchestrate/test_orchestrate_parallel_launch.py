@@ -153,7 +153,7 @@ def _write_job_config(path: Path) -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("runtime", "resource_manager"),
-    [("docker", DummyResourceManager()), ("pyxis", PortOnlyDummyResourceManager())],
+    [("docker", DummyResourceManager()), ("podman", DummyResourceManager()), ("pyxis", PortOnlyDummyResourceManager())],
 )
 async def test_parallel_launch_runs_concurrently(
     tmp_path: Path,
@@ -221,11 +221,11 @@ async def test_parallel_launch_runs_concurrently(
     async def fake_to_thread(func, /, *args, **kwargs):
         return func(*args, **kwargs)
 
-    monkeypatch.setattr("medarc_verifiers.orchestrate.run.wait_for_readiness_async", fake_wait_for_readiness_async)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.run.start_benchmark", fake_start_benchmark)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.run.wait_benchmark", fake_wait_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_for_readiness_async", fake_wait_for_readiness_async)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.start_benchmark", fake_start_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_benchmark", fake_wait_benchmark)
     monkeypatch.setattr("medarc_verifiers.orchestrate.run._register_signal_handlers", lambda loop, handler: None)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.run.asyncio.to_thread", fake_to_thread)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.asyncio.to_thread", fake_to_thread)
 
     await runner._run_async()
 
@@ -283,11 +283,11 @@ async def test_parallel_launch_records_gpu_accounting_and_dp_args(
     async def fake_to_thread(func, /, *args, **kwargs):
         return func(*args, **kwargs)
 
-    monkeypatch.setattr("medarc_verifiers.orchestrate.run.wait_for_readiness_async", fake_wait_for_readiness_async)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.run.start_benchmark", fake_start_benchmark)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.run.wait_benchmark", fake_wait_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_for_readiness_async", fake_wait_for_readiness_async)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.start_benchmark", fake_start_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_benchmark", fake_wait_benchmark)
     monkeypatch.setattr("medarc_verifiers.orchestrate.run._register_signal_handlers", lambda loop, handler: None)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.run.asyncio.to_thread", fake_to_thread)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.asyncio.to_thread", fake_to_thread)
     monkeypatch.setenv("MEDARC_ALLOCATED_GPU_COUNT", "8")
 
     await runner._run_async()
@@ -364,12 +364,12 @@ async def test_runner_persists_discovered_restart_source(tmp_path: Path, monkeyp
     async def fake_to_thread(func, /, *args, **kwargs):
         return func(*args, **kwargs)
 
-    monkeypatch.setattr("medarc_verifiers.orchestrate.run.wait_for_readiness_async", fake_wait_for_readiness_async)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.run.start_benchmark", fake_start_benchmark)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.run.wait_benchmark", fake_wait_benchmark)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.run._discover_bench_run_dir", fake_discover_bench_run_dir)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_for_readiness_async", fake_wait_for_readiness_async)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.start_benchmark", fake_start_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_benchmark", fake_wait_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker._discover_bench_run_dir", fake_discover_bench_run_dir)
     monkeypatch.setattr("medarc_verifiers.orchestrate.run._register_signal_handlers", lambda loop, handler: None)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.run.asyncio.to_thread", fake_to_thread)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.asyncio.to_thread", fake_to_thread)
 
     await runner._run_async()
 

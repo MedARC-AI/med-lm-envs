@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
+import shutil
 import sys
 from pathlib import Path
 
 from medarc_verifiers.orchestrate.config import TaskSpec, expand_tasks, load_plan, make_plan
-from medarc_verifiers.orchestrate.docker_vllm import cleanup_orphan_containers
+from medarc_verifiers.orchestrate.docker_vllm import cleanup_orphan_containers as cleanup_docker_orphans
+from medarc_verifiers.orchestrate.podman_vllm import cleanup_orphan_containers as cleanup_podman_orphans
 from medarc_verifiers.orchestrate.resources import (
     PortOnlyResourceManager,
     ResourceError,
@@ -47,9 +50,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--runtime",
-        choices=("docker", "pyxis"),
+        choices=("docker", "podman", "pyxis"),
         default=None,
-        help="Serve runtime backend (defaults to docker unless plan.runtime is set).",
+        help="Serve runtime backend (defaults to local docker, falling back to podman, unless plan.runtime is set).",
     )
     parser.add_argument(
         "--dry-run",
@@ -111,7 +114,7 @@ def _validate_schedule(
     port_range: tuple[int, int],
     max_parallel: int,
 ) -> None:
-    if runtime == "docker":
+    if runtime in {"docker", "podman"}:
         try:
             gpus = discover_gpus()
         except ResourceError as exc:
@@ -153,6 +156,10 @@ def main(argv: list[str] | None = None) -> int:
         from medarc_verifiers.orchestrate.slurm.cli import main as slurm_main
 
         return slurm_main(argv[1:])
+    if argv and argv[0] == "worker":
+        from medarc_verifiers.orchestrate.worker import main as worker_main
+
+        return worker_main(argv[1:])
     parser = build_parser()
     args = parser.parse_args(argv)
     plan_base_dir = Path.cwd()
@@ -162,14 +169,19 @@ def main(argv: list[str] | None = None) -> int:
         plan_base_dir = plan_path.parent
     else:
         plan = make_plan(job_configs=args.job_configs or [], base_dir=plan_base_dir, name=args.name)
-    runtime = args.runtime or plan.runtime or "docker"
+    runtime = args.runtime or plan.runtime or _default_local_runtime()
     if args.env_file is not None:
         env_file = args.env_file.expanduser()
         if not env_file.is_absolute():
             env_file = plan_base_dir / env_file
         plan.env_file = env_file.resolve()
-    tasks = expand_tasks(plan)
     configured_run_id = args.run_id or plan.run_id
+    if args.kill_orphans or plan.kill_orphans:
+        removed = _cleanup_orphans(runtime=runtime, run_id=configured_run_id)
+        if removed:
+            print("\n".join(removed))
+        return 0
+    tasks = expand_tasks(plan)
     if configured_run_id:
         run_id = configured_run_id
     else:
@@ -211,11 +223,6 @@ def main(argv: list[str] | None = None) -> int:
         for entry in summary.get("tasks", []):
             print(f"{entry.get('task_id')}\t{entry.get('state')}\t{entry.get('model_id')}")
         return 0
-    if args.kill_orphans or plan.kill_orphans:
-        removed = cleanup_orphan_containers(run_id=configured_run_id)
-        if removed:
-            print("\n".join(removed))
-        return 0
     if resume and summary_path.exists():
         summary = load_summary(summary_path)
         tasks = filter_tasks_for_resume(tasks, summary, rerun_failed=rerun_failed)
@@ -233,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
         max_parallel=max_parallel,
         prune_logs_on_success=prune_logs_on_success,
     )
-    if runtime == "docker":
+    if runtime in {"docker", "podman"}:
         resource_manager = ResourceManager(gpu_indices=gpu_indices, port_range=port_range)
     else:
         resource_manager = PortOnlyResourceManager(port_range=port_range)
@@ -246,3 +253,19 @@ def main(argv: list[str] | None = None) -> int:
 
 
 __all__ = ["build_parser", "main"]
+
+
+def _default_local_runtime() -> str:
+    if importlib.util.find_spec("docker") is not None:
+        return "docker"
+    if shutil.which("podman") is not None:
+        return "podman"
+    return "docker"
+
+
+def _cleanup_orphans(*, runtime: str, run_id: str | None) -> list[str]:
+    if runtime == "podman":
+        return cleanup_podman_orphans(run_id=run_id)
+    if runtime == "docker":
+        return cleanup_docker_orphans(run_id=run_id)
+    return []

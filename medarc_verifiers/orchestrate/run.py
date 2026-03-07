@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 import json
 import os
-import shlex
 import signal
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,10 +15,7 @@ from dotenv import dotenv_values
 
 from medarc_verifiers.orchestrate.bench import (
     BenchProcess,
-    render_command,
-    start_benchmark,
     terminate_benchmark,
-    wait_benchmark,
 )
 from medarc_verifiers.orchestrate.bundle import (
     ExecutionAllocation,
@@ -43,8 +39,8 @@ from medarc_verifiers.orchestrate.state import (
     write_task_result,
     write_text,
 )
-from medarc_verifiers.orchestrate.task_naming import bench_run_id, task_root_for_id
-from medarc_verifiers.orchestrate.vllm_args import build_container_args, normalize_volume_mounts
+from medarc_verifiers.orchestrate.task_naming import task_root_for_id
+from medarc_verifiers.orchestrate.worker import TaskWorker, WorkerCallbacks, WorkerOptions
 
 _COMMAND_TEMPLATE_UV = (
     "uv run medarc-eval bench --config {job_config_path} --api-base-url {base_url} "
@@ -213,226 +209,39 @@ class OrchestratorRunner:
         self, task: TaskSpec, allocation: Allocation, manifest: TaskManifest, paths: TaskPaths
     ) -> None:
         bundle = self._bundle_for_task(task)
-        self._set_state(manifest, paths, JobState.allocating)
-
-        orchestrate = task.orchestrate
-        container_cfg = _get_mapping(orchestrate.get("vllm-container"), "orchestrate.vllm-container")
-        model_cfg = _get_mapping(orchestrate.get(task.model_key), f"orchestrate.{task.model_key}")
-        pyxis_cfg = _get_optional_mapping(orchestrate.get("pyxis"), "orchestrate.pyxis")
-        container_port = int(container_cfg.get("container_port", 8000))
-        ipc_mode = container_cfg.get("ipc_mode")
-        image = str(container_cfg.get("image", "")).strip()
-        if not image:
-            raise RuntimeError(f"Missing orchestrate.vllm-container.image for {task.job_config_path}")
-        manifest.image = image
-
-        gpus_required = int(model_cfg.get("gpus", 1))
-        data_parallel = int(model_cfg.get("data_parallel_size", 1) or 1)
-        tensor_parallel = _resolve_tensor_parallel_size(
-            model_cfg,
-            gpus_required=gpus_required,
-            data_parallel_size=data_parallel,
-            label=f"orchestrate.{task.model_key}",
-        )
-        if gpus_required != tensor_parallel * data_parallel:
-            raise RuntimeError("gpus must equal tensor_parallel_size * data_parallel_size.")
-        if gpus_required == 1 and tensor_parallel > 1:
-            raise RuntimeError("tensor_parallel_size > 1 is invalid for single-GPU models.")
-
-        serve = _get_mapping(model_cfg.get("serve"), f"orchestrate.{task.model_key}.serve")
-        container_args = build_container_args(
-            task.model_id,
-            tensor_parallel_size=tensor_parallel if tensor_parallel > 1 else None,
-            data_parallel_size=data_parallel if data_parallel > 1 else None,
-            serve=serve,
-        )
-        env: dict[str, str] = {}
-        repo_root = Path(__file__).resolve().parents[2]
-        if self._plan.env_file is not None:
-            env.update(_load_env_file(self._plan.env_file, base_dir=repo_root))
-        else:
-            default_env = repo_root / ".env"
-            if default_env.exists():
-                env.update(_load_env_file(default_env, base_dir=repo_root))
-        env.update(_load_env_file(container_cfg.get("env_file"), base_dir=task.job_config_path.parent))
-        volume_mounts = normalize_volume_mounts(container_cfg.get("volumes", []) or [])
-        labels = {"orchestrator.run_id": self._options.run_id, "orchestrator.task_id": task.task_id}
-        container_name = sanitize_container_name(f"vllm-{self._options.run_id}-{task.task_id}")
-        manifest.container_name = container_name
-        if self._runtime == "pyxis" and ipc_mode:
-            self._dashboard.log(
-                f"JOB warn task={task.task_id} field=orchestrate.vllm-container.ipc_mode ignored runtime=pyxis"
-            )
-        if self._runtime == "docker" and pyxis_cfg:
-            self._dashboard.log(f"JOB warn task={task.task_id} field=orchestrate.pyxis ignored runtime=docker")
-
-        request_payload = {
-            "runtime": self._runtime,
-            "image": image,
-            "name": container_name,
-            "container_port": container_port,
-            "host_port": allocation.server_port,
-            "ipc_mode": ipc_mode,
-            "volumes": volume_mounts,
-            "env": sorted(env.keys()),
-            "gpu_ids": allocation.gpu_ids,
-            "command": container_args,
-            "labels": labels,
-        }
-        write_container_request(str(paths.container_request_path), request_payload)
-
-        self._set_state(manifest, paths, JobState.launching)
-        handle: RuntimeHandle | None = None
-        try:
-            handle = await asyncio.to_thread(
-                self._runtime_adapter.launch,
+        worker = TaskWorker(
+            bundle.spec,
+            ExecutionAllocation(
                 task_id=task.task_id,
-                model_id=task.model_id,
-                container_args=container_args,
-                image=image,
-                container_port=container_port,
-                volume_mounts=volume_mounts,
-                gpus_required=gpus_required,
-                gpu_ids=allocation.gpu_ids,
+                allocated_gpus=_allocated_gpu_count(allocation, task),
+                gpu_ids=list(allocation.gpu_ids),
                 server_port=allocation.server_port,
-                env=env,
-                labels=labels,
-                name=container_name,
-                ipc_mode=ipc_mode,
-                srun_extra_args=list(pyxis_cfg.get("srun_extra_args", [])) if pyxis_cfg else [],
-            )
-        except RuntimeLaunchError:
-            raise
-        except Exception as exc:
-            raise RuntimeLaunchError(str(exc)) from exc
-        manifest.container_id = handle.identifier
-        self._active_handles[task.task_id] = handle
-
-        log_streamer = self._runtime_adapter.stream_logs(handle, paths.container_logs_path)
-        log_streamer.start()
-        self._log_streamers[task.task_id] = log_streamer
-        base_url = handle.base_url
-        completed_successfully = False
-        try:
-            self._set_state(manifest, paths, JobState.loading)
-            readiness = await wait_for_readiness_async(
-                base_url,
-                model_id=task.model_id,
-                timeout_s=self._options.readiness_timeout_s,
-            )
-            manifest.readiness = readiness.__dict__
-            write_text(paths.readiness_path, json.dumps(readiness.__dict__, indent=2))
-            if not readiness.ready:
-                manifest.failure_reason = "readiness_timeout"
-                manifest.error = readiness.last_error
-                write_task_result(
-                    paths,
-                    {"state": JobState.failed, "failure_reason": manifest.failure_reason, "error": manifest.error},
-                )
-                self._set_state(manifest, paths, JobState.failed)
-                return
-            loading_elapsed = _format_elapsed(manifest.state_entered_at, _utcnow())
-            self._dashboard.log(
-                f"JOB ready task={task.task_id} attempts={readiness.attempts} loading_elapsed={loading_elapsed}"
-            )
-
-            command_context = {
-                "base_url": base_url,
-                "bench_run_id": bench_run_id(self._options.run_id, task.task_id),
-                "host_port": str(allocation.server_port),
-                "model_key": task.model_key,
-                "model_id": task.model_id,
-                "output_dir": str(paths.bench_dir),
-                "run_id": self._options.run_id,
-                "task_id": task.task_id,
-                "job_config_path": bundle.spec.bundled_eval_config_path,
-            }
-            command = render_command(self._command_template, command_context)
-            manifest.bench_run_id = command_context["bench_run_id"]
-            restart_source = bundle.state.restart_source or bundle.spec.restart_source
-            if restart_source:
-                restart_value = str(restart_source)
-                manifest.restart_source = restart_value
-                if "--restart" not in command:
-                    command.extend(["--restart", restart_value])
-            manifest.bench_command = shlex.join(command)
-            self._dashboard.log(f"JOB bench-start task={task.task_id} cmd={_shorten(manifest.bench_command)}")
-            self._set_state(manifest, paths, JobState.running)
-            bench_env = {**os.environ, "TQDM_DISABLE": "1"}
-            bench_proc = await start_benchmark(
-                command,
-                cwd=repo_root,
-                env=bench_env,
-                stdout_path=paths.stdout_path,
-                stderr_path=paths.stderr_path,
-            )
-            self._bench_processes[task.task_id] = bench_proc
-            discovered_run_dir = await _discover_bench_run_dir(
-                job_config_path=Path(bundle.spec.bundled_eval_config_path),
-                repo_root=repo_root,
-                timeout_s=15.0,
-            )
-            if discovered_run_dir is not None:
-                manifest.bench_run_dir = str(discovered_run_dir)
-                if restart_source is None:
-                    persisted_restart = _format_restart_source(discovered_run_dir, repo_root=repo_root)
-                    manifest.restart_source = persisted_restart
-                    write_runtime_state(
-                        bundle.paths.state_path,
-                        RuntimeState(
-                            task_id=task.task_id,
-                            state=manifest.state,
-                            restart_source=persisted_restart,
-                            restart_source_strategy="runtime_state",
-                            bench_run_id=manifest.bench_run_id,
-                            bench_run_dir=manifest.bench_run_dir,
-                        ),
+                require_contiguous_gpus=bool(
+                    _get_mapping(task.orchestrate.get(task.model_key), f"orchestrate.{task.model_key}").get(
+                        "require_contiguous_gpus",
+                        bool(allocation.gpu_ids and len(allocation.gpu_ids) > 1),
                     )
-                write_task_manifest(paths, manifest)
-            bench_result = await wait_benchmark(bench_proc)
-            self._bench_processes.pop(task.task_id, None)
-            manifest.bench_exit_code = bench_result.exit_code
-            manifest.bench_duration_s = bench_result.duration_s
-            if bench_result.terminated:
-                self._dashboard.log(f"JOB bench-terminated task={task.task_id} duration={bench_result.duration_s:.1f}s")
-            elif bench_result.exit_code == 0:
-                self._dashboard.log(f"JOB bench-ok task={task.task_id} duration={bench_result.duration_s:.1f}s")
-            else:
-                self._dashboard.log(
-                    f"JOB bench-failed task={task.task_id} exit={bench_result.exit_code} "
-                    f"duration={bench_result.duration_s:.1f}s"
-                )
-
-            result_payload = {
-                "exit_code": bench_result.exit_code,
-                "duration_s": bench_result.duration_s,
-                "state": JobState.cancelled
-                if bench_result.terminated
-                else (JobState.completed if bench_result.exit_code == 0 else JobState.failed),
-                "command": manifest.bench_command,
-                "argv": list(command),
-                "terminated": bench_result.terminated,
-            }
-            write_task_result(paths, result_payload)
-
-            if bench_result.terminated:
-                manifest.failure_reason = "bench_terminated"
-                self._set_state(manifest, paths, JobState.cancelled)
-            elif bench_result.exit_code != 0:
-                manifest.failure_reason = "bench_exit_nonzero"
-                self._set_state(manifest, paths, JobState.failed)
-            else:
-                self._set_state(manifest, paths, JobState.completed)
-                completed_successfully = True
-        finally:
-            if handle is not None:
-                await _teardown_runtime(self._runtime_adapter, handle, manifest)
-            log_streamer = self._log_streamers.pop(task.task_id, None)
-            if log_streamer:
-                await asyncio.to_thread(log_streamer.stop)
-            self._active_handles.pop(task.task_id, None)
-            if completed_successfully and self._options.prune_logs_on_success:
-                self._prune_task_logs(paths)
+                ),
+            ),
+            options=WorkerOptions(
+                run_id=self._options.run_id,
+                runtime=self._runtime,
+                readiness_timeout_s=self._options.readiness_timeout_s,
+                command_template=self._command_template,
+                env_file=self._plan.env_file,
+                prune_logs_on_success=self._options.prune_logs_on_success,
+            ),
+            runtime_adapter=self._runtime_adapter,
+            callbacks=WorkerCallbacks(
+                register_handle=lambda task_id, handle: self._active_handles.__setitem__(task_id, handle),
+                unregister_handle=lambda task_id: self._active_handles.pop(task_id, None),
+                register_bench=lambda task_id, process: self._bench_processes.__setitem__(task_id, process),
+                unregister_bench=lambda task_id: self._bench_processes.pop(task_id, None),
+                register_log_streamer=lambda task_id, streamer: self._log_streamers.__setitem__(task_id, streamer),
+                unregister_log_streamer=lambda task_id: self._log_streamers.pop(task_id, None),
+            ),
+        )
+        await worker.run(manifest=manifest, state_handler=self._set_state, log=self._dashboard.log)
 
     def _prune_task_logs(self, paths: TaskPaths) -> None:
         for log_path in (paths.container_logs_path, paths.stdout_path, paths.stderr_path):
@@ -852,8 +661,8 @@ def _is_transient_error(exc: Exception) -> bool:
 
 def _normalize_runtime(value: str) -> str:
     runtime = str(value).strip().lower()
-    if runtime not in {"docker", "pyxis"}:
-        raise ValueError(f"Unsupported runtime {value!r}; expected 'docker' or 'pyxis'.")
+    if runtime not in {"docker", "podman", "pyxis"}:
+        raise ValueError(f"Unsupported runtime {value!r}; expected 'docker', 'podman', or 'pyxis'.")
     return runtime
 
 
@@ -862,6 +671,10 @@ def _build_runtime_adapter(runtime: str) -> RuntimeAdapter:
         from medarc_verifiers.orchestrate.docker_vllm import DockerRuntimeAdapter
 
         return DockerRuntimeAdapter()
+    if runtime == "podman":
+        from medarc_verifiers.orchestrate.podman_vllm import PodmanRuntimeAdapter
+
+        return PodmanRuntimeAdapter()
     if runtime == "pyxis":
         from medarc_verifiers.orchestrate.pyxis_vllm import PyxisRuntimeAdapter
 

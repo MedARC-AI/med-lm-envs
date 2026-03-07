@@ -567,9 +567,14 @@ def _build_task_spec(
     _apply_restart_source(source_payload, restart_source)
     bundled_checksum = _sha256_bytes(_yaml_bytes(source_payload))
 
-    model_cfg = dict(task.orchestrate.get(task.model_key) or {})
-    container_cfg = dict(task.orchestrate.get("vllm-container") or {})
-    pyxis_cfg = dict(task.orchestrate.get("pyxis") or {})
+    model_cfg = _resolve_orchestrate_section(source_payload, key=task.model_key, task_id=task.task_id)
+    container_cfg = _resolve_orchestrate_section(
+        source_payload,
+        key="vllm-container",
+        task_id=task.task_id,
+        fallback_key="vllm-docker",
+    )
+    pyxis_cfg = _resolve_orchestrate_section(source_payload, key="pyxis", task_id=task.task_id)
     spec = ResolvedTaskSpec(
         spec_version=SPEC_VERSION,
         task_id=task.task_id,
@@ -617,6 +622,26 @@ def _write_task_bundle(*, paths: TaskBundlePaths, eval_payload: Mapping[str, Any
 
 def _write_task_spec(path: Path, spec: ResolvedTaskSpec) -> None:
     _write_yaml_atomic(path, spec.to_dict())
+
+
+def _resolve_orchestrate_section(
+    payload: Mapping[str, Any],
+    *,
+    key: str,
+    task_id: str,
+    fallback_key: str | None = None,
+) -> dict[str, Any]:
+    orchestrate = payload.get("orchestrate")
+    if not isinstance(orchestrate, Mapping):
+        raise ValueError(f"Task {task_id} bundled payload is missing a valid orchestrate mapping.")
+    section = orchestrate.get(key)
+    if section is None and fallback_key is not None:
+        section = orchestrate.get(fallback_key)
+    if section is None:
+        return {}
+    if not isinstance(section, Mapping):
+        raise ValueError(f"Task {task_id} orchestrate.{key} must be a mapping.")
+    return dict(section)
 
 
 __all__ = [
