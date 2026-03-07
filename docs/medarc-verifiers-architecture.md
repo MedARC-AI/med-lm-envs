@@ -235,7 +235,7 @@ Some environments use “LLM-as-judge” scoring. `medarc_verifiers` provides:
 
 Docs: `docs/medarc-orchestrate.md`.
 
-This is a separate tool (`medarc-orchestrate`) for running batch configs against locally hosted vLLM Docker containers with GPU/port scheduling.
+This is a separate tool (`medarc-orchestrate`) for running batch configs against locally hosted vLLM containers with GPU/port scheduling across Docker or Slurm+Pyxis runtimes.
 
 - CLI entry: `medarc_verifiers/orchestrate/cli.py`
 - Runtime loop: `medarc_verifiers/orchestrate/run.py`

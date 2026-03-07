@@ -5,11 +5,17 @@ from __future__ import annotations
 import argparse
 import re
 from pathlib import Path
-from datetime import datetime
+from datetime import UTC, datetime
 
 from medarc_verifiers.orchestrate.config import TaskSpec, expand_tasks, load_plan
 from medarc_verifiers.orchestrate.docker_vllm import cleanup_orphan_containers
-from medarc_verifiers.orchestrate.resources import ResourceError, ResourceManager, discover_gpus, parse_index_range
+from medarc_verifiers.orchestrate.resources import (
+    PortOnlyResourceManager,
+    ResourceError,
+    ResourceManager,
+    discover_gpus,
+    parse_index_range,
+)
 from medarc_verifiers.orchestrate.run import OrchestratorOptions, OrchestratorRunner
 from medarc_verifiers.orchestrate.state import filter_tasks_for_resume, load_summary
 
@@ -32,7 +38,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--env-file",
         type=Path,
         default=None,
-        help="Dotenv file shared by all Docker launches (overrides plan env_file; defaults to repo .env when present).",
+        help="Dotenv file shared by runtime launches (overrides plan env_file; defaults to repo .env when present).",
+    )
+    parser.add_argument(
+        "--runtime",
+        choices=("docker", "pyxis"),
+        default=None,
+        help="Serve runtime backend (defaults to docker unless plan.runtime is set).",
     )
     parser.add_argument(
         "--dry-run",
@@ -63,6 +75,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Delete per-task serve/bench logs for completed tasks (kept for failures).",
     )
+    parser.add_argument(
+        "--no-uv-run",
+        action="store_true",
+        help="Run 'medarc-eval bench' directly instead of via 'uv run' (use when venv is pre-activated).",
+    )
     return parser
 
 
@@ -84,36 +101,38 @@ def _has_contiguous_run(indices: list[int], *, length: int) -> bool:
 def _validate_schedule(
     tasks: list[TaskSpec],
     *,
+    runtime: str,
     gpu_indices: list[int] | None,
     port_range: tuple[int, int],
     max_parallel: int,
 ) -> None:
-    try:
-        gpus = discover_gpus()
-    except ResourceError as exc:
-        raise ValueError("GPU discovery failed; ensure NVML/pynvml is available.") from exc
-    discovered_indices = [gpu.index for gpu in gpus]
-    if gpu_indices is not None:
-        allowed_set = set(gpu_indices)
-        allowed_indices = [idx for idx in discovered_indices if idx in allowed_set]
-        allowed_desc = ",".join(str(idx) for idx in gpu_indices)
-    else:
-        allowed_indices = list(discovered_indices)
-        allowed_desc = "all"
-    for task in tasks:
-        model_cfg = task.orchestrate.get(task.model_key, {}) or {}
-        gpus_required = int(model_cfg.get("gpus", 1))
-        require_contiguous = bool(model_cfg.get("require_contiguous_gpus", gpus_required > 1))
-        if gpus_required > len(allowed_indices):
-            raise ValueError(
-                f"Task {task.task_id} ({task.job_config_path}) requests {gpus_required} GPUs, "
-                f"but only {len(allowed_indices)} available in range {allowed_desc}."
-            )
-        if gpus_required > 1 and require_contiguous and not _has_contiguous_run(allowed_indices, length=gpus_required):
-            raise ValueError(
-                f"Task {task.task_id} ({task.job_config_path}) requires {gpus_required} contiguous GPUs, "
-                f"but allowed indices {allowed_desc} have no contiguous run."
-            )
+    if runtime == "docker":
+        try:
+            gpus = discover_gpus()
+        except ResourceError as exc:
+            raise ValueError("GPU discovery failed; ensure NVML/pynvml is available.") from exc
+        discovered_indices = [gpu.index for gpu in gpus]
+        if gpu_indices is not None:
+            allowed_set = set(gpu_indices)
+            allowed_indices = [idx for idx in discovered_indices if idx in allowed_set]
+            allowed_desc = ",".join(str(idx) for idx in gpu_indices)
+        else:
+            allowed_indices = list(discovered_indices)
+            allowed_desc = "all"
+        for task in tasks:
+            model_cfg = task.orchestrate.get(task.model_key, {}) or {}
+            gpus_required = int(model_cfg.get("gpus", 1))
+            require_contiguous = bool(model_cfg.get("require_contiguous_gpus", gpus_required > 1))
+            if gpus_required > len(allowed_indices):
+                raise ValueError(
+                    f"Task {task.task_id} ({task.job_config_path}) requests {gpus_required} GPUs, "
+                    f"but only {len(allowed_indices)} available in range {allowed_desc}."
+                )
+            if gpus_required > 1 and require_contiguous and not _has_contiguous_run(allowed_indices, length=gpus_required):
+                raise ValueError(
+                    f"Task {task.task_id} ({task.job_config_path}) requires {gpus_required} contiguous GPUs, "
+                    f"but allowed indices {allowed_desc} have no contiguous run."
+                )
     start, end = port_range
     if end < start:
         raise ValueError(f"Port range is invalid: {start}-{end}.")
@@ -127,6 +146,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     plan_path = args.plan.expanduser().resolve()
     plan = load_plan(plan_path)
+    runtime = args.runtime or plan.runtime or "docker"
     if args.env_file is not None:
         env_file = args.env_file.expanduser()
         if not env_file.is_absolute():
@@ -134,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
         plan.env_file = env_file.resolve()
     tasks = expand_tasks(plan)
     configured_run_id = args.run_id or plan.run_id
-    timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     if configured_run_id:
         run_id = configured_run_id
     elif plan.name:
@@ -158,7 +178,9 @@ def main(argv: list[str] | None = None) -> int:
     elif plan.max_parallel is not None:
         max_parallel = plan.max_parallel
     else:
-        if gpu_indices is not None:
+        if runtime == "pyxis":
+            max_parallel = 1
+        elif gpu_indices is not None:
             max_parallel = max(1, len(gpu_indices))
         else:
             try:
@@ -185,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
         summary = load_summary(summary_path)
         tasks = filter_tasks_for_resume(tasks, summary, rerun_failed=rerun_failed)
     if tasks:
-        _validate_schedule(tasks, gpu_indices=gpu_indices, port_range=port_range, max_parallel=max_parallel)
+        _validate_schedule(tasks, runtime=runtime, gpu_indices=gpu_indices, port_range=port_range, max_parallel=max_parallel)
     if args.dry_run:
         for task in tasks:
             print(f"{task.task_id}\t{task.model_id}\t{task.job_config_path}")
@@ -198,8 +220,13 @@ def main(argv: list[str] | None = None) -> int:
         max_parallel=max_parallel,
         prune_logs_on_success=prune_logs_on_success,
     )
+    if runtime == "docker":
+        resource_manager = ResourceManager(gpu_indices=gpu_indices, port_range=port_range)
+    else:
+        resource_manager = PortOnlyResourceManager(port_range=port_range)
+    uv_run = not args.no_uv_run and plan.uv_run
     runner = OrchestratorRunner(
-        plan, tasks, ResourceManager(gpu_indices=gpu_indices, port_range=port_range), options=options
+        plan, tasks, resource_manager, options=options, runtime=runtime, uv_run=uv_run
     )
     runner.run()
     return 0

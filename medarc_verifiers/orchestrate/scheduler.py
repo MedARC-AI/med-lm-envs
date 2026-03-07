@@ -15,7 +15,11 @@ from medarc_verifiers.orchestrate.resources import ResourceError, ResourceManage
 @dataclass(frozen=True)
 class Allocation:
     gpu_ids: list[int]
-    port: int
+    server_port: int
+
+    @property
+    def port(self) -> int:
+        return self.server_port
 
 
 TaskRunner = Callable[[TaskSpec, Allocation], Awaitable[None]]
@@ -194,10 +198,10 @@ class TaskScheduler:
         except Exception:
             self._resource_manager.release_gpus(gpu_ids)
             raise
-        return Allocation(gpu_ids=gpu_ids, port=port)
+        return Allocation(gpu_ids=gpu_ids, server_port=port)
 
     def _release(self, allocation: Allocation) -> None:
-        self._resource_manager.release_port(allocation.port)
+        self._resource_manager.release_port(allocation.server_port)
         self._resource_manager.release_gpus(allocation.gpu_ids)
 
 
