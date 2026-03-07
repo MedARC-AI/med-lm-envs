@@ -25,6 +25,7 @@ def test_build_container_args_renders_tensor_parallel_and_flags() -> None:
     args = build_container_args(
         "some/model",
         tensor_parallel_size=2,
+        data_parallel_size=4,
         serve={"dtype": "bfloat16", "enable_prefix_caching": True, "max_model_len": 8192},
     )
 
@@ -33,6 +34,8 @@ def test_build_container_args_renders_tensor_parallel_and_flags() -> None:
         "some/model",
         "--tensor-parallel-size",
         "2",
+        "--data-parallel-size",
+        "4",
         "--dtype",
         "bfloat16",
         "--max-model-len",

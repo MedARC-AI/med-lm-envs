@@ -43,11 +43,19 @@ def normalize_volume_mounts(volumes: object) -> list[str]:
     return mounts
 
 
-def build_container_args(model_id: str, *, tensor_parallel_size: int | None, serve: Mapping[str, object]) -> list[str]:
+def build_container_args(
+    model_id: str,
+    *,
+    tensor_parallel_size: int | None,
+    data_parallel_size: int | None = None,
+    serve: Mapping[str, object],
+) -> list[str]:
     _validate_serve_config(serve)
     args = ["--model", model_id]
     if tensor_parallel_size and tensor_parallel_size > 1:
         args.extend(["--tensor-parallel-size", str(tensor_parallel_size)])
+    if data_parallel_size and data_parallel_size > 1:
+        args.extend(["--data-parallel-size", str(data_parallel_size)])
     args.extend(_render_serve_flags(serve))
     return args
 

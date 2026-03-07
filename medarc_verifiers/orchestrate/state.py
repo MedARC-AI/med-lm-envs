@@ -58,8 +58,14 @@ class TaskManifest:
     image: str | None = None
     readiness: Mapping[str, Any] | None = None
     bench_command: str | None = None
+    bench_run_id: str | None = None
     bench_exit_code: int | None = None
     bench_duration_s: float | None = None
+    restart_source: str | None = None
+    allocated_gpu_count: int | None = None
+    allocated_gpu_hours: float | None = None
+    effective_gpu_count: int | None = None
+    effective_gpu_hours: float | None = None
     failure_reason: str | None = None
     error: str | None = None
 

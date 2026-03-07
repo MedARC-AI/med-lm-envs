@@ -39,8 +39,14 @@ from medarc_verifiers.orchestrate.state import (
 )
 from medarc_verifiers.orchestrate.vllm_args import build_container_args, normalize_volume_mounts
 
-_COMMAND_TEMPLATE_UV = "uv run medarc-eval bench --config {job_config_path} --api-base-url {base_url} --on-complete exit"
-_COMMAND_TEMPLATE_BARE = "medarc-eval bench --config {job_config_path} --api-base-url {base_url} --on-complete exit"
+_COMMAND_TEMPLATE_UV = (
+    "uv run medarc-eval bench --config {job_config_path} --api-base-url {base_url} "
+    "--run-id {bench_run_id} --on-complete exit"
+)
+_COMMAND_TEMPLATE_BARE = (
+    "medarc-eval bench --config {job_config_path} --api-base-url {base_url} "
+    "--run-id {bench_run_id} --on-complete exit"
+)
 
 _TASK_DIR_ALLOWED = re.compile(r"[^a-zA-Z0-9_.-]+")
 
@@ -73,6 +79,10 @@ def _task_root_for_id(output_root: Path, task_id: str) -> Path:
     if sanitized.exists():
         return sanitized
     return sanitized
+
+
+def _bench_run_id(run_id: str, task_id: str) -> str:
+    return f"{run_id}-{_sanitize_task_dirname(task_id, max_len=80)}"
 
 
 @dataclass(frozen=True)
@@ -213,19 +223,25 @@ class OrchestratorRunner:
             raise RuntimeError(f"Missing orchestrate.vllm-container.image for {task.job_config_path}")
         manifest.image = image
 
-        tensor_parallel = model_cfg.get("tensor_parallel_size")
         gpus_required = int(model_cfg.get("gpus", 1))
-        if gpus_required > 1:
-            if not tensor_parallel:
-                raise RuntimeError(f"orchestrate.{task.model_key}.tensor_parallel_size is required for multi-GPU.")
-            if int(tensor_parallel) != gpus_required:
-                raise RuntimeError("gpus must match tensor_parallel_size for multi-GPU models.")
-        if gpus_required == 1 and tensor_parallel and int(tensor_parallel) > 1:
+        data_parallel = int(model_cfg.get("data_parallel_size", 1) or 1)
+        tensor_parallel = _resolve_tensor_parallel_size(
+            model_cfg,
+            gpus_required=gpus_required,
+            data_parallel_size=data_parallel,
+            label=f"orchestrate.{task.model_key}",
+        )
+        if gpus_required != tensor_parallel * data_parallel:
+            raise RuntimeError("gpus must equal tensor_parallel_size * data_parallel_size.")
+        if gpus_required == 1 and tensor_parallel > 1:
             raise RuntimeError("tensor_parallel_size > 1 is invalid for single-GPU models.")
 
         serve = _get_mapping(model_cfg.get("serve"), f"orchestrate.{task.model_key}.serve")
         container_args = build_container_args(
-            task.model_id, tensor_parallel_size=int(tensor_parallel) if tensor_parallel else None, serve=serve
+            task.model_id,
+            tensor_parallel_size=tensor_parallel if tensor_parallel > 1 else None,
+            data_parallel_size=data_parallel if data_parallel > 1 else None,
+            serve=serve,
         )
         env: dict[str, str] = {}
         repo_root = Path(__file__).resolve().parents[2]
@@ -319,6 +335,7 @@ class OrchestratorRunner:
 
             command_context = {
                 "base_url": base_url,
+                "bench_run_id": _bench_run_id(self._options.run_id, task.task_id),
                 "host_port": str(allocation.server_port),
                 "model_key": task.model_key,
                 "model_id": task.model_id,
@@ -328,9 +345,11 @@ class OrchestratorRunner:
                 "job_config_path": str(task.job_config_path),
             }
             command = render_command(self._command_template, command_context)
+            manifest.bench_run_id = command_context["bench_run_id"]
             restart_source = orchestrate.get("restart")
             if restart_source:
                 restart_value = str(restart_source)
+                manifest.restart_source = restart_value
                 if "--restart" not in command:
                     command.extend(["--restart", restart_value])
             manifest.bench_command = shlex.join(command)
@@ -406,6 +425,7 @@ class OrchestratorRunner:
             manifest.state_entered_at = now
         if state in {JobState.completed, JobState.failed, JobState.cancelled}:
             manifest.completed_at = now
+            _update_gpu_accounting(manifest)
         write_task_manifest(paths, manifest)
         write_summary(self._options.output_root / "summary.json", list(self._manifests.values()))
         if state != prev_state:
@@ -424,6 +444,10 @@ class OrchestratorRunner:
             self._manifests[task.task_id] = manifest
         manifest.gpu_ids = allocation.gpu_ids
         manifest.port = allocation.server_port
+        manifest.allocated_gpu_count = _allocated_gpu_count(allocation, task)
+        manifest.effective_gpu_count = int(
+            _get_mapping(task.orchestrate.get(task.model_key), f"orchestrate.{task.model_key}").get("gpus", 1)
+        )
         if manifest.started_at is None:
             manifest.started_at = _utcnow()
         return manifest
@@ -560,6 +584,53 @@ class OrchestratorRunner:
                 f"JOB cancelled task={manifest.task_id} at_state={prev_state} total_elapsed={total_elapsed}"
             )
             return
+
+
+def _resolve_tensor_parallel_size(
+    model_cfg: dict[str, object],
+    *,
+    gpus_required: int,
+    data_parallel_size: int,
+    label: str,
+) -> int:
+    if data_parallel_size < 1:
+        raise RuntimeError(f"{label}.data_parallel_size must be >= 1.")
+    tensor_parallel = model_cfg.get("tensor_parallel_size")
+    if tensor_parallel is not None:
+        resolved = int(tensor_parallel)
+    else:
+        if gpus_required < 1:
+            raise RuntimeError(f"{label}.gpus must be >= 1.")
+        if gpus_required % data_parallel_size != 0:
+            raise RuntimeError(
+                f"{label}.gpus={gpus_required} must be divisible by data_parallel_size={data_parallel_size}."
+            )
+        resolved = gpus_required // data_parallel_size
+    if resolved < 1:
+        raise RuntimeError(f"{label}.tensor_parallel_size must be >= 1.")
+    return resolved
+
+
+def _allocated_gpu_count(allocation: Allocation, task: TaskSpec) -> int:
+    override = os.environ.get("MEDARC_ALLOCATED_GPU_COUNT")
+    if override is not None:
+        return int(override)
+    if allocation.gpu_ids:
+        return len(allocation.gpu_ids)
+    model_cfg = _get_mapping(task.orchestrate.get(task.model_key), f"orchestrate.{task.model_key}")
+    return int(model_cfg.get("gpus", 1))
+
+
+def _update_gpu_accounting(manifest: TaskManifest) -> None:
+    started = _parse_time(manifest.started_at)
+    completed = _parse_time(manifest.completed_at)
+    if started is None or completed is None:
+        return
+    elapsed_hours = max(0.0, (completed - started).total_seconds() / 3600.0)
+    if manifest.allocated_gpu_count is not None:
+        manifest.allocated_gpu_hours = manifest.allocated_gpu_count * elapsed_hours
+    if manifest.effective_gpu_count is not None:
+        manifest.effective_gpu_hours = manifest.effective_gpu_count * elapsed_hours
 
 
 def _utcnow() -> str:
