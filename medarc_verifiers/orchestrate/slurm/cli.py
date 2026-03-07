@@ -14,11 +14,7 @@ from .render import render_bundle
 from .submit import mark_dry_run, submit_bundle
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="medarc-orchestrate slurm",
-        description="Render and submit one sbatch job per orchestrator task.",
-    )
+def _add_arguments(parser: argparse.ArgumentParser) -> None:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--plan", type=Path, help="Path to orchestrator plan YAML.")
     source.add_argument(
@@ -78,12 +74,29 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Shell activation script sourced before running medarc-orchestrate inside sbatch (defaults to <source-dir>/.venv/bin/activate).",
     )
+    parser.set_defaults(command="slurm", handler=run_from_args)
+
+
+def add_slurm_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> argparse.ArgumentParser:
+    parser = subparsers.add_parser(
+        "slurm",
+        description="Render and submit one sbatch job per orchestrator task.",
+        help="Submit one Slurm job per resolved task using pyxis at execution time.",
+    )
+    _add_arguments(parser)
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="medarc-orchestrate slurm",
+        description="Render and submit one sbatch job per orchestrator task.",
+    )
+    _add_arguments(parser)
+    return parser
+
+
+def run_from_args(args: argparse.Namespace) -> int:
     plan_base_dir = Path.cwd()
     if args.plan is not None:
         plan_path = args.plan.expanduser().resolve()
@@ -161,6 +174,12 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return run_from_args(args)
+
+
 def _load_existing_manifest(path: Path, *, run_id: str) -> SlurmBundleManifest | None:
     if not path.exists():
         return None
@@ -170,4 +189,4 @@ def _load_existing_manifest(path: Path, *, run_id: str) -> SlurmBundleManifest |
     return manifest
 
 
-__all__ = ["build_parser", "main"]
+__all__ = ["add_slurm_subparser", "build_parser", "main", "run_from_args"]

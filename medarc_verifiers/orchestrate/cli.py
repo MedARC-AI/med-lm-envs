@@ -24,11 +24,7 @@ from medarc_verifiers.orchestrate.topology import minimum_required_gpus, resolve
 from medarc_verifiers.utils.run_naming import generate_run_id
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="medarc-orchestrate",
-        description="Run vLLM orchestration over job configs.",
-    )
+def _add_local_arguments(parser: argparse.ArgumentParser) -> None:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--plan", type=Path, help="Path to orchestrator plan YAML.")
     source.add_argument(
@@ -53,7 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--runtime",
         choices=("docker", "podman", "pyxis"),
         default=None,
-        help="Serve runtime backend (defaults to local docker, falling back to podman, unless plan.runtime is set).",
+        help="Serve runtime backend (defaults to docker when available, otherwise podman, unless plan.runtime is set).",
     )
     parser.add_argument(
         "--dry-run",
@@ -89,6 +85,36 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run 'medarc-eval bench' directly instead of via 'uv run' (use when venv is pre-activated).",
     )
+    parser.set_defaults(command="local", handler=_run_local)
+
+
+def build_local_parser(*, prog: str = "medarc-orchestrate local") -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog=prog,
+        description="Run vLLM orchestration locally or inside an existing allocation.",
+    )
+    _add_local_arguments(parser)
+    return parser
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="medarc-orchestrate",
+        description="Run vLLM orchestration with explicit execution modes.",
+    )
+    subparsers = parser.add_subparsers(dest="command", metavar="{local,slurm}")
+    subparsers.required = True
+
+    local_parser = subparsers.add_parser(
+        "local",
+        description="Run vLLM orchestration locally or inside an existing allocation.",
+        help="Run tasks locally with docker/podman autodetection or an explicit runtime.",
+    )
+    _add_local_arguments(local_parser)
+
+    from medarc_verifiers.orchestrate.slurm.cli import add_slurm_subparser
+
+    add_slurm_subparser(subparsers)
     return parser
 
 
@@ -151,19 +177,7 @@ def _validate_schedule(
         raise ValueError(f"Port range {start}-{end} has {port_capacity} ports, but max_parallel={max_parallel}.")
 
 
-def main(argv: list[str] | None = None) -> int:
-    if argv is None:
-        argv = sys.argv[1:]
-    if argv and argv[0] == "slurm":
-        from medarc_verifiers.orchestrate.slurm.cli import main as slurm_main
-
-        return slurm_main(argv[1:])
-    if argv and argv[0] == "worker":
-        from medarc_verifiers.orchestrate.worker import main as worker_main
-
-        return worker_main(argv[1:])
-    parser = build_parser()
-    args = parser.parse_args(argv)
+def _run_local(args: argparse.Namespace) -> int:
     plan_base_dir = Path.cwd()
     if args.plan is not None:
         plan_path = args.plan.expanduser().resolve()
@@ -254,7 +268,19 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-__all__ = ["build_parser", "main"]
+def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv and argv[0] == "worker":
+        from medarc_verifiers.orchestrate.worker import main as worker_main
+
+        return worker_main(argv[1:])
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return args.handler(args)
+
+
+__all__ = ["build_local_parser", "build_parser", "main"]
 
 
 def _default_local_runtime() -> str:
