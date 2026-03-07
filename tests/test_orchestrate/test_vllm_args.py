@@ -26,7 +26,12 @@ def test_build_container_args_renders_tensor_parallel_and_flags() -> None:
         "some/model",
         tensor_parallel_size=2,
         data_parallel_size=4,
-        serve={"dtype": "bfloat16", "enable_prefix_caching": True, "max_model_len": 8192},
+        serve={
+            "dtype": "bfloat16",
+            "enable_prefix_caching": True,
+            "language_model_only": True,
+            "max_model_len": 8192,
+        },
     )
 
     assert args == [
@@ -41,6 +46,7 @@ def test_build_container_args_renders_tensor_parallel_and_flags() -> None:
         "--max-model-len",
         "8192",
         "--enable-prefix-caching",
+        "--language-model-only",
     ]
 
 

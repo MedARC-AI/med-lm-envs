@@ -92,7 +92,7 @@ Optional: add a top-level `slurm:` block when using the Slurm-native submitter:
 ```yaml
 slurm:
   job_name: qwen-30b-a3b
-  partition: gpu
+  partition: <cluster-partition>
   time: 04:00:00
   cpus_per_gpu: 12
   slurm_resume: true
@@ -164,7 +164,7 @@ medarc-orchestrate slurm \
   --job-config configs/job-gpt-oss-20b.yaml \
   --job-config configs/job-qwen-30b-a3b.yaml \
   --name local-vllm \
-  --partition gpu \
+  --partition <cluster-partition> \
   --time 04:00:00
 ```
 
@@ -192,6 +192,7 @@ Common flags:
 - `--max-simultaneous-nodes` limits the number of dependency chains. Default: `1`.
 - `--run-simultaneously` removes generated inter-task dependencies.
 - `--cpus-per-gpu`, `--time`, `--partition`, `--account`, `--qos`, `--mail-type`, and `--mail-user` override per-job `slurm:` defaults.
+- When no account is provided, Slurm-native submission defaults to `training` and passes it on the `sbatch` command line.
 - `--dependency` applies a base sbatch dependency to each chain head.
 - `--slurm-resume` adds `#SBATCH --requeue` and passes `--resume` to the inner orchestrator.
 - `--test-only` runs `sbatch --test-only` instead of submitting jobs.

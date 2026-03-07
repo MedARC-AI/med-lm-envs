@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -109,7 +110,11 @@ class ManifestPlanner:
             )
 
         if seed_dir is None:
-            return None
+            msg = (
+                f"Invalid --restart '{restart_source}': expected an existing run directory, "
+                f"or a run id under {self.output_dir}."
+            )
+            raise ValueError(msg)
         if not (seed_dir / MANIFEST_FILENAME).exists():
             msg = f"Invalid --restart '{seed_dir}': missing {MANIFEST_FILENAME}"
             raise ValueError(msg)

@@ -43,6 +43,7 @@ class SlurmTaskEntry:
     chain_index: int
     submission_order: int
     job_name: str
+    account: str | None = None
     slurm_job_id: str | None = None
     state: str = "pending"
 

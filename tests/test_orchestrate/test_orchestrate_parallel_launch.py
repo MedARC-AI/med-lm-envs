@@ -115,6 +115,23 @@ def _task(tmp_path: Path, task_id: str, *, gpus: int = 2, tensor_parallel_size: 
     )
 
 
+def _write_job_config(path: Path) -> None:
+    path.write_text(
+        (
+            "models:\n"
+            "  foo:\n"
+            "    model: Foo/Bar\n"
+            "orchestrate:\n"
+            "  vllm-container:\n"
+            "    image: fake\n"
+            "  foo:\n"
+            "    gpus: 1\n"
+            "    serve: {}\n"
+        ),
+        encoding="utf-8",
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("runtime", "resource_manager"),
@@ -274,3 +291,73 @@ async def test_parallel_launch_records_gpu_accounting_and_dp_args(
     assert manifest["effective_gpu_count"] == 8
     assert manifest["allocated_gpu_hours"] is not None
     assert manifest["effective_gpu_hours"] is not None
+
+
+@pytest.mark.asyncio
+async def test_runner_persists_discovered_restart_source(tmp_path: Path, monkeypatch) -> None:
+    plan = PlanConfig(job_configs=[tmp_path / "job.yaml"])
+    task = _task(tmp_path, "task-1", gpus=1, tensor_parallel_size=1, data_parallel_size=1)
+    _write_job_config(task.job_config_path)
+    options = OrchestratorOptions(
+        run_id="run-1",
+        output_root=tmp_path / "outputs",
+        readiness_timeout_s=1,
+        max_parallel=1,
+    )
+    adapter = FakeRuntimeAdapter()
+    runner = OrchestratorRunner(
+        plan,
+        [task],
+        PortOnlyDummyResourceManager(),
+        options=options,
+        runtime="pyxis",
+        runtime_adapter=adapter,
+        use_dashboard=False,
+    )
+
+    discovered_run_dir = tmp_path / "runs" / "raw" / "actual-run"
+
+    async def fake_wait_for_readiness_async(*args, **kwargs):
+        class Result:
+            ready = True
+            elapsed_s = 0.2
+            attempts = 1
+            last_error = None
+
+        return Result()
+
+    async def fake_start_benchmark(*args, **kwargs):
+        class Proc:
+            pass
+
+        return Proc()
+
+    async def fake_wait_benchmark(proc):
+        class Result:
+            exit_code = 0
+            duration_s = 0.0
+            terminated = False
+
+        return Result()
+
+    async def fake_discover_bench_run_dir(*args, **kwargs):
+        return discovered_run_dir
+
+    async def fake_to_thread(func, /, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.run.wait_for_readiness_async", fake_wait_for_readiness_async)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.run.start_benchmark", fake_start_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.run.wait_benchmark", fake_wait_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.run._discover_bench_run_dir", fake_discover_bench_run_dir)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.run._register_signal_handlers", lambda loop, handler: None)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.run.asyncio.to_thread", fake_to_thread)
+
+    await runner._run_async()
+
+    payload = task.job_config_path.read_text(encoding="utf-8")
+    assert f"restart: {discovered_run_dir}" in payload
+
+    manifest = json.loads((options.output_root / "task-1" / "run_manifest.json").read_text())
+    assert manifest["bench_run_dir"] == str(discovered_run_dir)
+    assert manifest["restart_source"] == str(discovered_run_dir)

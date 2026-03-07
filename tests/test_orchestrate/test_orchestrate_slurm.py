@@ -7,12 +7,9 @@ from medarc_verifiers.orchestrate.cli import main as orchestrate_main
 from medarc_verifiers.orchestrate.config import TaskSpec, expand_tasks, load_job_config, load_plan
 from medarc_verifiers.orchestrate.slurm.manifest import SlurmBundleManifest
 from medarc_verifiers.orchestrate.slurm.cli import build_parser as build_slurm_parser
-from medarc_verifiers.orchestrate.slurm.plan import SlurmCliOverrides, build_submission_plan
+from medarc_verifiers.orchestrate.slurm.plan import DEFAULT_SLURM_ACCOUNT, SlurmCliOverrides, build_submission_plan
 from medarc_verifiers.orchestrate.slurm.render import render_bundle
 from medarc_verifiers.orchestrate.slurm.submit import submit_bundle
-from medarc_verifiers.orchestrate.task_naming import bench_run_id
-
-
 def _write_job_config(
     path: Path,
     *,
@@ -100,6 +97,7 @@ def test_build_submission_plan_derives_dp_and_sorts(tmp_path: Path) -> None:
         (1, 8, 8),
     ]
     assert planned[1].predecessor_task_id == "large:foo"
+    assert all(task.options.account == DEFAULT_SLURM_ACCOUNT for task in planned)
 
 
 def test_build_submission_plan_round_robins_two_chains(tmp_path: Path) -> None:
@@ -217,8 +215,7 @@ def test_render_bundle_writes_script_and_patched_config(tmp_path: Path) -> None:
     patched_payload = load_job_config(Path(entry.patched_job_config_path))
     assert patched_payload["orchestrate"]["foo"]["gpus"] == 8
     assert patched_payload["orchestrate"]["foo"]["data_parallel_size"] == 4
-    assert patched_payload["orchestrate"]["restart"] == bench_run_id("bundle-job-foo", "job:foo")
-    assert "/" not in patched_payload["orchestrate"]["restart"]
+    assert "restart" not in patched_payload["orchestrate"]
     assert patched == {}
 
 
@@ -252,7 +249,7 @@ def test_render_bundle_always_materializes_task_local_config_and_reuses_it(tmp_p
     first_payload = load_job_config(first_config_path)
 
     assert first_entry.patched_job_config_path == str(first_config_path)
-    assert first_payload["orchestrate"]["restart"] == bench_run_id("bundle-job-foo", "job:foo")
+    assert "restart" not in first_payload["orchestrate"]
 
     job_cfg.write_text(
         """
@@ -286,7 +283,7 @@ orchestrate:
     second_payload = load_job_config(Path(second_entry.effective_job_config_path))
 
     assert second_entry.effective_job_config_path == first_entry.effective_job_config_path
-    assert second_payload["orchestrate"]["restart"] == first_payload["orchestrate"]["restart"]
+    assert "restart" not in second_payload["orchestrate"]
     assert second_payload["orchestrate"]["foo"].get("serve", {}) == first_payload["orchestrate"]["foo"].get("serve", {})
 
 
@@ -350,12 +347,14 @@ def test_slurm_dry_run_writes_manifest_and_prints_commands(tmp_path: Path, capsy
     assert rc == 0
     stdout_lines = capsys.readouterr().out.strip().splitlines()
     assert len(stdout_lines) == 2
-    assert stdout_lines[0].startswith("sbatch ")
+    assert stdout_lines[0].startswith(f"sbatch --account {DEFAULT_SLURM_ACCOUNT} ")
+    assert f"sbatch --account {DEFAULT_SLURM_ACCOUNT} " in stdout_lines[1]
     assert "--dependency=afterany:$JOBID_1" in stdout_lines[1]
 
     manifest = json.loads((tmp_path / "bundle" / "manifest.json").read_text())
     assert [entry["state"] for entry in manifest["entries"]] == ["dry-run", "dry-run"]
     assert all(entry["slurm_job_id"] is None for entry in manifest["entries"])
+    assert all(entry["account"] == DEFAULT_SLURM_ACCOUNT for entry in manifest["entries"])
 
 
 def test_slurm_cli_default_run_id_uses_shared_generator(tmp_path: Path, monkeypatch) -> None:
@@ -430,7 +429,7 @@ def test_submit_bundle_resumes_from_existing_job_ids(tmp_path: Path, monkeypatch
 
     submit_bundle(tmp_path / "bundle" / "manifest.json", manifest)
 
-    assert calls[0][0:2] == ["sbatch", "--parsable"]
+    assert calls[0][0:4] == ["sbatch", "--account", DEFAULT_SLURM_ACCOUNT, "--parsable"]
     assert "--dependency=afterany:101" in calls[0]
     assert "--dependency=afterany:202" in calls[1]
     assert [entry.slurm_job_id for entry in manifest.entries] == ["101", "202", "303"]

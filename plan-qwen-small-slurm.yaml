@@ -1,0 +1,17 @@
+name: qwen-small-family
+job_configs:
+  - job-qwen-3-0_6b-thinking.yaml
+  - job-qwen-3-0_6b-instruct.yaml
+  - job-qwen-3-1_7b-thinking.yaml
+  - job-qwen-3-1_7b-instruct.yaml
+  - job-qwen-3-4b-instruct-2507.yaml
+  - job-qwen3_5-0_8b-thinking.yaml
+  - job-qwen3_5-0_8b-instruct.yaml
+  - job-qwen3_5-2b-thinking.yaml
+  - job-qwen3_5-2b-instruct.yaml
+  - job-qwen3_5-4b-thinking.yaml
+  - job-qwen3_5-4b-instruct.yaml
+  - job-qwen3_5-9b-thinking.yaml
+  - job-qwen3_5-9b-instruct.yaml
+readiness_timeout_s: 1800
+prune_logs_on_success: true

@@ -73,6 +73,7 @@ def render_bundle(
                 chain_index=planned_task.chain_index,
                 submission_order=planned_task.submission_order,
                 job_name=planned_task.options.job_name,
+                account=planned_task.options.account,
                 slurm_job_id=slurm_job_id,
                 state=state,
             )
@@ -147,6 +148,7 @@ def resolve_restart_source(
     bench_run_id: str,
     existing_entry: SlurmTaskEntry | None,
 ) -> tuple[str | None, str]:
+    del bench_run_id
     if existing_entry and existing_entry.restart_source:
         return existing_entry.restart_source, "persisted"
 
@@ -162,7 +164,7 @@ def resolve_restart_source(
     source_restart = _extract_restart_source(source_payload)
     if source_restart:
         return source_restart, "source_config"
-    return bench_run_id, "auto_injected"
+    return None, "none"
 
 
 def write_script(

@@ -215,3 +215,7 @@ environments/healthbench/test*
 pyrightconfig.json
 
 
+configs/
+logs/
+plans/
+runs/

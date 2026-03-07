@@ -59,6 +59,7 @@ class TaskManifest:
     readiness: Mapping[str, Any] | None = None
     bench_command: str | None = None
     bench_run_id: str | None = None
+    bench_run_dir: str | None = None
     bench_exit_code: int | None = None
     bench_duration_s: float | None = None
     restart_source: str | None = None

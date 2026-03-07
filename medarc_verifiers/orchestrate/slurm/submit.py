@@ -20,7 +20,9 @@ def mark_dry_run(path: Path, manifest: SlurmBundleManifest) -> list[str]:
         if entry.state != "submitted":
             entry.state = "dry-run"
         dependency = _combine_dependency(entry.base_dependency, entry.generated_dependency)
-        commands.append(_render_sbatch_command(entry.script_path, dependency=dependency, test_only=False))
+        commands.append(
+            _render_sbatch_command(entry.script_path, dependency=dependency, account=entry.account, test_only=False)
+        )
     write_bundle_manifest(path, manifest)
     return commands
 
@@ -33,7 +35,7 @@ def submit_bundle(path: Path, manifest: SlurmBundleManifest, *, test_only: bool 
         generated_dependency = _actual_generated_dependency(entry, entry_map=entry_map)
         entry.generated_dependency = generated_dependency
         dependency = _combine_dependency(entry.base_dependency, generated_dependency)
-        command = _sbatch_command(entry.script_path, dependency=dependency, test_only=test_only)
+        command = _sbatch_command(entry.script_path, dependency=dependency, account=entry.account, test_only=test_only)
         completed = subprocess.run(command, check=False, capture_output=True, text=True)
         if completed.returncode != 0:
             raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or f"sbatch failed for {entry.task_id}")
@@ -62,8 +64,10 @@ def _combine_dependency(base_dependency: str | None, generated_dependency: str |
     return ",".join(parts)
 
 
-def _sbatch_command(script_path: str, *, dependency: str | None, test_only: bool) -> list[str]:
+def _sbatch_command(script_path: str, *, dependency: str | None, account: str | None, test_only: bool) -> list[str]:
     command = ["sbatch"]
+    if account:
+        command.extend(["--account", account])
     if not test_only:
         command.append("--parsable")
     if test_only:
@@ -74,8 +78,11 @@ def _sbatch_command(script_path: str, *, dependency: str | None, test_only: bool
     return command
 
 
-def _render_sbatch_command(script_path: str, *, dependency: str | None, test_only: bool) -> str:
-    return " ".join(shlex.quote(arg) for arg in _sbatch_command(script_path, dependency=dependency, test_only=test_only))
+def _render_sbatch_command(script_path: str, *, dependency: str | None, account: str | None, test_only: bool) -> str:
+    return " ".join(
+        shlex.quote(arg)
+        for arg in _sbatch_command(script_path, dependency=dependency, account=account, test_only=test_only)
+    )
 
 
 def _parse_job_id(output: str) -> str:

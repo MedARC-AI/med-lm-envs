@@ -89,6 +89,7 @@ def _render_serve_flags(serve: Mapping[str, object]) -> list[str]:
         "trust_remote_code": "--trust-remote-code",
         "enable_expert_parallel": "--enable-expert-parallel",
         "enable_auto_tool_choice": "--enable-auto-tool-choice",
+        "language_model_only": "--language-model-only",
     }
     for key, flag in bool_map.items():
         if serve.get(key) is True:
@@ -126,6 +127,7 @@ def _validate_serve_config(serve: Mapping[str, object]) -> None:
         "trust_remote_code",
         "enable_expert_parallel",
         "enable_auto_tool_choice",
+        "language_model_only",
     }
     allowed = scalar_keys | bool_keys | {"limit_mm_per_prompt"}
     unknown = sorted(set(serve.keys()) - allowed)

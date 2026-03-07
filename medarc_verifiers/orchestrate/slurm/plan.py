@@ -20,6 +20,7 @@ _ALLOWED_SLURM_KEYS = {
     "mail_user",
     "slurm_resume",
 }
+DEFAULT_SLURM_ACCOUNT = "training"
 
 
 def slug_task_id(task_id: str, *, fallback: str = "task") -> str:
@@ -170,7 +171,11 @@ def merge_slurm_options(task: TaskSpec, *, cli_overrides: SlurmCliOverrides) -> 
         cpus_per_gpu=cli_overrides.cpus_per_gpu if cli_overrides.cpus_per_gpu is not None else _optional_int(job_cfg.get("cpus_per_gpu")),
         time=cli_overrides.time if cli_overrides.time is not None else _optional_str(job_cfg.get("time")),
         partition=cli_overrides.partition if cli_overrides.partition is not None else _optional_str(job_cfg.get("partition")),
-        account=cli_overrides.account if cli_overrides.account is not None else _optional_str(job_cfg.get("account")),
+        account=(
+            cli_overrides.account
+            if cli_overrides.account is not None
+            else (_optional_str(job_cfg.get("account")) or DEFAULT_SLURM_ACCOUNT)
+        ),
         qos=cli_overrides.qos if cli_overrides.qos is not None else _optional_str(job_cfg.get("qos")),
         mail_type=cli_overrides.mail_type if cli_overrides.mail_type is not None else _optional_str(job_cfg.get("mail_type")),
         mail_user=cli_overrides.mail_user if cli_overrides.mail_user is not None else _optional_str(job_cfg.get("mail_user")),
@@ -216,6 +221,7 @@ def _optional_int(value: object) -> int | None:
 
 
 __all__ = [
+    "DEFAULT_SLURM_ACCOUNT",
     "PlannedSlurmTask",
     "SlurmCliOverrides",
     "SlurmTaskOptions",
