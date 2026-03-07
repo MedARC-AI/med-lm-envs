@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 import warnings
@@ -40,6 +40,7 @@ class TaskSpec:
     model_key: str
     model_id: str
     orchestrate: Mapping[str, Any]
+    slurm: Mapping[str, Any] = field(default_factory=dict)
 
 
 class ConfigFormatError(ValueError):
@@ -74,6 +75,24 @@ def load_plan(path: Path) -> PlanConfig:
     return plan
 
 
+def make_plan(
+    *,
+    job_configs: list[Path],
+    base_dir: Path | None = None,
+    name: str | None = None,
+) -> PlanConfig:
+    plan = PlanConfig(job_configs=job_configs, name=name)
+    resolved_job_configs: list[Path] = []
+    anchor = base_dir.resolve() if base_dir is not None else None
+    for cfg in plan.job_configs:
+        cfg_path = Path(cfg).expanduser()
+        if not cfg_path.is_absolute() and anchor is not None:
+            cfg_path = anchor / cfg_path
+        resolved_job_configs.append(cfg_path.resolve())
+    plan.job_configs = resolved_job_configs
+    return plan
+
+
 def load_job_config(path: Path) -> Mapping[str, Any]:
     resolved = path.expanduser().resolve()
     return _load_mapping(resolved)
@@ -97,6 +116,7 @@ def expand_tasks(plan: PlanConfig) -> list[TaskSpec]:
                 model_key=model_key,
                 model_id=model_id,
                 orchestrate=orchestrate_cfg,
+                slurm=_extract_slurm_config(job_cfg, source=resolved_job_path),
             )
         )
     return tasks
@@ -159,4 +179,13 @@ def _extract_orchestrate_config(payload: Mapping[str, Any], *, model_key: str, s
     return normalized
 
 
-__all__ = ["ConfigFormatError", "PlanConfig", "TaskSpec", "expand_tasks", "load_job_config", "load_plan"]
+def _extract_slurm_config(payload: Mapping[str, Any], *, source: Path) -> Mapping[str, Any]:
+    slurm = payload.get("slurm")
+    if slurm is None:
+        return {}
+    if not isinstance(slurm, Mapping):
+        raise ValueError(f"Job config {source} slurm must be a mapping when provided.")
+    return dict(slurm)
+
+
+__all__ = ["ConfigFormatError", "PlanConfig", "TaskSpec", "expand_tasks", "load_job_config", "load_plan", "make_plan"]

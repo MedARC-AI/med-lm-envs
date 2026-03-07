@@ -72,6 +72,17 @@ def test_cli_runtime_flag_parses() -> None:
     assert args.runtime == "pyxis"
 
 
+def test_cli_job_config_flag_parses_multiple_values() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        ["--job-config", "configs/job-a.yaml", "--job-config", "configs/job-b.yaml", "--runtime", "pyxis"]
+    )
+
+    assert args.job_configs == [Path("configs/job-a.yaml"), Path("configs/job-b.yaml")]
+    assert args.plan is None
+    assert args.runtime == "pyxis"
+
+
 def test_cli_runtime_precedence_cli_over_plan(monkeypatch, tmp_path: Path) -> None:
     job_cfg = tmp_path / "job.yaml"
     job_cfg.write_text(
@@ -110,6 +121,50 @@ runtime: docker
 
     assert rc == 0
     assert captured["runtime"] == "pyxis"
+
+
+def test_cli_direct_job_configs_launch_without_plan(monkeypatch, tmp_path: Path) -> None:
+    for name in ("job-a.yaml", "job-b.yaml"):
+        (tmp_path / name).write_text(
+            """
+models:
+  foo:
+    model: Foo/Bar
+orchestrate:
+  vllm-container:
+    image: fake
+  foo:
+    gpus: 1
+    serve: {}
+""".lstrip(),
+            encoding="utf-8",
+        )
+
+    captured: dict[str, object] = {}
+
+    def fake_run(self) -> None:
+        captured["runtime"] = self._runtime
+        captured["job_configs"] = list(self._plan.job_configs)
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.cli.discover_gpus", lambda: [_gpu(0), _gpu(1)])
+    monkeypatch.setattr(OrchestratorRunner, "run", fake_run)
+
+    rc = main(
+        [
+            "--job-config",
+            str(tmp_path / "job-a.yaml"),
+            "--job-config",
+            str(tmp_path / "job-b.yaml"),
+            "--runtime",
+            "pyxis",
+            "--name",
+            "bundle",
+        ]
+    )
+
+    assert rc == 0
+    assert captured["runtime"] == "pyxis"
+    assert captured["job_configs"] == [(tmp_path / "job-a.yaml").resolve(), (tmp_path / "job-b.yaml").resolve()]
 
 
 def test_port_only_resource_manager_skips_gpus() -> None:

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from medarc_verifiers.orchestrate.config import expand_tasks, load_plan
+from medarc_verifiers.orchestrate.config import expand_tasks, load_plan, make_plan
 
 
 def test_plan_job_configs_resolve_relative_to_plan_file(tmp_path: Path):
@@ -114,3 +114,55 @@ orchestrate:
 
     with pytest.raises(ValueError, match="defines both orchestrate.vllm-container and orchestrate.vllm-docker"):
         expand_tasks(load_plan(plan_path))
+
+
+def test_make_plan_resolves_job_configs_relative_to_base_dir(tmp_path: Path) -> None:
+    configs_dir = tmp_path / "configs"
+    configs_dir.mkdir()
+    job_cfg = configs_dir / "job-foo.yaml"
+    job_cfg.write_text(
+        """
+models:
+  foo:
+    model: Foo/Bar
+orchestrate:
+  vllm-container:
+    image: fake
+  foo:
+    gpus: 1
+    serve: {}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    plan = make_plan(job_configs=[Path("configs/job-foo.yaml")], base_dir=tmp_path, name="bundle")
+
+    assert plan.name == "bundle"
+    assert plan.job_configs == [job_cfg.resolve()]
+
+
+def test_expand_tasks_extracts_optional_slurm_block(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    job_cfg.write_text(
+        """
+models:
+  foo:
+    model: Foo/Bar
+orchestrate:
+  vllm-container:
+    image: fake
+  foo:
+    gpus: 2
+    serve: {}
+slurm:
+  partition: gpu
+  time: 04:00:00
+""".lstrip(),
+        encoding="utf-8",
+    )
+    plan_path = tmp_path / "plan.yaml"
+    plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\n", encoding="utf-8")
+
+    tasks = expand_tasks(load_plan(plan_path))
+
+    assert tasks[0].slurm == {"partition": "gpu", "time": "04:00:00"}

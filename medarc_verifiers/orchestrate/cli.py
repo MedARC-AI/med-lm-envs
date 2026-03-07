@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
 from pathlib import Path
 from datetime import UTC, datetime
 
-from medarc_verifiers.orchestrate.config import TaskSpec, expand_tasks, load_plan
+from medarc_verifiers.orchestrate.config import TaskSpec, expand_tasks, load_plan, make_plan
 from medarc_verifiers.orchestrate.docker_vllm import cleanup_orphan_containers
 from medarc_verifiers.orchestrate.resources import (
     PortOnlyResourceManager,
@@ -33,7 +34,20 @@ def build_parser() -> argparse.ArgumentParser:
         prog="medarc-orchestrate",
         description="Run vLLM orchestration over job configs.",
     )
-    parser.add_argument("--plan", required=True, type=Path, help="Path to orchestrator plan YAML.")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--plan", type=Path, help="Path to orchestrator plan YAML.")
+    source.add_argument(
+        "--job-config",
+        action="append",
+        type=Path,
+        dest="job_configs",
+        help="Job config to orchestrate. Repeat to launch multiple job configs without a wrapper plan file.",
+    )
+    parser.add_argument(
+        "--name",
+        default=None,
+        help="Optional bundle name when using --job-config directly (used for run-id prefix when --run-id is unset).",
+    )
     parser.add_argument(
         "--env-file",
         type=Path,
@@ -142,15 +156,26 @@ def _validate_schedule(
 
 
 def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv and argv[0] == "slurm":
+        from medarc_verifiers.orchestrate.slurm.cli import main as slurm_main
+
+        return slurm_main(argv[1:])
     parser = build_parser()
     args = parser.parse_args(argv)
-    plan_path = args.plan.expanduser().resolve()
-    plan = load_plan(plan_path)
+    plan_base_dir = Path.cwd()
+    if args.plan is not None:
+        plan_path = args.plan.expanduser().resolve()
+        plan = load_plan(plan_path)
+        plan_base_dir = plan_path.parent
+    else:
+        plan = make_plan(job_configs=args.job_configs or [], base_dir=plan_base_dir, name=args.name)
     runtime = args.runtime or plan.runtime or "docker"
     if args.env_file is not None:
         env_file = args.env_file.expanduser()
         if not env_file.is_absolute():
-            env_file = plan_path.parent / env_file
+            env_file = plan_base_dir / env_file
         plan.env_file = env_file.resolve()
     tasks = expand_tasks(plan)
     configured_run_id = args.run_id or plan.run_id
