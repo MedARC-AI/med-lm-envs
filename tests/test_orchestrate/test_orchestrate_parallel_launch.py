@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from medarc_verifiers.orchestrate.bundle import load_runtime_state
 from medarc_verifiers.orchestrate.config import PlanConfig, TaskSpec
 from medarc_verifiers.orchestrate.resources import ResourceError, ResourceManager
 from medarc_verifiers.orchestrate.run import OrchestratorOptions, OrchestratorRunner
@@ -98,9 +99,26 @@ class FakeRuntimeAdapter:
 
 
 def _task(tmp_path: Path, task_id: str, *, gpus: int = 2, tensor_parallel_size: int = 2, data_parallel_size: int = 1) -> TaskSpec:
+    job_config_path = tmp_path / f"{task_id}.yaml"
+    job_config_path.write_text(
+        (
+            "models:\n"
+            "  foo:\n"
+            f"    model: Foo/{task_id}\n"
+            "orchestrate:\n"
+            "  vllm-container:\n"
+            "    image: fake\n"
+            "  foo:\n"
+            f"    gpus: {gpus}\n"
+            f"    tensor_parallel_size: {tensor_parallel_size}\n"
+            f"    data_parallel_size: {data_parallel_size}\n"
+            "    serve: {}\n"
+        ),
+        encoding="utf-8",
+    )
     return TaskSpec(
         task_id=task_id,
-        job_config_path=tmp_path / f"{task_id}.yaml",
+        job_config_path=job_config_path,
         model_key="foo",
         model_id=f"Foo/{task_id}",
         orchestrate={
@@ -285,7 +303,7 @@ async def test_parallel_launch_records_gpu_accounting_and_dp_args(
         "4",
     ]
 
-    manifest = json.loads((options.output_root / "task-1" / "run_manifest.json").read_text())
+    manifest = json.loads((options.output_root / "tasks" / "task-1" / "runtime" / "task_manifest.json").read_text())
     assert manifest["bench_run_id"] == "run-1-task-1"
     assert manifest["allocated_gpu_count"] == 8
     assert manifest["effective_gpu_count"] == 8
@@ -355,9 +373,13 @@ async def test_runner_persists_discovered_restart_source(tmp_path: Path, monkeyp
 
     await runner._run_async()
 
-    payload = task.job_config_path.read_text(encoding="utf-8")
-    assert f"restart: {discovered_run_dir}" in payload
+    bundled_payload = (options.output_root / "tasks" / "task-1" / "eval-config.yaml").read_text(encoding="utf-8")
+    assert "restart:" not in bundled_payload
+    assert "restart:" not in task.job_config_path.read_text(encoding="utf-8")
 
-    manifest = json.loads((options.output_root / "task-1" / "run_manifest.json").read_text())
+    manifest = json.loads((options.output_root / "tasks" / "task-1" / "runtime" / "task_manifest.json").read_text())
     assert manifest["bench_run_dir"] == str(discovered_run_dir)
     assert manifest["restart_source"] == str(discovered_run_dir)
+    state = load_runtime_state(options.output_root / "tasks" / "task-1" / "runtime" / "state.json")
+    assert state is not None
+    assert state.restart_source == str(discovered_run_dir)

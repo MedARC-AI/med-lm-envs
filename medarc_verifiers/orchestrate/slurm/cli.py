@@ -105,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         run_id = generate_run_id(plan.name)
 
-    output_root = args.output_dir or plan.output_dir or Path("outputs") / "slurm" / run_id
+    output_root = args.output_dir or plan.output_dir or Path("outputs") / "orchestrate" / run_id
     output_root = output_root.expanduser().resolve()
     source_dir = args.source_dir.expanduser().resolve()
     if args.activate_script is not None:
@@ -136,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
         cli_overrides=cli_overrides,
     )
 
-    manifest_path = output_root / "manifest.json"
+    manifest_path = output_root / "submission_manifest.json"
     existing_manifest = _load_existing_manifest(manifest_path, run_id=run_id)
     manifest = render_bundle(
         planned_tasks=planned_tasks,

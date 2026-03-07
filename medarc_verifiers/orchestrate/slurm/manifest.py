@@ -28,8 +28,13 @@ class SlurmTaskEntry:
     task_id: str
     task_slug: str
     original_job_config_path: str
+    original_job_config_checksum: str
     effective_job_config_path: str
-    patched_job_config_path: str | None
+    bundled_eval_config_checksum: str
+    task_spec_path: str
+    task_spec_checksum: str
+    allocation_path: str
+    state_path: str
     tp_size: int
     dp_size: int
     effective_gpus: int

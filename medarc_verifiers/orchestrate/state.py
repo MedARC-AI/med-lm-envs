@@ -83,11 +83,15 @@ class TaskPaths:
 
     @property
     def manifest_path(self) -> Path:
-        return self.root / "run_manifest.json"
+        return self.root / "runtime" / "task_manifest.json"
 
     @property
     def result_path(self) -> Path:
-        return self.root / "result.json"
+        return self.root / "runtime" / "result.json"
+
+    @property
+    def runtime_dir(self) -> Path:
+        return self.root / "runtime"
 
     @property
     def serve_dir(self) -> Path:
@@ -96,6 +100,14 @@ class TaskPaths:
     @property
     def bench_dir(self) -> Path:
         return self.root / "bench"
+
+    @property
+    def state_path(self) -> Path:
+        return self.runtime_dir / "state.json"
+
+    @property
+    def allocation_path(self) -> Path:
+        return self.runtime_dir / "allocation.json"
 
     @property
     def stdout_path(self) -> Path:

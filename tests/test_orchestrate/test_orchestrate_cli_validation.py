@@ -198,7 +198,7 @@ orchestrate:
 
     assert rc == 0
     assert captured["run_id"] == "shared-run-id"
-    assert captured["output_root"] == Path("outputs") / "orchestrator" / "shared-run-id"
+    assert captured["output_root"] == Path("outputs") / "orchestrate" / "shared-run-id"
 
 
 def test_port_only_resource_manager_skips_gpus() -> None:

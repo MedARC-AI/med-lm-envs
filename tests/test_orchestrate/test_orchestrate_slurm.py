@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from medarc_verifiers.orchestrate.bundle import load_run_bundle_manifest, load_runtime_state
 from medarc_verifiers.orchestrate.cli import main as orchestrate_main
 from medarc_verifiers.orchestrate.config import TaskSpec, expand_tasks, load_job_config, load_plan
 from medarc_verifiers.orchestrate.slurm.manifest import SlurmBundleManifest
@@ -10,6 +11,8 @@ from medarc_verifiers.orchestrate.slurm.cli import build_parser as build_slurm_p
 from medarc_verifiers.orchestrate.slurm.plan import DEFAULT_SLURM_ACCOUNT, SlurmCliOverrides, build_submission_plan
 from medarc_verifiers.orchestrate.slurm.render import render_bundle
 from medarc_verifiers.orchestrate.slurm.submit import submit_bundle
+
+
 def _write_job_config(
     path: Path,
     *,
@@ -163,7 +166,7 @@ def test_build_submission_plan_rejects_tp_larger_than_node_gpus(tmp_path: Path) 
         )
 
 
-def test_render_bundle_writes_script_and_patched_config(tmp_path: Path) -> None:
+def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
     job_cfg = tmp_path / "job.yaml"
     _write_job_config(job_cfg, gpus=2, tensor_parallel_size=2, slurm={"partition": "gpu", "slurm_resume": True})
     tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
@@ -191,11 +194,12 @@ def test_render_bundle_writes_script_and_patched_config(tmp_path: Path) -> None:
 
     entry = manifest.entries[0]
     script = Path(entry.script_path).read_text(encoding="utf-8")
-    patched = json.loads(json.dumps({}))  # keep json imported for the file; patched content checked via OmegaConf-compatible parser below
 
     assert entry.dp_size == 4
     assert entry.effective_gpus == 8
-    assert entry.patched_job_config_path is not None
+    assert entry.original_job_config_checksum
+    assert entry.bundled_eval_config_checksum
+    assert entry.task_spec_checksum
     assert "#SBATCH --gpus-per-task=8" in script
     assert "#SBATCH --nodes=1" in script
     assert "#SBATCH --ntasks=1" in script
@@ -212,14 +216,18 @@ def test_render_bundle_writes_script_and_patched_config(tmp_path: Path) -> None:
     assert "--mem" not in script
     assert str(job_cfg) not in script
 
-    patched_payload = load_job_config(Path(entry.patched_job_config_path))
-    assert patched_payload["orchestrate"]["foo"]["gpus"] == 8
-    assert patched_payload["orchestrate"]["foo"]["data_parallel_size"] == 4
-    assert "restart" not in patched_payload["orchestrate"]
-    assert patched == {}
+    bundled_payload = load_job_config(Path(entry.effective_job_config_path))
+    assert bundled_payload["orchestrate"]["foo"]["gpus"] == 8
+    assert bundled_payload["orchestrate"]["foo"]["data_parallel_size"] == 4
+    assert "restart" not in bundled_payload["orchestrate"]
+    assert Path(entry.task_spec_path).name == "task.yaml"
+    assert Path(entry.script_path).name == "submit.sh"
+
+    run_manifest = load_run_bundle_manifest(tmp_path / "outputs" / "run_manifest.json")
+    assert run_manifest.tasks[0].bundled_eval_config_path == entry.effective_job_config_path
 
 
-def test_render_bundle_always_materializes_task_local_config_and_reuses_it(tmp_path: Path) -> None:
+def test_render_bundle_refreshes_stale_task_bundle_when_source_changes(tmp_path: Path) -> None:
     job_cfg = tmp_path / "job.yaml"
     _write_job_config(job_cfg, gpus=1)
     tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
@@ -248,7 +256,6 @@ def test_render_bundle_always_materializes_task_local_config_and_reuses_it(tmp_p
     first_config_path = Path(first_entry.effective_job_config_path)
     first_payload = load_job_config(first_config_path)
 
-    assert first_entry.patched_job_config_path == str(first_config_path)
     assert "restart" not in first_payload["orchestrate"]
 
     job_cfg.write_text(
@@ -284,7 +291,62 @@ orchestrate:
 
     assert second_entry.effective_job_config_path == first_entry.effective_job_config_path
     assert "restart" not in second_payload["orchestrate"]
-    assert second_payload["orchestrate"]["foo"].get("serve", {}) == first_payload["orchestrate"]["foo"].get("serve", {})
+    assert first_payload["orchestrate"]["foo"].get("serve", {}) == {}
+    assert second_payload["orchestrate"]["foo"].get("serve", {}) == {"dtype": "float16"}
+
+
+def test_render_bundle_prefers_runtime_state_restart_on_rerender(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    _write_job_config(job_cfg, gpus=1, restart="runs/raw/source-run")
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    planned = build_submission_plan(
+        tasks,
+        run_id="bundle",
+        node_gpus=8,
+        max_simultaneous_nodes=1,
+        run_simultaneously=False,
+        base_dependency=None,
+        cli_overrides=SlurmCliOverrides(),
+    )
+
+    first_manifest = render_bundle(
+        planned_tasks=planned,
+        bundle_root=tmp_path / "outputs",
+        run_id="bundle",
+        node_gpus=8,
+        source_dir=tmp_path,
+        activate_script=tmp_path / ".venv" / "bin" / "activate",
+        env_file=None,
+        readiness_timeout_s=None,
+        prune_logs_on_success=False,
+    )
+    first_entry = first_manifest.entries[0]
+    state_path = Path(first_entry.state_path)
+    state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+    state_payload["restart_source"] = "runs/raw/runtime-run"
+    state_payload["restart_source_strategy"] = "runtime_state"
+    state_path.write_text(json.dumps(state_payload, indent=2), encoding="utf-8")
+
+    second_manifest = render_bundle(
+        planned_tasks=planned,
+        bundle_root=tmp_path / "outputs",
+        run_id="bundle",
+        node_gpus=8,
+        source_dir=tmp_path,
+        activate_script=tmp_path / ".venv" / "bin" / "activate",
+        env_file=None,
+        readiness_timeout_s=None,
+        prune_logs_on_success=False,
+        existing_manifest=first_manifest,
+    )
+    second_entry = second_manifest.entries[0]
+    second_payload = load_job_config(Path(second_entry.effective_job_config_path))
+    runtime_state = load_runtime_state(Path(second_entry.state_path))
+
+    assert second_payload["orchestrate"]["restart"] == "runs/raw/source-run"
+    assert runtime_state is not None
+    assert runtime_state.restart_source == "runs/raw/runtime-run"
+    assert second_entry.restart_source == "runs/raw/runtime-run"
 
 
 def test_rendered_task_local_config_is_loadable_by_orchestrator(tmp_path: Path) -> None:
@@ -351,10 +413,13 @@ def test_slurm_dry_run_writes_manifest_and_prints_commands(tmp_path: Path, capsy
     assert f"sbatch --account {DEFAULT_SLURM_ACCOUNT} " in stdout_lines[1]
     assert "--dependency=afterany:$JOBID_1" in stdout_lines[1]
 
-    manifest = json.loads((tmp_path / "bundle" / "manifest.json").read_text())
+    manifest = json.loads((tmp_path / "bundle" / "submission_manifest.json").read_text())
     assert [entry["state"] for entry in manifest["entries"]] == ["dry-run", "dry-run"]
     assert all(entry["slurm_job_id"] is None for entry in manifest["entries"])
     assert all(entry["account"] == DEFAULT_SLURM_ACCOUNT for entry in manifest["entries"])
+
+    run_manifest = json.loads((tmp_path / "bundle" / "run_manifest.json").read_text())
+    assert len(run_manifest["tasks"]) == 2
 
 
 def test_slurm_cli_default_run_id_uses_shared_generator(tmp_path: Path, monkeypatch) -> None:
@@ -377,7 +442,7 @@ def test_slurm_cli_default_run_id_uses_shared_generator(tmp_path: Path, monkeypa
 
     assert rc == 0
     assert captured["run_id"] == "shared-run-id"
-    assert captured["bundle_root"] == (Path("outputs") / "slurm" / "shared-run-id").resolve()
+    assert captured["bundle_root"] == (Path("outputs") / "orchestrate" / "shared-run-id").resolve()
 
 
 def test_submit_bundle_resumes_from_existing_job_ids(tmp_path: Path, monkeypatch) -> None:
@@ -427,7 +492,7 @@ def test_submit_bundle_resumes_from_existing_job_ids(tmp_path: Path, monkeypatch
 
     monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.submit.subprocess.run", fake_run)
 
-    submit_bundle(tmp_path / "bundle" / "manifest.json", manifest)
+    submit_bundle(tmp_path / "bundle" / "submission_manifest.json", manifest)
 
     assert calls[0][0:4] == ["sbatch", "--account", DEFAULT_SLURM_ACCOUNT, "--parsable"]
     assert "--dependency=afterany:101" in calls[0]

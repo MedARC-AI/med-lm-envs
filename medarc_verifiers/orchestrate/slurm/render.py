@@ -2,15 +2,10 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from pathlib import Path
-from typing import Any
 import shlex
 
-from omegaconf import OmegaConf
-
-from medarc_verifiers.orchestrate.config import load_job_config
-from medarc_verifiers.orchestrate.task_naming import bench_run_id
+from medarc_verifiers.orchestrate.bundle import ExecutionAllocation, PlannedTaskBundle, ensure_run_bundle
 
 from .manifest import SlurmBundleManifest, SlurmTaskEntry
 from .plan import PlannedSlurmTask, placeholder_dependency
@@ -32,20 +27,53 @@ def render_bundle(
     bundle_root.mkdir(parents=True, exist_ok=True)
     existing_entries = existing_manifest.entry_map() if existing_manifest else {}
     task_order = {task.task.task_id: task.submission_order for task in planned_tasks}
+    eval_config_overrides = {
+        task.task.task_id: {
+            "orchestrate": {
+                task.task.model_key: {
+                    "gpus": task.effective_gpus,
+                    "tensor_parallel_size": task.tp_size,
+                    "data_parallel_size": task.dp_size,
+                }
+            }
+        }
+        for task in planned_tasks
+    }
+    allocation_defaults = {
+        task.task.task_id: ExecutionAllocation(
+            task_id=task.task.task_id,
+            allocated_gpus=node_gpus,
+            require_contiguous_gpus=node_gpus > 1,
+            slurm_job_id=(existing_entries.get(task.task.task_id).slurm_job_id if existing_entries.get(task.task.task_id) else None),
+            constraints={"scheduler": "slurm", "node_gpus": node_gpus},
+        )
+        for task in planned_tasks
+    }
+    bundle_plan = ensure_run_bundle(
+        tasks=[task.task for task in planned_tasks],
+        run_id=run_id,
+        output_root=bundle_root,
+        mode="slurm",
+        runtime="pyxis",
+        eval_config_overrides=eval_config_overrides,
+        allocation_defaults=allocation_defaults,
+    )
+    bundle_entries = bundle_plan.manifest.entry_map()
     entries: list[SlurmTaskEntry] = []
 
     for planned_task in planned_tasks:
         existing_entry = existing_entries.get(planned_task.task.task_id)
+        bundle = bundle_plan.tasks[planned_task.task.task_id]
+        bundle_entry = bundle_entries[planned_task.task.task_id]
         rendered = render_task_artifacts(
             planned_task=planned_task,
-            bundle_root=bundle_root,
+            task_bundle=bundle,
             source_dir=source_dir,
             activate_script=activate_script,
             env_file=env_file,
             readiness_timeout_s=readiness_timeout_s,
             prune_logs_on_success=prune_logs_on_success,
             node_gpus=node_gpus,
-            existing_entry=existing_entry,
         )
         generated_dependency = placeholder_dependency(planned_task, task_order=task_order)
         state = existing_entry.state if existing_entry else "pending"
@@ -58,14 +86,19 @@ def render_bundle(
                 task_id=planned_task.task.task_id,
                 task_slug=planned_task.task_slug,
                 original_job_config_path=str(planned_task.task.job_config_path),
-                effective_job_config_path=str(rendered["effective_job_config_path"]),
-                patched_job_config_path=_string_or_none(rendered["patched_job_config_path"]),
+                original_job_config_checksum=bundle.spec.original_job_config_checksum,
+                effective_job_config_path=bundle.spec.bundled_eval_config_path,
+                bundled_eval_config_checksum=bundle.spec.bundled_eval_config_checksum,
+                task_spec_path=bundle.spec.output_paths.task_spec_path,
+                task_spec_checksum=bundle_entry.task_spec_checksum,
+                allocation_path=bundle.spec.output_paths.allocation_path,
+                state_path=bundle.spec.output_paths.state_path,
                 tp_size=planned_task.tp_size,
                 dp_size=planned_task.dp_size,
                 effective_gpus=planned_task.effective_gpus,
                 inner_run_id=planned_task.inner_run_id,
-                restart_source=_string_or_none(rendered["restart_source"]),
-                restart_strategy=_string_or_none(rendered["restart_strategy"]),
+                restart_source=bundle.state.restart_source,
+                restart_strategy=bundle.state.restart_source_strategy,
                 script_path=str(rendered["script_path"]),
                 generated_dependency=generated_dependency,
                 base_dependency=planned_task.base_dependency,
@@ -93,94 +126,43 @@ def render_bundle(
 def render_task_artifacts(
     *,
     planned_task: PlannedSlurmTask,
-    bundle_root: Path,
+    task_bundle: PlannedTaskBundle,
     source_dir: Path,
     activate_script: Path,
     env_file: Path | None,
     readiness_timeout_s: int | None,
     prune_logs_on_success: bool,
     node_gpus: int,
-    existing_entry: SlurmTaskEntry | None,
 ) -> dict[str, Path | str | None]:
-    task_root = bundle_root / planned_task.task_slug
-    slurm_dir = task_root / "slurm"
-    slurm_dir.mkdir(parents=True, exist_ok=True)
-    source_payload = _load_task_source_payload(planned_task=planned_task, existing_entry=existing_entry)
-    restart_source, restart_strategy = resolve_restart_source(
-        source_payload=source_payload,
-        bench_run_id=bench_run_id(planned_task.inner_run_id, planned_task.task.task_id),
-        existing_entry=existing_entry,
-    )
-    patched_job_config_path = slurm_dir / "job-config.yaml"
-    payload = _build_task_config_payload(
-        source_payload=source_payload,
-        planned_task=planned_task,
-        restart_source=restart_source,
-    )
-    _write_yaml(patched_job_config_path, payload)
-    effective_job_config_path = patched_job_config_path
-
-    script_path = slurm_dir / "orchestrate.sh"
+    script_path = task_bundle.paths.submit_script_path
     write_script(
         script_path=script_path,
         planned_task=planned_task,
+        task_bundle=task_bundle,
         source_dir=source_dir,
         activate_script=activate_script,
         env_file=env_file,
         readiness_timeout_s=readiness_timeout_s,
         prune_logs_on_success=prune_logs_on_success,
         node_gpus=node_gpus,
-        effective_job_config_path=effective_job_config_path,
-        bundle_root=bundle_root,
     )
-    return {
-        "effective_job_config_path": effective_job_config_path,
-        "patched_job_config_path": patched_job_config_path,
-        "restart_source": restart_source,
-        "restart_strategy": restart_strategy,
-        "script_path": script_path,
-    }
-
-
-def resolve_restart_source(
-    *,
-    source_payload: dict[str, Any],
-    bench_run_id: str,
-    existing_entry: SlurmTaskEntry | None,
-) -> tuple[str | None, str]:
-    del bench_run_id
-    if existing_entry and existing_entry.restart_source:
-        return existing_entry.restart_source, "persisted"
-
-    persisted_path = None
-    if existing_entry and existing_entry.patched_job_config_path:
-        persisted_path = Path(existing_entry.patched_job_config_path)
-        if persisted_path.exists():
-            persisted_payload = dict(load_job_config(persisted_path))
-            persisted_restart = _extract_restart_source(persisted_payload)
-            if persisted_restart:
-                return persisted_restart, "persisted"
-
-    source_restart = _extract_restart_source(source_payload)
-    if source_restart:
-        return source_restart, "source_config"
-    return None, "none"
+    return {"script_path": script_path}
 
 
 def write_script(
     *,
     script_path: Path,
     planned_task: PlannedSlurmTask,
+    task_bundle: PlannedTaskBundle,
     source_dir: Path,
     activate_script: Path,
     env_file: Path | None,
     readiness_timeout_s: int | None,
     prune_logs_on_success: bool,
     node_gpus: int,
-    effective_job_config_path: Path,
-    bundle_root: Path,
 ) -> None:
-    log_path = bundle_root / planned_task.task_slug / "slurm" / "job_%j.log"
+    log_path = Path(task_bundle.spec.output_paths.root) / "slurm" / "job_%j.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         "#!/bin/bash",
         f"#SBATCH --job-name={planned_task.options.job_name}",
@@ -205,13 +187,13 @@ def write_script(
     command = [
         "medarc-orchestrate",
         "--job-config",
-        str(effective_job_config_path),
+        task_bundle.spec.bundled_eval_config_path,
         "--runtime",
         "pyxis",
         "--run-id",
         planned_task.inner_run_id,
         "--output-dir",
-        str(bundle_root / planned_task.task_slug / "orchestrator"),
+        str(Path(task_bundle.spec.output_paths.root) / "orchestrator"),
         "--no-uv-run",
     ]
     if env_file is not None:
@@ -252,61 +234,10 @@ def write_script(
     script_path.write_text("\n".join(lines + body_lines), encoding="utf-8")
 
 
-def _build_task_config_payload(
-    *,
-    source_payload: dict[str, Any],
-    planned_task: PlannedSlurmTask,
-    restart_source: str | None,
-) -> dict[str, Any]:
-    payload = deepcopy(source_payload)
-    orchestrate = dict(payload.get("orchestrate") or {})
-    model_cfg = dict(orchestrate.get(planned_task.task.model_key) or {})
-    model_cfg["gpus"] = planned_task.effective_gpus
-    if planned_task.dp_size > 1:
-        model_cfg["data_parallel_size"] = planned_task.dp_size
-    else:
-        model_cfg.pop("data_parallel_size", None)
-    orchestrate[planned_task.task.model_key] = model_cfg
-    if restart_source:
-        orchestrate["restart"] = restart_source
-    payload["orchestrate"] = orchestrate
-    return payload
-
-
-def _load_task_source_payload(*, planned_task: PlannedSlurmTask, existing_entry: SlurmTaskEntry | None) -> dict[str, Any]:
-    if existing_entry and existing_entry.effective_job_config_path:
-        existing_path = Path(existing_entry.effective_job_config_path)
-        if existing_path.exists():
-            return dict(load_job_config(existing_path))
-    return dict(load_job_config(planned_task.task.job_config_path))
-
-
-def _extract_restart_source(payload: dict[str, Any]) -> str | None:
-    orchestrate = payload.get("orchestrate")
-    if not isinstance(orchestrate, dict):
-        return None
-    restart = orchestrate.get("restart")
-    if restart is None:
-        return None
-    text = str(restart).strip()
-    return text or None
-
-
-def _write_yaml(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    OmegaConf.save(config=OmegaConf.create(payload), f=str(path))
-
-
 def _sbatch_line(flag: str, value: object) -> str | None:
     if value is None:
         return None
     return f"#SBATCH {flag}={value}"
 
 
-def _string_or_none(value: object) -> str | None:
-    if value is None:
-        return None
-    return str(value)
-
-
-__all__ = ["render_bundle", "render_task_artifacts", "resolve_restart_source", "write_script"]
+__all__ = ["render_bundle", "render_task_artifacts", "write_script"]

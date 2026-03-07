@@ -155,6 +155,17 @@ async def test_benchmark_termination_ends_process(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_runner_shutdown_state_machine(tmp_path: Path) -> None:
     plan = PlanConfig(job_configs=[tmp_path / "job.yaml"])
+    (tmp_path / "job-1.yaml").write_text(
+        (
+            "models:\n"
+            "  foo:\n"
+            "    model: Foo/Bar\n"
+            "orchestrate:\n"
+            "  foo:\n"
+            "    gpus: 1\n"
+        ),
+        encoding="utf-8",
+    )
     tasks = [
         TaskSpec(
             task_id="task-1",

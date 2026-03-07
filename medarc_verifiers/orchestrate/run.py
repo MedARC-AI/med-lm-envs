@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Iterable
 
 from dotenv import dotenv_values
-from omegaconf import OmegaConf
 
 from medarc_verifiers.orchestrate.bench import (
     BenchProcess,
@@ -21,6 +20,14 @@ from medarc_verifiers.orchestrate.bench import (
     start_benchmark,
     terminate_benchmark,
     wait_benchmark,
+)
+from medarc_verifiers.orchestrate.bundle import (
+    ExecutionAllocation,
+    PlannedTaskBundle,
+    RuntimeState,
+    ensure_run_bundle,
+    write_execution_allocation,
+    write_runtime_state,
 )
 from medarc_verifiers.orchestrate.config import PlanConfig, TaskSpec, load_job_config
 from medarc_verifiers.orchestrate.dashboard import ACTIVE_STATES, OrchestratorDashboard
@@ -103,6 +110,13 @@ class OrchestratorRunner:
         self._shutdown_requested_at: str | None = None
         self._run_started_at: str | None = None
         self._dashboard_refresh_task: asyncio.Task[None] | None = None
+        self._bundle_plan = ensure_run_bundle(
+            tasks=self._tasks,
+            run_id=self._options.run_id,
+            output_root=self._options.output_root,
+            mode="local",
+            runtime=self._runtime,
+        )
         self._init_manifests(self._tasks)
 
     def run(self) -> None:
@@ -145,7 +159,23 @@ class OrchestratorRunner:
         if current:
             self._active_runner_tasks[task.task_id] = current
         manifest = self._get_or_init_manifest(task, allocation)
-        paths = TaskPaths(task_root_for_id(self._options.output_root, task.task_id))
+        bundle = self._bundle_for_task(task)
+        paths = TaskPaths(bundle.paths.root)
+        write_execution_allocation(
+            bundle.paths.allocation_path,
+            ExecutionAllocation(
+                task_id=task.task_id,
+                allocated_gpus=_allocated_gpu_count(allocation, task),
+                gpu_ids=list(allocation.gpu_ids),
+                server_port=allocation.server_port,
+                require_contiguous_gpus=bool(
+                    _get_mapping(task.orchestrate.get(task.model_key), f"orchestrate.{task.model_key}").get(
+                        "require_contiguous_gpus",
+                        bool(allocation.gpu_ids and len(allocation.gpu_ids) > 1),
+                    )
+                ),
+            ),
+        )
         attempt = 0
         try:
             while True:
@@ -182,6 +212,7 @@ class OrchestratorRunner:
     async def _run_task_once(
         self, task: TaskSpec, allocation: Allocation, manifest: TaskManifest, paths: TaskPaths
     ) -> None:
+        bundle = self._bundle_for_task(task)
         self._set_state(manifest, paths, JobState.allocating)
 
         orchestrate = task.orchestrate
@@ -314,11 +345,11 @@ class OrchestratorRunner:
                 "output_dir": str(paths.bench_dir),
                 "run_id": self._options.run_id,
                 "task_id": task.task_id,
-                "job_config_path": str(task.job_config_path),
+                "job_config_path": bundle.spec.bundled_eval_config_path,
             }
             command = render_command(self._command_template, command_context)
             manifest.bench_run_id = command_context["bench_run_id"]
-            restart_source = orchestrate.get("restart")
+            restart_source = bundle.state.restart_source or bundle.spec.restart_source
             if restart_source:
                 restart_value = str(restart_source)
                 manifest.restart_source = restart_value
@@ -337,7 +368,7 @@ class OrchestratorRunner:
             )
             self._bench_processes[task.task_id] = bench_proc
             discovered_run_dir = await _discover_bench_run_dir(
-                job_config_path=task.job_config_path,
+                job_config_path=Path(bundle.spec.bundled_eval_config_path),
                 repo_root=repo_root,
                 timeout_s=15.0,
             )
@@ -345,8 +376,18 @@ class OrchestratorRunner:
                 manifest.bench_run_dir = str(discovered_run_dir)
                 if restart_source is None:
                     persisted_restart = _format_restart_source(discovered_run_dir, repo_root=repo_root)
-                    _persist_restart_source(task.job_config_path, restart_source=persisted_restart)
                     manifest.restart_source = persisted_restart
+                    write_runtime_state(
+                        bundle.paths.state_path,
+                        RuntimeState(
+                            task_id=task.task_id,
+                            state=manifest.state,
+                            restart_source=persisted_restart,
+                            restart_source_strategy="runtime_state",
+                            bench_run_id=manifest.bench_run_id,
+                            bench_run_dir=manifest.bench_run_dir,
+                        ),
+                    )
                 write_task_manifest(paths, manifest)
             bench_result = await wait_benchmark(bench_proc)
             self._bench_processes.pop(task.task_id, None)
@@ -411,6 +452,17 @@ class OrchestratorRunner:
             manifest.completed_at = now
             _update_gpu_accounting(manifest)
         write_task_manifest(paths, manifest)
+        write_runtime_state(
+            paths.state_path,
+            RuntimeState(
+                task_id=manifest.task_id,
+                state=manifest.state,
+                restart_source=manifest.restart_source,
+                restart_source_strategy="runtime_state" if manifest.restart_source else "none",
+                bench_run_id=manifest.bench_run_id,
+                bench_run_dir=manifest.bench_run_dir,
+            ),
+        )
         write_summary(self._options.output_root / "summary.json", list(self._manifests.values()))
         if state != prev_state:
             self._log_state_transition(manifest, prev_state, state, prev_state_entered_at, now)
@@ -421,7 +473,7 @@ class OrchestratorRunner:
         if not manifest:
             manifest = TaskManifest(
                 task_id=task.task_id,
-                config_path=str(task.job_config_path),
+                config_path=self._bundle_for_task(task).spec.bundled_eval_config_path,
                 model_key=task.model_key,
                 model_id=task.model_id,
             )
@@ -501,10 +553,13 @@ class OrchestratorRunner:
                 continue
             self._manifests[task.task_id] = TaskManifest(
                 task_id=task.task_id,
-                config_path=str(task.job_config_path),
+                config_path=self._bundle_for_task(task).spec.bundled_eval_config_path,
                 model_key=task.model_key,
                 model_id=task.model_id,
             )
+
+    def _bundle_for_task(self, task: TaskSpec) -> PlannedTaskBundle:
+        return self._bundle_plan.tasks[task.task_id]
 
     def _count_active(self) -> int:
         return sum(1 for task in self._manifests.values() if task.state in ACTIVE_STATES)
@@ -694,14 +749,6 @@ def _format_restart_source(run_dir: Path, *, repo_root: Path) -> str:
         return str(run_dir.resolve().relative_to(repo_root.resolve()))
     except ValueError:
         return str(run_dir.resolve())
-
-
-def _persist_restart_source(config_path: Path, *, restart_source: str) -> None:
-    payload = dict(load_job_config(config_path))
-    orchestrate = dict(payload.get("orchestrate") or {})
-    orchestrate["restart"] = restart_source
-    payload["orchestrate"] = orchestrate
-    OmegaConf.save(config=OmegaConf.create(payload), f=str(config_path))
 
 
 def _parse_time(value: str | None):

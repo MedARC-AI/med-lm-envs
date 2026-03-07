@@ -23,13 +23,16 @@ def sanitize_task_dirname(task_id: str, *, max_len: int = 120) -> str:
 
 
 def task_root_for_id(output_root: Path, task_id: str) -> Path:
+    task_dir = output_root / "tasks" / sanitize_task_dirname(task_id)
+    if task_dir.exists():
+        return task_dir
     raw = output_root / task_id
     if raw.exists():
         return raw
     sanitized = output_root / sanitize_task_dirname(task_id)
     if sanitized.exists():
         return sanitized
-    return sanitized
+    return task_dir
 
 
 def bench_run_id(run_id: str, task_id: str) -> str:

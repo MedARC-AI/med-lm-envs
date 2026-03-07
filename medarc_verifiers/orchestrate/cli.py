@@ -174,7 +174,7 @@ def main(argv: list[str] | None = None) -> int:
         run_id = configured_run_id
     else:
         run_id = generate_run_id(plan.name)
-    output_root = args.output_dir or plan.output_dir or Path("outputs") / "orchestrator" / run_id
+    output_root = args.output_dir or plan.output_dir or Path("outputs") / "orchestrate" / run_id
     gpu_range = args.gpu_range or plan.gpu_range
     if gpu_range:
         gpu_indices = parse_index_range(gpu_range)
