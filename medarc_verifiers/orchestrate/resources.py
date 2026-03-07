@@ -129,6 +129,29 @@ class ResourceManager:
         self._port_reservations.pop(port, None)
 
 
+class PortOnlyResourceManager(ResourceManager):
+    """Resource manager for runtimes where GPU allocation is delegated externally."""
+
+    def available_gpus(self, *, min_free_gb: float | None = None) -> list[GpuInfo]:
+        del min_free_gb
+        return []
+
+    def reserve_gpus(
+        self,
+        task_id: str,
+        *,
+        count: int,
+        min_free_gb: float | None = None,
+        require_contiguous: bool = False,
+    ) -> list[int]:
+        del task_id, count, min_free_gb, require_contiguous
+        return []
+
+    def release_gpus(self, indices: Iterable[int]) -> None:
+        del indices
+        return None
+
+
 def _port_is_available(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -154,6 +177,7 @@ def _select_contiguous(indices: Sequence[int], count: int) -> list[int] | None:
 
 __all__ = [
     "GpuInfo",
+    "PortOnlyResourceManager",
     "ResourceError",
     "ResourceManager",
     "discover_gpus",
