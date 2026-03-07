@@ -146,9 +146,13 @@ class ResolvedTaskSpec:
     bundled_eval_config_checksum: str
     gpus: int
     tensor_parallel_size: int
+    data_parallel_size: int
     container_image: str
+    container_port: int
+    container_ipc_mode: str | None
     container_env_file: str | None
     volume_mounts: list[str]
+    pyxis_srun_extra_args: list[str]
     serve_args: Mapping[str, Any]
     restart_source: str | None
     restart_source_strategy: str
@@ -176,11 +180,17 @@ class ResolvedTaskSpec:
             bundled_eval_config_checksum=str(payload["bundled_eval_config_checksum"]),
             gpus=int(payload["gpus"]),
             tensor_parallel_size=int(payload["tensor_parallel_size"]),
+            data_parallel_size=int(payload.get("data_parallel_size") or 1),
             container_image=str(payload["container_image"]),
+            container_port=int(payload.get("container_port") or 8000),
+            container_ipc_mode=(
+                str(payload["container_ipc_mode"]) if payload.get("container_ipc_mode") is not None else None
+            ),
             container_env_file=(
                 str(payload["container_env_file"]) if payload.get("container_env_file") is not None else None
             ),
             volume_mounts=[str(item) for item in payload.get("volume_mounts", [])],
+            pyxis_srun_extra_args=[str(item) for item in payload.get("pyxis_srun_extra_args", [])],
             serve_args=dict(payload.get("serve_args") or {}),
             restart_source=(str(payload["restart_source"]) if payload.get("restart_source") is not None else None),
             restart_source_strategy=str(payload.get("restart_source_strategy") or "none"),
@@ -559,6 +569,7 @@ def _build_task_spec(
 
     model_cfg = dict(task.orchestrate.get(task.model_key) or {})
     container_cfg = dict(task.orchestrate.get("vllm-container") or {})
+    pyxis_cfg = dict(task.orchestrate.get("pyxis") or {})
     spec = ResolvedTaskSpec(
         spec_version=SPEC_VERSION,
         task_id=task.task_id,
@@ -573,11 +584,15 @@ def _build_task_spec(
         bundled_eval_config_checksum=bundled_checksum,
         gpus=int(model_cfg.get("gpus", 1) or 1),
         tensor_parallel_size=int(model_cfg.get("tensor_parallel_size", 1) or 1),
+        data_parallel_size=int(model_cfg.get("data_parallel_size", 1) or 1),
         container_image=str(container_cfg.get("image", "")),
+        container_port=int(container_cfg.get("container_port", 8000) or 8000),
+        container_ipc_mode=str(container_cfg.get("ipc_mode")) if container_cfg.get("ipc_mode") is not None else None,
         container_env_file=(
             str(container_cfg["env_file"]).strip() if container_cfg.get("env_file") is not None else None
         ),
         volume_mounts=[str(item) for item in container_cfg.get("volumes", []) or []],
+        pyxis_srun_extra_args=[str(item) for item in pyxis_cfg.get("srun_extra_args", []) or []],
         serve_args=dict(model_cfg.get("serve") or {}),
         restart_source=restart_source,
         restart_source_strategy=restart_strategy,
