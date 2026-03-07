@@ -40,6 +40,7 @@ from medarc_verifiers.orchestrate.state import (
     write_text,
 )
 from medarc_verifiers.orchestrate.task_naming import task_root_for_id
+from medarc_verifiers.orchestrate.topology import configured_tensor_parallel_size, minimum_required_gpus, task_sort_key
 from medarc_verifiers.orchestrate.worker import TaskWorker, WorkerCallbacks, WorkerOptions
 
 _COMMAND_TEMPLATE_UV = (
@@ -84,13 +85,7 @@ class OrchestratorRunner:
     ) -> None:
         self._runtime = _normalize_runtime(runtime or plan.runtime or "docker")
         self._plan = plan
-        self._tasks = sorted(
-            list(tasks),
-            key=lambda task: int(
-                _get_mapping(task.orchestrate.get(task.model_key), f"orchestrate.{task.model_key}").get("gpus", 1)
-            ),
-            reverse=True,
-        )
+        self._tasks = sorted(list(tasks), key=task_sort_key)
         self._resource_manager = resource_manager
         self._options = options
         self._runtime_adapter = runtime_adapter or _build_runtime_adapter(self._runtime)
@@ -289,10 +284,9 @@ class OrchestratorRunner:
             self._manifests[task.task_id] = manifest
         manifest.gpu_ids = allocation.gpu_ids
         manifest.port = allocation.server_port
-        manifest.allocated_gpu_count = _allocated_gpu_count(allocation, task)
-        manifest.effective_gpu_count = int(
-            _get_mapping(task.orchestrate.get(task.model_key), f"orchestrate.{task.model_key}").get("gpus", 1)
-        )
+        manifest.gpus = minimum_required_gpus(task)
+        manifest.tensor_parallel_size = configured_tensor_parallel_size(task)
+        manifest.allocated_gpus = _allocated_gpu_count(allocation, task)
         if manifest.started_at is None:
             manifest.started_at = _utcnow()
         return manifest
@@ -434,39 +428,13 @@ class OrchestratorRunner:
             return
 
 
-def _resolve_tensor_parallel_size(
-    model_cfg: dict[str, object],
-    *,
-    gpus_required: int,
-    data_parallel_size: int,
-    label: str,
-) -> int:
-    if data_parallel_size < 1:
-        raise RuntimeError(f"{label}.data_parallel_size must be >= 1.")
-    tensor_parallel = model_cfg.get("tensor_parallel_size")
-    if tensor_parallel is not None:
-        resolved = int(tensor_parallel)
-    else:
-        if gpus_required < 1:
-            raise RuntimeError(f"{label}.gpus must be >= 1.")
-        if gpus_required % data_parallel_size != 0:
-            raise RuntimeError(
-                f"{label}.gpus={gpus_required} must be divisible by data_parallel_size={data_parallel_size}."
-            )
-        resolved = gpus_required // data_parallel_size
-    if resolved < 1:
-        raise RuntimeError(f"{label}.tensor_parallel_size must be >= 1.")
-    return resolved
-
-
 def _allocated_gpu_count(allocation: Allocation, task: TaskSpec) -> int:
     override = os.environ.get("MEDARC_ALLOCATED_GPU_COUNT")
     if override is not None:
         return int(override)
     if allocation.gpu_ids:
         return len(allocation.gpu_ids)
-    model_cfg = _get_mapping(task.orchestrate.get(task.model_key), f"orchestrate.{task.model_key}")
-    return int(model_cfg.get("gpus", 1))
+    return minimum_required_gpus(task)
 
 
 def _update_gpu_accounting(manifest: TaskManifest) -> None:
@@ -475,10 +443,10 @@ def _update_gpu_accounting(manifest: TaskManifest) -> None:
     if started is None or completed is None:
         return
     elapsed_hours = max(0.0, (completed - started).total_seconds() / 3600.0)
-    if manifest.allocated_gpu_count is not None:
-        manifest.allocated_gpu_hours = manifest.allocated_gpu_count * elapsed_hours
-    if manifest.effective_gpu_count is not None:
-        manifest.effective_gpu_hours = manifest.effective_gpu_count * elapsed_hours
+    if manifest.allocated_gpus is not None:
+        manifest.allocated_gpu_hours = manifest.allocated_gpus * elapsed_hours
+    if manifest.gpus is not None:
+        manifest.gpu_hours = manifest.gpus * elapsed_hours
 
 
 def _utcnow() -> str:

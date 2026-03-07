@@ -122,6 +122,12 @@ Config notes:
 - `orchestrate.vllm-container` is the preferred key.
 - `orchestrate.vllm-docker` is still accepted as a deprecated alias.
 - Do not set both keys in the same job config.
+- `orchestrate.<model>.gpus` is the minimum compatible outer allocation for the task, not the derived vLLM world size.
+- `allocated_gpus` is the runtime allocation handed to the worker. Local Docker/Podman runs usually allocate exactly `gpus`; Slurm submission typically allocates `--node-gpus`.
+- `data_parallel_size` is derived from `allocated_gpus // tensor_parallel_size`. If you set it explicitly, it must match that derived value or launch validation fails.
+- `vllm_world_size` is `tensor_parallel_size * data_parallel_size`.
+- Valid runtime launch shapes are `1`, `2`, `4`, and `8` GPUs.
+- A launch is valid only when `allocated_gpus >= gpus`, `allocated_gpus >= tensor_parallel_size`, and `allocated_gpus % tensor_parallel_size == 0`.
 - `ipc_mode` is Docker-only and is ignored in `--runtime pyxis`.
 - `orchestrate.pyxis` is Pyxis-only and is ignored in `--runtime docker`.
 - In Pyxis mode, Slurm allocates GPUs per `srun` step. The orchestrator only reserves localhost ports.
@@ -204,9 +210,12 @@ Slurm-native behavior:
 
 - Each resolved orchestrator task becomes one generated `sbatch` script.
 - Each generated `sbatch` script sources the configured activation script, then runs `medarc-orchestrate --no-uv-run ...`.
-- Tasks are sorted by tensor parallel size descending before submission.
+- Tasks are ordered by largest minimum `gpus` first, with larger `tensor_parallel_size` as the tie-breaker.
 - Every job requests the full `--node-gpus` allocation with `#SBATCH --gpus-per-task=<node_gpus>`.
-- The submitter computes `data_parallel_size = node_gpus // tensor_parallel_size` and writes a task-local config with the derived `gpus` and `data_parallel_size`.
+- The worker uses the full outer allocation it receives; it does not shrink a larger Slurm allocation down to the task minimum.
+- Slurm submission keeps the bundled task config’s authored `gpus` value unchanged and records the runtime `allocated_gpus` separately in the execution allocation / manifests.
+- The shared topology derivation computes `data_parallel_size = allocated_gpus // tensor_parallel_size` and `vllm_world_size = tensor_parallel_size * data_parallel_size`.
+- Submission and launch validation fail immediately when `allocated_gpus` is not one of `1`, `2`, `4`, `8`, when it is smaller than the task’s minimum `gpus`, or when it is incompatible with `tensor_parallel_size`.
 - When `orchestrate.restart` is absent, the task-local config persists an auto-generated restart target equal to the inner bench run id. That value is later passed to `medarc-eval bench --restart ...`, which resolves it under the default raw output root (`runs/raw/<bench-run-id>`).
 - The task-local config is the durable source of truth for restart settings and shields submitted jobs from later edits to the original repo config.
 

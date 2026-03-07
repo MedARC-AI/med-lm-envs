@@ -63,10 +63,13 @@ class TaskManifest:
     bench_exit_code: int | None = None
     bench_duration_s: float | None = None
     restart_source: str | None = None
-    allocated_gpu_count: int | None = None
+    gpus: int | None = None
+    tensor_parallel_size: int | None = None
+    data_parallel_size: int | None = None
+    vllm_world_size: int | None = None
+    allocated_gpus: int | None = None
     allocated_gpu_hours: float | None = None
-    effective_gpu_count: int | None = None
-    effective_gpu_hours: float | None = None
+    gpu_hours: float | None = None
     failure_reason: str | None = None
     error: str | None = None
 

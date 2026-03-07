@@ -35,9 +35,11 @@ class SlurmTaskEntry:
     task_spec_checksum: str
     allocation_path: str
     state_path: str
-    tp_size: int
-    dp_size: int
-    effective_gpus: int
+    gpus: int
+    allocated_gpus: int
+    tensor_parallel_size: int
+    data_parallel_size: int
+    vllm_world_size: int
     inner_run_id: str
     restart_source: str | None
     restart_strategy: str | None
@@ -57,7 +59,21 @@ class SlurmTaskEntry:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "SlurmTaskEntry":
-        return cls(**payload)
+        normalized = dict(payload)
+        tensor_parallel_size = normalized.get("tensor_parallel_size", normalized.get("tp_size"))
+        data_parallel_size = normalized.get("data_parallel_size", normalized.get("dp_size"))
+        effective_gpus = normalized.get("effective_gpus")
+        normalized["tensor_parallel_size"] = int(tensor_parallel_size)
+        normalized["data_parallel_size"] = int(data_parallel_size)
+        normalized["allocated_gpus"] = int(normalized.get("allocated_gpus", effective_gpus))
+        normalized["gpus"] = int(normalized.get("gpus", effective_gpus))
+        normalized["vllm_world_size"] = int(
+            normalized.get("vllm_world_size", normalized["tensor_parallel_size"] * normalized["data_parallel_size"])
+        )
+        normalized.pop("tp_size", None)
+        normalized.pop("dp_size", None)
+        normalized.pop("effective_gpus", None)
+        return cls(**normalized)
 
 
 @dataclass

@@ -40,9 +40,21 @@ def test_cli_validation_gpu_count(monkeypatch, tmp_path: Path, runtime: str) -> 
         "medarc_verifiers.orchestrate.cli.discover_gpus",
         lambda: [_gpu(0), _gpu(1)],
     )
+    tasks = [_task(tmp_path, gpus=4)]
+
+    with pytest.raises(ValueError, match=r"requires gpus=4"):
+        _validate_schedule(tasks, runtime=runtime, gpu_indices=None, port_range=(8000, 8003), max_parallel=1)
+
+
+@pytest.mark.parametrize("runtime", ["docker", "podman"])
+def test_cli_validation_rejects_invalid_local_launch_shape(monkeypatch, tmp_path: Path, runtime: str) -> None:
+    monkeypatch.setattr(
+        "medarc_verifiers.orchestrate.cli.discover_gpus",
+        lambda: [_gpu(0), _gpu(1), _gpu(2), _gpu(3)],
+    )
     tasks = [_task(tmp_path, gpus=3)]
 
-    with pytest.raises(ValueError, match="requests 3 GPUs"):
+    with pytest.raises(ValueError, match=r"allocated_gpus=3 is invalid; allowed shapes are \[1, 2, 4, 8\]"):
         _validate_schedule(tasks, runtime=runtime, gpu_indices=None, port_range=(8000, 8003), max_parallel=1)
 
 

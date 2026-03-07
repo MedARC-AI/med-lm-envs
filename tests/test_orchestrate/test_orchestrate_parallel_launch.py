@@ -305,10 +305,13 @@ async def test_parallel_launch_records_gpu_accounting_and_dp_args(
 
     manifest = json.loads((options.output_root / "tasks" / "task-1" / "runtime" / "task_manifest.json").read_text())
     assert manifest["bench_run_id"] == "run-1-task-1"
-    assert manifest["allocated_gpu_count"] == 8
-    assert manifest["effective_gpu_count"] == 8
+    assert manifest["allocated_gpus"] == 8
+    assert manifest["gpus"] == 8
+    assert manifest["tensor_parallel_size"] == 2
+    assert manifest["data_parallel_size"] == 4
+    assert manifest["vllm_world_size"] == 8
     assert manifest["allocated_gpu_hours"] is not None
-    assert manifest["effective_gpu_hours"] is not None
+    assert manifest["gpu_hours"] is not None
 
 
 @pytest.mark.asyncio

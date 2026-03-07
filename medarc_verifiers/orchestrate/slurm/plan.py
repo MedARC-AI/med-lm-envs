@@ -7,6 +7,7 @@ from typing import Any
 import re
 
 from medarc_verifiers.orchestrate.config import TaskSpec
+from medarc_verifiers.orchestrate.topology import ResolvedTopology, resolve_topology, task_sort_key
 
 _TASK_ALLOWED = re.compile(r"[^a-zA-Z0-9_.-]+")
 _ALLOWED_SLURM_KEYS = {
@@ -59,9 +60,11 @@ class PlannedSlurmTask:
     task_slug: str
     submission_order: int
     chain_index: int
-    tp_size: int
-    dp_size: int
-    effective_gpus: int
+    gpus: int
+    allocated_gpus: int
+    tensor_parallel_size: int
+    data_parallel_size: int
+    vllm_world_size: int
     inner_run_id: str
     predecessor_task_id: str | None
     base_dependency: str | None
@@ -78,36 +81,26 @@ def build_submission_plan(
     base_dependency: str | None,
     cli_overrides: SlurmCliOverrides,
 ) -> list[PlannedSlurmTask]:
-    if node_gpus < 1:
-        raise ValueError("--node-gpus must be >= 1.")
     if max_simultaneous_nodes < 1:
         raise ValueError("--max-simultaneous-nodes must be >= 1.")
 
-    prepared: list[tuple[int, TaskSpec, int, int, int, SlurmTaskOptions]] = []
+    prepared: list[tuple[tuple[int, int, str], int, TaskSpec, ResolvedTopology, SlurmTaskOptions]] = []
     for original_index, task in enumerate(tasks):
-        tp_size = resolve_tensor_parallel_size(task)
-        if tp_size > node_gpus:
-            raise ValueError(
-                f"Task {task.task_id} ({task.job_config_path}) requires tensor_parallel_size={tp_size}, "
-                f"which exceeds node_gpus={node_gpus}."
-            )
-        dp_size = max(1, node_gpus // tp_size)
-        effective_gpus = tp_size * dp_size
+        topology = resolve_topology(task, allocated_gpus=node_gpus)
         prepared.append(
             (
+                task_sort_key(task),
                 original_index,
                 task,
-                tp_size,
-                dp_size,
-                effective_gpus,
+                topology,
                 merge_slurm_options(task, cli_overrides=cli_overrides),
             )
         )
-    prepared.sort(key=lambda item: (-item[2], item[0]))
+    prepared.sort(key=lambda item: (item[0], item[1]))
 
     last_task_in_chain: dict[int, str] = {}
     planned: list[PlannedSlurmTask] = []
-    for submission_order, (original_index, task, tp_size, dp_size, effective_gpus, options) in enumerate(prepared):
+    for submission_order, (_, _, task, topology, options) in enumerate(prepared):
         if run_simultaneously:
             chain_index = submission_order
             predecessor_task_id = None
@@ -124,9 +117,11 @@ def build_submission_plan(
                 task_slug=task_slug,
                 submission_order=submission_order,
                 chain_index=chain_index,
-                tp_size=tp_size,
-                dp_size=dp_size,
-                effective_gpus=effective_gpus,
+                gpus=topology.gpus,
+                allocated_gpus=topology.allocated_gpus,
+                tensor_parallel_size=topology.tensor_parallel_size,
+                data_parallel_size=topology.data_parallel_size,
+                vllm_world_size=topology.vllm_world_size,
                 inner_run_id=inner_run_id,
                 predecessor_task_id=predecessor_task_id,
                 base_dependency=task_base_dependency,
@@ -135,31 +130,6 @@ def build_submission_plan(
         )
         last_task_in_chain[chain_index] = task.task_id
     return planned
-
-
-def resolve_tensor_parallel_size(task: TaskSpec) -> int:
-    model_cfg = task.orchestrate.get(task.model_key, {}) or {}
-    if not isinstance(model_cfg, dict):
-        raise ValueError(f"Task {task.task_id} orchestrate.{task.model_key} must be a mapping.")
-    gpus = int(model_cfg.get("gpus", 1))
-    data_parallel = int(model_cfg.get("data_parallel_size", 1) or 1)
-    tensor_parallel = model_cfg.get("tensor_parallel_size")
-    if tensor_parallel is not None:
-        resolved = int(tensor_parallel)
-    else:
-        if gpus < 1:
-            raise ValueError(f"Task {task.task_id} orchestrate.{task.model_key}.gpus must be >= 1.")
-        if data_parallel < 1:
-            raise ValueError(f"Task {task.task_id} orchestrate.{task.model_key}.data_parallel_size must be >= 1.")
-        if gpus % data_parallel != 0:
-            raise ValueError(
-                f"Task {task.task_id} orchestrate.{task.model_key}.gpus={gpus} must be divisible by "
-                f"data_parallel_size={data_parallel}."
-            )
-        resolved = gpus // data_parallel
-    if resolved < 1:
-        raise ValueError(f"Task {task.task_id} tensor_parallel_size must be >= 1.")
-    return resolved
 
 
 def merge_slurm_options(task: TaskSpec, *, cli_overrides: SlurmCliOverrides) -> SlurmTaskOptions:
@@ -228,6 +198,5 @@ __all__ = [
     "build_submission_plan",
     "merge_slurm_options",
     "placeholder_dependency",
-    "resolve_tensor_parallel_size",
     "slug_task_id",
 ]

@@ -10,6 +10,7 @@ from typing import Awaitable, Callable, Iterable
 
 from medarc_verifiers.orchestrate.config import TaskSpec
 from medarc_verifiers.orchestrate.resources import ResourceError, ResourceManager
+from medarc_verifiers.orchestrate.topology import minimum_required_gpus, task_sort_key
 
 
 @dataclass(frozen=True)
@@ -41,8 +42,8 @@ class TaskScheduler:
     ) -> None:
         # Order by (ready_at, priority, seq) so delays don't block ready tasks and
         # larger GPU requests are preferred among ready tasks.
-        ready: list[tuple[float, int, int, TaskSpec]] = []
-        blocked: list[tuple[float, int, int, TaskSpec]] = []
+        ready: list[tuple[float, tuple[int, int, str], int, TaskSpec]] = []
+        blocked: list[tuple[float, tuple[int, int, str], int, TaskSpec]] = []
         sequence = 0
         for task in tasks:
             priority = self._task_priority(task)
@@ -177,14 +178,12 @@ class TaskScheduler:
             await asyncio.gather(*runner_tasks, return_exceptions=True)
             raise
 
-    def _task_priority(self, task: TaskSpec) -> int:
-        gpus_required = int(task.orchestrate.get(task.model_key, {}).get("gpus", 1))
-        # Lower values are dequeued first; prioritize larger GPU requests.
-        return -gpus_required
+    def _task_priority(self, task: TaskSpec) -> tuple[int, int, str]:
+        return task_sort_key(task)
 
     def _allocate(self, task: TaskSpec) -> Allocation:
         model_cfg = task.orchestrate.get(task.model_key, {}) or {}
-        gpus_required = int(model_cfg.get("gpus", 1))
+        gpus_required = minimum_required_gpus(task)
         min_free_gb = model_cfg.get("memory_min_gb")
         require_contiguous = bool(model_cfg.get("require_contiguous_gpus", gpus_required > 1))
         gpu_ids = self._resource_manager.reserve_gpus(

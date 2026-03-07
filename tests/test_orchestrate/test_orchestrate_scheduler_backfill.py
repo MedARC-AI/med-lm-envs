@@ -87,3 +87,32 @@ async def test_scheduler_backfill_prefers_large_then_small(tmp_path: Path) -> No
 
     assert started[0] == "task-2gpu"
     assert set(started) == {"task-2gpu", "task-1gpu-a", "task-1gpu-b"}
+
+
+@pytest.mark.asyncio
+async def test_scheduler_backfill_breaks_gpu_ties_by_tensor_parallel_size(tmp_path: Path) -> None:
+    tasks = [
+        TaskSpec(
+            task_id="task-tp1",
+            job_config_path=tmp_path / "job-tp1.yaml",
+            model_key="foo",
+            model_id="Foo/Tp1",
+            orchestrate={"foo": {"gpus": 2, "tensor_parallel_size": 1}},
+        ),
+        TaskSpec(
+            task_id="task-tp2",
+            job_config_path=tmp_path / "job-tp2.yaml",
+            model_key="foo",
+            model_id="Foo/Tp2",
+            orchestrate={"foo": {"gpus": 2, "tensor_parallel_size": 2}},
+        ),
+    ]
+    scheduler = TaskScheduler(DummyResourceManager(), max_parallel=2)
+    started: list[str] = []
+
+    async def runner(task: TaskSpec, allocation) -> None:
+        started.append(task.task_id)
+
+    await scheduler.run(tasks, runner)
+
+    assert started == ["task-tp2", "task-tp1"]

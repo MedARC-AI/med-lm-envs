@@ -46,6 +46,7 @@ from medarc_verifiers.orchestrate.state import (
     write_text,
 )
 from medarc_verifiers.orchestrate.task_naming import bench_run_id
+from medarc_verifiers.orchestrate.topology import ResolvedTopology, resolve_task_spec_topology
 from medarc_verifiers.orchestrate.vllm_args import build_container_args, normalize_volume_mounts
 
 _COMMAND_TEMPLATE_UV = (
@@ -130,8 +131,10 @@ class TaskWorker:
         )
         manifest.gpu_ids = list(self._allocation.gpu_ids)
         manifest.port = self._allocation.server_port
-        manifest.allocated_gpu_count = self._allocation.allocated_gpus
-        manifest.effective_gpu_count = self._spec.gpus
+        manifest.gpus = self._spec.gpus
+        manifest.tensor_parallel_size = self._spec.tensor_parallel_size
+        manifest.data_parallel_size = self._spec.data_parallel_size
+        manifest.allocated_gpus = self._allocation.allocated_gpus
         if manifest.started_at is None:
             manifest.started_at = _utcnow()
         write_execution_allocation(paths.allocation_path, self._allocation)
@@ -151,6 +154,8 @@ class TaskWorker:
         state_handler: StateHandler,
         log: LogFn,
     ) -> None:
+        topology = _resolve_worker_topology(self._spec, self._allocation)
+        _apply_topology_to_manifest(manifest, topology)
         state_handler(manifest, paths, JobState.allocating)
         image = self._spec.container_image.strip()
         if not image:
@@ -159,8 +164,8 @@ class TaskWorker:
 
         container_args = build_container_args(
             self._spec.model_id,
-            tensor_parallel_size=self._spec.tensor_parallel_size if self._spec.tensor_parallel_size > 1 else None,
-            data_parallel_size=self._spec.data_parallel_size if self._spec.data_parallel_size > 1 else None,
+            tensor_parallel_size=topology.tensor_parallel_size if topology.tensor_parallel_size > 1 else None,
+            data_parallel_size=topology.data_parallel_size if topology.data_parallel_size > 1 else None,
             serve=dict(self._spec.serve_args),
         )
         env = _load_runtime_env(self._spec, allocation=self._allocation, options=self._options)
@@ -179,6 +184,11 @@ class TaskWorker:
             "volumes": volume_mounts,
             "env": sorted(env.keys()),
             "gpu_ids": self._allocation.gpu_ids,
+            "allocated_gpus": topology.allocated_gpus,
+            "gpus": topology.gpus,
+            "tensor_parallel_size": topology.tensor_parallel_size,
+            "data_parallel_size": topology.data_parallel_size,
+            "vllm_world_size": topology.vllm_world_size,
             "command": container_args,
             "labels": labels,
         }
@@ -194,7 +204,7 @@ class TaskWorker:
                 image=image,
                 container_port=self._spec.container_port,
                 volume_mounts=volume_mounts,
-                gpus_required=self._spec.gpus,
+                gpus_required=topology.allocated_gpus,
                 gpu_ids=list(self._allocation.gpu_ids),
                 server_port=_require_server_port(self._allocation),
                 env=env,
@@ -464,10 +474,25 @@ def _update_gpu_accounting(manifest: TaskManifest) -> None:
     if started is None or completed is None:
         return
     elapsed_hours = max(0.0, (completed - started).total_seconds() / 3600.0)
-    if manifest.allocated_gpu_count is not None:
-        manifest.allocated_gpu_hours = manifest.allocated_gpu_count * elapsed_hours
-    if manifest.effective_gpu_count is not None:
-        manifest.effective_gpu_hours = manifest.effective_gpu_count * elapsed_hours
+    if manifest.allocated_gpus is not None:
+        manifest.allocated_gpu_hours = manifest.allocated_gpus * elapsed_hours
+    if manifest.gpus is not None:
+        manifest.gpu_hours = manifest.gpus * elapsed_hours
+
+
+def _resolve_worker_topology(task_spec: ResolvedTaskSpec, allocation: ExecutionAllocation) -> ResolvedTopology:
+    allocated_gpus = allocation.allocated_gpus
+    if allocated_gpus is None:
+        raise RuntimeError(f"Task {task_spec.task_id} is missing allocated_gpus.")
+    return resolve_task_spec_topology(task_spec, allocated_gpus=allocated_gpus)
+
+
+def _apply_topology_to_manifest(manifest: TaskManifest, topology: ResolvedTopology) -> None:
+    manifest.gpus = topology.gpus
+    manifest.allocated_gpus = topology.allocated_gpus
+    manifest.tensor_parallel_size = topology.tensor_parallel_size
+    manifest.data_parallel_size = topology.data_parallel_size
+    manifest.vllm_world_size = topology.vllm_world_size
 
 
 def _prune_task_logs(paths: TaskPaths) -> None:

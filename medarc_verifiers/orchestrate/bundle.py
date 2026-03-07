@@ -146,7 +146,7 @@ class ResolvedTaskSpec:
     bundled_eval_config_checksum: str
     gpus: int
     tensor_parallel_size: int
-    data_parallel_size: int
+    data_parallel_size: int | None
     container_image: str
     container_port: int
     container_ipc_mode: str | None
@@ -180,7 +180,9 @@ class ResolvedTaskSpec:
             bundled_eval_config_checksum=str(payload["bundled_eval_config_checksum"]),
             gpus=int(payload["gpus"]),
             tensor_parallel_size=int(payload["tensor_parallel_size"]),
-            data_parallel_size=int(payload.get("data_parallel_size") or 1),
+            data_parallel_size=(
+                int(payload["data_parallel_size"]) if payload.get("data_parallel_size") is not None else None
+            ),
             container_image=str(payload["container_image"]),
             container_port=int(payload.get("container_port") or 8000),
             container_ipc_mode=(
@@ -589,7 +591,9 @@ def _build_task_spec(
         bundled_eval_config_checksum=bundled_checksum,
         gpus=int(model_cfg.get("gpus", 1) or 1),
         tensor_parallel_size=int(model_cfg.get("tensor_parallel_size", 1) or 1),
-        data_parallel_size=int(model_cfg.get("data_parallel_size", 1) or 1),
+        data_parallel_size=(
+            int(model_cfg["data_parallel_size"]) if model_cfg.get("data_parallel_size") is not None else None
+        ),
         container_image=str(container_cfg.get("image", "")),
         container_port=int(container_cfg.get("container_port", 8000) or 8000),
         container_ipc_mode=str(container_cfg.get("ipc_mode")) if container_cfg.get("ipc_mode") is not None else None,

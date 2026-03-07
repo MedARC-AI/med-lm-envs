@@ -8,7 +8,16 @@ from medarc_verifiers.orchestrate.podman_vllm import PodmanRuntimeAdapter
 from medarc_verifiers.orchestrate.worker import main as worker_main
 
 
-def _write_job_config(path: Path) -> None:
+def _write_job_config(
+    path: Path,
+    *,
+    gpus: int = 1,
+    tensor_parallel_size: int = 1,
+    data_parallel_size: int | None = 1,
+) -> None:
+    dp_block = ""
+    if data_parallel_size is not None:
+        dp_block = f"    data_parallel_size: {data_parallel_size}\n"
     path.write_text(
         (
             "models:\n"
@@ -18,19 +27,31 @@ def _write_job_config(path: Path) -> None:
             "  vllm-container:\n"
             "    image: fake\n"
             "  foo:\n"
-            "    gpus: 1\n"
-            "    tensor_parallel_size: 1\n"
-            "    data_parallel_size: 1\n"
+            f"    gpus: {gpus}\n"
+            f"    tensor_parallel_size: {tensor_parallel_size}\n"
+            f"{dp_block}"
             "    serve: {}\n"
         ),
         encoding="utf-8",
     )
 
 
-def _bundle(tmp_path: Path):
+def _bundle(
+    tmp_path: Path,
+    *,
+    gpus: int = 1,
+    tensor_parallel_size: int = 1,
+    data_parallel_size: int | None = 1,
+    allocated_gpus: int = 1,
+):
     job_cfg = tmp_path / "job.yaml"
     plan_path = tmp_path / "plan.yaml"
-    _write_job_config(job_cfg)
+    _write_job_config(
+        job_cfg,
+        gpus=gpus,
+        tensor_parallel_size=tensor_parallel_size,
+        data_parallel_size=data_parallel_size,
+    )
     plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\n", encoding="utf-8")
     tasks = expand_tasks(load_plan(plan_path))
     return tasks, ensure_run_bundle(
@@ -42,7 +63,7 @@ def _bundle(tmp_path: Path):
         allocation_defaults={
             tasks[0].task_id: ExecutionAllocation(
                 task_id=tasks[0].task_id,
-                allocated_gpus=1,
+                allocated_gpus=allocated_gpus,
                 server_port=8000,
             )
         },
@@ -114,6 +135,34 @@ def test_worker_cli_persists_failed_state(tmp_path: Path, monkeypatch) -> None:
     result_payload = Path(task_bundle.paths.runtime_dir / "result.json").read_text(encoding="utf-8")
     assert '"state": "failed"' in state_payload
     assert '"failure_reason": "serve_launch_failed"' in result_payload
+
+
+def test_worker_cli_rejects_allocation_incompatible_with_tp(tmp_path: Path, monkeypatch) -> None:
+    tasks, bundle = _bundle(tmp_path, gpus=3, tensor_parallel_size=3, data_parallel_size=None, allocated_gpus=4)
+    task_bundle = bundle.tasks[tasks[0].task_id]
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker._build_runtime_adapter", lambda runtime: object())
+
+    rc = worker_main(
+        [
+            "--task",
+            task_bundle.spec.output_paths.task_spec_path,
+            "--allocation",
+            task_bundle.spec.output_paths.allocation_path,
+            "--runtime",
+            "pyxis",
+            "--run-id",
+            "bundle-job-foo",
+            "--no-uv-run",
+        ]
+    )
+
+    assert rc == 1
+    state_payload = Path(task_bundle.spec.output_paths.state_path).read_text(encoding="utf-8")
+    result_payload = Path(task_bundle.paths.runtime_dir / "result.json").read_text(encoding="utf-8")
+    assert '"state": "failed"' in state_payload
+    assert '"failure_reason": "unexpected_exception"' in result_payload
+    assert "allocated_gpus=4 must be divisible by tensor_parallel_size=3" in result_payload
 
 
 def test_podman_runtime_adapter_launch_builds_expected_command(monkeypatch, tmp_path: Path) -> None:

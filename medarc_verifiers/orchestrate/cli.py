@@ -20,6 +20,7 @@ from medarc_verifiers.orchestrate.resources import (
 )
 from medarc_verifiers.orchestrate.run import OrchestratorOptions, OrchestratorRunner
 from medarc_verifiers.orchestrate.state import filter_tasks_for_resume, load_summary
+from medarc_verifiers.orchestrate.topology import minimum_required_gpus, resolve_topology
 from medarc_verifiers.utils.run_naming import generate_run_id
 
 
@@ -129,11 +130,12 @@ def _validate_schedule(
             allowed_desc = "all"
         for task in tasks:
             model_cfg = task.orchestrate.get(task.model_key, {}) or {}
-            gpus_required = int(model_cfg.get("gpus", 1))
+            gpus_required = minimum_required_gpus(task)
+            resolve_topology(task, allocated_gpus=gpus_required)
             require_contiguous = bool(model_cfg.get("require_contiguous_gpus", gpus_required > 1))
             if gpus_required > len(allowed_indices):
                 raise ValueError(
-                    f"Task {task.task_id} ({task.job_config_path}) requests {gpus_required} GPUs, "
+                    f"Task {task.task_id} ({task.job_config_path}) requires gpus={gpus_required}, "
                     f"but only {len(allowed_indices)} available in range {allowed_desc}."
                 )
             if gpus_required > 1 and require_contiguous and not _has_contiguous_run(allowed_indices, length=gpus_required):

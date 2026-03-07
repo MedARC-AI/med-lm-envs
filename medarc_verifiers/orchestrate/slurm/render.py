@@ -32,22 +32,10 @@ def render_bundle(
     bundle_root.mkdir(parents=True, exist_ok=True)
     existing_entries = existing_manifest.entry_map() if existing_manifest else {}
     task_order = {task.task.task_id: task.submission_order for task in planned_tasks}
-    eval_config_overrides = {
-        task.task.task_id: {
-            "orchestrate": {
-                task.task.model_key: {
-                    "gpus": task.effective_gpus,
-                    "tensor_parallel_size": task.tp_size,
-                    "data_parallel_size": task.dp_size,
-                }
-            }
-        }
-        for task in planned_tasks
-    }
     allocation_defaults = {
         task.task.task_id: ExecutionAllocation(
             task_id=task.task.task_id,
-            allocated_gpus=node_gpus,
+            allocated_gpus=task.allocated_gpus,
             server_port=8000,
             require_contiguous_gpus=node_gpus > 1,
             slurm_job_id=(existing_entries.get(task.task.task_id).slurm_job_id if existing_entries.get(task.task.task_id) else None),
@@ -61,7 +49,6 @@ def render_bundle(
         output_root=bundle_root,
         mode="slurm",
         runtime="pyxis",
-        eval_config_overrides=eval_config_overrides,
         allocation_defaults=allocation_defaults,
     )
     bundle_entries = bundle_plan.manifest.entry_map()
@@ -100,9 +87,11 @@ def render_bundle(
                 task_spec_checksum=bundle_entry.task_spec_checksum,
                 allocation_path=bundle.spec.output_paths.allocation_path,
                 state_path=bundle.spec.output_paths.state_path,
-                tp_size=planned_task.tp_size,
-                dp_size=planned_task.dp_size,
-                effective_gpus=planned_task.effective_gpus,
+                gpus=planned_task.gpus,
+                allocated_gpus=planned_task.allocated_gpus,
+                tensor_parallel_size=planned_task.tensor_parallel_size,
+                data_parallel_size=planned_task.data_parallel_size,
+                vllm_world_size=planned_task.vllm_world_size,
                 inner_run_id=planned_task.inner_run_id,
                 restart_source=bundle.state.restart_source,
                 restart_strategy=bundle.state.restart_source_strategy,
