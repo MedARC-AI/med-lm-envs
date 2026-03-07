@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -16,7 +15,7 @@ from medarc_verifiers.cli._manifest import (
     manifest_job_signature,
     resolved_job_signature,
 )
-from medarc_verifiers.cli.utils.shared import slugify
+from medarc_verifiers.utils.run_naming import generate_run_id
 from medarc_verifiers.utils.pathing import resolve_results_dir_from_manifest
 
 logger = logging.getLogger(__name__)
@@ -115,7 +114,7 @@ class ManifestPlanner:
             msg = f"Invalid --restart '{seed_dir}': missing {MANIFEST_FILENAME}"
             raise ValueError(msg)
         seed_manifest = RunManifest.load(seed_dir / MANIFEST_FILENAME, persist=False)
-        dest_run_id = self.run_id or _generate_run_id(self.run_name)
+        dest_run_id = self.run_id or generate_run_id(self.run_name)
         run_dir = self._run_dir_for(dest_run_id)
         manifest_path = run_dir / MANIFEST_FILENAME
         if run_dir.exists() and manifest_path.exists() and persist:
@@ -177,7 +176,7 @@ class ManifestPlanner:
         return ManifestSelection(manifest=manifest, seed_manifest=None, strategy="auto_resume")
 
     def _create_fresh_manifest(self, run_id: str | None = None) -> RunManifest:
-        dest_run_id = run_id or _generate_run_id(self.run_name)
+        dest_run_id = run_id or generate_run_id(self.run_name)
         run_dir = self._run_dir_for(dest_run_id)
         manifest = RunManifest.create(
             run_dir=run_dir,
@@ -406,9 +405,3 @@ def _manifest_job_signature_cached(
         signature = manifest_job_signature(manifest.model, entry)
         cache[job_id] = signature
     return signature
-
-
-def _generate_run_id(name: str) -> str:
-    base = slugify(name or "run")
-    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    return f"{base}-{timestamp}"

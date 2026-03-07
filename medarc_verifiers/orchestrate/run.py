@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hashlib
 import json
 import os
-import re
 import shlex
 import signal
 from dataclasses import dataclass
@@ -37,6 +35,7 @@ from medarc_verifiers.orchestrate.state import (
     write_task_result,
     write_text,
 )
+from medarc_verifiers.orchestrate.task_naming import bench_run_id, task_root_for_id
 from medarc_verifiers.orchestrate.vllm_args import build_container_args, normalize_volume_mounts
 
 _COMMAND_TEMPLATE_UV = (
@@ -48,41 +47,12 @@ _COMMAND_TEMPLATE_BARE = (
     "--run-id {bench_run_id} --on-complete exit"
 )
 
-_TASK_DIR_ALLOWED = re.compile(r"[^a-zA-Z0-9_.-]+")
-
-
 def _shorten(text: str, *, max_len: int = 220) -> str:
     if len(text) <= max_len:
         return text
     suffix = "…"
     keep = max(0, max_len - len(suffix))
     return f"{text[:keep]}{suffix}"
-
-
-def _sanitize_task_dirname(task_id: str, *, max_len: int = 120) -> str:
-    cleaned = _TASK_DIR_ALLOWED.sub("-", task_id).strip("-.")
-    if not cleaned:
-        cleaned = "task"
-    if cleaned != task_id:
-        suffix = hashlib.sha1(task_id.encode("utf-8")).hexdigest()[:8]  # noqa: S324
-        cleaned = f"{cleaned}-{suffix}"
-    if len(cleaned) > max_len:
-        cleaned = cleaned[:max_len].rstrip("-.")
-    return cleaned or "task"
-
-
-def _task_root_for_id(output_root: Path, task_id: str) -> Path:
-    raw = output_root / task_id
-    if raw.exists():
-        return raw
-    sanitized = output_root / _sanitize_task_dirname(task_id)
-    if sanitized.exists():
-        return sanitized
-    return sanitized
-
-
-def _bench_run_id(run_id: str, task_id: str) -> str:
-    return f"{run_id}-{_sanitize_task_dirname(task_id, max_len=80)}"
 
 
 @dataclass(frozen=True)
@@ -173,7 +143,7 @@ class OrchestratorRunner:
         if current:
             self._active_runner_tasks[task.task_id] = current
         manifest = self._get_or_init_manifest(task, allocation)
-        paths = TaskPaths(_task_root_for_id(self._options.output_root, task.task_id))
+        paths = TaskPaths(task_root_for_id(self._options.output_root, task.task_id))
         attempt = 0
         try:
             while True:
@@ -335,7 +305,7 @@ class OrchestratorRunner:
 
             command_context = {
                 "base_url": base_url,
-                "bench_run_id": _bench_run_id(self._options.run_id, task.task_id),
+                "bench_run_id": bench_run_id(self._options.run_id, task.task_id),
                 "host_port": str(allocation.server_port),
                 "model_key": task.model_key,
                 "model_id": task.model_id,
@@ -457,7 +427,7 @@ class OrchestratorRunner:
             if manifest.state in {JobState.completed, JobState.failed, JobState.cancelled, JobState.pending}:
                 continue
             manifest.failure_reason = manifest.failure_reason or "cancelled"
-            paths = TaskPaths(_task_root_for_id(self._options.output_root, task_id))
+            paths = TaskPaths(task_root_for_id(self._options.output_root, task_id))
             self._set_state(manifest, paths, JobState.cancelled)
 
     async def _teardown_active(self) -> None:

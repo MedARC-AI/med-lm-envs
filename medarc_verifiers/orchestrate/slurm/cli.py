@@ -3,23 +3,15 @@
 from __future__ import annotations
 
 import argparse
-from datetime import UTC, datetime
 from pathlib import Path
-import re
 
 from medarc_verifiers.orchestrate.config import expand_tasks, load_plan, make_plan
+from medarc_verifiers.utils.run_naming import generate_run_id
 
 from .manifest import SlurmBundleManifest, load_bundle_manifest, write_bundle_manifest
 from .plan import SlurmCliOverrides, build_submission_plan
 from .render import render_bundle
 from .submit import mark_dry_run, submit_bundle
-
-_RUN_ID_ALLOWED = re.compile(r"[^a-zA-Z0-9_.-]+")
-
-
-def _slug_run_id(value: str, *, fallback: str = "run") -> str:
-    cleaned = _RUN_ID_ALLOWED.sub("-", value).strip("-.")
-    return cleaned or fallback
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -78,7 +70,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--source-dir",
         type=Path,
         default=Path.cwd(),
-        help="Repository root containing .venv and the medarc-orchestrate checkout.",
+        help="Repository root containing the medarc-orchestrate checkout.",
+    )
+    parser.add_argument(
+        "--activate-script",
+        type=Path,
+        default=None,
+        help="Shell activation script sourced before running medarc-orchestrate inside sbatch (defaults to <source-dir>/.venv/bin/activate).",
     )
     return parser
 
@@ -102,17 +100,21 @@ def main(argv: list[str] | None = None) -> int:
 
     tasks = expand_tasks(plan)
     configured_run_id = args.run_id or plan.run_id
-    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     if configured_run_id:
         run_id = configured_run_id
-    elif plan.name:
-        run_id = f"{_slug_run_id(plan.name)}-{timestamp}"
     else:
-        run_id = timestamp
+        run_id = generate_run_id(plan.name)
 
     output_root = args.output_dir or plan.output_dir or Path("outputs") / "slurm" / run_id
     output_root = output_root.expanduser().resolve()
     source_dir = args.source_dir.expanduser().resolve()
+    if args.activate_script is not None:
+        activate_script = args.activate_script.expanduser()
+        if not activate_script.is_absolute():
+            activate_script = source_dir / activate_script
+        activate_script = activate_script.resolve()
+    else:
+        activate_script = (source_dir / ".venv" / "bin" / "activate").resolve()
     readiness_timeout_s = args.readiness_timeout_s if args.readiness_timeout_s is not None else plan.readiness_timeout_s
     cli_overrides = SlurmCliOverrides(
         cpus_per_gpu=args.cpus_per_gpu,
@@ -142,6 +144,7 @@ def main(argv: list[str] | None = None) -> int:
         run_id=run_id,
         node_gpus=args.node_gpus,
         source_dir=source_dir,
+        activate_script=activate_script,
         env_file=plan.env_file,
         readiness_timeout_s=readiness_timeout_s,
         prune_logs_on_success=bool(args.prune_logs_on_success or plan.prune_logs_on_success),

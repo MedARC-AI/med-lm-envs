@@ -167,6 +167,40 @@ orchestrate:
     assert captured["job_configs"] == [(tmp_path / "job-a.yaml").resolve(), (tmp_path / "job-b.yaml").resolve()]
 
 
+def test_cli_default_run_id_uses_shared_generator(monkeypatch, tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    job_cfg.write_text(
+        """
+models:
+  foo:
+    model: Foo/Bar
+orchestrate:
+  vllm-container:
+    image: fake
+  foo:
+    gpus: 1
+    serve: {}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_run(self) -> None:
+        captured["run_id"] = self._options.run_id
+        captured["output_root"] = self._options.output_root
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.cli.discover_gpus", lambda: [_gpu(0)])
+    monkeypatch.setattr("medarc_verifiers.orchestrate.cli.generate_run_id", lambda name: "shared-run-id")
+    monkeypatch.setattr(OrchestratorRunner, "run", fake_run)
+
+    rc = main(["--job-config", str(job_cfg), "--runtime", "pyxis"])
+
+    assert rc == 0
+    assert captured["run_id"] == "shared-run-id"
+    assert captured["output_root"] == Path("outputs") / "orchestrator" / "shared-run-id"
+
+
 def test_port_only_resource_manager_skips_gpus() -> None:
     rm = PortOnlyResourceManager(port_range=(9000, 9010))
 

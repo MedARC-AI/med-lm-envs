@@ -5,10 +5,12 @@ import pytest
 
 from medarc_verifiers.orchestrate.cli import main as orchestrate_main
 from medarc_verifiers.orchestrate.config import TaskSpec, expand_tasks, load_job_config, load_plan
+from medarc_verifiers.orchestrate.slurm.manifest import SlurmBundleManifest
 from medarc_verifiers.orchestrate.slurm.cli import build_parser as build_slurm_parser
 from medarc_verifiers.orchestrate.slurm.plan import SlurmCliOverrides, build_submission_plan
 from medarc_verifiers.orchestrate.slurm.render import render_bundle
 from medarc_verifiers.orchestrate.slurm.submit import submit_bundle
+from medarc_verifiers.orchestrate.task_naming import bench_run_id
 
 
 def _write_job_config(
@@ -126,6 +128,43 @@ def test_build_submission_plan_round_robins_two_chains(tmp_path: Path) -> None:
     ]
 
 
+def test_build_submission_plan_run_simultaneously_uses_no_generated_dependencies(tmp_path: Path) -> None:
+    tasks = [
+        _task(tmp_path, "a", gpus=4, tp=4),
+        _task(tmp_path, "b", gpus=1),
+    ]
+
+    planned = build_submission_plan(
+        tasks,
+        run_id="bundle",
+        node_gpus=8,
+        max_simultaneous_nodes=1,
+        run_simultaneously=True,
+        base_dependency="afterok:555",
+        cli_overrides=SlurmCliOverrides(),
+    )
+
+    assert [(task.task.task_id, task.chain_index, task.predecessor_task_id, task.base_dependency) for task in planned] == [
+        ("a:foo", 0, None, "afterok:555"),
+        ("b:foo", 1, None, "afterok:555"),
+    ]
+
+
+def test_build_submission_plan_rejects_tp_larger_than_node_gpus(tmp_path: Path) -> None:
+    tasks = [_task(tmp_path, "too-wide", gpus=16, tp=16)]
+
+    with pytest.raises(ValueError, match=r"tensor_parallel_size=16.*exceeds node_gpus=8"):
+        build_submission_plan(
+            tasks,
+            run_id="bundle",
+            node_gpus=8,
+            max_simultaneous_nodes=1,
+            run_simultaneously=False,
+            base_dependency=None,
+            cli_overrides=SlurmCliOverrides(),
+        )
+
+
 def test_render_bundle_writes_script_and_patched_config(tmp_path: Path) -> None:
     job_cfg = tmp_path / "job.yaml"
     _write_job_config(job_cfg, gpus=2, tensor_parallel_size=2, slurm={"partition": "gpu", "slurm_resume": True})
@@ -146,6 +185,7 @@ def test_render_bundle_writes_script_and_patched_config(tmp_path: Path) -> None:
         run_id="bundle",
         node_gpus=8,
         source_dir=tmp_path,
+        activate_script=tmp_path / ".venv" / "bin" / "activate",
         env_file=tmp_path / ".env",
         readiness_timeout_s=300,
         prune_logs_on_success=True,
@@ -167,14 +207,123 @@ def test_render_bundle_writes_script_and_patched_config(tmp_path: Path) -> None:
     assert "#SBATCH --requeue" in script
     assert "--runtime pyxis" in script
     assert "--resume" in script
+    assert f'ACTIVATE_SCRIPT="${{ACTIVATE_SCRIPT:-{tmp_path / ".venv" / "bin" / "activate"}}}"' in script
+    assert 'source "$ACTIVATE_SCRIPT"' in script
+    assert "Missing activation script:" in script
     assert "MEDARC_ALLOCATED_GPU_COUNT=8" in script
     assert "--mem" not in script
+    assert str(job_cfg) not in script
 
     patched_payload = load_job_config(Path(entry.patched_job_config_path))
     assert patched_payload["orchestrate"]["foo"]["gpus"] == 8
     assert patched_payload["orchestrate"]["foo"]["data_parallel_size"] == 4
-    assert patched_payload["orchestrate"]["restart"] == "runs/raw/bundle-job-foo"
+    assert patched_payload["orchestrate"]["restart"] == bench_run_id("bundle-job-foo", "job:foo")
+    assert "/" not in patched_payload["orchestrate"]["restart"]
     assert patched == {}
+
+
+def test_render_bundle_always_materializes_task_local_config_and_reuses_it(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    _write_job_config(job_cfg, gpus=1)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    planned = build_submission_plan(
+        tasks,
+        run_id="bundle",
+        node_gpus=8,
+        max_simultaneous_nodes=1,
+        run_simultaneously=False,
+        base_dependency=None,
+        cli_overrides=SlurmCliOverrides(),
+    )
+
+    first_manifest = render_bundle(
+        planned_tasks=planned,
+        bundle_root=tmp_path / "outputs",
+        run_id="bundle",
+        node_gpus=8,
+        source_dir=tmp_path,
+        activate_script=tmp_path / ".venv" / "bin" / "activate",
+        env_file=None,
+        readiness_timeout_s=None,
+        prune_logs_on_success=False,
+    )
+    first_entry = first_manifest.entries[0]
+    first_config_path = Path(first_entry.effective_job_config_path)
+    first_payload = load_job_config(first_config_path)
+
+    assert first_entry.patched_job_config_path == str(first_config_path)
+    assert first_payload["orchestrate"]["restart"] == bench_run_id("bundle-job-foo", "job:foo")
+
+    job_cfg.write_text(
+        """
+models:
+  foo:
+    model: Foo/Bar
+orchestrate:
+  vllm-container:
+    image: fake
+  foo:
+    gpus: 1
+    serve:
+      dtype: float16
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    second_manifest = render_bundle(
+        planned_tasks=planned,
+        bundle_root=tmp_path / "outputs",
+        run_id="bundle",
+        node_gpus=8,
+        source_dir=tmp_path,
+        activate_script=tmp_path / ".venv" / "bin" / "activate",
+        env_file=None,
+        readiness_timeout_s=None,
+        prune_logs_on_success=False,
+        existing_manifest=first_manifest,
+    )
+    second_entry = second_manifest.entries[0]
+    second_payload = load_job_config(Path(second_entry.effective_job_config_path))
+
+    assert second_entry.effective_job_config_path == first_entry.effective_job_config_path
+    assert second_payload["orchestrate"]["restart"] == first_payload["orchestrate"]["restart"]
+    assert second_payload["orchestrate"]["foo"].get("serve", {}) == first_payload["orchestrate"]["foo"].get("serve", {})
+
+
+def test_rendered_task_local_config_is_loadable_by_orchestrator(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    _write_job_config(job_cfg, gpus=2, tensor_parallel_size=2)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    planned = build_submission_plan(
+        tasks,
+        run_id="bundle",
+        node_gpus=8,
+        max_simultaneous_nodes=1,
+        run_simultaneously=False,
+        base_dependency=None,
+        cli_overrides=SlurmCliOverrides(),
+    )
+
+    manifest = render_bundle(
+        planned_tasks=planned,
+        bundle_root=tmp_path / "outputs",
+        run_id="bundle",
+        node_gpus=8,
+        source_dir=tmp_path,
+        activate_script=tmp_path / ".venv" / "bin" / "activate",
+        env_file=None,
+        readiness_timeout_s=None,
+        prune_logs_on_success=False,
+    )
+
+    patched_path = Path(manifest.entries[0].effective_job_config_path)
+    patched_plan = tmp_path / "patched-plan.yaml"
+    patched_plan.write_text(f"job_configs:\n  - {patched_path}\n", encoding="utf-8")
+    patched_tasks = expand_tasks(load_plan(patched_plan))
+
+    assert len(patched_tasks) == 1
+    assert patched_tasks[0].orchestrate["foo"]["gpus"] == 8
+    assert patched_tasks[0].orchestrate["foo"]["data_parallel_size"] == 4
 
 
 def test_slurm_dry_run_writes_manifest_and_prints_commands(tmp_path: Path, capsys) -> None:
@@ -209,6 +358,29 @@ def test_slurm_dry_run_writes_manifest_and_prints_commands(tmp_path: Path, capsy
     assert all(entry["slurm_job_id"] is None for entry in manifest["entries"])
 
 
+def test_slurm_cli_default_run_id_uses_shared_generator(tmp_path: Path, monkeypatch) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    _write_job_config(job_cfg, gpus=1)
+
+    captured: dict[str, object] = {}
+
+    def fake_render_bundle(**kwargs):
+        captured["run_id"] = kwargs["run_id"]
+        captured["bundle_root"] = kwargs["bundle_root"]
+        return SlurmBundleManifest(run_id=kwargs["run_id"], bundle_root=str(kwargs["bundle_root"]), node_gpus=8, entries=[])
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.cli.generate_run_id", lambda name: "shared-run-id")
+    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.cli.render_bundle", fake_render_bundle)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.cli.write_bundle_manifest", lambda path, manifest: None)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.cli.mark_dry_run", lambda path, manifest: [])
+
+    rc = orchestrate_main(["slurm", "--job-config", str(job_cfg), "--dry-run"])
+
+    assert rc == 0
+    assert captured["run_id"] == "shared-run-id"
+    assert captured["bundle_root"] == (Path("outputs") / "slurm" / "shared-run-id").resolve()
+
+
 def test_submit_bundle_resumes_from_existing_job_ids(tmp_path: Path, monkeypatch) -> None:
     job_a = tmp_path / "job-a.yaml"
     job_b = tmp_path / "job-b.yaml"
@@ -232,6 +404,7 @@ def test_submit_bundle_resumes_from_existing_job_ids(tmp_path: Path, monkeypatch
         run_id="bundle",
         node_gpus=8,
         source_dir=tmp_path,
+        activate_script=tmp_path / ".venv" / "bin" / "activate",
         env_file=None,
         readiness_timeout_s=None,
         prune_logs_on_success=False,

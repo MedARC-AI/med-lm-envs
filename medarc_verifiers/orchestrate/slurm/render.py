@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 import shlex
@@ -9,6 +10,7 @@ import shlex
 from omegaconf import OmegaConf
 
 from medarc_verifiers.orchestrate.config import load_job_config
+from medarc_verifiers.orchestrate.task_naming import bench_run_id
 
 from .manifest import SlurmBundleManifest, SlurmTaskEntry
 from .plan import PlannedSlurmTask, placeholder_dependency
@@ -21,6 +23,7 @@ def render_bundle(
     run_id: str,
     node_gpus: int,
     source_dir: Path,
+    activate_script: Path,
     env_file: Path | None,
     readiness_timeout_s: int | None,
     prune_logs_on_success: bool,
@@ -37,6 +40,7 @@ def render_bundle(
             planned_task=planned_task,
             bundle_root=bundle_root,
             source_dir=source_dir,
+            activate_script=activate_script,
             env_file=env_file,
             readiness_timeout_s=readiness_timeout_s,
             prune_logs_on_success=prune_logs_on_success,
@@ -90,6 +94,7 @@ def render_task_artifacts(
     planned_task: PlannedSlurmTask,
     bundle_root: Path,
     source_dir: Path,
+    activate_script: Path,
     env_file: Path | None,
     readiness_timeout_s: int | None,
     prune_logs_on_success: bool,
@@ -99,39 +104,27 @@ def render_task_artifacts(
     task_root = bundle_root / planned_task.task_slug
     slurm_dir = task_root / "slurm"
     slurm_dir.mkdir(parents=True, exist_ok=True)
-    source_payload = dict(load_job_config(planned_task.task.job_config_path))
-    source_orchestrate = dict(source_payload.get("orchestrate") or {})
-    source_model_cfg = dict(source_orchestrate.get(planned_task.task.model_key) or {})
+    source_payload = _load_task_source_payload(planned_task=planned_task, existing_entry=existing_entry)
     restart_source, restart_strategy = resolve_restart_source(
         source_payload=source_payload,
-        inner_run_id=planned_task.inner_run_id,
+        bench_run_id=bench_run_id(planned_task.inner_run_id, planned_task.task.task_id),
         existing_entry=existing_entry,
     )
-
-    source_gpus = int(source_model_cfg.get("gpus", 1))
-    source_dp_size = int(source_model_cfg.get("data_parallel_size", 1) or 1)
-    patch_needed = (
-        planned_task.effective_gpus != source_gpus
-        or planned_task.dp_size != source_dp_size
-        or restart_strategy != "source_config"
+    patched_job_config_path = slurm_dir / "job-config.yaml"
+    payload = _build_task_config_payload(
+        source_payload=source_payload,
+        planned_task=planned_task,
+        restart_source=restart_source,
     )
-    patched_job_config_path: Path | None = None
-    effective_job_config_path = planned_task.task.job_config_path
-    if patch_needed:
-        patched_job_config_path = slurm_dir / "job-config.yaml"
-        payload = _build_task_config_payload(
-            source_payload=source_payload,
-            planned_task=planned_task,
-            restart_source=restart_source,
-        )
-        _write_yaml(patched_job_config_path, payload)
-        effective_job_config_path = patched_job_config_path
+    _write_yaml(patched_job_config_path, payload)
+    effective_job_config_path = patched_job_config_path
 
     script_path = slurm_dir / "orchestrate.sh"
     write_script(
         script_path=script_path,
         planned_task=planned_task,
         source_dir=source_dir,
+        activate_script=activate_script,
         env_file=env_file,
         readiness_timeout_s=readiness_timeout_s,
         prune_logs_on_success=prune_logs_on_success,
@@ -151,7 +144,7 @@ def render_task_artifacts(
 def resolve_restart_source(
     *,
     source_payload: dict[str, Any],
-    inner_run_id: str,
+    bench_run_id: str,
     existing_entry: SlurmTaskEntry | None,
 ) -> tuple[str | None, str]:
     if existing_entry and existing_entry.restart_source:
@@ -169,7 +162,7 @@ def resolve_restart_source(
     source_restart = _extract_restart_source(source_payload)
     if source_restart:
         return source_restart, "source_config"
-    return f"runs/raw/{inner_run_id}", "auto_injected"
+    return bench_run_id, "auto_injected"
 
 
 def write_script(
@@ -177,6 +170,7 @@ def write_script(
     script_path: Path,
     planned_task: PlannedSlurmTask,
     source_dir: Path,
+    activate_script: Path,
     env_file: Path | None,
     readiness_timeout_s: int | None,
     prune_logs_on_success: bool,
@@ -232,6 +226,7 @@ def write_script(
         "set -euo pipefail",
         "",
         f'SOURCE_DIR="${{SOURCE_DIR:-{source_dir}}}"',
+        f'ACTIVATE_SCRIPT="${{ACTIVATE_SCRIPT:-{activate_script}}}"',
         "",
         'cd "$SOURCE_DIR"',
         "",
@@ -241,7 +236,12 @@ def write_script(
         '    set +a',
         "fi",
         "",
-        'source "$SOURCE_DIR/.venv/bin/activate"',
+        'if [ ! -f "$ACTIVATE_SCRIPT" ]; then',
+        '    echo "Missing activation script: $ACTIVATE_SCRIPT" >&2',
+        "    exit 1",
+        "fi",
+        "",
+        'source "$ACTIVATE_SCRIPT"',
         f"export MEDARC_ALLOCATED_GPU_COUNT={node_gpus}",
         "",
         " ".join(shlex.quote(arg) for arg in command),
@@ -256,7 +256,7 @@ def _build_task_config_payload(
     planned_task: PlannedSlurmTask,
     restart_source: str | None,
 ) -> dict[str, Any]:
-    payload = dict(source_payload)
+    payload = deepcopy(source_payload)
     orchestrate = dict(payload.get("orchestrate") or {})
     model_cfg = dict(orchestrate.get(planned_task.task.model_key) or {})
     model_cfg["gpus"] = planned_task.effective_gpus
@@ -269,6 +269,14 @@ def _build_task_config_payload(
         orchestrate["restart"] = restart_source
     payload["orchestrate"] = orchestrate
     return payload
+
+
+def _load_task_source_payload(*, planned_task: PlannedSlurmTask, existing_entry: SlurmTaskEntry | None) -> dict[str, Any]:
+    if existing_entry and existing_entry.effective_job_config_path:
+        existing_path = Path(existing_entry.effective_job_config_path)
+        if existing_path.exists():
+            return dict(load_job_config(existing_path))
+    return dict(load_job_config(planned_task.task.job_config_path))
 
 
 def _extract_restart_source(payload: dict[str, Any]) -> str | None:

@@ -1,7 +1,14 @@
-## vLLM orchestrator (Docker or Pyxis)
+## vLLM orchestrator (Docker, Pyxis, or Slurm-native submission)
 
 This repo includes an experimental vLLM orchestrator for running `medarc-eval` against
 locally hosted vLLM containers with GPU/port scheduling.
+
+There are two different Slurm-related workflows:
+
+- `medarc-orchestrate --runtime pyxis ...` runs the orchestrator inside an existing Slurm allocation on a GPU node.
+- `medarc-orchestrate slurm ...` is the Slurm-native submitter. It generates and submits one `sbatch` job per orchestrator task.
+
+If you want `medarc-orchestrate` itself to submit Slurm jobs, use `medarc-orchestrate slurm`. Use `--runtime pyxis` only when you are already inside an allocation.
 
 ### Requirements
 
@@ -18,27 +25,39 @@ Pyxis runtime:
 
 - Slurm with the Pyxis plugin installed.
 - Enroot available on compute nodes.
-- Run `medarc-orchestrate` inside an existing Slurm allocation on a GPU node.
+- Run `medarc-orchestrate --runtime pyxis ...` inside an existing Slurm allocation on a GPU node.
 - The Pyxis `--container-image` value must match cluster policy:
   - registry-backed URI such as `docker://vllm/vllm-openai:latest`
   - or a pre-staged squashfs image path
 
 Notes for Pyxis:
 
-- Recommended interactive workflow: `salloc --nodes=1 --gpus=4 --time=02:00:00`, then `uv run medarc-orchestrate --runtime pyxis ...`.
+- Recommended interactive workflow: `salloc --nodes=1 --gpus=4 --time=02:00:00`, then `medarc-orchestrate --runtime pyxis ...`.
 - `srun --pty bash` shells can block later `srun` steps on some clusters unless overlap is enabled. Prefer `salloc` or `sbatch`.
 - Pulling large registry images at launch can fail on systems with limited local storage. Pre-staging a squashfs image is often more reliable.
 - In shell scripts, image strings containing `#` may need escaping, for example `nvcr.io\\#nvidia/pytorch:25.01-py3`.
+
+Slurm-native submission:
+
+- Use `medarc-orchestrate slurm ...` when you want the tool to create and submit `sbatch` jobs for you.
+- The Slurm-native path always uses Pyxis for the inner runtime in v1.
+- This is the recommended path for queued multi-job Slurm execution.
+- Generated `sbatch` scripts activate an environment and invoke `medarc-orchestrate` directly with `--no-uv-run`; they do not use `uv run` by default.
 
 Note: This machine does not have Docker installed, so integration runs are not available here.
 
 ### Job configs vs plan files
 
+These inputs are shared by both:
+
+- `medarc-orchestrate ...`
+- `medarc-orchestrate slurm ...`
+
 The orchestrator can run directly from one or more job configs:
 
 ```bash
-uv run medarc-orchestrate --job-config configs/job-gpt-oss-20b.yaml
-uv run medarc-orchestrate \
+medarc-orchestrate --job-config configs/job-gpt-oss-20b.yaml
+medarc-orchestrate \
   --job-config configs/job-gpt-oss-20b.yaml \
   --job-config configs/job-qwen-30b-a3b.yaml \
   --runtime pyxis
@@ -111,14 +130,20 @@ Config notes:
 ### CLI usage
 
 ```bash
-uv run medarc-orchestrate --plan plans/local-vllm.yaml
+medarc-orchestrate --plan plans/local-vllm.yaml
+```
+
+If you want queued Slurm submission rather than running inside your current shell or allocation, use:
+
+```bash
+medarc-orchestrate slurm --plan plans/local-vllm.yaml
 ```
 
 Direct job config mode:
 
 ```bash
-uv run medarc-orchestrate --job-config configs/job-gpt-oss-20b.yaml
-uv run medarc-orchestrate \
+medarc-orchestrate --job-config configs/job-gpt-oss-20b.yaml
+medarc-orchestrate \
   --job-config configs/job-gpt-oss-20b.yaml \
   --job-config configs/job-qwen-30b-a3b.yaml \
   --name local-vllm
@@ -127,15 +152,15 @@ uv run medarc-orchestrate \
 Runtime examples:
 
 ```bash
-uv run medarc-orchestrate --plan plans/local-vllm.yaml --runtime docker
-uv run medarc-orchestrate --plan plans/local-vllm.yaml --runtime pyxis
+medarc-orchestrate --plan plans/local-vllm.yaml --runtime docker
+medarc-orchestrate --plan plans/local-vllm.yaml --runtime pyxis
 ```
 
 Slurm-native submission examples:
 
 ```bash
-uv run medarc-orchestrate slurm --plan plans/local-vllm.yaml
-uv run medarc-orchestrate slurm \
+medarc-orchestrate slurm --plan plans/local-vllm.yaml
+medarc-orchestrate slurm \
   --job-config configs/job-gpt-oss-20b.yaml \
   --job-config configs/job-qwen-30b-a3b.yaml \
   --name local-vllm \
@@ -151,7 +176,7 @@ Common flags:
 - `--dry-run` prints resolved tasks and exits.
 - `--gpu-range 0-3` restricts GPU indices (overrides `gpu_range` from the plan file).
 - `--port-range 8000-8999` restricts ports (overrides `port_range` from the plan file).
-- `--run-id` sets a custom run identifier (overrides `run_id` from the plan file).
+- `--run-id` sets a custom run identifier (overrides `run_id` from the plan file). When omitted, `medarc-orchestrate` now uses the same default generator as `medarc-eval bench`: explicit `run_id`, else plan `run_id`, else `<slug(name)>-<timestamp>`, else `run-<timestamp>`.
 - `--output-dir` overrides the output root (overrides `output_dir` from the plan file).
 - `--max-parallel` caps concurrent tasks (overrides `max_parallel` from the plan file; defaults to GPU count).
 - `--readiness-timeout-s` controls server readiness wait (overrides `readiness_timeout_s` from the plan file).
@@ -171,15 +196,18 @@ Common flags:
 - `--slurm-resume` adds `#SBATCH --requeue` and passes `--resume` to the inner orchestrator.
 - `--test-only` runs `sbatch --test-only` instead of submitting jobs.
 - `--dry-run` writes scripts/configs and prints the `sbatch` commands without submitting them.
-- `--source-dir` points at the checkout containing `.venv` and `medarc-orchestrate`. Default: current working directory.
+- `--source-dir` points at the checkout used inside the generated `sbatch` script. Default: current working directory.
+- `--activate-script` overrides the shell activation script sourced by the generated `sbatch` script. Default: `<source-dir>/.venv/bin/activate`.
 
 Slurm-native behavior:
 
 - Each resolved orchestrator task becomes one generated `sbatch` script.
+- Each generated `sbatch` script sources the configured activation script, then runs `medarc-orchestrate --no-uv-run ...`.
 - Tasks are sorted by tensor parallel size descending before submission.
 - Every job requests the full `--node-gpus` allocation with `#SBATCH --gpus-per-task=<node_gpus>`.
-- The submitter computes `data_parallel_size = node_gpus // tensor_parallel_size` and patches the task-local config with the derived `gpus` and `data_parallel_size`.
-- When `orchestrate.restart` is absent, the task-local config persists an auto-generated restart target under `runs/raw/<inner-run-id>` so requeued or resumed Slurm jobs restart the inner `medarc-eval bench` run instead of starting from scratch.
+- The submitter computes `data_parallel_size = node_gpus // tensor_parallel_size` and writes a task-local config with the derived `gpus` and `data_parallel_size`.
+- When `orchestrate.restart` is absent, the task-local config persists an auto-generated restart target equal to the inner bench run id. That value is later passed to `medarc-eval bench --restart ...`, which resolves it under the default raw output root (`runs/raw/<bench-run-id>`).
+- The task-local config is the durable source of truth for restart settings and shields submitted jobs from later edits to the original repo config.
 
 Plan files may also set:
 
@@ -198,7 +226,7 @@ Slurm submission bundles are written under `outputs/slurm/<run_id>/` by default:
 
 - `manifest.json` records the generated scripts, patched configs, dependency expressions, restart source, and submitted Slurm job IDs.
 - `<task-slug>/slurm/orchestrate.sh` is the generated `sbatch` script for one orchestrator task.
-- `<task-slug>/slurm/job-config.yaml` is written when the submitter needs a task-local normalized config.
+- `<task-slug>/slurm/job-config.yaml` is always written as the task-local config used by the generated script.
 - `<task-slug>/orchestrator/` contains the inner orchestrator artifacts, including the per-task `run_manifest.json` with GPU-hour accounting.
 
 ### Runtime behavior

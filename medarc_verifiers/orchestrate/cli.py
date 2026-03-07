@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from pathlib import Path
-from datetime import UTC, datetime
 
 from medarc_verifiers.orchestrate.config import TaskSpec, expand_tasks, load_plan, make_plan
 from medarc_verifiers.orchestrate.docker_vllm import cleanup_orphan_containers
@@ -19,14 +17,7 @@ from medarc_verifiers.orchestrate.resources import (
 )
 from medarc_verifiers.orchestrate.run import OrchestratorOptions, OrchestratorRunner
 from medarc_verifiers.orchestrate.state import filter_tasks_for_resume, load_summary
-
-
-_RUN_ID_ALLOWED = re.compile(r"[^a-zA-Z0-9_.-]+")
-
-
-def _slug_run_id(value: str, *, fallback: str = "run") -> str:
-    cleaned = _RUN_ID_ALLOWED.sub("-", value).strip("-.")
-    return cleaned or fallback
+from medarc_verifiers.utils.run_naming import generate_run_id
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -179,13 +170,10 @@ def main(argv: list[str] | None = None) -> int:
         plan.env_file = env_file.resolve()
     tasks = expand_tasks(plan)
     configured_run_id = args.run_id or plan.run_id
-    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     if configured_run_id:
         run_id = configured_run_id
-    elif plan.name:
-        run_id = f"{_slug_run_id(plan.name)}-{timestamp}"
     else:
-        run_id = timestamp
+        run_id = generate_run_id(plan.name)
     output_root = args.output_dir or plan.output_dir or Path("outputs") / "orchestrator" / run_id
     gpu_range = args.gpu_range or plan.gpu_range
     if gpu_range:
