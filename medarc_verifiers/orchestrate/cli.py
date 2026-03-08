@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -141,6 +142,8 @@ def _validate_schedule(
     port_range: tuple[int, int],
     max_parallel: int,
 ) -> None:
+    if runtime == "pyxis" and max_parallel != 1:
+        raise ValueError("local --runtime pyxis uses the full outer allocation; max_parallel must be 1.")
     if runtime in {"docker", "podman"}:
         try:
             gpus = discover_gpus()
@@ -248,6 +251,7 @@ def _run_local(args: argparse.Namespace) -> int:
         for task in tasks:
             print(f"{task.task_id}\t{task.model_id}\t{task.job_config_path}")
         return 0
+    allocated_gpu_count = _infer_pyxis_allocated_gpu_count() if runtime == "pyxis" else None
     prune_logs_on_success = args.prune_logs_on_success or plan.prune_logs_on_success
     options = OrchestratorOptions(
         run_id=run_id,
@@ -255,6 +259,7 @@ def _run_local(args: argparse.Namespace) -> int:
         readiness_timeout_s=readiness_timeout_s,
         max_parallel=max_parallel,
         prune_logs_on_success=prune_logs_on_success,
+        allocated_gpu_count=allocated_gpu_count,
     )
     if runtime in {"docker", "podman"}:
         resource_manager = ResourceManager(gpu_indices=gpu_indices, port_range=port_range)
@@ -289,6 +294,53 @@ def _default_local_runtime() -> str:
     if shutil.which("podman") is not None:
         return "podman"
     return "docker"
+
+
+def _infer_pyxis_allocated_gpu_count() -> int:
+    for key in (
+        "MEDARC_ALLOCATED_GPU_COUNT",
+        "SLURM_STEP_GPUS",
+        "SLURM_JOB_GPUS",
+        "CUDA_VISIBLE_DEVICES",
+        "NVIDIA_VISIBLE_DEVICES",
+        "SLURM_GPUS_ON_NODE",
+    ):
+        count = _count_visible_gpus(os.environ.get(key))
+        if count is not None:
+            if count < 1:
+                raise ValueError(f"{key} resolved to {count} GPUs; local --runtime pyxis requires at least one GPU.")
+            return count
+    raise ValueError(
+        "Could not determine the outer GPU allocation for local --runtime pyxis. "
+        "Run inside an allocation that sets visible-device or Slurm GPU env vars."
+    )
+
+
+def _count_visible_gpus(value: str | None) -> int | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    if lowered in {"none", "void", "novisibledevices"}:
+        return 0
+    if text.isdigit():
+        return int(text)
+    if ":" in text:
+        suffix = text.rsplit(":", maxsplit=1)[-1].strip()
+        if suffix.isdigit():
+            return int(suffix)
+    try:
+        parsed = parse_index_range(text)
+    except ValueError:
+        parsed = []
+    if parsed:
+        return len(parsed)
+    tokens = [token.strip() for token in text.split(",") if token.strip()]
+    if tokens:
+        return len(tokens)
+    return None
 
 
 def _cleanup_orphans(*, runtime: str, run_id: str | None) -> list[str]:

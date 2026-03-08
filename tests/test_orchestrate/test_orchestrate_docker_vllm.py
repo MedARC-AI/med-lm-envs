@@ -1,5 +1,7 @@
 import queue
+import sys
 import time
+import types
 
 import pytest
 
@@ -7,6 +9,7 @@ from medarc_verifiers.orchestrate.docker_vllm import (
     ContainerLogStreamer,
     DockerLaunchError,
     DockerRuntimeAdapter,
+    create_and_start_container,
     normalize_volumes,
 )
 
@@ -99,3 +102,65 @@ def test_docker_runtime_adapter_returns_local_base_url(monkeypatch) -> None:
     assert handle.identifier == "abc123"
     assert captured["host_port"] == 8123
     assert captured["volumes"] == ["/cache:/root/.cache/huggingface:ro"]
+
+
+def test_create_and_start_container_recovers_from_owned_name_conflict(monkeypatch) -> None:
+    class FakeContainer:
+        def __init__(self, *, status: str = "created", labels: dict[str, str] | None = None, container_id: str = "abc123") -> None:
+            self.status = status
+            self.labels = labels or {"orchestrator.managed": "true", "orchestrator.task_id": "task-1"}
+            self.id = container_id
+            self.removed = False
+            self.started = False
+
+        def reload(self) -> None:
+            return None
+
+        def remove(self, v: bool, force: bool) -> None:
+            self.removed = True
+
+        def start(self) -> None:
+            self.started = True
+
+    class FakeContainers:
+        def __init__(self) -> None:
+            self.create_calls = 0
+            self.existing = FakeContainer(status="exited")
+
+        def get(self, name: str):
+            assert name == "task-1"
+            return self.existing
+
+        def create(self, **kwargs):
+            self.create_calls += 1
+            if self.create_calls == 1:
+                raise RuntimeError("Conflict. The container name is already in use.")
+            return FakeContainer(labels=kwargs["labels"])
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.containers = FakeContainers()
+            self.images = types.SimpleNamespace(pull=lambda image: None)
+
+    fake_client = FakeClient()
+    fake_docker = types.SimpleNamespace(from_env=lambda timeout=600: fake_client)
+    fake_docker_types = types.SimpleNamespace(DeviceRequest=lambda **kwargs: kwargs)
+    monkeypatch.setitem(sys.modules, "docker", fake_docker)
+    monkeypatch.setitem(sys.modules, "docker.types", fake_docker_types)
+
+    container = create_and_start_container(
+        image="fake",
+        name="task-1",
+        container_port=8000,
+        host_port=8123,
+        env={"OPENAI_API_KEY": "x"},
+        volumes=["/cache:/root/.cache/huggingface:ro"],
+        ipc_mode="host",
+        gpu_ids=[0],
+        command=["--model", "Foo/Bar"],
+        labels={"orchestrator.task_id": "task-1"},
+    )
+
+    assert fake_client.containers.create_calls == 2
+    assert fake_client.containers.existing.removed is True
+    assert container.started is True

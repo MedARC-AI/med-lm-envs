@@ -285,6 +285,43 @@ def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
     assert run_manifest.tasks[0].bundled_eval_config_path == entry.effective_job_config_path
 
 
+def test_render_bundle_assigns_unique_ports_per_task(tmp_path: Path) -> None:
+    job_a = tmp_path / "job-a.yaml"
+    job_b = tmp_path / "job-b.yaml"
+    _write_job_config(job_a, gpus=1)
+    _write_job_config(job_b, gpus=1)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_a, job_b])))
+    planned = build_submission_plan(
+        tasks,
+        run_id="bundle",
+        node_gpus=1,
+        max_simultaneous_nodes=2,
+        run_simultaneously=True,
+        base_dependency=None,
+        cli_overrides=SlurmCliOverrides(),
+    )
+
+    manifest = render_bundle(
+        planned_tasks=planned,
+        bundle_root=tmp_path / "outputs",
+        run_id="bundle",
+        node_gpus=1,
+        source_dir=tmp_path,
+        activate_script=tmp_path / ".venv" / "bin" / "activate",
+        env_file=None,
+        readiness_timeout_s=None,
+        prune_logs_on_success=False,
+    )
+
+    allocations = [load_execution_allocation(Path(entry.allocation_path)) for entry in manifest.entries]
+
+    ports = [allocation.server_port for allocation in allocations if allocation is not None]
+
+    assert len(ports) == 2
+    assert len(set(ports)) == 2
+    assert all(port is not None and 8000 <= port <= 65000 for port in ports)
+
+
 def test_render_bundle_refreshes_stale_task_bundle_when_source_changes(tmp_path: Path) -> None:
     job_cfg = tmp_path / "job.yaml"
     _write_job_config(job_cfg, gpus=1)

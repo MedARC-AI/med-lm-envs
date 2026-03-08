@@ -154,12 +154,12 @@ def create_and_start_container(
                 container = existing
             else:
                 raise DockerLaunchError(message) from exc
-        if "already in use" in message.lower() or "conflict" in message.lower():
+        elif "already in use" in message.lower() or "conflict" in message.lower():
             if remove_existing_if_safe():
                 container = client.containers.create(**container_create_kwargs)
             else:
                 raise DockerLaunchError(message) from exc
-        if "No such image" in message or "not found" in message.lower():
+        elif "No such image" in message or "not found" in message.lower():
             try:
                 client.images.pull(image)
             except Exception as pull_exc:

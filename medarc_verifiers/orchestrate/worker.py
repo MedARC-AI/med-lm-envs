@@ -35,6 +35,7 @@ from medarc_verifiers.orchestrate.docker_vllm import (
     wait_for_readiness_async,
     write_container_request,
 )
+from medarc_verifiers.orchestrate.resources import parse_index_range
 from medarc_verifiers.orchestrate.runtime import LogStreamer, RuntimeAdapter, RuntimeHandle, RuntimeLaunchError
 from medarc_verifiers.orchestrate.state import (
     JobState,
@@ -454,7 +455,7 @@ def _normalize_allocation(allocation: ExecutionAllocation, *, task_spec: Resolve
         if allocation.gpu_ids:
             allocated_gpus = len(allocation.gpu_ids)
         else:
-            allocated_gpus = task_spec.gpus
+            allocated_gpus = _infer_allocated_gpu_count_from_environment() or task_spec.gpus
     server_port = allocation.server_port if allocation.server_port is not None else 8000
     return ExecutionAllocation(
         task_id=allocation.task_id,
@@ -466,6 +467,48 @@ def _normalize_allocation(allocation: ExecutionAllocation, *, task_spec: Resolve
         constraints=dict(allocation.constraints),
         runtime_env=dict(allocation.runtime_env),
     )
+
+
+def _infer_allocated_gpu_count_from_environment() -> int | None:
+    for key in (
+        "MEDARC_ALLOCATED_GPU_COUNT",
+        "SLURM_STEP_GPUS",
+        "SLURM_JOB_GPUS",
+        "CUDA_VISIBLE_DEVICES",
+        "NVIDIA_VISIBLE_DEVICES",
+        "SLURM_GPUS_ON_NODE",
+    ):
+        count = _count_visible_gpus(os.environ.get(key))
+        if count is not None:
+            return count
+    return None
+
+
+def _count_visible_gpus(value: str | None) -> int | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    if lowered in {"none", "void", "novisibledevices"}:
+        return 0
+    if text.isdigit():
+        return int(text)
+    if ":" in text:
+        suffix = text.rsplit(":", maxsplit=1)[-1].strip()
+        if suffix.isdigit():
+            return int(suffix)
+    try:
+        parsed = parse_index_range(text)
+    except ValueError:
+        parsed = []
+    if parsed:
+        return len(parsed)
+    tokens = [token.strip() for token in text.split(",") if token.strip()]
+    if tokens:
+        return len(tokens)
+    return None
 
 
 def _update_gpu_accounting(manifest: TaskManifest) -> None:

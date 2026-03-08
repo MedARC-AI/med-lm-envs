@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 import shlex
 
@@ -36,7 +37,7 @@ def render_bundle(
         task.task.task_id: ExecutionAllocation(
             task_id=task.task.task_id,
             allocated_gpus=task.allocated_gpus,
-            server_port=8000,
+            server_port=_default_server_port(run_id, task.submission_order),
             require_contiguous_gpus=node_gpus > 1,
             slurm_job_id=(existing_entries.get(task.task.task_id).slurm_job_id if existing_entries.get(task.task.task_id) else None),
             constraints={"scheduler": "slurm", "node_gpus": node_gpus},
@@ -227,6 +228,15 @@ def _sbatch_line(flag: str, value: object) -> str | None:
     if value is None:
         return None
     return f"#SBATCH {flag}={value}"
+
+
+def _default_server_port(run_id: str, submission_order: int, *, min_port: int = 8000, max_port: int = 65000) -> int:
+    port_span = max_port - min_port + 1
+    if submission_order >= port_span:
+        raise ValueError(f"Submission order {submission_order} exceeds the available TCP port range.")
+    run_seed = int(hashlib.sha1(run_id.encode("utf-8")).hexdigest()[:8], 16)  # noqa: S324
+    base_port = min_port + (run_seed % max(1, port_span - submission_order))
+    return base_port + submission_order
 
 
 __all__ = ["render_bundle", "render_task_artifacts", "write_script"]

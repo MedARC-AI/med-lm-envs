@@ -20,19 +20,21 @@ class PodmanLogStreamer:
         self._container_id = container_id
         self._sink_path = sink_path
         self._process: subprocess.Popen[bytes] | None = None
+        self._sink = None
 
     def start(self) -> None:
         if self._process is not None and self.is_alive():
             return
-        sink = open(self._sink_path, "wb")
+        self._sink = open(self._sink_path, "wb")
         self._process = subprocess.Popen(
             ["podman", "logs", "-f", self._container_id],
-            stdout=sink,
+            stdout=self._sink,
             stderr=subprocess.STDOUT,
         )
 
     def stop(self, *, timeout: float = 2.0) -> None:
         if self._process is None:
+            self._close_sink()
             return
         if self._process.poll() is None:
             self._process.terminate()
@@ -41,9 +43,18 @@ class PodmanLogStreamer:
             except subprocess.TimeoutExpired:
                 self._process.kill()
                 self._process.wait(timeout=timeout)
+        self._close_sink()
 
     def is_alive(self) -> bool:
         return self._process is not None and self._process.poll() is None
+
+    def _close_sink(self) -> None:
+        if self._sink is None:
+            return
+        try:
+            self._sink.close()
+        finally:
+            self._sink = None
 
 
 class PodmanRuntimeAdapter:
@@ -86,7 +97,8 @@ class PodmanRuntimeAdapter:
             command.extend(["--volume", mount])
         for key, value in env.items():
             command.extend(["--env", f"{key}={value}"])
-        for key, value in labels.items():
+        all_labels = {ORCHESTRATOR_LABEL_KEY: "true", **dict(labels)}
+        for key, value in all_labels.items():
             command.extend(["--label", f"{key}={value}"])
         if gpu_ids:
             command.extend(["--env", f"NVIDIA_VISIBLE_DEVICES={','.join(str(gpu) for gpu in gpu_ids)}"])

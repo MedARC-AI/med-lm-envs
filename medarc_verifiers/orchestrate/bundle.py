@@ -415,7 +415,12 @@ def ensure_run_bundle(
     output_root = output_root.expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
     manifest_path = run_manifest_path(output_root)
-    existing = existing_manifest or (load_run_bundle_manifest(manifest_path) if manifest_path.exists() else None)
+    existing = _load_existing_run_bundle(
+        output_root=output_root,
+        manifest_path=manifest_path,
+        run_id=run_id,
+        existing_manifest=existing_manifest,
+    )
     existing_entries = existing.entry_map() if existing else {}
     bundles: dict[str, PlannedTaskBundle] = {}
     manifest_entries: list[RunBundleEntry] = []
@@ -457,6 +462,35 @@ def ensure_run_bundle(
         manifest.created_at = existing.created_at
     write_run_bundle_manifest(manifest_path, manifest)
     return BundlePlan(manifest=manifest, tasks=bundles)
+
+
+def _load_existing_run_bundle(
+    *,
+    output_root: Path,
+    manifest_path: Path,
+    run_id: str,
+    existing_manifest: RunBundleManifest | None,
+) -> RunBundleManifest | None:
+    existing = existing_manifest or (load_run_bundle_manifest(manifest_path) if manifest_path.exists() else None)
+    if existing is not None:
+        if existing.run_id != run_id:
+            raise ValueError(
+                f"Existing run bundle at {manifest_path} belongs to run_id={existing.run_id}, not {run_id}."
+            )
+        return existing
+    if _has_orphaned_bundle_artifacts(output_root):
+        raise ValueError(
+            f"Output root {output_root} already contains orchestrate task bundle artifacts without a run manifest; "
+            "remove the stale artifacts or choose a different output directory."
+        )
+    return None
+
+
+def _has_orphaned_bundle_artifacts(output_root: Path) -> bool:
+    tasks_root = output_root / "tasks"
+    if not tasks_root.exists():
+        return False
+    return any(tasks_root.iterdir())
 
 
 def _ensure_task_bundle(

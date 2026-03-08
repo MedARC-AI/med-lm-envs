@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from medarc_verifiers.orchestrate.bundle import ExecutionAllocation, ensure_run_bundle
 from medarc_verifiers.orchestrate.config import expand_tasks, load_plan
 from medarc_verifiers.orchestrate.state import TaskManifest
@@ -68,6 +70,38 @@ def _bundle(
             )
         },
     )
+
+
+def test_ensure_run_bundle_rejects_output_root_from_different_run_id(tmp_path: Path) -> None:
+    tasks, _ = _bundle(tmp_path)
+
+    with pytest.raises(ValueError, match="belongs to run_id=bundle, not fresh-run"):
+        ensure_run_bundle(
+            tasks=tasks,
+            run_id="fresh-run",
+            output_root=tmp_path / "outputs",
+            mode="slurm",
+            runtime="pyxis",
+        )
+
+
+def test_ensure_run_bundle_rejects_orphaned_task_bundle_artifacts(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    plan_path = tmp_path / "plan.yaml"
+    _write_job_config(job_cfg)
+    plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\n", encoding="utf-8")
+    tasks = expand_tasks(load_plan(plan_path))
+    orphan_root = tmp_path / "outputs" / "tasks" / "orphan-task"
+    orphan_root.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="contains orchestrate task bundle artifacts without a run manifest"):
+        ensure_run_bundle(
+            tasks=tasks,
+            run_id="bundle",
+            output_root=tmp_path / "outputs",
+            mode="slurm",
+            runtime="pyxis",
+        )
 
 
 def test_worker_cli_loads_task_and_allocation(tmp_path: Path, monkeypatch) -> None:
@@ -165,6 +199,47 @@ def test_worker_cli_rejects_allocation_incompatible_with_tp(tmp_path: Path, monk
     assert "allocated_gpus=4 must be divisible by tensor_parallel_size=3" in result_payload
 
 
+def test_worker_cli_infers_allocated_gpus_from_visible_devices(tmp_path: Path, monkeypatch) -> None:
+    tasks, bundle = _bundle(tmp_path, gpus=1, tensor_parallel_size=1, data_parallel_size=None, allocated_gpus=1)
+    task_bundle = bundle.tasks[tasks[0].task_id]
+    allocation_path = Path(task_bundle.spec.output_paths.allocation_path)
+    allocation_path.write_text(
+        f'{{"task_id": "{tasks[0].task_id}", "server_port": 8000, "gpu_ids": []}}',
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_run(self, *, manifest=None):
+        captured["allocated_gpus"] = self._allocation.allocated_gpus
+        return manifest or TaskManifest(
+            task_id=self._spec.task_id,
+            config_path=self._spec.bundled_eval_config_path,
+            model_key=self._spec.model_key,
+            model_id=self._spec.model_id,
+        )
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker._build_runtime_adapter", lambda runtime: object())
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.TaskWorker.run", fake_run)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,3,5")
+
+    rc = worker_main(
+        [
+            "--task",
+            task_bundle.spec.output_paths.task_spec_path,
+            "--allocation",
+            task_bundle.spec.output_paths.allocation_path,
+            "--runtime",
+            "pyxis",
+            "--run-id",
+            "bundle-job-foo",
+            "--no-uv-run",
+        ]
+    )
+
+    assert rc == 0
+    assert captured["allocated_gpus"] == 4
+
+
 def test_podman_runtime_adapter_launch_builds_expected_command(monkeypatch, tmp_path: Path) -> None:
     calls: list[list[str]] = []
 
@@ -206,6 +281,7 @@ def test_podman_runtime_adapter_launch_builds_expected_command(monkeypatch, tmp_
     assert "--env" in command
     assert "HF_TOKEN=secret" in command
     assert "--label" in command
+    assert "orchestrator.managed=true" in command
     assert "orchestrator.task_id=task-1" in command
     assert "--device" in command
     assert "nvidia.com/gpu=0,1" in command

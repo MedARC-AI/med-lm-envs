@@ -68,6 +68,7 @@ class OrchestratorOptions:
     readiness_timeout_s: int
     max_parallel: int
     prune_logs_on_success: bool = False
+    allocated_gpu_count: int | None = None
 
 
 class OrchestratorRunner:
@@ -156,7 +157,7 @@ class OrchestratorRunner:
             bundle.paths.allocation_path,
             ExecutionAllocation(
                 task_id=task.task_id,
-                allocated_gpus=_allocated_gpu_count(allocation, task),
+                allocated_gpus=_allocated_gpu_count(allocation, task, default_allocated_gpus=self._options.allocated_gpu_count),
                 gpu_ids=list(allocation.gpu_ids),
                 server_port=allocation.server_port,
                 require_contiguous_gpus=bool(
@@ -208,7 +209,7 @@ class OrchestratorRunner:
             bundle.spec,
             ExecutionAllocation(
                 task_id=task.task_id,
-                allocated_gpus=_allocated_gpu_count(allocation, task),
+                allocated_gpus=_allocated_gpu_count(allocation, task, default_allocated_gpus=self._options.allocated_gpu_count),
                 gpu_ids=list(allocation.gpu_ids),
                 server_port=allocation.server_port,
                 require_contiguous_gpus=bool(
@@ -286,7 +287,11 @@ class OrchestratorRunner:
         manifest.port = allocation.server_port
         manifest.gpus = minimum_required_gpus(task)
         manifest.tensor_parallel_size = configured_tensor_parallel_size(task)
-        manifest.allocated_gpus = _allocated_gpu_count(allocation, task)
+        manifest.allocated_gpus = _allocated_gpu_count(
+            allocation,
+            task,
+            default_allocated_gpus=self._options.allocated_gpu_count,
+        )
         if manifest.started_at is None:
             manifest.started_at = _utcnow()
         return manifest
@@ -428,7 +433,14 @@ class OrchestratorRunner:
             return
 
 
-def _allocated_gpu_count(allocation: Allocation, task: TaskSpec) -> int:
+def _allocated_gpu_count(
+    allocation: Allocation,
+    task: TaskSpec,
+    *,
+    default_allocated_gpus: int | None = None,
+) -> int:
+    if default_allocated_gpus is not None:
+        return default_allocated_gpus
     override = os.environ.get("MEDARC_ALLOCATED_GPU_COUNT")
     if override is not None:
         return int(override)

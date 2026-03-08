@@ -245,6 +245,7 @@ async def test_parallel_launch_records_gpu_accounting_and_dp_args(
         output_root=tmp_path / "outputs",
         readiness_timeout_s=1,
         max_parallel=1,
+        allocated_gpu_count=8,
     )
     adapter = FakeRuntimeAdapter()
     runner = OrchestratorRunner(
@@ -288,8 +289,6 @@ async def test_parallel_launch_records_gpu_accounting_and_dp_args(
     monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_benchmark", fake_wait_benchmark)
     monkeypatch.setattr("medarc_verifiers.orchestrate.run._register_signal_handlers", lambda loop, handler: None)
     monkeypatch.setattr("medarc_verifiers.orchestrate.worker.asyncio.to_thread", fake_to_thread)
-    monkeypatch.setenv("MEDARC_ALLOCATED_GPU_COUNT", "8")
-
     await runner._run_async()
 
     launch = adapter.launch_calls[0]

@@ -77,7 +77,14 @@ def test_cli_validation_pyxis_skips_gpu_discovery(monkeypatch, tmp_path: Path) -
     monkeypatch.setattr("medarc_verifiers.orchestrate.cli.discover_gpus", boom)
     tasks = [_task(tmp_path, gpus=8)]
 
-    _validate_schedule(tasks, runtime="pyxis", gpu_indices=None, port_range=(8000, 8003), max_parallel=2)
+    _validate_schedule(tasks, runtime="pyxis", gpu_indices=None, port_range=(8000, 8003), max_parallel=1)
+
+
+def test_cli_validation_pyxis_requires_single_task_allocation_use(tmp_path: Path) -> None:
+    tasks = [_task(tmp_path, gpus=8)]
+
+    with pytest.raises(ValueError, match="max_parallel must be 1"):
+        _validate_schedule(tasks, runtime="pyxis", gpu_indices=None, port_range=(8000, 8003), max_parallel=2)
 
 
 def test_root_parser_accepts_local_subcommand() -> None:
@@ -139,6 +146,7 @@ runtime: docker
 
     monkeypatch.setattr("medarc_verifiers.orchestrate.cli.discover_gpus", lambda: [_gpu(0)])
     monkeypatch.setattr(OrchestratorRunner, "run", fake_run)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2,3")
 
     rc = main(["local", "--plan", str(plan_path), "--runtime", "pyxis"])
 
@@ -171,6 +179,7 @@ orchestrate:
 
     monkeypatch.setattr("medarc_verifiers.orchestrate.cli.discover_gpus", lambda: [_gpu(0), _gpu(1)])
     monkeypatch.setattr(OrchestratorRunner, "run", fake_run)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2,3")
 
     rc = main(
         [
@@ -217,12 +226,74 @@ orchestrate:
     monkeypatch.setattr("medarc_verifiers.orchestrate.cli.discover_gpus", lambda: [_gpu(0)])
     monkeypatch.setattr("medarc_verifiers.orchestrate.cli.generate_run_id", lambda name: "shared-run-id")
     monkeypatch.setattr(OrchestratorRunner, "run", fake_run)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2,3")
 
     rc = main(["local", "--job-config", str(job_cfg), "--runtime", "pyxis"])
 
     assert rc == 0
     assert captured["run_id"] == "shared-run-id"
     assert captured["output_root"] == Path("outputs") / "orchestrate" / "shared-run-id"
+
+
+def test_cli_local_pyxis_derives_allocated_gpu_count_from_visible_devices(monkeypatch, tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    job_cfg.write_text(
+        """
+models:
+  foo:
+    model: Foo/Bar
+orchestrate:
+  vllm-container:
+    image: fake
+  foo:
+    gpus: 1
+    serve: {}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_run(self) -> None:
+        captured["allocated_gpu_count"] = self._options.allocated_gpu_count
+
+    monkeypatch.setattr(OrchestratorRunner, "run", fake_run)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,2,4,6")
+
+    rc = main(["local", "--job-config", str(job_cfg), "--runtime", "pyxis"])
+
+    assert rc == 0
+    assert captured["allocated_gpu_count"] == 4
+
+
+def test_cli_local_pyxis_dry_run_does_not_require_allocation_env(monkeypatch, tmp_path: Path, capsys) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    job_cfg.write_text(
+        """
+models:
+  foo:
+    model: Foo/Bar
+orchestrate:
+  vllm-container:
+    image: fake
+  foo:
+    gpus: 1
+    serve: {}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("MEDARC_ALLOCATED_GPU_COUNT", raising=False)
+    monkeypatch.delenv("SLURM_STEP_GPUS", raising=False)
+    monkeypatch.delenv("SLURM_JOB_GPUS", raising=False)
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("NVIDIA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("SLURM_GPUS_ON_NODE", raising=False)
+
+    rc = main(["local", "--job-config", str(job_cfg), "--runtime", "pyxis", "--dry-run"])
+
+    assert rc == 0
+    assert capsys.readouterr().out.strip() == f"job:foo\tFoo/Bar\t{job_cfg.resolve()}"
 
 
 def test_cli_local_podman_uses_gpu_resource_manager(monkeypatch, tmp_path: Path) -> None:
