@@ -161,6 +161,12 @@ LEADING_OPTION_PATTERN = re.compile(
 # Negation words that invalidate nearby matches
 NEGATION_PATTERN = re.compile(r"\b(?:not|isn['’]t)\b", re.IGNORECASE)
 
+# Negation/correction phrases that immediately precede an option or answer text
+NEGATION_BEFORE_MATCH_PATTERN = re.compile(
+    r"(?:\bnot\b|\bisn['’]t\b|\baren['’]t\b|\bwasn['’]t\b|\bweren['’]t\b|\bincorrect\b|\bwrong\b|\bfalse\b|\bexcept(?:\s+for)?\b|\brather\s+than\b)(?:\W+\w+){0,3}\W*$",
+    re.IGNORECASE,
+)
+
 # Negative-context phrases that indicate an option mention is NOT a selected answer
 NEGATIVE_AFTER_OPTION_PATTERN = re.compile(
     r"^\s*(?:is|are|was|were)\s+(?:incorrect|wrong|false|not\s+correct)\b|^\s*not\s+correct\b",
@@ -199,7 +205,7 @@ def _negated_near(text: str, match: re.Match) -> bool:
     """
     sentence_start, sentence_end, match_start, _match_end = _get_sentence_containing_match(text, match)
     prefix = text[sentence_start:match_start]
-    return bool(NEGATION_PATTERN.search(prefix))
+    return bool(NEGATION_BEFORE_MATCH_PATTERN.search(prefix))
 
 
 def _negative_after_option(text: str, match: re.Match) -> bool:
@@ -207,6 +213,22 @@ def _negative_after_option(text: str, match: re.Match) -> bool:
     _sentence_start, sentence_end, _match_start, match_end = _get_sentence_containing_match(text, match)
     suffix = text[match_end:sentence_end]
     return bool(NEGATIVE_AFTER_OPTION_PATTERN.search(suffix))
+
+
+def _contradicted_by_later_option(text: str, match: re.Match) -> bool:
+    """Check for same-sentence corrections like 'C, but D is correct' or 'C rather than D'."""
+    _sentence_start, sentence_end, _match_start, match_end = _get_sentence_containing_match(text, match)
+    suffix = text[match_end:sentence_end]
+    current = _norm_letter(match.group("opt") if getattr(match.re, "groupindex", None) and "opt" in match.re.groupindex else match.group(1))
+    contrast_pattern = re.compile(
+        r"\b(?:but|however|instead|rather)\b.{0,40}?(?<![\w+\-/])\(?\s*([A-Za-z]|\d{1,2})\s*[\)\.:]?(?![\w+\-/])",
+        re.IGNORECASE,
+    )
+    later = contrast_pattern.search(suffix)
+    if not later:
+        return False
+    contrasted = _norm_letter(later.group(1))
+    return contrasted is not None and contrasted != current
 
 
 def _tail_region(text: str, max_tokens: int = 64) -> str:
@@ -321,9 +343,10 @@ def multiple_choice_accuracy(
     if anchored_matches and answer_letter:
         last_match = anchored_matches[-1]
         predicted = _norm_letter(last_match.group("opt"))
-        if last_match.group("neg") is None and _token_kind_matches_answer_letter(predicted, answer_letter):
+        contradicted = _contradicted_by_later_option(llm_answer, last_match)
+        if last_match.group("neg") is None and not contradicted and _token_kind_matches_answer_letter(predicted, answer_letter):
             explicit_choice_found = True
-        if predicted == answer_letter and last_match.group("neg") is None:
+        if predicted == answer_letter and last_match.group("neg") is None and not contradicted:
             return _result(True, "anchored_token", predicted, answer_letter, return_details)
 
     # Strategy 4: Last token in the answer tail, ignore negative contexts like "C is incorrect",
@@ -339,6 +362,8 @@ def multiple_choice_accuracy(
                 if _negated_near(tail, token_match):
                     continue
                 if _negative_after_option(tail, token_match):
+                    continue
+                if _contradicted_by_later_option(tail, token_match):
                     continue
                 if predicted == answer_letter:
                     return _result(True, "last_token", predicted, answer_letter, return_details)

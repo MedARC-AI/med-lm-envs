@@ -372,6 +372,21 @@ def test_last_token_isnt_same_sentence_blocks():
     assert not multiple_choice_accuracy("It isn't C, but maybe C", answer_letter="C", answer_text="Option C")
 
 
+def test_answer_text_rather_than_prefix_blocks():
+    response = "The diagnosis is viral rather than bacterial pneumonia."
+    assert not multiple_choice_accuracy(response, answer_letter="B", answer_text="bacterial pneumonia")
+
+
+def test_answer_text_wrong_prefix_blocks():
+    response = "The wrong diagnosis is bacterial pneumonia."
+    assert not multiple_choice_accuracy(response, answer_letter="B", answer_text="bacterial pneumonia")
+
+
+def test_anchored_token_contradicted_by_later_option_blocks():
+    response = "Answer: C, but D is correct."
+    assert not multiple_choice_accuracy(response, answer_letter="C", answer_text="Option C")
+
+
 def test_answer_text_does_not_override_explicit_wrong_choice():
     response = (
         "The other options do not account for the renal findings as well:\n"
