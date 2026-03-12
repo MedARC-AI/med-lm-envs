@@ -563,6 +563,18 @@ def test_answer_text_requires_exact_formatting_beyond_normalization(response, an
     assert not multiple_choice_accuracy(response, answer_letter="D", answer_text=answer_text, accept_answer_text=True)
 
 
+@pytest.mark.parametrize(
+    "response, answer_text",
+    [
+        ("<answer>Proliferation of surfactant‑secreting cells</answer>", "Proliferation of surfactant-secreting cells"),
+        ("<answer>Anti‑D IgG</answer>", "Anti-D IgG"),
+        ("<answer>Upslope of T‑wave</answer>", "Upslope of T-wave"),
+    ],
+)
+def test_answer_text_matches_unicode_dash_variants(response, answer_text):
+    assert multiple_choice_accuracy(response, answer_letter="D", answer_text=answer_text, accept_answer_text=True)
+
+
 def test_multiple_answers_last_explicit_anchor_wins():
     response = "Answer: B. After reconsideration, final answer: C"
     assert multiple_choice_accuracy(response, answer_letter="C", answer_text="Option C")

@@ -15,6 +15,26 @@ from dataclasses import dataclass
 from typing import Optional
 
 
+_UNICODE_PUNCT_TRANSLATIONS = str.maketrans(
+    {
+        "\u00A0": " ",  # no-break space
+        "\u2010": "-",  # hyphen
+        "\u2011": "-",  # non-breaking hyphen
+        "\u2012": "-",  # figure dash
+        "\u2013": "-",  # en dash
+        "\u2014": "-",  # em dash
+        "\u2015": "-",  # horizontal bar
+        "\u2212": "-",  # minus sign
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201C": '"',
+        "\u201D": '"',
+    }
+)
+
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
 @dataclass
 class MCQAccuracyResult:
     """Result of multiple-choice accuracy grading."""
@@ -32,14 +52,16 @@ class MCQAccuracyResult:
     """The correct answer for reference, if available."""
 
 
-def _nfkc_casefold(text: str) -> str:
-    """Unicode normalize + casefold for robust text comparison."""
-    return unicodedata.normalize("NFKC", text or "").casefold()
+def normalize_for_structure(text: str) -> str:
+    """Canonicalize text for structural matching without collapsing whitespace."""
+    text = unicodedata.normalize("NFKC", text or "")
+    text = text.translate(_UNICODE_PUNCT_TRANSLATIONS)
+    return text.casefold()
 
 
-def _normalize_spaces(text: str) -> str:
-    """Collapse multiple whitespace to single space."""
-    return re.sub(r"\s+", " ", text).strip()
+def normalize_for_match(text: str) -> str:
+    """Canonicalize text for answer-text equivalence matching."""
+    return _WHITESPACE_RE.sub(" ", normalize_for_structure(text)).strip()
 
 
 def _strip_tex(text: str) -> str:
@@ -261,10 +283,10 @@ def multiple_choice_accuracy(
     llm_answer_original = llm_answer
 
     # Normalize: casefold only (preserve whitespace structure for sentence detection)
-    llm_answer = _nfkc_casefold(llm_answer)
+    llm_answer = normalize_for_structure(llm_answer)
 
     answer_letter = _norm_letter(answer_letter)
-    answer_text = _nfkc_casefold(_normalize_spaces(answer_text or ""))
+    answer_text = normalize_for_match(answer_text or "")
     if answer_letter is None:
         raise ValueError(f"Invalid answer_letter '{answer_letter=}'. Must be a single letter or digit string.")
 
@@ -286,7 +308,7 @@ def multiple_choice_accuracy(
     # Strategy 3: Anchored token (prefix matches first, fallback to generic anchors)
     prefix_matches = []
     if prefix:
-        prefix_norm = _nfkc_casefold(prefix).strip()
+        prefix_norm = normalize_for_structure(prefix).strip()
         if prefix_norm:
             flexible_prefix = re.escape(prefix_norm).replace(r"\ ", r"\s+")
             prefix_pattern = re.compile(
