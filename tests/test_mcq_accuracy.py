@@ -258,6 +258,20 @@ def test_edge_case_letter_in_medical_term():
     )
 
 
+def test_answer_text_match_ignores_terminal_period_difference():
+    response = "Final answer: Furosemide-responsive cardiogenic pulmonary edema"
+    assert multiple_choice_accuracy(
+        response,
+        answer_letter="B",
+        answer_text="Furosemide-responsive cardiogenic pulmonary edema.",
+    )
+
+
+def test_answer_text_match_ignores_spacing_inside_parentheses():
+    response = "Final answer: Ca ( OH ) 2"
+    assert multiple_choice_accuracy(response, answer_letter="C", answer_text="Ca(OH)2")
+
+
 def test_edge_case_hemoglobin_a1c():
     # "A" in "A1c" should not match
     assert multiple_choice_accuracy("HbA1c is elevated. The answer is B", answer_letter="B", answer_text="Option B")

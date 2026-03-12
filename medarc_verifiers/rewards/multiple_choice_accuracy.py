@@ -17,7 +17,7 @@ from typing import Optional
 
 _UNICODE_PUNCT_TRANSLATIONS = str.maketrans(
     {
-        "\u00A0": " ",  # no-break space
+        "\u00a0": " ",  # no-break space
         "\u2010": "-",  # hyphen
         "\u2011": "-",  # non-breaking hyphen
         "\u2012": "-",  # figure dash
@@ -27,12 +27,14 @@ _UNICODE_PUNCT_TRANSLATIONS = str.maketrans(
         "\u2212": "-",  # minus sign
         "\u2018": "'",
         "\u2019": "'",
-        "\u201C": '"',
-        "\u201D": '"',
+        "\u201c": '"',
+        "\u201d": '"',
     }
 )
 
 _WHITESPACE_RE = re.compile(r"\s+")
+_INNER_PUNCT_SPACING_RE = re.compile(r"\s*([()\[\]{}.,;:])\s*")
+_TRAILING_TERMINAL_PUNCT_RE = re.compile(r"(?<=\w)[.!?,;:]+$")
 
 
 @dataclass
@@ -62,6 +64,13 @@ def normalize_for_structure(text: str) -> str:
 def normalize_for_match(text: str) -> str:
     """Canonicalize text for answer-text equivalence matching."""
     return _WHITESPACE_RE.sub(" ", normalize_for_structure(text)).strip()
+
+
+def normalize_for_answer_text_match(text: str) -> str:
+    """Canonicalize text for answer-text matching while tolerating minor punctuation drift."""
+    text = normalize_for_match(text)
+    text = _INNER_PUNCT_SPACING_RE.sub(r"\1", text)
+    return _TRAILING_TERMINAL_PUNCT_RE.sub("", text)
 
 
 def _strip_tex(text: str) -> str:
@@ -209,7 +218,9 @@ def _contradicted_by_later_option(text: str, match: re.Match) -> bool:
     """Check for same-sentence corrections like 'C, but D is correct' or 'C rather than D'."""
     _sentence_start, sentence_end, _match_start, match_end = _get_sentence_containing_match(text, match)
     suffix = text[match_end:sentence_end]
-    current = _norm_letter(match.group("opt") if getattr(match.re, "groupindex", None) and "opt" in match.re.groupindex else match.group(1))
+    current = _norm_letter(
+        match.group("opt") if getattr(match.re, "groupindex", None) and "opt" in match.re.groupindex else match.group(1)
+    )
     contrast_pattern = re.compile(
         r"\b(?:but|however|instead|rather)\b.{0,40}?(?<![\w+\-/])\(?\s*([A-Za-z]|\d{1,2})\s*[\)\.:]?(?![\w+\-/])",
         re.IGNORECASE,
@@ -334,7 +345,11 @@ def multiple_choice_accuracy(
         last_match = anchored_matches[-1]
         predicted = _norm_letter(last_match.group("opt"))
         contradicted = _contradicted_by_later_option(llm_answer, last_match)
-        if last_match.group("neg") is None and not contradicted and _token_kind_matches_answer_letter(predicted, answer_letter):
+        if (
+            last_match.group("neg") is None
+            and not contradicted
+            and _token_kind_matches_answer_letter(predicted, answer_letter)
+        ):
             explicit_choice_found = True
         if predicted == answer_letter and last_match.group("neg") is None and not contradicted:
             return _result(True, "anchored_token", predicted, answer_letter, return_details)
@@ -386,5 +401,21 @@ def multiple_choice_accuracy(
         match = pattern.search(end_region)
         if match and not _negated_near(end_region, match):
             return _result(True, "answer_text", end_region, answer_text, return_details)
+
+        normed_answer_text = normalize_for_answer_text_match(answer_text)
+        normed_beginning_region = normalize_for_answer_text_match(beginning_region)
+        normed_end_region = normalize_for_answer_text_match(end_region)
+
+        if normed_answer_text:
+            flexible_loose_answer = re.escape(normed_answer_text).replace(r"\ ", r"\s+")
+            loose_pattern = re.compile(rf"(?<!\w){flexible_loose_answer}(?!\w)", re.IGNORECASE)
+
+            match = loose_pattern.search(normed_beginning_region)
+            if match and not _negated_near(normed_beginning_region, match):
+                return _result(True, "answer_text", beginning_region, answer_text, return_details)
+
+            match = loose_pattern.search(normed_end_region)
+            if match and not _negated_near(normed_end_region, match):
+                return _result(True, "answer_text", end_region, answer_text, return_details)
 
     return _result(False, "none", None, None, return_details)
