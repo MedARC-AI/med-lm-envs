@@ -100,39 +100,29 @@ def _token_kind_matches_answer_letter(predicted: Optional[str], answer_letter: s
     return predicted.isalpha()
 
 
-_THINK_OPEN_RE = re.compile(r"<think>", re.IGNORECASE)
-_THINK_CLOSE_RE = re.compile(r"</think>", re.IGNORECASE)
-_THINK_PAIR_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_THINK_OPEN_RE = re.compile(r"<\s*think\b[^>]*>", re.IGNORECASE)
+_THINK_CLOSE_RE = re.compile(r"</\s*think\s*>", re.IGNORECASE)
 
 
 def _remove_think_tags(completion_text: str) -> str:
     """Extract the answer section from completion text, handling think tags properly.
 
     Behavior is intentionally conservative:
-    - If there is exactly one well-formed <think>...</think> pair AND no unclosed <think> later,
-      return everything after that closing tag.
+    - If there is any explicit closing </think>, return everything after the last closing tag.
+    - If there is an unclosed <think> with no closing tag, treat the output as missing
+      a final-answer region.
     - Otherwise, return the full response.
     """
     text = completion_text or ""
 
-    # Fast path: most outputs won't contain think tags.
-    # Some models emit an unpaired closing tag (</think>) and then the final answer.
-    # In that case, treat the closing tag as the end of reasoning and keep only the tail.
-    if _THINK_OPEN_RE.search(text) is None:
-        closes = list(_THINK_CLOSE_RE.finditer(text))
-        if closes:
-            return text[closes[-1].end() :].strip()
-        return text.strip()
+    closes = list(_THINK_CLOSE_RE.finditer(text))
+    if closes:
+        return text[closes[-1].end() :].lstrip()
 
-    # Count properly closed pairs, but stop early once we know there are 2+.
-    it = _THINK_PAIR_RE.finditer(text)
-    first = next(it, None)
-    if first is None:
-        return text.strip()
-    if next(it, None) is not None:
-        return text.strip()
+    if _THINK_OPEN_RE.search(text):
+        return ""
 
-    return text[first.end() :].strip()
+    return text
 
 
 # Anchored patterns like "final answer: C" or "the answer is D"

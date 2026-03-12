@@ -221,6 +221,16 @@ def test_unpaired_think_close_with_spurious_match():
     assert multiple_choice_accuracy(response, answer_letter="A", answer_text="Option A")
 
 
+def test_multiple_think_blocks_use_last_close():
+    response = "<think>first</think> draft <think>second</think>\n\nFinal answer: B"
+    assert multiple_choice_accuracy(response, answer_letter="B", answer_text="Option B")
+
+
+def test_unclosed_think_open_returns_empty():
+    response = "<think>reasoning only Final answer: C"
+    assert not multiple_choice_accuracy(response, answer_letter="C", answer_text="Option C")
+
+
 def test_cot_prevents_early_letter_matching():
     # Should not match A or B from the reasoning
     cot_response = """
