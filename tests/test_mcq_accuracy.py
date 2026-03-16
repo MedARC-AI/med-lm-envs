@@ -43,6 +43,23 @@ def test_last_token_with_period():
     assert multiple_choice_accuracy("My selection is B.", answer_letter="B", answer_text="Some text")
 
 
+@pytest.mark.parametrize(
+    ("response", "answer_letter"),
+    [
+        ("My selection is [C]", "C"),
+        ("My selection is C]", "C"),
+        ("My selection is C)", "C"),
+        ("My selection is (C)", "C"),
+        ("My selection is [2]", "2"),
+        ("My selection is 2]", "2"),
+        ("My selection is 2)", "2"),
+        ("My selection is (2)", "2"),
+    ],
+)
+def test_last_token_bracket_like_variants(response: str, answer_letter: str):
+    assert multiple_choice_accuracy(response, answer_letter=answer_letter, answer_text="Option")
+
+
 def test_last_token_multiple_letters_takes_last():
     # A and B appear in reasoning, D is the final answer
     assert multiple_choice_accuracy("A is wrong. B seems unlikely. D", answer_letter="D", answer_text="Final option")
@@ -58,6 +75,34 @@ def test_last_token_numeric():
 
 def test_last_token_wrong():
     assert not multiple_choice_accuracy("My answer is A", answer_letter="B", answer_text="Correct")
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "A, C",
+        "A; C",
+        "A: C",
+        "A. C",
+        "A) C",
+        "B, C, E",
+        "D / G / J",
+        "(A), (C)",
+        "[B], [C], [E]",
+        "A or C",
+        "B and E",
+        "B, and E",
+        "B, & D",
+        "both A and C",
+        "A & C",
+        "A + C",
+        "A y C",
+        "A e D",
+        "A ou C",
+    ],
+)
+def test_last_token_rejects_compact_multi_option_lists(response: str):
+    assert not multiple_choice_accuracy(response, answer_letter="C", answer_text="Option", accept_answer_text=False)
 
 
 def test_last_token_disabled_when_explicit_anchor_exists_even_if_wrong():
@@ -88,6 +133,24 @@ def test_answer_text_in_sentence():
         answer_letter="B",
         answer_text="acute myocardial infarction",
     )
+
+
+@pytest.mark.parametrize("response", ["All of the above", "The answer is all of the above."])
+def test_answer_text_all_of_the_above_is_not_rejected(response: str):
+    assert multiple_choice_accuracy(response, answer_letter="D", answer_text="All of the above")
+
+
+@pytest.mark.parametrize("response", ["None of the above", "The answer is none of the above."])
+def test_answer_text_none_of_the_above_is_not_rejected(response: str):
+    assert multiple_choice_accuracy(response, answer_letter="E", answer_text="None of the above")
+
+
+def test_multi_answer_tail_does_not_count_as_all_of_the_above():
+    assert not multiple_choice_accuracy("A and B", answer_letter="D", answer_text="All of the above")
+
+
+def test_all_of_the_above_does_not_match_plain_option_text():
+    assert not multiple_choice_accuracy("All of the above", answer_letter="C", answer_text="acute appendicitis")
 
 
 def test_answer_text_case_insensitive():

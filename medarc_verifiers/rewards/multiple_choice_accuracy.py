@@ -176,6 +176,19 @@ NEGATIVE_AFTER_OPTION_PATTERN = re.compile(
 # Handles both single newlines (for line breaks in CoT) and double newlines (paragraphs)
 SENTENCE_BOUNDARY = re.compile(r"[.!?]\s+|\n+")
 
+# Compact-list glue that should cause the last-token fallback to reject a tail as
+# multi-answer rather than selecting the final option.
+COMPACT_MULTI_OPTION_GLUE_PATTERN = re.compile(
+    r"""
+    \b(?:and|or|both|y|e|ou|und|et|plus)\b
+    |
+    \b(?:as\ well\ as|together\ with|followed\ by|correct\ choices?\s+are|choices?\s+are)\b
+    |
+    [,:;/&+\-|]
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
 
 def _get_sentence_containing_match(text: str, match: re.Match) -> str:
     """Return (sentence_start, sentence_end, match_start, match_end) in the original text."""
@@ -248,6 +261,19 @@ def _tail_region(text: str, max_tokens: int = 64) -> str:
     if len(tokens) > max_tokens:
         tail = " ".join(tokens[-max_tokens:])
     return tail
+
+
+def _is_compact_multi_option_list(text: str) -> bool:
+    """Return True for short multi-option tails like 'A, C' or '> **A** and C'."""
+    text = (text or "").strip()
+    matches = list(TOKEN_PATTERN.finditer(text))
+    if len(matches) < 2:
+        return False
+
+    residue = TOKEN_PATTERN.sub(" ", text)
+    residue = COMPACT_MULTI_OPTION_GLUE_PATTERN.sub(" ", residue)
+    residue = re.sub(r"[\s\[\]\(\)\{\}<>*_`~.!?]+", " ", residue)
+    return residue.strip() == ""
 
 
 def multiple_choice_accuracy(
@@ -357,7 +383,7 @@ def multiple_choice_accuracy(
     # Strategy 4: Last token in the answer tail, ignore negative contexts like "C is incorrect",
     if not explicit_choice_found and answer_letter:
         tail = _tail_region(llm_answer)
-        tail_tokens = list(TOKEN_PATTERN.finditer(tail))
+        tail_tokens = [] if _is_compact_multi_option_list(tail) else list(TOKEN_PATTERN.finditer(tail))
         if tail_tokens:
             # Take the last non-negated, non-negative-context token.
             for token_match in reversed(tail_tokens):
