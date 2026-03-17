@@ -1,8 +1,14 @@
 """Tests for the simplified MCQ accuracy grader."""
 
+import time
+
 import pytest
 
-from medarc_verifiers.rewards.multiple_choice_accuracy import MCQAccuracyResult, multiple_choice_accuracy
+from medarc_verifiers.rewards.multiple_choice_accuracy import (
+    MCQAccuracyResult,
+    _contains_multiple_option_led_sentences,
+    multiple_choice_accuracy,
+)
 
 
 def test_anchored_final_answer_colon():
@@ -586,6 +592,19 @@ def test_answer_text_fallback_rejects_multiple_option_led_sentences(response: st
     )
     assert result_a.is_correct is False
     assert result_a.method == "none"
+
+
+def test_multiple_option_led_sentence_scan_handles_large_payload_linearly():
+    response = ("Reasoning sentence with details. " * 12000) + "Final answer: C"
+    started = time.perf_counter()
+    assert _contains_multiple_option_led_sentences(response, answer_letter="C") is False
+    elapsed = time.perf_counter() - started
+    assert elapsed < 1.0
+
+
+def test_large_reasoning_payload_still_accepts_final_answer():
+    response = ("Reasoning sentence with details. " * 12000) + "Final answer: C"
+    assert multiple_choice_accuracy(response, answer_letter="C", answer_text="Option C")
 
 
 def test_answer_text_does_not_override_explicit_wrong_choice():

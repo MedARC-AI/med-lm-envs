@@ -153,18 +153,21 @@ TOKEN_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# Leading option token like "B. Answer text" or "C) ..." at the start of the response
-LEADING_OPTION_PATTERN = re.compile(
-    r"^\s*(?:>\s*)?(?:(?:[-*+]\s+)|(?:\d{1,3}[.)]\s+))?\s*"  # blockquote / list prefixes
+_LEADING_OPTION_PATTERN_BODY = (
+    r"\s*(?:>\s*)?(?:(?:[-*+]\s+)|(?:\d{1,3}[.)]\s+))?\s*"  # blockquote / list prefixes
     r"(?:[*_`~]+)?\s*\(?\s*([A-Za-z]|\d{1,2})\s*"  # markdown wrappers before the option
     r"(?:"
     r"[\)\.:]\s*\)?\s*(?:[*_`~]+)?\s*"  # B. Answer text / C) ...
     r"|"
     r"(?=\s*(?:\(|[-–—]))"  # A (Answer text) / A - Answer text / A – Answer text
     r")"
-    r"(?!\w)",
-    re.IGNORECASE,
+    r"(?!\w)"
 )
+
+# Leading option token like "B. Answer text" or "C) ..." at the start of the response
+LEADING_OPTION_PATTERN = re.compile(rf"^{_LEADING_OPTION_PATTERN_BODY}", re.IGNORECASE)
+# Same pattern without ^ so we can match from sentence offsets without slicing `text[start:]`.
+SENTENCE_LEADING_OPTION_PATTERN = re.compile(_LEADING_OPTION_PATTERN_BODY, re.IGNORECASE)
 
 # Standalone final-line option token like "C", "(C)", or "\boxed{C}".
 TERMINAL_OPTION_LINE_PATTERN = re.compile(
@@ -475,9 +478,8 @@ def _contains_multiple_option_led_sentences(text: str, answer_letter: str) -> bo
     distinct: set[str] = set()
     starts = [0]
     starts.extend(match.end() for match in SENTENCE_BOUNDARY.finditer(text))
-
     for start in starts:
-        match = LEADING_OPTION_PATTERN.match(text[start:])
+        match = SENTENCE_LEADING_OPTION_PATTERN.match(text, pos=start)
         if not match:
             continue
         token = _norm_letter(match.group(1))
