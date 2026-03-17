@@ -12,6 +12,7 @@ negations to avoid false positives (e.g., "the answer is not C").
 import re
 import unicodedata
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Optional
 
 
@@ -35,6 +36,7 @@ _UNICODE_PUNCT_TRANSLATIONS = str.maketrans(
 _WHITESPACE_RE = re.compile(r"\s+")
 _INNER_PUNCT_SPACING_RE = re.compile(r"\s*([()\[\]{}.,;:])\s*")
 _TRAILING_TERMINAL_PUNCT_RE = re.compile(r"(?<=\w)[.!?,;:]+$")
+_LIKELY_TEX_RE = re.compile(r"\\[A-Za-z]+|\\[$\\()\\[\\]{}]|[$]")
 
 
 @dataclass
@@ -73,12 +75,20 @@ def normalize_for_answer_text_match(text: str) -> str:
     return _TRAILING_TERMINAL_PUNCT_RE.sub("", text)
 
 
+@lru_cache(maxsize=1)
+def _latex_to_text_converter():
+    from pylatexenc.latex2text import LatexNodes2Text
+
+    return LatexNodes2Text(math_mode="text")
+
+
 def _strip_tex(text: str) -> str:
     """Remove LaTeX formatting if pylatexenc is available."""
-    try:
-        from pylatexenc.latex2text import LatexNodes2Text
+    if not text or not _LIKELY_TEX_RE.search(text):
+        return text
 
-        return LatexNodes2Text(math_mode="text").latex_to_text(text)
+    try:
+        return _latex_to_text_converter().latex_to_text(text)
     except Exception:
         return text
 
