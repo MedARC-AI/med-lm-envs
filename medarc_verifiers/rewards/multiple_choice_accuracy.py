@@ -10,9 +10,13 @@ negations to avoid false positives (e.g., "the answer is not C").
 """
 
 import re
+import os
+import sys
+import time
 import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache
+from functools import wraps
 from typing import Optional
 
 
@@ -37,6 +41,61 @@ _WHITESPACE_RE = re.compile(r"\s+")
 _INNER_PUNCT_SPACING_RE = re.compile(r"\s*([()\[\]{}.,;:])\s*")
 _TRAILING_TERMINAL_PUNCT_RE = re.compile(r"(?<=\w)[.!?,;:]+$")
 _LIKELY_TEX_RE = re.compile(r"\\[A-Za-z]+|\\[$\\()\\[\\]{}]|[$]")
+
+
+def _mcq_perf_trace_enabled() -> bool:
+    return os.getenv("MEDARC_MCQ_PERF_TRACE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _mcq_perf_trace_min_seconds() -> float:
+    raw = os.getenv("MEDARC_MCQ_PERF_TRACE_MIN_MS", "").strip()
+    if not raw:
+        return 0.0
+    try:
+        return max(float(raw) / 1000.0, 0.0)
+    except ValueError:
+        return 0.0
+
+
+def _mcq_perf_trace_summary(args: tuple, kwargs: dict) -> str:
+    parts: list[str] = []
+    for idx, value in enumerate(args[:3]):
+        if isinstance(value, str):
+            parts.append(f"arg{idx}_len={len(value)}")
+        elif isinstance(value, re.Match):
+            try:
+                start, end = value.span()
+                parts.append(f"arg{idx}_span={start}:{end}")
+            except Exception:
+                parts.append(f"arg{idx}=match")
+        elif isinstance(value, list):
+            parts.append(f"arg{idx}_len={len(value)}")
+    if "answer_letter" in kwargs and isinstance(kwargs["answer_letter"], str):
+        parts.append(f"answer_letter={kwargs['answer_letter']!r}")
+    return " ".join(parts)
+
+
+def _trace_scan_perf(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        if not _mcq_perf_trace_enabled():
+            return func(*args, **kwargs)
+
+        started = time.perf_counter()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            elapsed = time.perf_counter() - started
+            if elapsed >= _mcq_perf_trace_min_seconds():
+                summary = _mcq_perf_trace_summary(args, kwargs)
+                print(
+                    f"[mcq-perf] {func.__name__} elapsed_ms={elapsed * 1000:.3f}"
+                    + (f" {summary}" if summary else ""),
+                    file=sys.stderr,
+                    flush=True,
+                )
+
+    return wrapper
 
 
 @dataclass
@@ -82,6 +141,7 @@ def _latex_to_text_converter():
     return LatexNodes2Text(math_mode="text")
 
 
+@_trace_scan_perf
 def _strip_tex(text: str) -> str:
     """Remove LaTeX formatting if pylatexenc is available."""
     if not text or not _LIKELY_TEX_RE.search(text):
@@ -123,6 +183,7 @@ _THINK_OPEN_RE = re.compile(r"<\s*think\b[^>]*>", re.IGNORECASE)
 _THINK_CLOSE_RE = re.compile(r"</\s*think\s*>", re.IGNORECASE)
 
 
+@_trace_scan_perf
 def _remove_think_tags(completion_text: str) -> str:
     """Extract the answer section from completion text, handling think tags properly.
 
@@ -229,7 +290,10 @@ COMPACT_MULTI_OPTION_GLUE_PATTERN = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+_MULTIPLE_OPTION_LED_SCAN_MAX_CHARS = 8000
 
+
+@_trace_scan_perf
 def _get_sentence_containing_match(text: str, match: re.Match) -> str:
     """Return (sentence_start, sentence_end, match_start, match_end) in the original text."""
     if getattr(match.re, "groupindex", None) and "opt" in match.re.groupindex:
@@ -248,6 +312,7 @@ def _get_sentence_containing_match(text: str, match: re.Match) -> str:
     return sentence_start, sentence_end, match_start, match_end
 
 
+@_trace_scan_perf
 def _negated_near(text: str, match: re.Match) -> bool:
     """Check for negation that appears before the match within the same sentence.
 
@@ -260,6 +325,7 @@ def _negated_near(text: str, match: re.Match) -> bool:
     return bool(NEGATION_BEFORE_MATCH_PATTERN.search(prefix))
 
 
+@_trace_scan_perf
 def _negative_after_option(text: str, match: re.Match) -> bool:
     """Check if an option token is immediately followed by negative context like 'C is incorrect'."""
     _sentence_start, sentence_end, _match_start, match_end = _get_sentence_containing_match(text, match)
@@ -267,6 +333,7 @@ def _negative_after_option(text: str, match: re.Match) -> bool:
     return bool(NEGATIVE_AFTER_OPTION_PATTERN.search(suffix))
 
 
+@_trace_scan_perf
 def _contradicted_by_later_option(text: str, match: re.Match) -> bool:
     """Check for same-sentence corrections like 'C, but D is correct' or 'C rather than D'."""
     _sentence_start, sentence_end, _match_start, match_end = _get_sentence_containing_match(text, match)
@@ -281,6 +348,7 @@ def _contradicted_by_later_option(text: str, match: re.Match) -> bool:
     return contrasted is not None and contrasted != current
 
 
+@_trace_scan_perf
 def _tail_region(text: str, max_tokens: int = 64) -> str:
     """Return a short tail slice (last sentence/line) to reduce option-token noise."""
     boundaries = list(SENTENCE_BOUNDARY.finditer(text))
@@ -299,6 +367,7 @@ def _tail_region(text: str, max_tokens: int = 64) -> str:
     return tail
 
 
+@_trace_scan_perf
 def _last_nonempty_line(text: str) -> str:
     """Return the last non-empty line, if any."""
     for line in reversed((text or "").splitlines()):
@@ -330,6 +399,7 @@ def _ignore_prior_option_like_token(prefix: str, prior_match: re.Match) -> bool:
     return False
 
 
+@_trace_scan_perf
 def _extract_terminal_option_line(line: str) -> Optional[str]:
     """Extract a standalone option token from the last line."""
     if not line:
@@ -365,6 +435,7 @@ def _extract_terminal_option_line(line: str) -> Optional[str]:
     return predicted
 
 
+@_trace_scan_perf
 def _extract_short_final_clause_option(text: str, max_words: int = 12) -> Optional[str]:
     """Extract a terminal option token from a short final clause like 'I think it's C'."""
     clause = _tail_region(text).strip()
@@ -406,6 +477,7 @@ _MULTI_ANSWER_CONNECTOR_WORD_RE = re.compile(
     re.IGNORECASE,
 )
 
+@_trace_scan_perf
 def _anchored_match_in_multi_answer_phrase(text: str, matches: list[re.Match], idx: int) -> bool:
     """Return True if anchored match *idx* is part of a local multi-answer phrase."""
     match = matches[idx]
@@ -463,6 +535,7 @@ def _anchored_match_in_multi_answer_phrase(text: str, matches: list[re.Match], i
     return False
 
 
+@_trace_scan_perf
 def _is_compact_multi_option_list(text: str) -> bool:
     """Return True for short multi-option tails like 'A, C' or '> **A** and C'."""
     text = (text or "").strip()
@@ -476,6 +549,7 @@ def _is_compact_multi_option_list(text: str) -> bool:
     return residue.strip() == ""
 
 
+@_trace_scan_perf
 def _contains_multiple_option_led_sentences(text: str, answer_letter: str) -> bool:
     """Return True when different sentences/lines each start with different option labels.
 
@@ -501,6 +575,7 @@ def _contains_multiple_option_led_sentences(text: str, answer_letter: str) -> bo
     return False
 
 
+@_trace_scan_perf
 def multiple_choice_accuracy(
     llm_answer: str,
     answer_letter: str,
@@ -565,14 +640,25 @@ def multiple_choice_accuracy(
         raise ValueError(f"Invalid answer_letter '{answer_letter=}'. Must be a single letter or digit string.")
 
     explicit_choice_found = False
-    multiple_option_led_sentences = _contains_multiple_option_led_sentences(llm_answer_original, answer_letter)
 
     # Strategy 1: Only answer letter anywhere (without anchoring)
     if answer_letter == _norm_letter(llm_answer):
         return _result(True, "direct_answer", llm_answer, answer_letter, return_details)
 
+    multiple_option_led_sentences = False
+    leading_match = LEADING_OPTION_PATTERN.match(llm_answer_original)
+    if leading_match:
+        # Only pay for the multi-sentence scan when the response actually starts like a
+        # leading-option answer. For very large payloads, disable the leading-option shortcut
+        # rather than scanning the whole response.
+        if len(llm_answer_original) <= _MULTIPLE_OPTION_LED_SCAN_MAX_CHARS:
+            multiple_option_led_sentences = _contains_multiple_option_led_sentences(llm_answer_original, answer_letter)
+            if multiple_option_led_sentences:
+                leading_match = None
+        else:
+            leading_match = None
+
     # Strategy 2: Accept leading option token like "B. answer ..."
-    leading_match = None if multiple_option_led_sentences else LEADING_OPTION_PATTERN.match(llm_answer_original)
     if leading_match and answer_letter:
         predicted = _norm_letter(leading_match.group(1))
         if _token_kind_matches_answer_letter(predicted, answer_letter):
