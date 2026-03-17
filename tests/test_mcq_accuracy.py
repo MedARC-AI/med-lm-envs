@@ -440,6 +440,21 @@ def test_leading_option_with_no_and_punctuation_should_pass():
     assert multiple_choice_accuracy("B) No.", answer_letter="B", answer_text="No")
 
 
+@pytest.mark.parametrize(
+    ("response", "answer_text"),
+    [
+        ("A (Nadolol)", "Nadolol"),
+        ("A - Nadolol", "Nadolol"),
+        ("A – Nadolol", "Nadolol"),
+    ],
+)
+def test_leading_option_with_parenthetical_or_dash_answer_text(response: str, answer_text: str):
+    result = multiple_choice_accuracy(response, answer_letter="A", answer_text=answer_text, return_details=True)
+    assert result.is_correct is True
+    assert result.method == "anchored_token"
+    assert result.matched_answer == "A"
+
+
 def test_last_token_negation_same_sentence_blocks():
     # No anchor phrase, so it falls to last_token.
     # Because "Not" is in the same sentence, the final "C" should be blocked.
@@ -472,6 +487,105 @@ def test_answer_text_wrong_prefix_blocks():
 def test_anchored_token_contradicted_by_later_option_blocks():
     response = "Answer: C, but D is correct."
     assert not multiple_choice_accuracy(response, answer_letter="C", answer_text="Option C")
+
+
+def test_anchored_token_instead_correction_blocks():
+    response = "Answer: C, instead D is correct."
+    assert not multiple_choice_accuracy(response, answer_letter="C", answer_text="Option C")
+
+
+def test_anchored_token_instead_of_preference_does_not_block():
+    response = "Answer: C instead of D."
+    assert multiple_choice_accuracy(response, answer_letter="C", answer_text="Option C")
+    assert not multiple_choice_accuracy(response, answer_letter="D", answer_text="Option D")
+
+
+def test_multi_answer_anchors_elsewhere_do_not_poison_final_anchor():
+    response = "Option A and Option C were considered earlier. Final answer: B"
+    result = multiple_choice_accuracy(response, answer_letter="B", answer_text="Option B", return_details=True)
+    assert result.is_correct is True
+    assert result.method == "anchored_token"
+    assert result.matched_answer == "B"
+
+
+def test_multi_answer_anchors_elsewhere_do_not_allow_later_tail_token_override():
+    response = "Option A and Option C are wrong. Final answer: B. D"
+    assert multiple_choice_accuracy(response, answer_letter="B", answer_text="Option B")
+    assert not multiple_choice_accuracy(response, answer_letter="D", answer_text="Option D")
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        (
+            "Option (A) and Option (I) are both correct statements concerning feeding for this patient, but "
+            "since the prompt asks for a singular choice that is true, the most directly relevant and universally "
+            "accepted principle would be (A) Enteral nutrition may decrease infection due to the prevention of "
+            "bacterial translocation, highlighting a key benefit of enteral feeding in acute pancreatitis management."
+        ),
+        (
+            "Answer: option A and option I are both correct. If I must pick one, I would lean toward A because "
+            "enteral nutrition may decrease infection due to the prevention of bacterial translocation."
+        ),
+        (
+            "Option A as well as option I are valid here. The better-supported statement is A: "
+            "Enteral nutrition may decrease infection due to the prevention of bacterial translocation."
+        ),
+        (
+            "Choice A or choice I could both be defended. The most directly relevant principle would be A "
+            "(Enteral nutrition may decrease infection due to the prevention of bacterial translocation)."
+        ),
+        (
+            "Selected options: A and I. Since only one answer is requested, I would prefer A - "
+            "Enteral nutrition may decrease infection due to the prevention of bacterial translocation."
+        ),
+        (
+            "Option (A), together with option (I), is correct for feeding in severe acute pancreatitis; "
+            "among them, (A) Enteral nutrition may decrease infection due to the prevention of bacterial "
+            "translocation is the most important principle."
+        ),
+    ],
+)
+def test_answer_text_fallback_allows_disambiguated_multi_candidate_payloads(response: str):
+    result_a = multiple_choice_accuracy(
+        response,
+        answer_letter="A",
+        answer_text="Enteral nutrition may decrease infection due to the prevention of bacterial translocation.",
+        accept_answer_text=True,
+        return_details=True,
+    )
+    assert result_a.is_correct is True
+    assert result_a.method == "answer_text"
+
+    result_i = multiple_choice_accuracy(
+        response,
+        answer_letter="I",
+        answer_text="Feeding should begin within 24-48 hours.",
+        accept_answer_text=True,
+        return_details=True,
+    )
+    assert result_i.is_correct is False
+    assert result_i.method == "none"
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "(A) Naloxone is a synthetic N-allyl derivative of oxymorphone. (D) Naloxone is not rapidly absorbed after oral administration.",
+        "A. Naloxone is a synthetic N-allyl derivative of oxymorphone.\nD. Naloxone is not rapidly absorbed after oral administration.",
+        "(A) First statement. (C) Second statement.",
+    ],
+)
+def test_answer_text_fallback_rejects_multiple_option_led_sentences(response: str):
+    result_a = multiple_choice_accuracy(
+        response,
+        answer_letter="A",
+        answer_text="Naloxone is a synthetic N-allyl derivative of oxymorphone.",
+        accept_answer_text=True,
+        return_details=True,
+    )
+    assert result_a.is_correct is False
+    assert result_a.method == "none"
 
 
 def test_answer_text_does_not_override_explicit_wrong_choice():
