@@ -594,6 +594,24 @@ def test_answer_text_fallback_rejects_multiple_option_led_sentences(response: st
     assert result_a.method == "none"
 
 
+def test_answer_text_fallback_allows_option_led_sentences_after_prose_preface():
+    response = (
+        "Let me compare the statements before picking one.\n"
+        "A. Naloxone is a synthetic N-allyl derivative of oxymorphone.\n"
+        "D. Naloxone is not rapidly absorbed after oral administration.\n"
+        "The correct statement is Naloxone is a synthetic N-allyl derivative of oxymorphone."
+    )
+    result = multiple_choice_accuracy(
+        response,
+        answer_letter="A",
+        answer_text="Naloxone is a synthetic N-allyl derivative of oxymorphone.",
+        accept_answer_text=True,
+        return_details=True,
+    )
+    assert result.is_correct is True
+    assert result.method == "answer_text"
+
+
 def test_multiple_option_led_sentence_scan_handles_large_payload_linearly():
     response = ("Reasoning sentence with details. " * 12000) + "Final answer: C"
     started = time.perf_counter()
