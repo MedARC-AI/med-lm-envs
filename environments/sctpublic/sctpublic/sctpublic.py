@@ -93,11 +93,28 @@ def sct_prompts(df: pd.DataFrame, reason: bool, few_shot: bool) -> pd.DataFrame:
     return df
 
 
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
 class SCTParser(vf.Parser):
     """Parser for SCT numeric ratings (-2 to +2)."""
 
+    @staticmethod
+    def _strip_think_blocks(text: str) -> str:
+        """Remove <think>...</think> blocks so we only parse the final answer.
+
+        Also handles the case where a model emits an unpaired </think>
+        (no opening tag) -- we keep only the text after the last </think>.
+        """
+        if "<think>" in text.lower():
+            text = _THINK_BLOCK_RE.sub("", text)
+        if "</think>" in text.lower():
+            text = text.split("</think>")[-1]
+        return text.strip()
+
     def parse_answer(self, completion: Any) -> str | None:
         response = getattr(completion, "content", str(completion))
+        response = self._strip_think_blocks(response)
         try:
             rating = response.split("Rating: ")[1][:5]
             pattern = r"\+2|\+1|0|-1|-2"

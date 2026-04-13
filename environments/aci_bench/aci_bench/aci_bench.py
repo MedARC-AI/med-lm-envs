@@ -5,6 +5,7 @@ from datasets import Dataset, DatasetDict, concatenate_datasets, load_dataset
 from datasets.utils.logging import disable_progress_bar
 from aci_bench.judge_prompts import JUDGE_DIMENSIONS, JUDGE_OUTPUT_JSON, JUDGE_TEMPLATE
 from medarc_verifiers.parsers import JSONParser
+from medarc_verifiers.parsers.xml_parser import XMLParser
 from medarc_verifiers.prompts import XML_SYSTEM_PROMPT, AnswerFormat
 from medarc_verifiers.judging import MultiJudge, MultiJudgeRubric
 from medarc_verifiers.rewards import normalize_helm_reward
@@ -83,7 +84,7 @@ def load_environment(
     if answer_format == AnswerFormat.XML:
         system_prompt = system_prompt or XML_SYSTEM_PROMPT
         parser_fields = ["answer"]
-        parser = vf.XMLParser(fields=parser_fields, answer_field="answer")
+        parser = XMLParser(fields=parser_fields, answer_field="answer")
     elif answer_format == AnswerFormat.BOXED:
         system_prompt = system_prompt or BOXED_SYSTEM_PROMPT
         parser = vf.Parser(extract_fn=extract_boxed_answer)

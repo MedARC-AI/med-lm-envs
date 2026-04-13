@@ -1,3 +1,5 @@
+import re
+
 import verifiers as vf
 from datasets import load_dataset
 from datasets.utils.logging import disable_progress_bar
@@ -113,7 +115,9 @@ def load_environment(
             )
 
             # Parse judge response
-            judge_response_clean = judge_response.strip().lower()
+            judge_response_clean = re.sub(
+                r"<think>.*?</think>", "", judge_response, flags=re.DOTALL | re.IGNORECASE
+            ).strip().lower()
         else:
             judge_response_clean = "no"
             judge_response = "no answer"

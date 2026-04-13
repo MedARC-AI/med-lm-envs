@@ -61,6 +61,25 @@ class XMLParser(BaseXMLParser):
                 return parsed
         return None
 
+    def parse_answer(self, completion: Messages | str) -> str | None:
+        """Extract the last answer from a completion.
+
+        Overrides upstream to always use ``last=True`` when parsing chat messages.
+        Qwen 3.5 reasoning models echo ``<answer>`` tags inside their thinking
+        blocks, so we must take the **last** match to get the real answer.
+        """
+        if isinstance(completion, str):
+            parsed = self.parse(completion, last=True)
+            if parsed and hasattr(parsed, self.answer_field) and getattr(parsed, self.answer_field) is not None:
+                return getattr(parsed, self.answer_field)
+        else:
+            for msg in reversed(self.get_assistant_messages(completion)):
+                content = str(msg.get("content", ""))
+                parsed = self.parse(content, last=True)
+                if parsed and hasattr(parsed, self.answer_field) and getattr(parsed, self.answer_field) is not None:
+                    return getattr(parsed, self.answer_field)
+        return None
+
     def _has_any_field(self, parsed: Any) -> bool:
         for _, alternatives in self._fields:
             for alt in alternatives:

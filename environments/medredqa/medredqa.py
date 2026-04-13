@@ -5,6 +5,7 @@ import verifiers as vf
 from datasets import load_dataset
 from datasets.utils.logging import disable_progress_bar
 from factscore_judge.atomic_facts_judge import create_atomic_facts_judge_rubric
+from medarc_verifiers.parsers.xml_parser import XMLParser
 from openai import AsyncOpenAI
 
 disable_progress_bar()  # suppress datasets mapping progress bar
@@ -82,9 +83,9 @@ def load_environment(
 
     # Create parser - XMLParser with both think and answer fields if use_think is True
     parser = (
-        vf.XMLParser(fields=["think", "answer"], answer_field="answer")
+        XMLParser(fields=["think", "answer"], answer_field="answer")
         if use_think
-        else vf.XMLParser(fields=["answer"], answer_field="answer")
+        else XMLParser(fields=["answer"], answer_field="answer")
     )
 
     # Create JudgeRubric using the helper function from judge.py
