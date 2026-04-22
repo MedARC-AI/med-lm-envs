@@ -23,6 +23,7 @@ from typing import Any
 import verifiers as vf
 from datasets import load_dataset
 from datasets.utils.logging import disable_progress_bar
+from medarc_verifiers.parsers.xml_parser import XMLParser
 from medarc_verifiers.prompts import THINK_XML_SYSTEM_PROMPT, XML_SYSTEM_PROMPT, AnswerFormat
 from medarc_verifiers.rewards.multiple_choice_accuracy import multiple_choice_accuracy
 from medarc_verifiers.utils.randomize_multiple_choice import randomize_multiple_choice
@@ -125,7 +126,7 @@ def load_environment(
     if answer_format == AnswerFormat.XML:
         system_prompt = system_prompt or (THINK_XML_SYSTEM_PROMPT if use_think else XML_SYSTEM_PROMPT)
         parser_fields = ["think", "answer"] if use_think else ["answer"]
-        parser = vf.XMLParser(fields=parser_fields, answer_field="answer")
+        parser = XMLParser(fields=parser_fields, answer_field="answer")
     elif answer_format == AnswerFormat.BOXED:
         system_prompt = system_prompt or (THINK_BOXED_SYSTEM_PROMPT if use_think else BOXED_SYSTEM_PROMPT)
         parser = vf.ThinkParser(extract_boxed_answer) if use_think else vf.Parser(extract_boxed_answer)
