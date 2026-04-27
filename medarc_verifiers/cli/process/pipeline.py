@@ -748,7 +748,9 @@ def _validate_selected_results_completeness(
                 continue
 
             expected_rows = _expected_results_rows(normalized)
-            observed_rows = _completeness_observed_rows(record, expected_rows=expected_rows, threshold=max_results_missing_pct)
+            observed_rows = _completeness_observed_rows(
+                record, expected_rows=expected_rows, threshold=max_results_missing_pct
+            )
             if expected_rows is None or observed_rows is None:
                 ungateable += 1
                 continue

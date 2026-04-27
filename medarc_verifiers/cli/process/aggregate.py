@@ -33,9 +33,7 @@ def aggregate_rows_by_env(
     groups: dict[tuple[str, str], dict[str, Any]] = {}
     identity_list = list(identities or ())
     fake_rollout_groups = {
-        (identity.model_id, identity.output_env_id)
-        for identity in identity_list
-        if identity.rollout_index is not None
+        (identity.model_id, identity.output_env_id) for identity in identity_list if identity.rollout_index is not None
     }
 
     for row in rows:

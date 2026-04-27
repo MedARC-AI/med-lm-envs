@@ -128,7 +128,11 @@ def _validate_schedule(
                     f"Task {task.task_id} ({task.job_config_path}) requests {gpus_required} GPUs, "
                     f"but only {len(allowed_indices)} available in range {allowed_desc}."
                 )
-            if gpus_required > 1 and require_contiguous and not _has_contiguous_run(allowed_indices, length=gpus_required):
+            if (
+                gpus_required > 1
+                and require_contiguous
+                and not _has_contiguous_run(allowed_indices, length=gpus_required)
+            ):
                 raise ValueError(
                     f"Task {task.task_id} ({task.job_config_path}) requires {gpus_required} contiguous GPUs, "
                     f"but allowed indices {allowed_desc} have no contiguous run."
@@ -207,7 +211,9 @@ def main(argv: list[str] | None = None) -> int:
         summary = load_summary(summary_path)
         tasks = filter_tasks_for_resume(tasks, summary, rerun_failed=rerun_failed)
     if tasks:
-        _validate_schedule(tasks, runtime=runtime, gpu_indices=gpu_indices, port_range=port_range, max_parallel=max_parallel)
+        _validate_schedule(
+            tasks, runtime=runtime, gpu_indices=gpu_indices, port_range=port_range, max_parallel=max_parallel
+        )
     if args.dry_run:
         for task in tasks:
             print(f"{task.task_id}\t{task.model_id}\t{task.job_config_path}")
@@ -225,9 +231,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         resource_manager = PortOnlyResourceManager(port_range=port_range)
     uv_run = not args.no_uv_run and plan.uv_run
-    runner = OrchestratorRunner(
-        plan, tasks, resource_manager, options=options, runtime=runtime, uv_run=uv_run
-    )
+    runner = OrchestratorRunner(plan, tasks, resource_manager, options=options, runtime=runtime, uv_run=uv_run)
     runner.run()
     return 0
 
