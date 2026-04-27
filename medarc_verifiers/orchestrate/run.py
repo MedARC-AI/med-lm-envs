@@ -1,4 +1,4 @@
-"""Orchestrator runtime loop wiring scheduler, docker, readiness, and bench."""
+"""Orchestrator runtime loop wiring scheduler, runtime adapters, readiness, and bench."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import os
 import re
 import shlex
 import signal
@@ -24,16 +25,8 @@ from medarc_verifiers.orchestrate.bench import (
 )
 from medarc_verifiers.orchestrate.config import PlanConfig, TaskSpec
 from medarc_verifiers.orchestrate.dashboard import ACTIVE_STATES, OrchestratorDashboard
-from medarc_verifiers.orchestrate.docker_vllm import (
-    ContainerLogStreamer,
-    DockerLaunchError,
-    build_container_args,
-    create_and_start_container,
-    sanitize_container_name,
-    wait_for_readiness_async,
-    write_container_request,
-)
 from medarc_verifiers.orchestrate.resources import ResourceManager
+from medarc_verifiers.orchestrate.runtime import LogStreamer, RuntimeAdapter, RuntimeHandle, RuntimeLaunchError
 from medarc_verifiers.orchestrate.scheduler import Allocation, TaskScheduler
 from medarc_verifiers.orchestrate.state import (
     JobState,
@@ -44,8 +37,10 @@ from medarc_verifiers.orchestrate.state import (
     write_task_result,
     write_text,
 )
+from medarc_verifiers.orchestrate.vllm_args import build_container_args, normalize_volume_mounts
 
-COMMAND_TEMPLATE = "uv run medarc-eval bench --config {job_config_path} --api-base-url {base_url} --on-complete exit"
+_COMMAND_TEMPLATE_UV = "uv run medarc-eval bench --config {job_config_path} --api-base-url {base_url} --on-complete exit"
+_COMMAND_TEMPLATE_BARE = "medarc-eval bench --config {job_config_path} --api-base-url {base_url} --on-complete exit"
 
 _TASK_DIR_ALLOWED = re.compile(r"[^a-zA-Z0-9_.-]+")
 
@@ -97,8 +92,12 @@ class OrchestratorRunner:
         resource_manager: ResourceManager,
         *,
         options: OrchestratorOptions,
+        runtime: str = "docker",
+        runtime_adapter: RuntimeAdapter | None = None,
+        uv_run: bool = True,
         use_dashboard: bool = True,
     ) -> None:
+        self._runtime = _normalize_runtime(runtime or plan.runtime or "docker")
         self._plan = plan
         self._tasks = sorted(
             list(tasks),
@@ -109,11 +108,13 @@ class OrchestratorRunner:
         )
         self._resource_manager = resource_manager
         self._options = options
+        self._runtime_adapter = runtime_adapter or _build_runtime_adapter(self._runtime)
+        self._command_template = _COMMAND_TEMPLATE_UV if uv_run else _COMMAND_TEMPLATE_BARE
         self._dashboard = OrchestratorDashboard(enabled=use_dashboard)
         self._manifests: dict[str, TaskManifest] = {}
-        self._active_containers: dict[str, object] = {}
+        self._active_handles: dict[str, RuntimeHandle] = {}
         self._bench_processes: dict[str, BenchProcess] = {}
-        self._log_streamers: dict[str, ContainerLogStreamer] = {}
+        self._log_streamers: dict[str, LogStreamer] = {}
         self._active_runner_tasks: dict[str, asyncio.Task] = {}
         self._shutdown = asyncio.Event()
         self._shutdown_mode: str | None = None
@@ -133,7 +134,7 @@ class OrchestratorRunner:
         self._dashboard_refresh_task = self._start_dashboard_refresh()
         self._dashboard.log(
             f"RUN started run_id={self._options.run_id} tasks={len(self._manifests)} "
-            f"max_parallel={self._options.max_parallel} output={self._options.output_root}"
+            f"runtime={self._runtime} max_parallel={self._options.max_parallel} output={self._options.output_root}"
         )
         write_summary(self._options.output_root / "summary.json", list(self._manifests.values()))
         try:
@@ -183,7 +184,7 @@ class OrchestratorRunner:
                         )
                         await asyncio.sleep(5)
                         continue
-                    if isinstance(exc, DockerLaunchError):
+                    if isinstance(exc, RuntimeLaunchError):
                         manifest.failure_reason = "serve_launch_failed"
                     else:
                         manifest.failure_reason = "unexpected_exception"
@@ -202,13 +203,14 @@ class OrchestratorRunner:
         self._set_state(manifest, paths, JobState.allocating)
 
         orchestrate = task.orchestrate
-        docker_cfg = _get_mapping(orchestrate.get("vllm-docker"), "orchestrate.vllm-docker")
+        container_cfg = _get_mapping(orchestrate.get("vllm-container"), "orchestrate.vllm-container")
         model_cfg = _get_mapping(orchestrate.get(task.model_key), f"orchestrate.{task.model_key}")
-        container_port = int(docker_cfg.get("container_port", 8000))
-        ipc_mode = docker_cfg.get("ipc_mode")
-        image = str(docker_cfg.get("image", "")).strip()
+        pyxis_cfg = _get_optional_mapping(orchestrate.get("pyxis"), "orchestrate.pyxis")
+        container_port = int(container_cfg.get("container_port", 8000))
+        ipc_mode = container_cfg.get("ipc_mode")
+        image = str(container_cfg.get("image", "")).strip()
         if not image:
-            raise RuntimeError(f"Missing orchestrate.vllm-docker.image for {task.job_config_path}")
+            raise RuntimeError(f"Missing orchestrate.vllm-container.image for {task.job_config_path}")
         manifest.image = image
 
         tensor_parallel = model_cfg.get("tensor_parallel_size")
@@ -233,19 +235,26 @@ class OrchestratorRunner:
             default_env = repo_root / ".env"
             if default_env.exists():
                 env.update(_load_env_file(default_env, base_dir=repo_root))
-        env.update(_load_env_file(docker_cfg.get("env_file"), base_dir=task.job_config_path.parent))
-        volumes = docker_cfg.get("volumes", []) or []
+        env.update(_load_env_file(container_cfg.get("env_file"), base_dir=task.job_config_path.parent))
+        volume_mounts = normalize_volume_mounts(container_cfg.get("volumes", []) or [])
         labels = {"orchestrator.run_id": self._options.run_id, "orchestrator.task_id": task.task_id}
         container_name = sanitize_container_name(f"vllm-{self._options.run_id}-{task.task_id}")
         manifest.container_name = container_name
+        if self._runtime == "pyxis" and ipc_mode:
+            self._dashboard.log(
+                f"JOB warn task={task.task_id} field=orchestrate.vllm-container.ipc_mode ignored runtime=pyxis"
+            )
+        if self._runtime == "docker" and pyxis_cfg:
+            self._dashboard.log(f"JOB warn task={task.task_id} field=orchestrate.pyxis ignored runtime=docker")
 
         request_payload = {
+            "runtime": self._runtime,
             "image": image,
             "name": container_name,
             "container_port": container_port,
-            "host_port": allocation.port,
+            "host_port": allocation.server_port,
             "ipc_mode": ipc_mode,
-            "volumes": volumes,
+            "volumes": volume_mounts,
             "env": sorted(env.keys()),
             "gpu_ids": allocation.gpu_ids,
             "command": container_args,
@@ -254,31 +263,36 @@ class OrchestratorRunner:
         write_container_request(str(paths.container_request_path), request_payload)
 
         self._set_state(manifest, paths, JobState.launching)
+        handle: RuntimeHandle | None = None
         try:
-            container = await asyncio.to_thread(
-                create_and_start_container,
+            handle = await asyncio.to_thread(
+                self._runtime_adapter.launch,
+                task_id=task.task_id,
+                model_id=task.model_id,
+                container_args=container_args,
                 image=image,
-                name=container_name,
                 container_port=container_port,
-                host_port=allocation.port,
-                env=env,
-                volumes=volumes,
-                ipc_mode=ipc_mode,
+                volume_mounts=volume_mounts,
+                gpus_required=gpus_required,
                 gpu_ids=allocation.gpu_ids,
-                command=container_args,
+                server_port=allocation.server_port,
+                env=env,
                 labels=labels,
+                name=container_name,
+                ipc_mode=ipc_mode,
+                srun_extra_args=list(pyxis_cfg.get("srun_extra_args", [])) if pyxis_cfg else [],
             )
-        except DockerLaunchError:
+        except RuntimeLaunchError:
             raise
         except Exception as exc:
-            raise DockerLaunchError(str(exc)) from exc
-        manifest.container_id = container.id
-        self._active_containers[task.task_id] = container
+            raise RuntimeLaunchError(str(exc)) from exc
+        manifest.container_id = handle.identifier
+        self._active_handles[task.task_id] = handle
 
-        log_streamer = ContainerLogStreamer(container, str(paths.container_logs_path))
+        log_streamer = self._runtime_adapter.stream_logs(handle, paths.container_logs_path)
         log_streamer.start()
         self._log_streamers[task.task_id] = log_streamer
-        base_url = f"http://127.0.0.1:{allocation.port}/v1"
+        base_url = handle.base_url
         completed_successfully = False
         try:
             self._set_state(manifest, paths, JobState.loading)
@@ -305,7 +319,7 @@ class OrchestratorRunner:
 
             command_context = {
                 "base_url": base_url,
-                "host_port": str(allocation.port),
+                "host_port": str(allocation.server_port),
                 "model_key": task.model_key,
                 "model_id": task.model_id,
                 "output_dir": str(paths.bench_dir),
@@ -313,7 +327,7 @@ class OrchestratorRunner:
                 "task_id": task.task_id,
                 "job_config_path": str(task.job_config_path),
             }
-            command = render_command(COMMAND_TEMPLATE, command_context)
+            command = render_command(self._command_template, command_context)
             restart_source = orchestrate.get("restart")
             if restart_source:
                 restart_value = str(restart_source)
@@ -322,10 +336,11 @@ class OrchestratorRunner:
             manifest.bench_command = shlex.join(command)
             self._dashboard.log(f"JOB bench-start task={task.task_id} cmd={_shorten(manifest.bench_command)}")
             self._set_state(manifest, paths, JobState.running)
+            bench_env = {**os.environ, "TQDM_DISABLE": "1"}
             bench_proc = await start_benchmark(
                 command,
                 cwd=repo_root,
-                env=None,
+                env=bench_env,
                 stdout_path=paths.stdout_path,
                 stderr_path=paths.stderr_path,
             )
@@ -366,11 +381,12 @@ class OrchestratorRunner:
                 self._set_state(manifest, paths, JobState.completed)
                 completed_successfully = True
         finally:
-            await _teardown_container(container, manifest)
+            if handle is not None:
+                await _teardown_runtime(self._runtime_adapter, handle, manifest)
             log_streamer = self._log_streamers.pop(task.task_id, None)
             if log_streamer:
                 await asyncio.to_thread(log_streamer.stop)
-            self._active_containers.pop(task.task_id, None)
+            self._active_handles.pop(task.task_id, None)
             if completed_successfully and self._options.prune_logs_on_success:
                 self._prune_task_logs(paths)
 
@@ -407,7 +423,7 @@ class OrchestratorRunner:
             )
             self._manifests[task.task_id] = manifest
         manifest.gpu_ids = allocation.gpu_ids
-        manifest.port = allocation.port
+        manifest.port = allocation.server_port
         if manifest.started_at is None:
             manifest.started_at = _utcnow()
         return manifest
@@ -421,12 +437,12 @@ class OrchestratorRunner:
             self._set_state(manifest, paths, JobState.cancelled)
 
     async def _teardown_active(self) -> None:
-        for container in list(self._active_containers.values()):
+        for handle in list(self._active_handles.values()):
             try:
-                await _teardown_container(container)
+                await _teardown_runtime(self._runtime_adapter, handle)
             except Exception:
                 continue
-        self._active_containers.clear()
+        self._active_handles.clear()
 
     async def _force_shutdown(self) -> None:
         for task_id, bench_proc in list(self._bench_processes.items()):
@@ -463,7 +479,7 @@ class OrchestratorRunner:
         active = self._count_active()
         self._dashboard.log(
             "SHUTDOWN force requested "
-            f"active={active} benches={len(self._bench_processes)} containers={len(self._active_containers)}"
+            f"active={active} benches={len(self._bench_processes)} handles={len(self._active_handles)}"
         )
         runner_task.cancel()
         for task in list(self._active_runner_tasks.values()):
@@ -589,6 +605,41 @@ def _get_mapping(value: object, label: str) -> dict:
     return value
 
 
+def sanitize_container_name(value: str, *, max_len: int = 128) -> str:
+    from medarc_verifiers.orchestrate.docker_vllm import sanitize_container_name as _sanitize_container_name
+
+    return _sanitize_container_name(value, max_len=max_len)
+
+
+async def wait_for_readiness_async(
+    base_url: str,
+    *,
+    model_id: str | None = None,
+    timeout_s: float = 1800,
+    poll_interval_s: float = 5.0,
+):
+    from medarc_verifiers.orchestrate.docker_vllm import wait_for_readiness_async as _wait_for_readiness_async
+
+    return await _wait_for_readiness_async(
+        base_url,
+        model_id=model_id,
+        timeout_s=timeout_s,
+        poll_interval_s=poll_interval_s,
+    )
+
+
+def write_container_request(path: str, payload: dict[str, object]) -> None:
+    from medarc_verifiers.orchestrate.docker_vllm import write_container_request as _write_container_request
+
+    _write_container_request(path, payload)
+
+
+def _get_optional_mapping(value: object, label: str) -> dict:
+    if value is None:
+        return {}
+    return _get_mapping(value, label)
+
+
 def _load_env_file(path: object, *, base_dir: Path) -> dict[str, str]:
     if not path:
         return {}
@@ -596,22 +647,20 @@ def _load_env_file(path: object, *, base_dir: Path) -> dict[str, str]:
     if not env_path.is_absolute():
         env_path = (base_dir / env_path).resolve()
     if not env_path.exists():
-        raise DockerLaunchError(
-            f"env_file not found: {env_path} (set orchestrate.vllm-docker.env_file relative to {base_dir})"
+        raise RuntimeLaunchError(
+            f"env_file not found: {env_path} (set orchestrate.vllm-container.env_file relative to {base_dir})"
         )
     values = dotenv_values(env_path)
     return {key: value for key, value in values.items() if value is not None}
 
 
-async def _teardown_container(container, manifest: TaskManifest | None = None) -> None:
-    try:
-        exit_status = await asyncio.to_thread(container.wait, timeout=1)
-        if manifest and isinstance(exit_status, dict):
-            manifest.container_exit_code = exit_status.get("StatusCode")
-    except Exception:
-        pass
-    await asyncio.to_thread(container.stop, timeout=10)
-    await asyncio.to_thread(container.remove, v=True, force=True)
+async def _teardown_runtime(
+    runtime_adapter: RuntimeAdapter,
+    handle: RuntimeHandle,
+    manifest: TaskManifest | None = None,
+) -> None:
+    del manifest
+    await asyncio.to_thread(runtime_adapter.teardown, handle)
 
 
 def _register_signal_handlers(loop: asyncio.AbstractEventLoop, handler) -> None:
@@ -624,7 +673,7 @@ def _register_signal_handlers(loop: asyncio.AbstractEventLoop, handler) -> None:
 
 def _is_transient_error(exc: Exception) -> bool:
     message = str(exc).lower()
-    if isinstance(exc, DockerLaunchError):
+    if isinstance(exc, RuntimeLaunchError):
         return (
             "port" in message
             or "bind" in message
@@ -636,6 +685,25 @@ def _is_transient_error(exc: Exception) -> bool:
     return (
         "connection reset" in message or "read timed out" in message or "timeout" in message or "timed out" in message
     )
+
+
+def _normalize_runtime(value: str) -> str:
+    runtime = str(value).strip().lower()
+    if runtime not in {"docker", "pyxis"}:
+        raise ValueError(f"Unsupported runtime {value!r}; expected 'docker' or 'pyxis'.")
+    return runtime
+
+
+def _build_runtime_adapter(runtime: str) -> RuntimeAdapter:
+    if runtime == "docker":
+        from medarc_verifiers.orchestrate.docker_vllm import DockerRuntimeAdapter
+
+        return DockerRuntimeAdapter()
+    if runtime == "pyxis":
+        from medarc_verifiers.orchestrate.pyxis_vllm import PyxisRuntimeAdapter
+
+        return PyxisRuntimeAdapter()
+    raise ValueError(f"Unsupported runtime {runtime!r}.")
 
 
 __all__ = ["OrchestratorOptions", "OrchestratorRunner"]
