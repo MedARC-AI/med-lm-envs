@@ -137,9 +137,7 @@ def _extract_orchestrate_config(payload: Mapping[str, Any], *, model_key: str, s
     has_container = "vllm-container" in orchestrate
     has_docker = "vllm-docker" in orchestrate
     if has_container and has_docker:
-        raise ValueError(
-            f"Job config {source} defines both orchestrate.vllm-container and orchestrate.vllm-docker."
-        )
+        raise ValueError(f"Job config {source} defines both orchestrate.vllm-container and orchestrate.vllm-docker.")
     if not has_container and not has_docker:
         raise ValueError(f"Job config {source} must define orchestrate.vllm-container settings.")
     if model_key not in orchestrate:
@@ -147,10 +145,7 @@ def _extract_orchestrate_config(payload: Mapping[str, Any], *, model_key: str, s
     normalized = dict(orchestrate)
     if has_docker:
         warnings.warn(
-            (
-                f"Job config {source} uses deprecated orchestrate.vllm-docker; "
-                "rename it to orchestrate.vllm-container."
-            ),
+            (f"Job config {source} uses deprecated orchestrate.vllm-docker; rename it to orchestrate.vllm-container."),
             DeprecationWarning,
             stacklevel=2,
         )

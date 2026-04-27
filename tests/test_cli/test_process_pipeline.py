@@ -1036,7 +1036,9 @@ def test_run_process_continue_upload_syncs_pending_parquets_without_new_deltas(
         captured["files"] = list(files or [])
         return None
 
-    monkeypatch.setattr("medarc_verifiers.cli.process.pipeline.workspace.prepare_output_workspace", fake_prepare_output_workspace)
+    monkeypatch.setattr(
+        "medarc_verifiers.cli.process.pipeline.workspace.prepare_output_workspace", fake_prepare_output_workspace
+    )
     monkeypatch.setattr("medarc_verifiers.cli.process.pipeline.hf_sync.sync_to_hub", fake_sync_to_hub)
 
     result = run_process(
@@ -1098,7 +1100,9 @@ def test_run_process_continue_upload_unions_pending_and_current_touched_files(
         captured["files"] = list(files or [])
         return None
 
-    monkeypatch.setattr("medarc_verifiers.cli.process.pipeline.workspace.prepare_output_workspace", fake_prepare_output_workspace)
+    monkeypatch.setattr(
+        "medarc_verifiers.cli.process.pipeline.workspace.prepare_output_workspace", fake_prepare_output_workspace
+    )
     monkeypatch.setattr("medarc_verifiers.cli.process.pipeline.hf_sync.sync_to_hub", fake_sync_to_hub)
 
     result = run_process(
@@ -1326,7 +1330,9 @@ def test_process_latest_missing_model_id_not_masked_by_newer_other_job(tmp_path:
         job_id="job-model-b",
     )
 
-    with pytest.raises(RuntimeError, match=r"Missing model_id for run \(job_run_id=run-model-a-bad, job_id=job-model-a,"):
+    with pytest.raises(
+        RuntimeError, match=r"Missing model_id for run \(job_run_id=run-model-a-bad, job_id=job-model-a,"
+    ):
         run_process(ProcessOptions(runs_dir=runs_dir, output_dir=tmp_path / "processed", dry_run=False, max_workers=1))
 
 

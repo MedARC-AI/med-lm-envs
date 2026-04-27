@@ -23,6 +23,7 @@ def test_normalize_volumes_rejects_bad_mount_string():
     with pytest.raises(DockerLaunchError):
         normalize_volumes(["/host/only"])
 
+
 def test_container_log_streamer_stop_does_not_hang(tmp_path):
     class BlockingStream:
         def __init__(self):

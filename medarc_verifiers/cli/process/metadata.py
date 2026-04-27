@@ -267,19 +267,14 @@ def _warn_manifest_metadata_result_mismatch(record: RunRecord, metadata_payload:
 
     mismatches: list[str] = []
     if _has_float_mismatch(record.avg_reward, metadata_payload.avg_reward):
-        mismatches.append(
-            f"avg_reward manifest={record.avg_reward!r} metadata={metadata_payload.avg_reward!r}"
-        )
+        mismatches.append(f"avg_reward manifest={record.avg_reward!r} metadata={metadata_payload.avg_reward!r}")
     if _has_int_mismatch(record.num_examples, metadata_payload.num_examples):
-        mismatches.append(
-            f"num_examples manifest={record.num_examples!r} metadata={metadata_payload.num_examples!r}"
-        )
+        mismatches.append(f"num_examples manifest={record.num_examples!r} metadata={metadata_payload.num_examples!r}")
     if not mismatches:
         return
 
     logger.warning(
-        "Manifest/metadata result mismatch for process input "
-        "(job_run_id=%s, job_id=%s, metadata=%s): %s",
+        "Manifest/metadata result mismatch for process input (job_run_id=%s, job_id=%s, metadata=%s): %s",
         record.manifest.job_run_id,
         record.job_id,
         record.metadata_path,

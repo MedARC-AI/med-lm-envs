@@ -124,7 +124,9 @@ def prepare_hf_baseline(
                 token=hf_config.token,
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("HF upload recovery check failed for continue-upload; uploading only current touched files: %s", exc)
+            logger.warning(
+                "HF upload recovery check failed for continue-upload; uploading only current touched files: %s", exc
+            )
 
     prompt_conflicts = False
     if policy == "prompt":

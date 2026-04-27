@@ -39,7 +39,9 @@ from medarc_verifiers.orchestrate.state import (
 )
 from medarc_verifiers.orchestrate.vllm_args import build_container_args, normalize_volume_mounts
 
-_COMMAND_TEMPLATE_UV = "uv run medarc-eval bench --config {job_config_path} --api-base-url {base_url} --on-complete exit"
+_COMMAND_TEMPLATE_UV = (
+    "uv run medarc-eval bench --config {job_config_path} --api-base-url {base_url} --on-complete exit"
+)
 _COMMAND_TEMPLATE_BARE = "medarc-eval bench --config {job_config_path} --api-base-url {base_url} --on-complete exit"
 
 _TASK_DIR_ALLOWED = re.compile(r"[^a-zA-Z0-9_.-]+")
