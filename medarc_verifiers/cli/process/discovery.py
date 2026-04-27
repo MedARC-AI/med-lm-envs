@@ -20,7 +20,6 @@ from medarc_verifiers.cli._manifest import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_STATUS = "unknown"
-_COMPLETED_STATUSES = {"completed", "succeeded", "success"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,8 +65,10 @@ class RunRecord:
     reason: str | None
     started_at: str | None
     ended_at: str | None
+    avg_reward: float | None
     num_examples: int | None
     rollouts_per_example: int | None
+    row_count: int | None
     env_args: Mapping[str, Any]
     sampling_args: Mapping[str, Any]
     env_config: Mapping[str, Any] | None
@@ -78,17 +79,15 @@ def discover_run_records(
     runs_dir: Path | str,
     *,
     filter_status: Sequence[str] | None = None,
-    only_complete_runs: bool = False,
 ) -> list[RunRecord]:
     """Return all discovered run records within the provided runs directory."""
-    return list(iter_run_records(runs_dir, filter_status=filter_status, only_complete_runs=only_complete_runs))
+    return list(iter_run_records(runs_dir, filter_status=filter_status))
 
 
 def iter_run_records(
     runs_dir: Path | str,
     *,
     filter_status: Sequence[str] | None = None,
-    only_complete_runs: bool = False,
 ) -> Iterator[RunRecord]:
     """Yield run records for each job entry found under the runs directory."""
     runs_path = Path(runs_dir)
@@ -107,13 +106,6 @@ def iter_run_records(
     for run_dir in run_dirs:
         manifest_info, job_entries = _load_manifest(run_dir)
         if manifest_info is None:
-            continue
-        if (
-            only_complete_runs
-            and manifest_info.summary_total_known
-            and manifest_info.summary_completed != manifest_info.summary_total
-        ):
-            # Skip entire run if not fully completed
             continue
         summary_map = _load_run_summary(run_dir)
         for job_entry in job_entries:
@@ -194,8 +186,10 @@ def _build_run_record(
         reason=reason or job_entry.reason,
         started_at=job_entry.started_at,
         ended_at=job_entry.ended_at,
+        avg_reward=job_entry.avg_reward,
         num_examples=job_entry.num_examples,
         rollouts_per_example=job_entry.rollouts_per_example,
+        row_count=job_entry.row_count,
         env_args=env_args,
         sampling_args=sampling_args,
         env_config=env_config,

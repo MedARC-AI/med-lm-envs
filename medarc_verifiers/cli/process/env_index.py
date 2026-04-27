@@ -54,21 +54,9 @@ def read_env_index_inventory(processed_dir: Path) -> EnvIndexInventory:
     """Read env_index.json and return a dataset inventory."""
     index_path = processed_dir / "env_index.json"
     payload = load_env_index(index_path)
-    version = payload.get("version") if isinstance(payload, Mapping) else None
-    if version == 2:
+    if isinstance(payload, Mapping) and int(payload.get("version") or 0) == 2:
         return _inventory_from_v2(payload, processed_dir)
-    return EnvIndexInventory(env_paths={}, version=int(version or 1))
-
-
-def read_env_index_runs(processed_dir: Path) -> tuple[int, dict[str, Mapping[str, Any]]]:
-    """Return env_index version and run metadata map."""
-    index_path = processed_dir / "env_index.json"
-    payload = load_env_index(index_path)
-    version = int(payload.get("version") or 1) if isinstance(payload, Mapping) else 1
-    runs = payload.get("runs") if isinstance(payload, Mapping) else None
-    if version != 2 or not isinstance(runs, Mapping):
-        return version, {}
-    return version, {str(k): v for k, v in runs.items() if isinstance(v, Mapping)}
+    return EnvIndexInventory(env_paths={}, version=0)
 
 
 def read_env_index_files(processed_dir: Path) -> dict[str, Mapping[str, Any]]:
@@ -118,7 +106,6 @@ def read_env_index_models(processed_dir: Path) -> set[str]:
 __all__ = [
     "EnvIndexInventory",
     "read_env_index_inventory",
-    "read_env_index_runs",
     "read_env_index_files",
     "read_env_index_models",
 ]

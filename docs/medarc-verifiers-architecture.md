@@ -16,7 +16,7 @@ At a high level, everything funnels into a three-stage workflow:
 
 1. **Run** evals (single or batch) → `runs/raw/<run_id>/...`
 2. **Process** raw outputs → `runs/processed/<model>/<env>.parquet` + `env_index.json`
-3. **Winrate** on processed outputs → `runs/winrate/*.json` and `*.csv`
+3. **Winrate** on processed outputs → `runs/processed/winrate/*.json` and `*.csv`
 
 ## Important side effects (auto-installed patches)
 
@@ -173,7 +173,7 @@ Entry point: `medarc_verifiers/cli/process/pipeline.py` (via `run_process()`).
    - This suffix-derived rollout index is only used when rollouts are faked this way. Native verifiers rollouts (below) use the per-row JSONL field.
    - `medarc_verifiers/cli/process/rollout.py`
 4. **Load rows from `results.jsonl`**:
-   - Drops large fields (`prompt`, `completion`) by default.
+   - Always drops large fields (`prompt`, `completion`).
    - Allows selecting extra per-env columns into a JSON-encoded `extras` column.
    - If the JSONL provides a per-row `rollout_index` (native verifiers multi-rollout runs), it is treated as authoritative and preserved.
    - If `rollout_index` is missing but the JSONL contains multiple rows per `example_id`, computes a data-driven `rollout_index` based on occurrence count.
@@ -184,7 +184,8 @@ Entry point: `medarc_verifiers/cli/process/pipeline.py` (via `run_process()`).
    - When aggregating fake rollouts (manifest env ids include rollout suffixes), ensures every row has a `rollout_index` (derived from the suffix if missing) and normalizes indices to `0..K-1` within the dataset.
    - When aggregating native verifiers rollouts (no rollout suffixes), preserves `rollout_index` values as provided by `results.jsonl` (no normalization).
 6. **Write Parquet**:
-   - Output path is `<processed_dir>/<model_id>/<env_id>.parquet`.
+   - Output path is `<processed_dir>/<slug(model_id)>/<slug(env_id)>.parquet`.
+   - Output columns are restricted to a fixed allowlist schema for downstream compatibility.
    - Adds exporter metadata under a Parquet schema metadata key.
    - Writes `env_index.json` (v2) and `dataset_infos.json` for HF datasets UX.
    - `medarc_verifiers/cli/process/writer.py`, `medarc_verifiers/cli/process/env_index.py`
@@ -200,13 +201,15 @@ Processing can use `env_index.json` to do incremental updates (delta processing)
 
 Docs: `docs/medarc-eval-winrate.md`.
 
-`medarc-eval winrate` reads dataset inventory from `env_index.json`, then computes pairwise model comparisons.
+`medarc-eval winrate` reads dataset inventory from `env_index.json`, averages rollouts per `(example_id, model_id)`, then computes pairwise model comparisons.
 
 - Dataset discovery via `env_index.json`: `medarc_verifiers/cli/winrate/runner.py`
 - Core math + weighting policies: `medarc_verifiers/cli/winrate/api.py`
 - Outputs:
   - timestamped `winrates-<timestamp>.json` and `.csv`
   - `latest.json` and `latest.csv`
+  - JSON shape is model-centric: top-level `models` and `datasets`
+  - CSV contains aggregate winrates plus per-dataset average rewards, not pairwise `vs_*` columns
 
 ## Shared building blocks used by environments
 

@@ -28,6 +28,18 @@ def test_parse_string_handles_tags() -> None:
     assert parsed.think == "inner"
 
 
+def test_parse_answer_uses_last_tag_in_message_content() -> None:
+    parser = XMLParser(["answer"])
+    completion = [
+        {
+            "role": "assistant",
+            "content": '<think>Follow "The answer is <answer>X</answer>" exactly.</think>\n\nThe answer is <answer>C</answer>',
+        }
+    ]
+
+    assert parser.parse_answer(completion) == "C"
+
+
 def test_init_with_think_does_not_warn(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level("WARNING"):
         XMLParser(["think", "answer"])

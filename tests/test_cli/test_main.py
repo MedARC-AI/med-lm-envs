@@ -1794,10 +1794,11 @@ def test_process_cli_applies_config_defaults(monkeypatch: pytest.MonkeyPatch, tm
     cfg_path = tmp_path / "process.yaml"
     cfg_path.write_text(
         f"""
-        runs_dir: runs-from-config
-        output_dir: processed-from-config
-        env_config_root: {env_root}
-        max_workers: 2
+        runs_dir: runs/raw-from-config
+        process:
+          dir: processed
+          env_config_root: {env_root}
+          max_workers: 2
         hf:
           repo: medarc/demo
           branch: main
@@ -1821,8 +1822,8 @@ def test_process_cli_applies_config_defaults(monkeypatch: pytest.MonkeyPatch, tm
     assert exit_code == 0
 
     options = captured["options"]
-    assert options.runs_dir == Path("runs-from-config")
-    assert options.output_dir == Path("processed-from-config")
+    assert options.runs_dir == Path("runs/raw-from-config")
+    assert options.output_dir == Path("runs/processed")
     assert options.max_workers == 2
     assert options.hf_pull_policy == "pull"
     assert options.hf_config is not None
@@ -1837,24 +1838,62 @@ def test_process_cli_applies_config_defaults(monkeypatch: pytest.MonkeyPatch, tm
     assert options.hf_config is not None
     assert options.hf_config.token == "override"
 
+    exit_code = main.main(["process", "--config", str(cfg_path), "--hf-pull-policy", "continue-upload", "--dry-run"])
+    assert exit_code == 0
+    options = captured["options"]
+    assert options.hf_pull_policy == "continue-upload"
+
+
+def test_process_cli_resolves_hf_token_env_reference(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    cfg_path = tmp_path / "process.yaml"
+    cfg_path.write_text(
+        """
+        runs_dir: runs/raw-from-config
+        process:
+          dir: processed
+        hf:
+          repo: medarc/demo
+          token: $HF_TOKEN
+        """,
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HF_TOKEN", "env-secret")
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(options, env_export_map):
+        captured["options"] = options
+        return ProcessResult(records_processed=0, rows_processed=0, env_groups=[], env_summaries=[], hf_summary=None)
+
+    monkeypatch.setattr("medarc_verifiers.cli.main.run_process", fake_run)
+
+    exit_code = main.main(["process", "--config", str(cfg_path), "--dry-run"])
+    assert exit_code == 0
+    assert captured["options"].hf_config is not None
+    assert captured["options"].hf_config.token == "env-secret"
+
 
 def test_winrate_cli_applies_config_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg_path = tmp_path / "winrate.yaml"
     cfg_path.write_text(
         """
-        processed_dir: runs-from-config
-        output_name: from-config
-        missing_policy: zero
-        epsilon: 0.123
-        min_common: 7
-        weight_policy: equal
-        weight_cap: 99
-        include_models: [alpha, beta]
-        exclude_model: gamma
+        runs_dir: runs/raw-from-config
+        process:
+          dir: processed
+        winrate:
+          output_name: from-config
+          missing_policy: zero
+          epsilon: 0.123
+          min_common: 7
+          weight_policy: equal
+          weight_cap: 99
+          include_models: [alpha, beta]
+          exclude_model: gamma
         hf:
           repo: medarc/demo
           branch: main
           token: secret-token
+          winrate_dir: scorecards/latest
         """,
         encoding="utf-8",
     )
@@ -1876,17 +1915,23 @@ def test_winrate_cli_applies_config_defaults(monkeypatch: pytest.MonkeyPatch, tm
         }
         return SimpleNamespace(
             output_path=tmp_path / "out.json",
+            output_paths=[tmp_path / "out.json"],
             result={"models": {}},
             datasets=[("demo-env", [Path("demo-env.parquet")])],
         )
 
+    def fake_sync_files_to_hub(**kwargs):
+        captured["upload"] = kwargs
+
     monkeypatch.setattr(main, "run_winrate", fake_run_winrate)
+    monkeypatch.setattr(main, "sync_files_to_hub", fake_sync_files_to_hub)
     monkeypatch.setattr(main, "print_winrate_summary_markdown", lambda *_args, **_kwargs: None)
 
     exit_code = main.main(["winrate", "--config", str(cfg_path), "--processed-at", "2024-01-01T00:00:00Z"])
     assert exit_code == 0
 
-    assert captured["run_kwargs"]["processed_dir"] == Path("runs-from-config")
+    assert captured["run_kwargs"]["processed_dir"] == Path("runs/processed")
+    assert captured["run_kwargs"]["output_dir"] == Path("runs/processed") / "winrate"
     cfg = captured["run_kwargs"]["config"]
     assert cfg.missing_policy == "zero"
     assert cfg.epsilon == pytest.approx(0.123)
@@ -1895,6 +1940,12 @@ def test_winrate_cli_applies_config_defaults(monkeypatch: pytest.MonkeyPatch, tm
     assert cfg.weight_cap == 99
     assert cfg.include_models == ("alpha", "beta")
     assert cfg.exclude_models == ("gamma",)
+    assert captured["run_kwargs"]["hf_config"] is not None
+    assert captured["run_kwargs"]["hf_config"].repo_id == "medarc/demo"
+    upload = captured.get("upload")
+    assert upload is not None
+    assert upload["repo_id"] == "medarc/demo"
+    assert upload["path_in_repo_prefix"] == "scorecards/latest"
 
     exit_code = main.main(
         [
@@ -1910,6 +1961,126 @@ def test_winrate_cli_applies_config_defaults(monkeypatch: pytest.MonkeyPatch, tm
     assert exit_code == 0
     cfg = captured["run_kwargs"]["config"]
     assert cfg.epsilon == pytest.approx(0.5)
+
+
+def test_winrate_cli_resolves_hf_token_braced_env_reference(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg_path = tmp_path / "winrate.yaml"
+    cfg_path.write_text(
+        """
+        processed_dir: runs/processed
+        hf:
+          repo: medarc/demo
+          token: ${HF_TOKEN}
+        """,
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HF_TOKEN", "env-secret")
+
+    captured: dict[str, Any] = {}
+
+    def fake_run_winrate(
+        *, processed_dir, output_dir, output_path, output_name, config, processed_at, hf_config, hf_processed_pull
+    ):
+        captured["hf_config"] = hf_config
+        return SimpleNamespace(
+            output_path=tmp_path / "out.json",
+            output_paths=[tmp_path / "out.json"],
+            result={"models": {}},
+            datasets=[],
+        )
+
+    monkeypatch.setattr(main, "run_winrate", fake_run_winrate)
+    monkeypatch.setattr(main, "print_winrate_summary_markdown", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(main, "sync_files_to_hub", lambda **_kwargs: None)
+
+    exit_code = main.main(["winrate", "--config", str(cfg_path), "--processed-at", "2024-01-01T00:00:00Z"])
+    assert exit_code == 0
+    assert captured["hf_config"] is not None
+    assert captured["hf_config"].token == "env-secret"
+
+
+def test_process_cli_rejects_unset_hf_token_env_reference(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cfg_path = tmp_path / "process.yaml"
+    cfg_path.write_text(
+        """
+        runs_dir: runs/raw-from-config
+        process:
+          dir: processed
+        hf:
+          repo: medarc/demo
+          token: $HF_TOKEN
+        """,
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+
+    with pytest.raises(SystemExit) as excinfo:
+        main.main(["process", "--config", str(cfg_path), "--dry-run"])
+
+    assert excinfo.value.code == 2
+    assert "references unset environment variable 'HF_TOKEN'" in capsys.readouterr().err
+
+
+def test_expand_embedded_process_config_promotes_process_section() -> None:
+    payload = {
+        "runs_dir": "runs/raw",
+        "process": {
+            "dir": "processed",
+            "max_workers": 8,
+            "replace_models": ["model-a"],
+        },
+        "winrate": {"dir": "scorecards"},
+    }
+
+    expanded = main._expand_embedded_pipeline_config(payload, mode="process")
+
+    assert expanded["runs_dir"] == "runs/raw"
+    assert expanded["output_dir"] == Path("runs/processed")
+    assert expanded["max_workers"] == 8
+    assert expanded["replace_models"] == ["model-a"]
+    assert "winrate" not in expanded
+    assert payload["process"]["dir"] == "processed"
+
+
+def test_expand_embedded_winrate_config_resolves_relative_dirs() -> None:
+    payload = {
+        "runs_dir": "artifacts/raw",
+        "process": {"dir": "processed"},
+        "winrate": {
+            "dir": "scorecards",
+            "missing_policy": "zero",
+            "hf_winrate_dir": "uploads/winrate",
+        },
+    }
+
+    expanded = main._expand_embedded_pipeline_config(payload, mode="winrate")
+
+    assert expanded["processed_dir"] == Path("artifacts/processed")
+    assert expanded["output_dir"] == Path("artifacts/processed/scorecards")
+    assert expanded["missing_policy"] == "zero"
+    assert expanded["hf_winrate_dir"] == "uploads/winrate"
+
+
+def test_expand_embedded_winrate_config_keeps_explicit_dirs() -> None:
+    payload = {
+        "processed_dir": "custom/processed",
+        "output_dir": "custom/winrate",
+        "runs_dir": "artifacts/raw",
+        "process": {"dir": "processed"},
+        "winrate": {"dir": "scorecards"},
+    }
+
+    expanded = main._expand_embedded_pipeline_config(payload, mode="winrate")
+
+    assert expanded["processed_dir"] == "custom/processed"
+    assert expanded["output_dir"] == "custom/winrate"
 
 
 def test_process_cli_requires_winrate_config_path(tmp_path: Path) -> None:
@@ -1928,17 +2099,130 @@ def test_process_cli_requires_winrate_config_path(tmp_path: Path) -> None:
         )
 
 
-def test_process_cli_runs_winrate_post_step(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    cfg_path = tmp_path / "winrate.yaml"
+def test_process_cli_defaults_status_filter_to_completed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run_process(options, env_export_map):
+        captured["options"] = options
+        return ProcessResult(records_processed=0, rows_processed=0, env_groups=[], env_summaries=[], hf_summary=None)
+
+    monkeypatch.setattr(main, "run_process", fake_run_process)
+
+    exit_code = main.main(
+        [
+            "process",
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--output-dir",
+            str(tmp_path / "processed"),
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0
+    options = captured["options"]
+    assert options.status_filter == ("completed",)
+    assert options.processed_with_args["status"] == ["completed"]
+    assert options.max_results_missing_pct == pytest.approx(2.5)
+    assert options.processed_with_args["max_results_missing_pct"] == pytest.approx(2.5)
+
+
+def test_process_cli_uses_explicit_status_filter(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run_process(options, env_export_map):
+        captured["options"] = options
+        return ProcessResult(records_processed=0, rows_processed=0, env_groups=[], env_summaries=[], hf_summary=None)
+
+    monkeypatch.setattr(main, "run_process", fake_run_process)
+
+    exit_code = main.main(
+        [
+            "process",
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--output-dir",
+            str(tmp_path / "processed"),
+            "--status",
+            "failed",
+            "--max-results-missing-pct",
+            "100",
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0
+    options = captured["options"]
+    assert options.status_filter == ("failed",)
+    assert options.processed_with_args["status"] == ["failed"]
+    assert options.max_results_missing_pct == pytest.approx(100.0)
+
+
+def test_process_cli_rejects_negative_max_results_missing_pct(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        main.main(
+            [
+                "process",
+                "--runs-dir",
+                str(tmp_path / "runs"),
+                "--output-dir",
+                str(tmp_path / "processed"),
+                "--max-results-missing-pct",
+                "-1",
+            ]
+        )
+
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert "--max-results-missing-pct must be non-negative." in err
+
+
+def test_process_config_empty_status_uses_default_filter(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg_path = tmp_path / "process.yaml"
     cfg_path.write_text(
         """
-        processed_dir: ignored
-        output_dir: winrate-out
-        output_name: from-config
-        missing_policy: zero
-        hf_processed_repo: ignored/also
-        hf_winrate_repo: medarc/winrate
-        hf_token: secret-token
+        runs_dir: runs/raw
+        process:
+          dir: processed
+          status: []
+        """,
+        encoding="utf-8",
+    )
+
+    captured: dict[str, Any] = {}
+
+    def fake_run_process(options, env_export_map):
+        captured["options"] = options
+        return ProcessResult(records_processed=0, rows_processed=0, env_groups=[], env_summaries=[], hf_summary=None)
+
+    monkeypatch.setattr(main, "run_process", fake_run_process)
+
+    exit_code = main.main(["process", "--config", str(cfg_path), "--dry-run"])
+
+    assert exit_code == 0
+    options = captured["options"]
+    assert options.status_filter == ("completed",)
+    assert options.processed_with_args["status"] == ["completed"]
+
+
+def test_process_cli_runs_embedded_winrate_post_step(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    cfg_path = tmp_path / "process.yaml"
+    cfg_path.write_text(
+        """
+        runs_dir: runs/raw
+        process:
+          dir: processed
+        winrate:
+          dir: scorecards
+          output_name: from-config
+          missing_policy: zero
+          hf_winrate_dir: winrate-post
         """,
         encoding="utf-8",
     )
@@ -1981,6 +2265,7 @@ def test_process_cli_runs_winrate_post_step(monkeypatch: pytest.MonkeyPatch, tmp
             "message": message,
             "branch": branch,
             "dry_run": dry_run,
+            **_kw,
         }
 
     monkeypatch.setattr(main, "run_process", fake_run_process)
@@ -1991,37 +2276,90 @@ def test_process_cli_runs_winrate_post_step(monkeypatch: pytest.MonkeyPatch, tmp
     exit_code = main.main(
         [
             "process",
-            "--runs-dir",
-            str(tmp_path / "runs"),
-            "--output-dir",
-            str(tmp_path / "processed"),
-            "--winrate",
+            "--config",
             str(cfg_path),
+            "--hf-repo",
+            "medarc/shared",
+            "--hf-token",
+            "secret-token",
         ]
     )
     assert exit_code == 0
-    assert captured["run_kwargs"]["processed_dir"] == Path(tmp_path / "processed")
-    assert captured["run_kwargs"]["output_dir"] == Path("winrate-out")
+    assert captured["run_kwargs"]["processed_dir"] == Path("runs/processed")
+    assert captured["run_kwargs"]["output_dir"] == Path("runs/processed/scorecards")
     assert captured["run_kwargs"]["hf_config"] is None
     assert captured["run_kwargs"]["hf_processed_pull"] is False
     upload = captured.get("upload")
     assert upload is not None
-    assert upload["repo_id"] == "medarc/winrate"
+    assert upload["repo_id"] == "medarc/shared"
     assert upload["token"] == "secret-token"
     assert upload["files"] == ["winrate.json"]
+    assert upload["path_in_repo_prefix"] == "winrate-post"
+
+
+def test_process_cli_defaults_winrate_output_dir_under_processed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg_path = tmp_path / "process.yaml"
+    cfg_path.write_text(
+        """
+        runs_dir: runs/raw
+        process:
+          dir: processed
+        winrate:
+          missing_policy: zero
+        """,
+        encoding="utf-8",
+    )
+
+    captured: dict[str, Any] = {}
+
+    def fake_run_process(options, env_export_map):
+        captured["options"] = options
+        return ProcessResult(records_processed=0, rows_processed=0, env_groups=[], env_summaries=[], hf_summary=None)
+
+    def fake_run_winrate(
+        *, processed_dir, output_dir, output_path, output_name, config, processed_at, hf_config, hf_processed_pull
+    ):
+        captured["run_kwargs"] = {
+            "processed_dir": processed_dir,
+            "output_dir": output_dir,
+        }
+        return SimpleNamespace(
+            output_path=Path(output_dir) / "winrate.json",
+            output_paths=[Path(output_dir) / "winrate.json"],
+            result={"models": {}},
+            datasets=[],
+        )
+
+    monkeypatch.setattr(main, "run_process", fake_run_process)
+    monkeypatch.setattr(main, "run_winrate", fake_run_winrate)
+    monkeypatch.setattr(main, "print_winrate_summary_markdown", lambda *_args, **_kwargs: None)
+
+    exit_code = main.main(
+        [
+            "process",
+            "--config",
+            str(cfg_path),
+        ]
+    )
+    assert exit_code == 0
+    assert captured["run_kwargs"]["processed_dir"] == Path("runs/processed")
+    assert captured["run_kwargs"]["output_dir"] == Path("runs/processed/winrate")
 
 
 def test_process_config_sets_winrate_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg_path = tmp_path / "process.yaml"
-    winrate_cfg = tmp_path / "winrate.yaml"
     fake_runs_dir = tmp_path / "runs" / "raw"
     fake_runs_dir.mkdir(parents=True)
-    winrate_cfg.write_text("output_dir: runs/winrate\n", encoding="utf-8")
     cfg_path.write_text(
         f"""
         runs_dir: {fake_runs_dir}
-        output_dir: runs/processed
-        winrate: {winrate_cfg}
+        process:
+          dir: processed
+        winrate:
+          enabled: true
         """,
         encoding="utf-8",
     )
@@ -2055,7 +2393,9 @@ def test_process_config_sets_winrate_path(monkeypatch: pytest.MonkeyPatch, tmp_p
         ]
     )
     assert exit_code == 0
-    assert captured["run_kwargs"]["processed_dir"] == Path("runs/processed")
+    expected_processed_dir = fake_runs_dir.parent / "processed"
+    assert captured["run_kwargs"]["processed_dir"] == expected_processed_dir
+    assert captured["run_kwargs"]["output_dir"] == expected_processed_dir / "winrate"
 
 
 def test_process_cli_rejects_include_prompt_completion(tmp_path: Path) -> None:
@@ -2076,6 +2416,7 @@ def test_process_cli_rejects_include_prompt_completion(tmp_path: Path) -> None:
     ("field", "value"),
     [
         ("max_workers", "not-an-int"),
+        ("max_results_missing_pct", "not-a-float"),
         ("hf_request_timeout", "not-a-float"),
         ("hf_retries", "not-an-int"),
         ("hf_max_files_per_commit", "not-an-int"),
@@ -2104,6 +2445,97 @@ def test_process_cli_rejects_invalid_typed_config_values(
     err = capsys.readouterr().err
     assert f"Invalid process config value for '{field}'" in err
     assert value in err
+
+
+def test_process_cli_rejects_removed_top_level_max_run_missing_pct_config_key(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cfg_path = tmp_path / "process-removed-top-level.yaml"
+    cfg_path.write_text(
+        """
+        runs_dir: runs/raw
+        output_dir: runs/processed
+        max_run_missing_pct: 2.5
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        main.main(["process", "--config", str(cfg_path)])
+
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert "Process config field 'max_run_missing_pct' was removed" in err
+    assert "max_results_missing_pct" in err
+
+
+def test_process_cli_rejects_removed_embedded_max_run_missing_pct_config_key(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cfg_path = tmp_path / "process-removed-embedded.yaml"
+    cfg_path.write_text(
+        """
+        runs_dir: runs/raw
+        process:
+          dir: processed
+          max_run_missing_pct: 2.5
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        main.main(["process", "--config", str(cfg_path)])
+
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert "Process config field 'process.max_run_missing_pct' was removed" in err
+    assert "process.max_results_missing_pct" in err
+
+
+def test_winrate_cli_ignores_removed_process_only_missing_pct_key(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg_path = tmp_path / "winrate-process-key.yaml"
+    cfg_path.write_text(
+        """
+        processed_dir: runs/processed
+        process:
+          max_run_missing_pct: 2.5
+        """,
+        encoding="utf-8",
+    )
+
+    captured: dict[str, Any] = {}
+
+    def fake_run_winrate(
+        *, processed_dir, output_dir, output_path, output_name, config, processed_at, hf_config, hf_processed_pull
+    ):
+        captured["processed_dir"] = processed_dir
+        return SimpleNamespace(
+            output_path=tmp_path / "out.json",
+            output_paths=[tmp_path / "out.json"],
+            result={"models": {}},
+            datasets=[],
+        )
+
+    monkeypatch.setattr(main, "run_winrate", fake_run_winrate)
+    monkeypatch.setattr(main, "print_winrate_summary_markdown", lambda *_args, **_kwargs: None)
+
+    exit_code = main.main(
+        [
+            "winrate",
+            "--config",
+            str(cfg_path),
+            "--processed-at",
+            "2024-01-01T00:00:00Z",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["processed_dir"] == Path("runs/processed")
 
 
 @pytest.mark.parametrize(
@@ -2161,9 +2593,7 @@ def test_process_cli_allows_cli_override_of_malformed_numeric_config(
     monkeypatch.setattr(main, "_load_env_export_map", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(main, "run_process", fake_run)
 
-    exit_code = main.main(
-        ["process", "--config", str(cfg_path), "--max-workers", "2", "--dry-run", "--no-validate-manifest"]
-    )
+    exit_code = main.main(["process", "--config", str(cfg_path), "--max-workers", "2", "--dry-run"])
     assert exit_code == 0
     assert captured["options"].max_workers == 2
 
