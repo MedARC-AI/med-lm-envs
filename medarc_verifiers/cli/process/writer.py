@@ -51,7 +51,7 @@ ALLOWED_COLUMNS: tuple[str, ...] = (
 EXPECTED_POLARS_DTYPES: dict[str, pl.DataType] = {
     "env_id": pl.String,
     "error": pl.String,
-    "example_id": pl.Int64,
+    "example_id": pl.String,
     "answer": pl.String,
     "extras": pl.String,
     "generation_ms": pl.Float64,
@@ -79,7 +79,7 @@ EXPECTED_ARROW_SCHEMA = pa.schema(
     [
         pa.field("env_id", pa.large_string()),
         pa.field("error", pa.large_string()),
-        pa.field("example_id", pa.int64()),
+        pa.field("example_id", pa.large_string()),
         pa.field("answer", pa.large_string()),
         pa.field("extras", pa.large_string()),
         pa.field("generation_ms", pa.float64()),

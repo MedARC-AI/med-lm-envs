@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping
@@ -21,6 +22,7 @@ class _MetadataPayload(BaseModel):
 
     env_id: str | None = None
     model: str | None = None
+    avg_reward: float | None = None
     version_info: dict[str, str | None] | None = None
     env_args: dict[str, Any] = Field(default_factory=dict)
     num_examples: int | None = None
@@ -32,6 +34,7 @@ class _MetadataPayload(BaseModel):
 class NormalizedMetadata:
     """Normalized view of metadata.json merged with manifest discovery data."""
 
+    identity: "RunIdentity"
     record: RunRecord
     metadata_path: Path | None
     raw_metadata: Mapping[str, Any]
@@ -47,13 +50,111 @@ class NormalizedMetadata:
     rollouts_per_example: int | None
 
 
+@dataclass(frozen=True, slots=True)
+class RunIdentity:
+    """Canonical identity for selecting and exporting a discovered run record."""
+
+    model_id: str
+    manifest_env_id: str
+    base_env_id: str
+    rollout_index: int | None
+    job_run_id: str
+    output_env_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedRunIdentity:
+    """Selection-time identity that tolerates missing model ids."""
+
+    model_id: str | None
+    manifest_env_id: str
+    base_env_id: str
+    rollout_index: int | None
+    job_run_id: str
+    output_env_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedMetadataContext:
+    raw_metadata: Mapping[str, Any]
+    manifest_env_id: str
+    metadata_env_id: str | None
+    base_env_id: str
+    rollout_index: int
+    model_id: str | None
+    metadata_model: str | None
+    env_args: Mapping[str, Any]
+    sampling_args: Mapping[str, Any]
+    num_examples: int | None
+    rollouts_per_example: int | None
+
+
+def resolve_run_identity(
+    record: RunRecord,
+    *,
+    combine_rollouts: bool = True,
+) -> ResolvedRunIdentity:
+    """Resolve a run identity for selection without requiring model_id."""
+    context = _resolve_metadata_context(record, combine_rollouts=combine_rollouts)
+    resolved_rollout_index = (
+        context.rollout_index if context.rollout_index != 0 or context.manifest_env_id != context.base_env_id else None
+    )
+    return ResolvedRunIdentity(
+        model_id=context.model_id,
+        manifest_env_id=context.manifest_env_id,
+        base_env_id=context.base_env_id,
+        rollout_index=resolved_rollout_index,
+        job_run_id=record.manifest.job_run_id,
+        output_env_id=context.base_env_id or context.manifest_env_id or record.job_id,
+    )
+
+
 def load_normalized_metadata(
     record: RunRecord,
     *,
     combine_rollouts: bool = True,
 ) -> NormalizedMetadata:
     """Merge manifest fields with metadata.json (when present)."""
+    context = _resolve_metadata_context(record, combine_rollouts=combine_rollouts)
+    if not context.model_id:
+        raise RuntimeError(format_missing_model_id_error(record))
+    resolved_rollout_index = (
+        context.rollout_index if context.rollout_index != 0 or context.manifest_env_id != context.base_env_id else None
+    )
+    identity = RunIdentity(
+        model_id=context.model_id,
+        manifest_env_id=context.manifest_env_id,
+        base_env_id=context.base_env_id,
+        rollout_index=resolved_rollout_index,
+        job_run_id=record.manifest.job_run_id,
+        output_env_id=context.base_env_id or context.manifest_env_id or record.job_id,
+    )
+
+    return NormalizedMetadata(
+        identity=identity,
+        record=record,
+        metadata_path=record.metadata_path if record.has_metadata else None,
+        raw_metadata=context.raw_metadata,
+        manifest_env_id=context.manifest_env_id,
+        metadata_env_id=context.metadata_env_id,
+        base_env_id=context.base_env_id,
+        rollout_index=identity.rollout_index or 0,
+        model_id=identity.model_id,
+        metadata_model=context.metadata_model,
+        env_args=context.env_args,
+        sampling_args=context.sampling_args,
+        num_examples=context.num_examples,
+        rollouts_per_example=context.rollouts_per_example,
+    )
+
+
+def _resolve_metadata_context(
+    record: RunRecord,
+    *,
+    combine_rollouts: bool,
+) -> _ResolvedMetadataContext:
     metadata_payload, raw_metadata = _load_metadata(record)
+    _warn_manifest_metadata_result_mismatch(record, metadata_payload)
     metadata_env_id = metadata_payload.env_id if metadata_payload else None
     metadata_model = metadata_payload.model if metadata_payload else None
     env_args = _merge_mappings(
@@ -64,7 +165,6 @@ def load_normalized_metadata(
         primary=record.sampling_args,
         fallback=metadata_payload.sampling_args if metadata_payload else None,
     )
-
     manifest_env_id = (
         _extract_env_config_id(record.env_config) or record.manifest_env_id or metadata_env_id or record.job_id
     )
@@ -72,34 +172,36 @@ def load_normalized_metadata(
         manifest_env_id,
         combine_rollouts=combine_rollouts,
     )
-    # If we didn't capture a rollout index from the manifest env id,
-    # try to derive it from the results directory name (common when
-    # manifests keep base env id, but the on-disk folder encodes the rollout).
     if rollout_index == 0 and record.results_dir_name:
         alt_index = extract_rollout_index(record.results_dir_name)
         if alt_index:
             rollout_index = alt_index
-
-    model_id = record.model_id or metadata_model
-    num_examples = record.num_examples or (metadata_payload.num_examples if metadata_payload else None)
-    rollouts_per_example = record.rollouts_per_example or (
-        metadata_payload.rollouts_per_example if metadata_payload else None
-    )
-
-    return NormalizedMetadata(
-        record=record,
-        metadata_path=record.metadata_path if record.has_metadata else None,
+    return _ResolvedMetadataContext(
         raw_metadata=raw_metadata,
         manifest_env_id=manifest_env_id,
         metadata_env_id=metadata_env_id,
         base_env_id=base_env_id,
         rollout_index=rollout_index,
-        model_id=model_id,
+        model_id=record.model_id or metadata_model,
         metadata_model=metadata_model,
         env_args=env_args,
         sampling_args=sampling_args,
-        num_examples=num_examples,
-        rollouts_per_example=rollouts_per_example,
+        num_examples=_prefer_manifest_value(
+            record.num_examples,
+            metadata_payload.num_examples if metadata_payload else None,
+        ),
+        rollouts_per_example=_prefer_manifest_value(
+            record.rollouts_per_example,
+            metadata_payload.rollouts_per_example if metadata_payload else None,
+        ),
+    )
+
+
+def format_missing_model_id_error(record: RunRecord) -> str:
+    return (
+        "Missing model_id for run "
+        f"(job_run_id={record.manifest.job_run_id}, job_id={record.job_id}, "
+        f"results_dir={record.results_dir}, manifest={record.manifest.manifest_path})"
     )
 
 
@@ -153,6 +255,50 @@ def _merge_mappings(
     return result
 
 
+def _prefer_manifest_value(primary: int | None, fallback: int | None) -> int | None:
+    if primary is not None:
+        return primary
+    return fallback
+
+
+def _warn_manifest_metadata_result_mismatch(record: RunRecord, metadata_payload: _MetadataPayload | None) -> None:
+    if metadata_payload is None:
+        return
+
+    mismatches: list[str] = []
+    if _has_float_mismatch(record.avg_reward, metadata_payload.avg_reward):
+        mismatches.append(
+            f"avg_reward manifest={record.avg_reward!r} metadata={metadata_payload.avg_reward!r}"
+        )
+    if _has_int_mismatch(record.num_examples, metadata_payload.num_examples):
+        mismatches.append(
+            f"num_examples manifest={record.num_examples!r} metadata={metadata_payload.num_examples!r}"
+        )
+    if not mismatches:
+        return
+
+    logger.warning(
+        "Manifest/metadata result mismatch for process input "
+        "(job_run_id=%s, job_id=%s, metadata=%s): %s",
+        record.manifest.job_run_id,
+        record.job_id,
+        record.metadata_path,
+        "; ".join(mismatches),
+    )
+
+
+def _has_float_mismatch(left: float | None, right: float | None) -> bool:
+    if left is None or right is None:
+        return False
+    return not math.isclose(left, right, rel_tol=1e-9, abs_tol=1e-9)
+
+
+def _has_int_mismatch(left: int | None, right: int | None) -> bool:
+    if left is None or right is None:
+        return False
+    return left != right
+
+
 def _extract_env_config_id(env_config: Mapping[str, Any] | None) -> str | None:
     if not env_config:
         return None
@@ -164,4 +310,11 @@ def _extract_env_config_id(env_config: Mapping[str, Any] | None) -> str | None:
     return None
 
 
-__all__ = ["NormalizedMetadata", "load_normalized_metadata"]
+__all__ = [
+    "NormalizedMetadata",
+    "ResolvedRunIdentity",
+    "RunIdentity",
+    "format_missing_model_id_error",
+    "load_normalized_metadata",
+    "resolve_run_identity",
+]
