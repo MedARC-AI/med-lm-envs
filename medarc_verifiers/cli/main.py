@@ -42,7 +42,7 @@ from medarc_verifiers.cli._manifest import MANIFEST_FILENAME, ManifestJobEntry, 
 from medarc_verifiers.cli._manifest_planner import ManifestPlanner
 from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, EnvironmentExportConfig
 from medarc_verifiers.cli._single_run import run_single_mode
-from medarc_verifiers.cli.eval_identity import EvalPathPlan, plan_eval_paths
+from medarc_verifiers.cli.eval_identity import EvalPathPlan, generate_variant_id, plan_eval_paths
 from medarc_verifiers.cli.eval_identity import metadata_identity_fields
 from medarc_verifiers.cli.hf import HFSyncConfig, sync_files_to_hub
 from medarc_verifiers.cli.process import PROCESS_DEFAULT_STATUS_FILTER, ProcessOptions, ProcessResult, run_process
@@ -2125,6 +2125,8 @@ def _load_env_export_map(root: Path | None) -> dict[str, EnvironmentExportConfig
             if env_cfg.export is None:
                 continue
             keys = {env_cfg.id, env_cfg.matrix_base_id}
+            if env_cfg.module and env_cfg.env_args:
+                keys.add(f"{env_cfg.module}::{generate_variant_id({'env_args': env_cfg.env_args})}")
             for key in filter(None, keys):
                 export_map[key] = env_cfg.export
 

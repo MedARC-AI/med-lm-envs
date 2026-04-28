@@ -78,6 +78,29 @@ def test_duplicate_model_env_variant_can_use_sampling_args(tmp_path: Path) -> No
     ]
 
 
+def test_duplicate_model_env_variant_uses_only_differing_nested_keys(tmp_path: Path) -> None:
+    common_env_args = {
+        "judge_model": ["openai/gpt-5-mini", "google/gemini-3-flash-preview"],
+        "judge_base_url": "https://api.pinference.ai/api/v1",
+    }
+
+    plans = plan_eval_paths(
+        [
+            {"model": "gpt-5-mini", "env_id": "medrbench", "env_args": {**common_env_args, "task": "oracle"}},
+            {"model": "gpt-5-mini", "env_id": "medrbench", "env_args": {**common_env_args, "task": "1turn"}},
+            {"model": "gpt-5-mini", "env_id": "medrbench", "env_args": {**common_env_args, "task": "free_turn"}},
+        ],
+        output_root=tmp_path,
+    )
+
+    assert [plan.identity.variant_id for plan in plans] == [
+        "env_args.task-oracle",
+        "env_args.task-1turn",
+        "env_args.task-free_turn",
+    ]
+    assert plans[0].identity.variant_payload == {"env_args": {"task": "oracle"}}
+
+
 def test_duplicate_model_env_variant_canonicalizes_sampling_args(tmp_path: Path) -> None:
     plans = plan_eval_paths(
         [

@@ -132,6 +132,16 @@ def extract_variant_payload(config: Mapping[str, Any], field_names: Sequence[str
 
     payload: dict[str, Any] = {}
     for field_name in field_names:
+        if "." in field_name:
+            root, nested_key = field_name.split(".", 1)
+            value = config.get(root)
+            if isinstance(value, Mapping):
+                nested_payload = payload.setdefault(root, {})
+                if isinstance(nested_payload, dict) and nested_key in value:
+                    nested_payload[nested_key] = _canonicalize(value[nested_key])
+            else:
+                payload.setdefault(root, {})
+            continue
         if field_name in config:
             payload[field_name] = _canonicalize(config[field_name])
     return payload
@@ -253,11 +263,32 @@ def _differing_fields_by_key(
             differing[key] = []
             continue
         field_names = sorted(set().union(*(payload.keys() for payload in configs)))
-        differing[key] = [
-            field_name
-            for field_name in field_names
-            if len({_canonical_json(payload.get(field_name)) for payload in configs}) > 1
-        ]
+        differing[key] = []
+        for field_name in field_names:
+            values = [payload.get(field_name) for payload in configs]
+            if all(isinstance(value, Mapping) for value in values if value is not None):
+                nested_names = sorted(
+                    {
+                        str(nested_key)
+                        for value in values
+                        if isinstance(value, Mapping)
+                        for nested_key in value.keys()
+                    }
+                )
+                differing[key].extend(
+                    f"{field_name}.{nested_name}"
+                    for nested_name in nested_names
+                    if len(
+                        {
+                            _canonical_json(value.get(nested_name) if isinstance(value, Mapping) else None)
+                            for value in values
+                        }
+                    )
+                    > 1
+                )
+                continue
+            if len({_canonical_json(value) for value in values}) > 1:
+                differing[key].append(field_name)
     return differing
 
 

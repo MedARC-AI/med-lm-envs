@@ -21,3 +21,6 @@ build-backend = "hatchling.build"
 [tool.hatch.build]
 include = ["m_arc.py"]
 
+[tool.verifiers.eval]
+num_examples = -1
+rollouts_per_example = 1

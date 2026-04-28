@@ -22,3 +22,7 @@ build-backend = "hatchling.build"
 loader = "med_mcqa:load_environment"
 display_name = "MedMCQA"
 visibility = "PUBLIC"
+
+[tool.verifiers.eval]
+num_examples = -1
+rollouts_per_example = 1

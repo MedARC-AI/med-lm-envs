@@ -338,13 +338,22 @@ def select_work_items(
 
 def _resolve_env_export(
     manifest_env_id: str | None,
+    variant_id: str | None,
     env_export_map: Mapping[str, EnvironmentExportConfig],
 ) -> EnvironmentExportConfig:
     if not manifest_env_id:
         return EnvironmentExportConfig()
+    if variant_id:
+        variant_key = f"{manifest_env_id}::{variant_id}"
+        if variant_key in env_export_map:
+            return env_export_map[variant_key]
     if manifest_env_id in env_export_map:
         return env_export_map[manifest_env_id]
     base_env_id, _ = rollout.derive_base_env_id(manifest_env_id)
+    if base_env_id and variant_id:
+        variant_base_key = f"{base_env_id}::{variant_id}"
+        if variant_base_key in env_export_map:
+            return env_export_map[variant_base_key]
     if base_env_id and base_env_id in env_export_map:
         return env_export_map[base_env_id]
     return EnvironmentExportConfig()
@@ -358,9 +367,14 @@ def _plan_selection_record(
     record: discovery.RunRecord,
     env_export_map: Mapping[str, EnvironmentExportConfig],
 ) -> SelectionRecord:
-    env_export = _resolve_env_export(record.manifest_env_id, env_export_map)
+    env_export = _resolve_env_export(record.manifest_env_id, None, env_export_map)
     combine_rollouts = bool(env_export.combine_rollouts)
     identity = metadata.resolve_run_identity(record, combine_rollouts=combine_rollouts)
+    variant_export = _resolve_env_export(record.manifest_env_id, identity.variant_id, env_export_map)
+    if variant_export != env_export:
+        env_export = variant_export
+        combine_rollouts = bool(env_export.combine_rollouts)
+        identity = metadata.resolve_run_identity(record, combine_rollouts=combine_rollouts)
     return SelectionRecord(
         record=record,
         identity=identity,

@@ -23,3 +23,7 @@ include = ["medqa.py"]
 loader = "medqa:load_environment"
 display_name = "MedQA"
 visibility = "PUBLIC"
+
+[tool.verifiers.eval]
+num_examples = -1
+rollouts_per_example = 1

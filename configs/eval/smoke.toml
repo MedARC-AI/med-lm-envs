@@ -1,5 +1,6 @@
 model = "openai/gpt-4.1-mini"
 save_results = true
+output_dir = "runs/evals"
 
 [[eval]]
 env_id = "medqa"

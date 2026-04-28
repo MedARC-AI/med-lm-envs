@@ -4,7 +4,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 from types import SimpleNamespace
 
 import pytest
@@ -218,6 +218,58 @@ def test_toml_bench_dry_run_expands_evals_and_ablations(
     assert "env_args.shuffle_seed-1618" in output
     assert "env_args.shuffle_seed-9331" in output
     assert str(tmp_path / "evals" / "gpt-5-mini" / "medqa" / "baseline") in output
+
+
+def test_repository_smoke_toml_config_dry_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code = main.main(["bench", "--config", "configs/eval/smoke.toml", "--dry-run"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "TOML Bench Dry Run" in output
+    assert "medqa" in output
+    assert "runs/evals/openai-gpt-4.1-mini/medqa" in output
+
+
+def test_repository_mcq_toml_config_dry_run_shows_ablation_variants(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code = main.main(["bench", "--config", "configs/eval/medarc-mcq.toml", "--dry-run", "--eval-index", "9"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "medqa" in output
+    assert "env_args.shuffle_seed-1618" in output
+    assert "runs/evals/openai-gpt-4.1-mini/medqa/env_args.shuffle_answers-true__env_args.shuffle_seed-1618" in output
+
+
+def test_repository_judge_toml_config_loads_expected_judge_args() -> None:
+    configs = main.load_toml_eval_configs("configs/eval/medarc-judge.toml")
+    healthbench = next(config for config in configs if config["env_id"] == "healthbench")
+    medrbench = [config for config in configs if config["env_id"] == "medrbench"]
+
+    assert healthbench["env_args"]["judge_model"] == "openai/gpt-5-mini"
+    assert healthbench["env_args"]["judge_base_url"] == "https://api.pinference.ai/api/v1"
+    assert {config["env_args"]["task"] for config in medrbench} == {"oracle", "1turn", "free_turn"}
+
+
+def test_repository_all_toml_contains_production_suite_entries() -> None:
+    def signature(config: Mapping[str, Any]) -> str:
+        return json.dumps(
+            {
+                "env_id": config["env_id"],
+                "env_args": config.get("env_args", {}),
+                "num_examples": config.get("num_examples"),
+                "rollouts_per_example": config.get("rollouts_per_example"),
+            },
+            sort_keys=True,
+        )
+
+    all_configs = {signature(config) for config in main.load_toml_eval_configs("configs/eval/medarc-all.toml")}
+    production_configs = {
+        signature(config)
+        for path in ("configs/eval/medarc-mcq.toml", "configs/eval/medarc-judge.toml")
+        for config in main.load_toml_eval_configs(path)
+    }
+
+    assert production_configs <= all_configs
 
 
 def test_toml_bench_dry_run_model_override(
@@ -2145,6 +2197,32 @@ def test_process_cli_builds_options(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     assert options.hf_config is not None
     env_map = captured["env_export_map"]
     assert "demo-env" in env_map
+
+
+def test_load_env_export_map_adds_module_variant_keys(tmp_path: Path) -> None:
+    env_root = tmp_path / "envs"
+    env_root.mkdir()
+    (env_root / "medcalc_bench.yaml").write_text(
+        """
+        - id: medcalc_bench_tools
+          module: medcalc_bench
+          env_args:
+            version: verified
+            add_python_tool: true
+            add_calculator_tool: true
+          export:
+            extra_columns: [lower_bound, upper_bound]
+            answer_column: ground_truth
+        """,
+        encoding="utf-8",
+    )
+
+    env_map = main._load_env_export_map(env_root)
+
+    variant_key = "medcalc_bench::env_args.add_calculator_tool-true__env_args.add_python_tool-true__env_args.version-verified"
+    assert "medcalc_bench_tools" in env_map
+    assert variant_key in env_map
+    assert env_map[variant_key].answer_column == "ground_truth"
 
 
 def test_process_cli_applies_config_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

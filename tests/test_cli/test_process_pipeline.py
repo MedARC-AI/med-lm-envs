@@ -247,13 +247,16 @@ def _write_deterministic_eval(
     model_id: str = "gpt-mini",
     env_id: str = "demo-env",
     variant_id: str | None = None,
+    env_args: dict[str, object] | None = None,
+    result_row: dict[str, object] | None = None,
 ) -> Path:
     runs_dir = tmp_path / "runs"
     results_dir = runs_dir / "evals" / model_id / env_id
+    resolved_env_args = env_args or {}
     metadata = {
         "env_id": env_id,
         "model": model_id,
-        "env_args": {},
+        "env_args": resolved_env_args,
         "sampling_args": {},
         "num_examples": 1,
         "rollouts_per_example": 1,
@@ -261,7 +264,7 @@ def _write_deterministic_eval(
         "medarc_config_fingerprint_payload": {
             "env_id": env_id,
             "model": model_id,
-            "env_args": {},
+            "env_args": resolved_env_args,
             "sampling_args": {},
             "num_examples": 1,
             "rollouts_per_example": 1,
@@ -272,9 +275,10 @@ def _write_deterministic_eval(
     if variant_id is not None:
         results_dir = results_dir / variant_id
         metadata["variant_id"] = variant_id
-        metadata["variant_payload"] = {"env_args": {"shuffle_seed": 1618}}
+        metadata["variant_payload"] = {"env_args": resolved_env_args or {"shuffle_seed": 1618}}
     _write_json(results_dir / "metadata.json", metadata)
-    (results_dir / "results.jsonl").write_text(json.dumps({"example_id": "ex-1", "reward": 1.0}) + "\n", encoding="utf-8")
+    row = result_row or {"example_id": "ex-1", "reward": 1.0}
+    (results_dir / "results.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
     return runs_dir / "raw"
 
 
@@ -398,6 +402,50 @@ def test_run_process_excludes_deterministic_eval_variants_by_base_env(tmp_path: 
 
     assert result.records_processed == 0
     assert result.env_groups == []
+
+
+def test_run_process_applies_variant_export_overrides_to_deterministic_eval(tmp_path: Path) -> None:
+    variant_id = "env_args.add_calculator_tool-true__env_args.add_python_tool-true__env_args.version-verified"
+    env_args = {
+        "version": "verified",
+        "add_python_tool": True,
+        "add_calculator_tool": True,
+    }
+    runs_dir = _write_deterministic_eval(
+        tmp_path,
+        env_id="medcalc_bench",
+        variant_id=variant_id,
+        env_args=env_args,
+        result_row={
+            "example_id": "ex-1",
+            "ground_truth": "42",
+            "lower_bound": 40,
+            "upper_bound": 44,
+            "reward": 1.0,
+        },
+    )
+    output_dir = tmp_path / "processed"
+
+    result = run_process(
+        ProcessOptions(
+            runs_dir=runs_dir,
+            output_dir=output_dir,
+            dry_run=False,
+            max_workers=1,
+        ),
+        env_export_map={
+            f"medcalc_bench::{variant_id}": EnvironmentExportConfig(
+                extra_columns=["lower_bound", "upper_bound"],
+                answer_column="ground_truth",
+            )
+        },
+    )
+
+    table = pq.read_table(result.env_summaries[0].output_path)
+    row = table.to_pylist()[0]
+    assert row["answer"] == "42"
+    assert json.loads(row["extras"]) == {"lower_bound": 40, "upper_bound": 44}
+    assert "ground_truth" not in row
 
 
 def test_run_process_resolves_base_env_id(tmp_path: Path) -> None:

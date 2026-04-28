@@ -25,3 +25,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build]
 include = ["pubmedqa.py", "data/"]
+
+[tool.verifiers.eval]
+num_examples = -1
+rollouts_per_example = 1
