@@ -29,10 +29,6 @@ def _patch_single_run_env(monkeypatch: pytest.MonkeyPatch, metadata: list[EnvPar
         "medarc_verifiers.cli._single_run.gather_env_cli_metadata",
         lambda env_id: metadata,
     )
-    monkeypatch.setattr(
-        "medarc_verifiers.cli._single_run.load_endpoint_registry",
-        lambda *args, **kwargs: {},
-    )
 
 
 def _patch_single_run_metadata_only(monkeypatch: pytest.MonkeyPatch, metadata: list[EnvParam]) -> None:
@@ -1803,6 +1799,44 @@ def test_single_run_explicit_api_key_var_is_respected_for_prime_url(
     assert config["client_config"]["api_key_var"] == "OPENAI_API_KEY"
 
 
+def test_single_run_endpoint_alias_uses_registry_url_and_key(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    metadata: list[EnvParam] = []
+    _patch_single_run_env(monkeypatch, metadata)
+    endpoints_path = tmp_path / "endpoints.toml"
+    endpoints_path.write_text(
+        """
+        [[endpoint]]
+        endpoint_id = "openai-alias"
+        model = "openai/resolved"
+        url = "https://registry.example/v1"
+        key = "REGISTRY_KEY"
+        """,
+        encoding="utf-8",
+    )
+
+    exit_code = main.main(
+        [
+            "medqa",
+            "--dry-run",
+            "--model",
+            "openai-alias",
+            "--endpoints-path",
+            str(endpoints_path),
+        ]
+    )
+
+    assert exit_code == 0
+    config = json.loads(capsys.readouterr().out)
+    assert config["endpoint_id"] == "openai-alias"
+    assert config["model"] == "openai/resolved"
+    assert config["client_config"]["api_base_url"] == "https://registry.example/v1"
+    assert config["client_config"]["api_key_var"] == "REGISTRY_KEY"
+
+
 def test_single_run_dry_run_outputs_config(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -1910,7 +1944,7 @@ def test_single_run_resume_auto_discovery_sets_eval_resume_path(
         return discovered
 
     monkeypatch.setattr(
-        "medarc_verifiers.cli.utils.resume.find_latest_incomplete_eval_results_path",
+        "medarc_verifiers.cli.verifiers_adapter.find_latest_incomplete_eval_results_path",
         fake_find_latest_incomplete_eval_results_path,
     )
 

@@ -307,8 +307,10 @@ def _build_client_config(
             raise ValueError(f"Endpoint id '{raw_endpoint_id}' not found in endpoint registry at {endpoints_path}")
         provider_cfg = PROVIDER_CONFIGS[raw_provider or DEFAULT_PROVIDER]
         model = raw_model
-        api_key_var = raw["api_key_var"] if api_key_override else provider_cfg["key"]
-        api_base_url = raw_api_base_url if api_base_url_override else provider_cfg["url"]
+        api_key_var = raw["api_key_var"] if api_key_override else raw.get("default_api_key_var", provider_cfg["key"])
+        api_base_url = (
+            raw_api_base_url if api_base_url_override else raw.get("default_api_base_url", provider_cfg["url"])
+        )
         client_type = (
             raw["api_client_type"] if client_type_override else provider_cfg.get("client_type", DEFAULT_CLIENT_TYPE)
         )
@@ -338,14 +340,20 @@ def _build_client_config(
             for endpoint in endpoint_group
         ]
 
-    client_config = ClientConfig(
-        client_type=cast(ClientType, client_type),
-        api_key_var=api_key_var,
-        api_base_url=api_base_url,
-        endpoint_configs=endpoint_configs,
-        extra_headers=merged_headers,
-        extra_headers_from_state=eval_headers_from_state,
-    )
+    client_kwargs: dict[str, Any] = {
+        "client_type": cast(ClientType, client_type),
+        "api_key_var": api_key_var,
+        "api_base_url": api_base_url,
+        "endpoint_configs": endpoint_configs,
+        "extra_headers": merged_headers,
+        "extra_headers_from_state": eval_headers_from_state,
+    }
+    if raw.get("client_timeout") is not None:
+        client_kwargs["timeout"] = raw["client_timeout"]
+    if raw.get("http_max_retries") is not None:
+        client_kwargs["max_retries"] = raw["http_max_retries"]
+
+    client_config = ClientConfig(**client_kwargs)
     return cast(str, model), resolved_endpoint_id, client_config
 
 
@@ -354,7 +362,7 @@ def _build_sampling_args(raw: Mapping[str, Any], api_base_url: str) -> dict[str,
         raw.get("sampling_args"),
         max_tokens=raw.get("max_tokens"),
         temperature=raw.get("temperature"),
-        include_none_max_tokens=True,
+        include_none_max_tokens=raw.get("include_none_max_tokens", True),
     )
     _, prime_sampling_overrides = prime_inference_overrides(api_base_url)
     return sanitize_sampling_args_for_openai(_deep_merge(prime_sampling_overrides, sampling_args))

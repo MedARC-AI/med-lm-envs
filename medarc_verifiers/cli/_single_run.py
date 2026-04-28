@@ -20,16 +20,13 @@ from medarc_verifiers.cli._constants import (
     DEFAULT_API_KEY_VAR,
     DEFAULT_ENDPOINTS_PATH,
 )
-from medarc_verifiers.cli._eval_builder import build_client_config, build_eval_config
-from medarc_verifiers.cli._schemas import ModelConfigSchema
+from medarc_verifiers.cli.verifiers_adapter import build_eval_config
 from medarc_verifiers.cli.utils.env_args import EnvParam, MissingEnvParamError, gather_env_cli_metadata, merge_env_args
-from medarc_verifiers.cli.utils.endpoint_utils import load_endpoint_registry
 from medarc_verifiers.cli.utils.overrides import build_cli_override
 from medarc_verifiers.cli.utils.resume import (
     format_resume_mismatch_lines,
     is_resume_metadata_mismatch_error,
     load_resume_metadata_values,
-    resolve_resume_path,
 )
 from medarc_verifiers.cli.utils.shared import (
     HEADER_SEPARATOR,
@@ -40,6 +37,7 @@ from medarc_verifiers.cli.utils.shared import (
     merge_sampling_args,
     normalize_headers,
 )
+from medarc_verifiers.utils.prime_inference import PRIME_INFERENCE_URL
 
 logger = logging.getLogger(__name__)
 
@@ -51,21 +49,6 @@ class EnvOptionBinding:
     param: EnvParam
     dest: str
     default: Any
-
-
-@dataclass
-class _SingleRunEnvConfig:
-    """Lightweight env config to reuse the shared EvalConfig builder."""
-
-    id: str
-    module: str | None = None
-    matrix_base_id: str | None = None
-    num_examples: int = 5
-    rollouts_per_example: int = 1
-    max_concurrent: int | None = None
-    independent_scoring: bool = True
-    state_columns: list[str] | None = None
-    verbose: bool | None = False
 
 
 def run_single_mode(argv: Sequence[str] | None = None) -> int:
@@ -84,6 +67,7 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
     remaining = args_list[1:]
     endpoints_path_explicit = _option_was_provided(remaining, "--endpoints-path", "-e")
     api_key_var_explicit = _option_was_provided(remaining, "--api-key-var", "-k")
+    api_base_url_explicit = _option_was_provided(remaining, "--api-base-url", "-b")
 
     parser, env_group, reserved_dests = _build_base_parser_layout(require_env=True, add_help=True, env_id=env_id)
     try:
@@ -174,105 +158,46 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         )
 
     endpoints_path = Path(args.endpoints_path).expanduser()
-    default_endpoints_path = Path(DEFAULT_ENDPOINTS_PATH).expanduser()
-    if not endpoints_path.exists():
-        if endpoints_path_explicit:
-            logger.error("Explicit endpoints registry path does not exist: %s", endpoints_path)
-            return 2
-        if _same_path(endpoints_path, default_endpoints_path):
-            logger.warning(
-                "Default endpoints registry '%s' not found; continuing without endpoint aliases.",
-                endpoints_path,
-            )
-        endpoints = {}
-    else:
-        try:
-            endpoints = load_endpoint_registry(endpoints_path)
-        except Exception as exc:  # noqa: BLE001
-            if endpoints_path_explicit:
-                logger.error("Failed to load explicit endpoints registry '%s': %s", endpoints_path, exc)
-                return 2
-            logger.warning(
-                "Failed to load default endpoints registry '%s'; continuing without endpoint aliases: %s",
-                endpoints_path,
-                exc,
-            )
-            endpoints = {}
-
-    if endpoints_path_explicit and not endpoints:
-        logger.error("Failed to load endpoint registry from explicit path: %s", endpoints_path)
+    if endpoints_path_explicit and not endpoints_path.exists():
+        logger.error("Explicit endpoints registry path does not exist: %s", endpoints_path)
         return 2
 
-    model_cfg = ModelConfigSchema(model=args.model)
-    resolved_model, client_config, prime_sampling_overrides = build_client_config(
-        model_cfg,
-        endpoints=endpoints,
-        default_api_key_var=args.api_key_var,
-        default_api_key_var_explicit=api_key_var_explicit,
-        default_api_base_url=args.api_base_url,
-        api_base_url_override=None,
-        http_max_retries_override=args.http_max_retries,
-        timeout_override=args.timeout,
-        headers=headers,
-    )
-
-    # Merge Prime Inference overrides with user sampling args (user args take precedence)
-    merged_sampling_args = {**prime_sampling_overrides, **merged_sampling_args}
-
-    env_cfg = _SingleRunEnvConfig(
-        id=args.env,
-        num_examples=args.num_examples,
-        rollouts_per_example=args.rollouts_per_example,
-        max_concurrent=args.max_concurrent,
-        independent_scoring=not args.group_scoring,
-        state_columns=state_columns or None,
-        verbose=args.verbose,
-    )
+    raw_config: dict[str, Any] = {
+        "env_id": args.env,
+        "model": args.model,
+        "env_args": merged_env_args,
+        "sampling_args": merged_sampling_args,
+        "include_none_max_tokens": False,
+        "env_dir_path": str(Path(args.env_dir_path).expanduser()),
+        "endpoints_path": str(endpoints_path),
+        "headers": headers,
+        "num_examples": args.num_examples,
+        "rollouts_per_example": args.rollouts_per_example,
+        "max_concurrent": args.max_concurrent,
+        "max_retries": args.rollout_max_retries,
+        "http_max_retries": args.http_max_retries,
+        "client_timeout": args.timeout,
+        "independent_scoring": not args.group_scoring,
+        "state_columns": state_columns,
+        "save_results": bool(args.save_results or args.resume),
+        "resume": args.resume,
+        "save_to_hf_hub": args.save_to_hf_hub,
+        "hf_hub_dataset_name": args.hf_hub_dataset_name or "",
+        "verbose": args.verbose,
+    }
+    if api_base_url_explicit:
+        raw_config["api_base_url"] = args.api_base_url
+    else:
+        raw_config["default_api_base_url"] = args.api_base_url
+    if api_key_var_explicit:
+        raw_config["api_key_var"] = args.api_key_var
+    elif not (api_base_url_explicit and args.api_base_url == PRIME_INFERENCE_URL):
+        raw_config["default_api_key_var"] = args.api_key_var
 
     try:
-        resume_path = resolve_resume_path(
-            resume_arg=args.resume,
-            env_id=args.env,
-            model=resolved_model,
-            num_examples=args.num_examples,
-            rollouts_per_example=args.rollouts_per_example,
-            env_dir_path=Path(args.env_dir_path).expanduser(),
-        )
+        eval_config = build_eval_config(raw_config)
     except ValueError as exc:
         parser.error(str(exc))
-
-    if isinstance(args.resume, str):
-        logger.info("Resuming from explicit path: %s", resume_path)
-    elif args.resume is True:
-        if resume_path is not None:
-            logger.info("Auto-resuming from: %s", resume_path)
-        else:
-            logger.info("No matching incomplete run found for --resume; starting a new run.")
-
-    eval_config = build_eval_config(
-        job_label=args.env,
-        model_cfg=model_cfg,
-        env_cfg=env_cfg,
-        env_args=merged_env_args,
-        sampling_args=merged_sampling_args,
-        cli_env_args=None,
-        cli_sampling_args=None,
-        resolved_model=resolved_model,
-        client_config=client_config,
-        env_dir=Path(args.env_dir_path).expanduser(),
-        max_concurrent_override=args.max_concurrent,
-        max_concurrent_generation=args.max_concurrent_generation,
-        max_concurrent_scoring=args.max_concurrent_scoring,
-        rollout_max_retries=args.rollout_max_retries,
-        resume_path=resume_path,
-        default_max_concurrent=DEFAULT_SINGLE_RUN_MAX_CONCURRENT,
-        save_results=args.save_results,
-        save_to_hf_hub=args.save_to_hf_hub,
-        hf_hub_dataset_name=args.hf_hub_dataset_name or None,
-        verbose=args.verbose,
-        env_metadata_cache=None,
-        enforce_required_env_args=True,
-    )
 
     if args.dry_run:
         print(eval_config.model_dump_json(indent=2))
@@ -291,9 +216,9 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         logger.error("Evaluation interrupted by user.")
         return 1
     except Exception as exc:  # noqa: BLE001
-        if resume_path is not None and is_resume_metadata_mismatch_error(exc):
-            logger.error("Resume metadata mismatch for %s.", resume_path)
-            saved_values = load_resume_metadata_values(resume_path)
+        if eval_config.resume_path is not None and is_resume_metadata_mismatch_error(exc):
+            logger.error("Resume metadata mismatch for %s.", eval_config.resume_path)
+            saved_values = load_resume_metadata_values(eval_config.resume_path)
             current_values = {
                 "env_id": eval_config.env_id,
                 "model": eval_config.model,
