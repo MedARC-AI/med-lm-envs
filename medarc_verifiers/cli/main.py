@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import json
 import logging
 import os
+import shutil
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from textwrap import dedent
-from typing import Any, Literal, Mapping, Sequence
+from typing import Any, Literal, Mapping, MutableMapping, Sequence
 
 import yaml
 from pydantic import ValidationError
 from rich.console import Console
 from rich.table import Table
+from verifiers.utils.eval_utils import run_evaluation
+from verifiers.utils.save_utils import make_serializable
 
 from medarc_verifiers.cli._config_loader import ConfigFormatError, load_run_config
 from medarc_verifiers.cli._constants import (
@@ -37,6 +43,7 @@ from medarc_verifiers.cli._manifest_planner import ManifestPlanner
 from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, EnvironmentExportConfig
 from medarc_verifiers.cli._single_run import run_single_mode
 from medarc_verifiers.cli.eval_identity import EvalPathPlan, plan_eval_paths
+from medarc_verifiers.cli.eval_identity import metadata_identity_fields
 from medarc_verifiers.cli.hf import HFSyncConfig, sync_files_to_hub
 from medarc_verifiers.cli.process import PROCESS_DEFAULT_STATUS_FILTER, ProcessOptions, ProcessResult, run_process
 from medarc_verifiers.cli.utils.config_io import load_mapping_file
@@ -145,6 +152,16 @@ def build_batch_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-key-var", default=None, help="Override API key environment variable for TOML bench.")
     parser.add_argument("--provider", default=None, help="Override provider shorthand for TOML bench.")
     parser.add_argument("--model", "-m", default=None, help="Override model for every TOML eval.")
+    parser.add_argument(
+        "--eval-index", "--job-index", dest="eval_index", type=int, help="Run only one TOML eval by 1-based index."
+    )
+    parser.add_argument("--start-at", type=int, help="Start TOML execution at this 1-based eval index.")
+    parser.add_argument("--stop-after", type=int, help="Stop TOML execution after this 1-based eval index.")
+    parser.add_argument(
+        "--continue-on-error",
+        action="store_true",
+        help="Continue TOML sequential execution after a failed eval.",
+    )
     parser.add_argument(
         "--job-id", action="append", help="Run only the specified job identifier (repeat to select multiple)."
     )
@@ -557,12 +574,11 @@ def _run_batch_mode(argv: Sequence[str]) -> int:
 
     config_path = Path(args.config).expanduser()
     if config_path.suffix.lower() == ".toml":
-        if not args.dry_run:
-            parser.error("TOML bench execution is not available yet; use --dry-run in this transition commit.")
         try:
-            return _dry_run_toml_bench(args)
+            _validate_toml_selection_args(args, parser=parser)
+            return _run_toml_bench(args)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("TOML bench dry-run failed: %s", exc)
+            logger.exception("TOML bench failed: %s", exc)
             return 1
 
     if args.restart:
@@ -1576,9 +1592,20 @@ def _execute_batch(args: argparse.Namespace) -> int:
     return 1 if has_failures else 0
 
 
-def _dry_run_toml_bench(args: argparse.Namespace) -> int:
+def _validate_toml_selection_args(args: argparse.Namespace, *, parser: argparse.ArgumentParser) -> None:
+    for attr, flag in (("eval_index", "--eval-index"), ("start_at", "--start-at"), ("stop_after", "--stop-after")):
+        value = getattr(args, attr, None)
+        if value is not None and value < 1:
+            parser.error(f"{flag} must be a 1-based index.")
+    if args.eval_index is not None and (args.start_at is not None or args.stop_after is not None):
+        parser.error("--eval-index cannot be combined with --start-at or --stop-after.")
+    if args.start_at is not None and args.stop_after is not None and args.stop_after < args.start_at:
+        parser.error("--stop-after must be greater than or equal to --start-at.")
+
+
+def _run_toml_bench(args: argparse.Namespace) -> int:
     config_path = Path(args.config).expanduser()
-    raw_configs = load_toml_eval_configs(config_path)
+    raw_configs = _prepare_toml_raw_configs(load_toml_eval_configs(config_path), args)
     overrides = EvalConfigOverrides(
         model=args.model,
         provider=args.provider,
@@ -1591,11 +1618,189 @@ def _dry_run_toml_bench(args: argparse.Namespace) -> int:
     )
     eval_configs = [build_eval_config(raw, overrides=overrides) for raw in raw_configs]
     plan_inputs = [_eval_config_identity_payload(config) for config in eval_configs]
-    output_root = Path(args.output_dir).expanduser() if args.output_dir else DEFAULT_EVALS_DIR
+    output_root = _resolve_toml_output_root(eval_configs, args)
     path_plans = plan_eval_paths(plan_inputs, output_root=output_root)
+    eval_configs, path_plans = _select_toml_plan(eval_configs, path_plans, args)
 
-    _print_toml_bench_plan(eval_configs, path_plans)
-    return 0
+    _print_toml_bench_plan(eval_configs, path_plans, dry_run=bool(args.dry_run))
+    if args.dry_run:
+        return 0
+    return _execute_toml_plan(eval_configs, path_plans, args)
+
+
+def _prepare_toml_raw_configs(raw_configs: Sequence[dict[str, Any]], args: argparse.Namespace) -> list[dict[str, Any]]:
+    prepared: list[dict[str, Any]] = []
+    for raw in raw_configs:
+        item = dict(raw)
+        item.setdefault("save_results", True)
+        if args.max_concurrent is None and "max_concurrent" not in item:
+            item["max_concurrent"] = 1
+        prepared.append(item)
+    return prepared
+
+
+def _resolve_toml_output_root(eval_configs: Sequence[Any], args: argparse.Namespace) -> Path:
+    if args.output_dir:
+        return Path(args.output_dir).expanduser()
+
+    configured_roots = {str(config.output_dir) for config in eval_configs if config.output_dir}
+    if len(configured_roots) > 1:
+        raise ValueError(
+            "TOML bench deterministic output supports one output_dir per run; use a single global output_dir."
+        )
+    if configured_roots:
+        return Path(configured_roots.pop()).expanduser()
+    return DEFAULT_EVALS_DIR
+
+
+def _select_toml_plan(
+    eval_configs: Sequence[Any],
+    path_plans: Sequence[EvalPathPlan],
+    args: argparse.Namespace,
+) -> tuple[list[Any], list[EvalPathPlan]]:
+    indexed = list(zip(eval_configs, path_plans))
+    if args.eval_index is not None:
+        start = args.eval_index - 1
+        indexed = indexed[start : start + 1]
+    else:
+        if args.start_at is not None:
+            indexed = indexed[args.start_at - 1 :]
+        if args.stop_after is not None:
+            indexed = indexed[: args.stop_after - (args.start_at or 1) + 1]
+    if not indexed:
+        raise ValueError("No TOML evals matched the requested selection.")
+    selected_configs, selected_paths = zip(*indexed)
+    return list(selected_configs), list(selected_paths)
+
+
+def _execute_toml_plan(
+    eval_configs: Sequence[Any], path_plans: Sequence[EvalPathPlan], args: argparse.Namespace
+) -> int:
+    failures = 0
+    for index, (config, path_plan) in enumerate(zip(eval_configs, path_plans), start=1):
+        metadata_fields = metadata_identity_fields(_eval_config_identity_payload(config), path_plan.identity)
+        results_path = path_plan.results_path
+        try:
+            _prepare_toml_results_dir(results_path, metadata_fields, config, force=bool(args.force))
+            run_config = config.model_copy(update={"resume_path": results_path, "save_results": True})
+            logger.info("Running TOML eval %d/%d: %s on %s", index, len(eval_configs), config.env_id, config.model)
+            asyncio.run(_run_one_toml_eval(run_config, results_path, metadata_fields))
+            _merge_metadata_fields(results_path, metadata_fields)
+        except Exception as exc:  # noqa: BLE001
+            failures += 1
+            logger.exception("TOML eval %d failed: %s", index, exc)
+            if not args.continue_on_error:
+                return 1
+        if args.sleep and index < len(eval_configs):
+            import time
+
+            time.sleep(float(args.sleep))
+    return 1 if failures else 0
+
+
+async def _run_one_toml_eval(config: Any, results_path: Path, metadata_fields: Mapping[str, Any]) -> Any:
+    import verifiers.envs.environment as environment_module
+
+    def add_medarc_metadata(_all_outputs: Any, _new_outputs: Any, metadata: MutableMapping[str, Any]) -> None:
+        metadata.update(metadata_fields)
+
+    original_save_metadata = environment_module.save_metadata
+
+    def save_metadata_with_medarc_fields(metadata: MutableMapping[str, Any], result_path: Path) -> Any:
+        if Path(result_path) == results_path:
+            metadata.update(metadata_fields)
+        return original_save_metadata(metadata, result_path)
+
+    environment_module.save_metadata = save_metadata_with_medarc_fields
+    try:
+        return await run_evaluation(config, on_progress=add_medarc_metadata)
+    finally:
+        environment_module.save_metadata = original_save_metadata
+
+
+def _prepare_toml_results_dir(
+    results_path: Path,
+    metadata_fields: Mapping[str, Any],
+    config: Any,
+    *,
+    force: bool,
+) -> None:
+    if results_path.exists() and force:
+        _archive_existing_path(results_path)
+
+    metadata_path = results_path / "metadata.json"
+    results_file = results_path / "results.jsonl"
+    has_existing_state = metadata_path.exists() or results_file.exists()
+    if has_existing_state:
+        _validate_toml_resume_metadata(results_path, metadata_fields)
+
+    results_path.mkdir(parents=True, exist_ok=True)
+    results_file.touch(exist_ok=True)
+    if has_existing_state:
+        _merge_metadata_fields(results_path, metadata_fields)
+        return
+
+    metadata = _initial_toml_metadata(config)
+    metadata.update(metadata_fields)
+    _write_json(metadata_path, metadata)
+
+
+def _validate_toml_resume_metadata(results_path: Path, metadata_fields: Mapping[str, Any]) -> None:
+    metadata_path = results_path / "metadata.json"
+    if not metadata_path.exists():
+        raise ValueError(f"Cannot resume {results_path}: metadata.json is missing.")
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Cannot resume {results_path}: metadata.json is invalid JSON.") from exc
+    expected = metadata_fields.get("medarc_config_fingerprint")
+    current = metadata.get("medarc_config_fingerprint") if isinstance(metadata, Mapping) else None
+    if current != expected:
+        raise ValueError(
+            f"Cannot resume {results_path}: MedARC config fingerprint mismatch "
+            f"(saved={current!r}, current={expected!r}). Use --force to archive and rerun."
+        )
+
+
+def _initial_toml_metadata(config: Any) -> dict[str, Any]:
+    return {
+        "env_id": config.env_id,
+        "env_args": dict(config.env_args or {}),
+        "model": config.model,
+        "base_url": config.client_config.api_base_url,
+        "num_examples": config.num_examples,
+        "rollouts_per_example": config.rollouts_per_example,
+        "sampling_args": dict(config.sampling_args or {}),
+        "avg_reward": None,
+        "avg_metrics": {},
+        "avg_error": None,
+        "state_columns": list(config.state_columns or []),
+    }
+
+
+def _merge_metadata_fields(results_path: Path, metadata_fields: Mapping[str, Any]) -> None:
+    metadata_path = results_path / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_path.exists() else {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata.update(metadata_fields)
+    _write_json(metadata_path, metadata)
+
+
+def _archive_existing_path(path: Path) -> Path:
+    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    candidate = path.with_name(f"{path.name}__old_{timestamp}")
+    suffix = 1
+    while candidate.exists():
+        candidate = path.with_name(f"{path.name}__old_{timestamp}_{suffix}")
+        suffix += 1
+    shutil.move(str(path), str(candidate))
+    return candidate
+
+
+def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, default=make_serializable, sort_keys=True), encoding="utf-8")
 
 
 def _eval_config_identity_payload(config: Any) -> dict[str, Any]:
@@ -1609,9 +1814,14 @@ def _eval_config_identity_payload(config: Any) -> dict[str, Any]:
     }
 
 
-def _print_toml_bench_plan(eval_configs: Sequence[Any], path_plans: Sequence[EvalPathPlan]) -> None:
+def _print_toml_bench_plan(eval_configs: Sequence[Any], path_plans: Sequence[EvalPathPlan], *, dry_run: bool) -> None:
     console = Console(width=240)
-    table = Table(title="TOML Bench Dry Run", caption=f"{len(eval_configs)} eval(s) to dry-run", expand=True)
+    action = "dry-run" if dry_run else "run"
+    table = Table(
+        title="TOML Bench Dry Run" if dry_run else "TOML Bench Plan",
+        caption=f"{len(eval_configs)} eval(s) to {action}",
+        expand=True,
+    )
     table.add_column("#", justify="right", style="dim")
     table.add_column("Model", style="magenta", overflow="fold")
     table.add_column("Environment", style="green", overflow="fold")
