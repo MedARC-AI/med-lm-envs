@@ -72,13 +72,13 @@ model = "Foo/Bar"
 [[eval]]
 env_id = "medqa"
 
-[orchestrate.vllm-container]
+[medarc.orchestrate.vllm-container]
 image = "vllm/vllm-openai:latest"
 
-[orchestrate.foo]
+[medarc.orchestrate.foo]
 gpus = 1
 
-[orchestrate.foo.serve]
+[medarc.orchestrate.foo.serve]
 dtype = "bfloat16"
 """.lstrip(),
         encoding="utf-8",

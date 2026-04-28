@@ -71,6 +71,30 @@ shuffle_seed = [1618, 9331]
     assert configs[2]["env_args"] == {"shuffle_answers": True, "shuffle_seed": 9331}
 
 
+def test_load_toml_eval_configs_strips_medarc_metadata(tmp_path: Path) -> None:
+    config_path = tmp_path / "eval.toml"
+    config_path.write_text(
+        """
+model = "openai/gpt-4.1-mini"
+
+[[eval]]
+env_id = "medqa"
+
+[medarc.orchestrate.foo]
+gpus = 1
+
+[medarc.orchestrate.vllm-container]
+image = "vllm/vllm-openai:latest"
+""".strip()
+    )
+
+    configs = load_toml_eval_configs(config_path)
+
+    assert len(configs) == 1
+    assert "medarc" not in configs[0]
+    assert configs[0]["env_id"] == "medqa"
+
+
 def test_build_eval_config_resolves_endpoint_alias_and_core_fields(tmp_path: Path) -> None:
     endpoints_path = _write_endpoints(tmp_path / "endpoints.toml")
     resume_path = tmp_path / "resume"

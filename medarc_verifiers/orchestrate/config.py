@@ -138,39 +138,56 @@ def _extract_task_model(payload: Mapping[str, Any], *, source: Path) -> tuple[st
     model_id = str(payload.get("model", "")).strip()
     if not model_id:
         raise ValueError(f"Job config {source} must define either one models entry or a top-level model.")
-    orchestrate = payload.get("orchestrate")
-    if not isinstance(orchestrate, Mapping):
-        raise ValueError(f"Job config {source} must define a top-level orchestrate mapping.")
+    orchestrate, table_name = _extract_orchestrate_root(payload, source=source)
     model_keys = [str(key) for key, value in orchestrate.items() if key not in _ORCHESTRATE_NON_MODEL_KEYS]
     if len(model_keys) != 1:
         raise ValueError(
-            f"Job config {source} must define exactly one orchestrate model settings table; found {len(model_keys)}."
+            f"Job config {source} must define exactly one {table_name} model settings table; found {len(model_keys)}."
         )
     return model_keys[0], {"model": model_id}
 
 
 def _extract_orchestrate_config(payload: Mapping[str, Any], *, model_key: str, source: Path) -> Mapping[str, Any]:
-    orchestrate = payload.get("orchestrate")
-    if not isinstance(orchestrate, Mapping):
-        raise ValueError(f"Job config {source} must define a top-level orchestrate mapping.")
+    orchestrate, table_name = _extract_orchestrate_root(payload, source=source)
     has_container = "vllm-container" in orchestrate
     has_docker = "vllm-docker" in orchestrate
     if has_container and has_docker:
-        raise ValueError(f"Job config {source} defines both orchestrate.vllm-container and orchestrate.vllm-docker.")
+        raise ValueError(f"Job config {source} defines both {table_name}.vllm-container and {table_name}.vllm-docker.")
     if not has_container and not has_docker:
-        raise ValueError(f"Job config {source} must define orchestrate.vllm-container settings.")
+        raise ValueError(f"Job config {source} must define {table_name}.vllm-container settings.")
     if model_key not in orchestrate:
-        raise ValueError(f"Job config {source} must define orchestrate.{model_key} settings.")
+        raise ValueError(f"Job config {source} must define {table_name}.{model_key} settings.")
     normalized = dict(orchestrate)
     if has_docker:
         warnings.warn(
-            (f"Job config {source} uses deprecated orchestrate.vllm-docker; rename it to orchestrate.vllm-container."),
+            (
+                f"Job config {source} uses deprecated {table_name}.vllm-docker; "
+                f"rename it to {table_name}.vllm-container."
+            ),
             DeprecationWarning,
             stacklevel=2,
         )
         normalized["vllm-container"] = orchestrate["vllm-docker"]
         del normalized["vllm-docker"]
     return normalized
+
+
+def _extract_orchestrate_root(payload: Mapping[str, Any], *, source: Path) -> tuple[Mapping[str, Any], str]:
+    medarc = payload.get("medarc")
+    if medarc is not None:
+        if not isinstance(medarc, Mapping):
+            raise ValueError(f"Job config {source} medarc must be a mapping.")
+        medarc_orchestrate = medarc.get("orchestrate")
+        if medarc_orchestrate is not None:
+            if not isinstance(medarc_orchestrate, Mapping):
+                raise ValueError(f"Job config {source} medarc.orchestrate must be a mapping.")
+            return medarc_orchestrate, "medarc.orchestrate"
+
+    orchestrate = payload.get("orchestrate")
+    if isinstance(orchestrate, Mapping):
+        return orchestrate, "orchestrate"
+
+    raise ValueError(f"Job config {source} must define a [medarc.orchestrate] mapping.")
 
 
 __all__ = ["ConfigFormatError", "PlanConfig", "TaskSpec", "expand_tasks", "load_job_config", "load_plan"]

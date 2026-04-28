@@ -50,7 +50,7 @@ rerun_failed: false
 ```
 
 Each job config should be an upstream `medarc-eval bench` TOML config with a top-level
-`model` and a top-level `orchestrate` table.
+`model` and a namespaced `[medarc.orchestrate]` table.
 
 The `env_file` is a dotenv file that is loaded for every Docker launch. If unset and a repo-level `.env` exists,
 it is used automatically. You can also override it via `--env-file`.
@@ -63,30 +63,30 @@ model = "Qwen/Qwen3-30B-A3B"
 [[eval]]
 env_id = "medqa"
 
-[orchestrate.qwen-30b-a3b]
+[medarc.orchestrate.qwen-30b-a3b]
 gpus = 2
 tensor_parallel_size = 2
 
-[orchestrate.qwen-30b-a3b.serve]
+[medarc.orchestrate.qwen-30b-a3b.serve]
 max_model_len = 40960
 
-[orchestrate.vllm-container]
+[medarc.orchestrate.vllm-container]
 image = "vllm/vllm-openai:latest"
 container_port = 8000
 volumes = ["/data/huggingface:/root/.cache/huggingface"]
 ipc_mode = "host"
 
-[orchestrate.pyxis]
+[medarc.orchestrate.pyxis]
 srun_extra_args = []
 ```
 
 Config notes:
 
-- `orchestrate.vllm-container` is the preferred key.
-- `orchestrate.vllm-docker` is still accepted as a deprecated alias.
+- `medarc.orchestrate.vllm-container` is the preferred key.
+- `medarc.orchestrate.vllm-docker` is still accepted as a deprecated alias.
 - Do not set both keys in the same job config.
 - `ipc_mode` is Docker-only and is ignored in `--runtime pyxis`.
-- `orchestrate.pyxis` is Pyxis-only and is ignored in `--runtime docker`.
+- `medarc.orchestrate.pyxis` is Pyxis-only and is ignored in `--runtime docker`.
 - In Pyxis mode, Slurm allocates GPUs per `srun` step. The orchestrator only reserves localhost ports.
 
 ### CLI usage

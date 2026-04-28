@@ -161,6 +161,36 @@ def test_repository_smoke_toml_config_dry_runs(capsys: pytest.CaptureFixture[str
     assert "runs/evals/openai-gpt-4.1-mini/medqa" in output
 
 
+def test_toml_bench_dry_run_accepts_medarc_orchestrate_metadata(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = tmp_path / "bench.toml"
+    _write_config(
+        config_path,
+        """
+        model = "gpt-5-mini"
+
+        [[eval]]
+        env_id = "medqa"
+        num_examples = 1
+        rollouts_per_example = 1
+
+        [medarc.orchestrate.foo]
+        gpus = 1
+
+        [medarc.orchestrate.vllm-container]
+        image = "vllm/vllm-openai:latest"
+        """,
+    )
+
+    exit_code = main.main(["bench", "--config", str(config_path), "--dry-run"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "TOML Bench Dry Run" in output
+    assert "medqa" in output
+
+
 def test_bench_rejects_non_toml_config(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     config_path = tmp_path / "bench.yaml"
     _write_config(config_path, "models: {}\n")

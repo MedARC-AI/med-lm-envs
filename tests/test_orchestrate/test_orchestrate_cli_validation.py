@@ -121,10 +121,10 @@ model = "Foo/Bar"
 [[eval]]
 env_id = "medqa"
 
-[orchestrate.vllm-container]
+[medarc.orchestrate.vllm-container]
 image = "fake"
 
-[orchestrate.foo]
+[medarc.orchestrate.foo]
 gpus = 1
 serve = {}
 """.lstrip(),
