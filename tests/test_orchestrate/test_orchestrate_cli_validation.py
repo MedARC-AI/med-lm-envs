@@ -112,6 +112,40 @@ runtime: docker
     assert captured["runtime"] == "pyxis"
 
 
+def test_cli_dry_run_accepts_toml_job_config(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    job_cfg = tmp_path / "job.toml"
+    job_cfg.write_text(
+        """
+model = "Foo/Bar"
+
+[[eval]]
+env_id = "medqa"
+
+[orchestrate.vllm-container]
+image = "fake"
+
+[orchestrate.foo]
+gpus = 1
+serve = {}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    plan_path = tmp_path / "plan.yaml"
+    plan_path.write_text(
+        f"""
+job_configs:
+  - {job_cfg.name}
+runtime: pyxis
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    rc = main(["--plan", str(plan_path), "--dry-run"])
+
+    assert rc == 0
+    assert f"job:foo\tFoo/Bar\t{job_cfg.resolve()}" in capsys.readouterr().out
+
+
 def test_port_only_resource_manager_skips_gpus() -> None:
     rm = PortOnlyResourceManager(port_range=(9000, 9010))
 

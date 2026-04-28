@@ -5,10 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
+import tomllib
 import warnings
 
 from omegaconf import OmegaConf
 from pydantic import BaseModel, Field, ValidationError
+
+
+_ORCHESTRATE_NON_MODEL_KEYS = {"restart", "vllm-container", "vllm-docker", "pyxis"}
 
 
 class PlanConfig(BaseModel):
@@ -84,7 +88,7 @@ def expand_tasks(plan: PlanConfig) -> list[TaskSpec]:
     for job_path in plan.job_configs:
         resolved_job_path = job_path.expanduser().resolve()
         job_cfg = load_job_config(resolved_job_path)
-        model_key, model_entry = _extract_single_model(job_cfg, source=resolved_job_path)
+        model_key, model_entry = _extract_task_model(job_cfg, source=resolved_job_path)
         orchestrate_cfg = _extract_orchestrate_config(job_cfg, model_key=model_key, source=resolved_job_path)
         model_id = str(model_entry.get("model", "")).strip()
         if not model_id:
@@ -105,10 +109,13 @@ def expand_tasks(plan: PlanConfig) -> list[TaskSpec]:
 def _load_mapping(path: Path) -> Mapping[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Config not found: {path}")
-    if path.suffix not in {".yaml", ".yml", ".json"}:
-        raise ValueError(f"Unsupported config format: {path} (expected .yaml/.yml/.json)")
+    if path.suffix not in {".yaml", ".yml", ".json", ".toml"}:
+        raise ValueError(f"Unsupported config format: {path} (expected .yaml/.yml/.json/.toml)")
     try:
-        data = OmegaConf.to_container(OmegaConf.load(path), resolve=True)
+        if path.suffix == ".toml":
+            data = tomllib.loads(path.read_text(encoding="utf-8"))
+        else:
+            data = OmegaConf.to_container(OmegaConf.load(path), resolve=True)
     except Exception as exc:  # pragma: no cover - OmegaConf error types vary
         raise ConfigFormatError(f"Failed to load config: {path}") from exc
     if not isinstance(data, Mapping):
@@ -116,18 +123,30 @@ def _load_mapping(path: Path) -> Mapping[str, Any]:
     return data
 
 
-def _extract_single_model(payload: Mapping[str, Any], *, source: Path) -> tuple[str, Mapping[str, Any]]:
+def _extract_task_model(payload: Mapping[str, Any], *, source: Path) -> tuple[str, Mapping[str, Any]]:
     models = payload.get("models")
-    if not isinstance(models, Mapping):
-        raise ValueError(f"Job config {source} must define a models mapping.")
-    keys = list(models.keys())
-    if len(keys) != 1:
-        raise ValueError(f"Job config {source} must define exactly one model; found {len(keys)}.")
-    model_key = str(keys[0])
-    model_entry = models.get(model_key)
-    if not isinstance(model_entry, Mapping):
-        raise ValueError(f"Job config {source} models.{model_key} must be a mapping.")
-    return model_key, model_entry
+    if isinstance(models, Mapping):
+        keys = list(models.keys())
+        if len(keys) != 1:
+            raise ValueError(f"Job config {source} must define exactly one model; found {len(keys)}.")
+        model_key = str(keys[0])
+        model_entry = models.get(model_key)
+        if not isinstance(model_entry, Mapping):
+            raise ValueError(f"Job config {source} models.{model_key} must be a mapping.")
+        return model_key, model_entry
+
+    model_id = str(payload.get("model", "")).strip()
+    if not model_id:
+        raise ValueError(f"Job config {source} must define either one models entry or a top-level model.")
+    orchestrate = payload.get("orchestrate")
+    if not isinstance(orchestrate, Mapping):
+        raise ValueError(f"Job config {source} must define a top-level orchestrate mapping.")
+    model_keys = [str(key) for key, value in orchestrate.items() if key not in _ORCHESTRATE_NON_MODEL_KEYS]
+    if len(model_keys) != 1:
+        raise ValueError(
+            f"Job config {source} must define exactly one orchestrate model settings table; found {len(model_keys)}."
+        )
+    return model_keys[0], {"model": model_id}
 
 
 def _extract_orchestrate_config(payload: Mapping[str, Any], *, model_key: str, source: Path) -> Mapping[str, Any]:

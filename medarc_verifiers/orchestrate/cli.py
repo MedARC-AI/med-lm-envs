@@ -33,7 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="medarc-orchestrate",
         description="Run vLLM orchestration over job configs.",
     )
-    parser.add_argument("--plan", required=True, type=Path, help="Path to orchestrator plan YAML.")
+    parser.add_argument("--plan", required=True, type=Path, help="Path to orchestrator plan YAML or JSON.")
     parser.add_argument(
         "--env-file",
         type=Path,

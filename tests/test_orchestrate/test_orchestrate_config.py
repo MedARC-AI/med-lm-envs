@@ -63,6 +63,38 @@ kill_orphans: false
     assert "vllm-container" in tasks[0].orchestrate
 
 
+def test_expand_tasks_accepts_toml_eval_config(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.toml"
+    job_cfg.write_text(
+        """
+model = "Foo/Bar"
+
+[[eval]]
+env_id = "medqa"
+
+[orchestrate.vllm-container]
+image = "vllm/vllm-openai:latest"
+
+[orchestrate.foo]
+gpus = 1
+
+[orchestrate.foo.serve]
+dtype = "bfloat16"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    plan_path = tmp_path / "plan.yaml"
+    plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\n", encoding="utf-8")
+
+    tasks = expand_tasks(load_plan(plan_path))
+
+    assert tasks[0].job_config_path == job_cfg.resolve()
+    assert tasks[0].model_key == "foo"
+    assert tasks[0].model_id == "Foo/Bar"
+    assert tasks[0].orchestrate["vllm-container"]["image"] == "vllm/vllm-openai:latest"
+    assert tasks[0].orchestrate["foo"]["serve"]["dtype"] == "bfloat16"
+
+
 def test_expand_tasks_accepts_deprecated_vllm_docker_with_warning(tmp_path: Path) -> None:
     job_cfg = tmp_path / "job.yaml"
     job_cfg.write_text(

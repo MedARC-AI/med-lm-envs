@@ -39,7 +39,7 @@ Create a plan YAML listing the job configs you want to orchestrate:
 ```yaml
 name: local-vllm
 job_configs:
-  - configs/job-gpt-oss-20b.yaml
+  - configs/eval/job-gpt-oss-20b.toml
 env_file: .env
 gpu_range: "0-3"
 port_range: "8000-8999"
@@ -49,32 +49,36 @@ resume: false
 rerun_failed: false
 ```
 
-Each job config must define exactly one model under `models:` and include a top-level
-`orchestrate:` block with per-model serve settings.
+Each job config should be an upstream `medarc-eval bench` TOML config with a top-level
+`model` and a top-level `orchestrate` table. Legacy YAML job configs are still loadable
+during migration, but new orchestrated runs should use TOML.
 
 The `env_file` is a dotenv file that is loaded for every Docker launch. If unset and a repo-level `.env` exists,
 it is used automatically. You can also override it via `--env-file`.
 
-Optional: set `orchestrate.restart` to reuse completed jobs from a previous `medarc-eval` run (it is forwarded as
-`medarc-eval bench --restart ...`).
-
 Shared container config:
 
-```yaml
-orchestrate:
-  qwen-30b-a3b:
-    gpus: 2
-    tensor_parallel_size: 2
-    serve:
-      max_model_len: 40960
-  vllm-container:
-    image: vllm/vllm-openai:latest
-    container_port: 8000
-    volumes:
-      - /data/huggingface:/root/.cache/huggingface
-    ipc_mode: host
-  pyxis:
-    srun_extra_args: []
+```toml
+model = "Qwen/Qwen3-30B-A3B"
+
+[[eval]]
+env_id = "medqa"
+
+[orchestrate.qwen-30b-a3b]
+gpus = 2
+tensor_parallel_size = 2
+
+[orchestrate.qwen-30b-a3b.serve]
+max_model_len = 40960
+
+[orchestrate.vllm-container]
+image = "vllm/vllm-openai:latest"
+container_port = 8000
+volumes = ["/data/huggingface:/root/.cache/huggingface"]
+ipc_mode = "host"
+
+[orchestrate.pyxis]
+srun_extra_args = []
 ```
 
 Config notes:
@@ -129,6 +133,15 @@ Artifacts are written under `outputs/orchestrator/<run_id>/`:
 - per-task folders contain `run_manifest.json`, `serve/` logs, `bench/` outputs, and `result.json`.
 
 ### Runtime behavior
+
+For each task, the orchestrator launches vLLM, waits for readiness, then runs:
+
+```bash
+medarc-eval bench --config <job.toml> --api-base-url <allocated-local-url> --provider local
+```
+
+The bench command exits naturally on completion; the orchestrator no longer passes YAML-runner flags such as
+`--on-complete` or `--restart`.
 
 Docker mode:
 
