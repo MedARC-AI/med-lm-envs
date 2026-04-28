@@ -21,12 +21,9 @@ from rich.table import Table
 from verifiers.utils.eval_utils import run_evaluation
 from verifiers.utils.save_utils import make_serializable
 
-from medarc_verifiers.cli._config_loader import ConfigFormatError, load_run_config
 from medarc_verifiers.cli._constants import (
     BENCH_COMMAND,
     COMMAND,
-    DEFAULT_API_BASE_URL,
-    DEFAULT_API_KEY_VAR,
     DEFAULT_ENDPOINTS_PATH,
     DEFAULT_EVALS_DIR,
     DEFAULT_ENV_CONFIG_ROOT,
@@ -36,10 +33,6 @@ from medarc_verifiers.cli._constants import (
     PROCESS_COMMAND,
     WINRATE_COMMAND,
 )
-from medarc_verifiers.cli._job_builder import ResolvedJob, build_jobs
-from medarc_verifiers.cli._job_executor import ExecutorSettings, JobExecutionResult, execute_jobs
-from medarc_verifiers.cli._manifest import MANIFEST_FILENAME, ManifestJobEntry, RunManifest, compute_snapshot_checksum
-from medarc_verifiers.cli._manifest_planner import ManifestPlanner
 from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, EnvironmentExportConfig
 from medarc_verifiers.cli._single_run import run_single_mode
 from medarc_verifiers.cli.eval_identity import EvalPathPlan, generate_variant_id, plan_eval_paths
@@ -52,8 +45,6 @@ from medarc_verifiers.cli.utils.shared import (
     dataset_is_excluded,
     normalize_dataset_ids,
     normalize_model_ids,
-    slugify,
-    validate_simple_name,
 )
 from medarc_verifiers.cli.verifiers_adapter import EvalConfigOverrides, build_eval_config, load_toml_eval_configs
 from medarc_verifiers.utils.pathing import resolve_under
@@ -73,45 +64,10 @@ def build_batch_parser() -> argparse.ArgumentParser:
     """Construct the unified CLI parser."""
     parser = argparse.ArgumentParser(
         prog=COMMAND,
-        description="Run MedARC evaluations using unified configuration files.",
+        description="Run MedARC evaluations using upstream verifiers TOML configs.",
     )
-    parser.add_argument("-c", "--config", required=True, type=Path, help="Path to a benchmark configuration file.")
-    parser.add_argument(
-        "--run-id",
-        help="Override the generated run identifier (simple name only: no slashes, no '..', not absolute).",
-    )
-    parser.add_argument("--name", help="Override the human-friendly run name (defaults to the config name).")
-    parser.add_argument(
-        "--restart",
-        help=(
-            "Seed jobs from a previous run directory or run_manifest.json path; "
-            "otherwise treated as a run id under output_dir."
-        ),
-    )
-    parser.add_argument(
-        "--auto-resume",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help=(
-            "Automatically resume the newest matching run (default: enabled). "
-            "Pass --no-auto-resume to force a fresh run."
-        ),
-    )
-    parser.add_argument(
-        "--on-complete",
-        choices=("exit", "continue", "rerun", "new", "prompt"),
-        default="prompt",
-        help=(
-            "Action when all selected jobs are already completed. "
-            "Use 'prompt' for interactive selection (default: prompt)."
-        ),
-    )
-    parser.add_argument("--force", action="store_true", help="Re-run every job regardless of manifest state.")
-    parser.add_argument(
-        "--forced",
-        action="append",
-        help="Re-run jobs for the specified environment(s); repeat or comma-separate values.",
-    )
+    parser.add_argument("-c", "--config", required=True, type=Path, help="Path to an upstream TOML eval config file.")
+    parser.add_argument("--force", action="store_true", help="Archive existing deterministic output and rerun.")
     parser.add_argument("--output-dir", type=Path, help="Override the output directory from the configuration.")
     parser.add_argument(
         "--env-dir",
@@ -120,34 +76,15 @@ def build_batch_parser() -> argparse.ArgumentParser:
         help="Directory containing environments (default: %(default)s).",
     )
     parser.add_argument(
-        "--env-config-root",
-        type=Path,
-        default=DEFAULT_ENV_CONFIG_ROOT,
-        help="Directory containing environment YAMLs for auto-discovery (default: %(default)s).",
-    )
-    parser.add_argument(
         "--endpoints-path",
         type=Path,
         default=DEFAULT_ENDPOINTS_PATH,
         help=f"Path to the endpoints registry file (default: {DEFAULT_ENDPOINTS_PATH}).",
     )
     parser.add_argument(
-        "--default-api-key-var",
-        default=DEFAULT_API_KEY_VAR,
-        help=f"Default API key environment variable (default: {DEFAULT_API_KEY_VAR}).",
-    )
-    parser.add_argument(
-        "--default-api-base-url",
-        default=DEFAULT_API_BASE_URL,
-        help=f"Default API base URL (default: {DEFAULT_API_BASE_URL}).",
-    )
-    parser.add_argument(
         "--api-base-url",
         default=None,
-        help=(
-            "Override API base URL for all models (CLI force > model api_base_url > --default-api-base-url). "
-            "Useful when pointing a config at a dynamically assigned endpoint."
-        ),
+        help="Override API base URL for all TOML evals.",
     )
     parser.add_argument("--api-key-var", default=None, help="Override API key environment variable for TOML bench.")
     parser.add_argument("--provider", default=None, help="Override provider shorthand for TOML bench.")
@@ -163,9 +100,6 @@ def build_batch_parser() -> argparse.ArgumentParser:
         help="Continue TOML sequential execution after a failed eval.",
     )
     parser.add_argument(
-        "--job-id", action="append", help="Run only the specified job identifier (repeat to select multiple)."
-    )
-    parser.add_argument(
         "--env-arg", action="append", help="Override an environment argument with KEY=VALUE (repeatable)."
     )
     parser.add_argument("--env-args", help="Override environment arguments with a JSON object.")
@@ -178,49 +112,23 @@ def build_batch_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging.")
     parser.add_argument(
-        "--save-results",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Persist evaluation outputs (default: enabled).",
-    )
-    parser.add_argument(
-        "--save-to-hf-hub",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Upload results to the Hugging Face Hub.",
-    )
-    parser.add_argument("--hf-hub-dataset-name", help="Custom dataset name when uploading to the Hub.")
-    parser.add_argument(
         "--max-concurrent",
         type=int,
         default=None,
-        help="Override env max_concurrent for all jobs (CLI > model > env > defaults).",
+        help="Override max_concurrent for every TOML eval.",
     )
-    parser.add_argument("--max-concurrent-generation", type=int, help="Deprecated: ignored.")
-    parser.add_argument("--max-concurrent-scoring", type=int, help="Deprecated: ignored.")
     parser.add_argument(
         "--timeout",
         type=float,
         default=None,
-        help="Override request timeout in seconds for all jobs (CLI > model > default).",
+        help="Override request timeout in seconds for every TOML eval.",
     )
     parser.add_argument(
-        "--http-max-retries",
+        "--max-retries",
+        dest="rollout_max_retries",
         type=int,
         default=None,
-        help="HTTP/client-level retries for model calls (CLI > model max_retries).",
-    )
-    parser.add_argument(
-        "--rollout-max-retries",
-        type=int,
-        default=0,
-        help="Retry full rollout/group on retryable infra/invalid-response errors.",
-    )
-    parser.add_argument(
-        "--model-call-retries",
-        type=int,
-        default=None,
-        help="Per-model-call MedARC retry attempts (0 disables the monkeypatch).",
+        help="Override upstream rollout max_retries for every TOML eval.",
     )
     parser.add_argument(
         "--sleep",
@@ -229,21 +137,6 @@ def build_batch_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.0,
         help="Sleep this many seconds after each job (overridden by per-job sleep).",
-    )
-    parser.add_argument(
-        "--enable-additional-retries",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Deprecated alias for --model-call-retries (true maps to 3 attempts).",
-    )
-    parser.add_argument(
-        "--include-usage",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help=(
-            "Include usage reporting in API requests (extra_body.usage.include). "
-            "Default: auto-detect (enabled for Prime Inference, disabled otherwise)."
-        ),
     )
     return parser
 
@@ -561,42 +454,19 @@ def _run_batch_mode(argv: Sequence[str]) -> int:
             json_flag="--sampling-args",
             pair_flag="--sampling-arg",
         )
-        args.model_call_retries = _resolve_model_call_retries(
-            args.model_call_retries,
-            args.enable_additional_retries,
-        )
-        if args.http_max_retries is not None and args.http_max_retries < 0:
-            raise ValueError("--http-max-retries must be >= 0.")
-        if args.rollout_max_retries < 0:
-            raise ValueError("--rollout-max-retries must be >= 0.")
+        if args.rollout_max_retries is not None and args.rollout_max_retries < 0:
+            raise ValueError("--max-retries must be >= 0.")
     except ValueError as exc:
         parser.error(str(exc))
 
     config_path = Path(args.config).expanduser()
-    if config_path.suffix.lower() == ".toml":
-        try:
-            _validate_toml_selection_args(args, parser=parser)
-            return _run_toml_bench(args)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("TOML bench failed: %s", exc)
-            return 1
-
-    if args.restart:
-        args.auto_resume = False
-    # Restarting is an explicit workflow; disable auto-resume selection when --restart is set.
-    # The planner may restart in-place when --restart points to an existing run directory.
-
+    if config_path.suffix.lower() != ".toml":
+        parser.error("medarc-eval bench now accepts upstream TOML configs only.")
     try:
-        return _execute_batch(args)
-    except KeyboardInterrupt:
-        logger.warning("Batch run interrupted by user.")
-        return 1
-    except ConfigFormatError as exc:
-        parser.error(str(exc))
-    except SystemExit:  # pragma: no cover - argparse already handled messaging
-        raise
+        _validate_toml_selection_args(args, parser=parser)
+        return _run_toml_bench(args)
     except Exception as exc:  # noqa: BLE001
-        logger.exception("Unhandled error: %s", exc)
+        logger.exception("TOML bench failed: %s", exc)
         return 1
 
 
@@ -1370,228 +1240,6 @@ def _run_winrate_mode(argv: Sequence[str]) -> int:
     return 0
 
 
-def _execute_batch(args: argparse.Namespace) -> int:
-    # Set the include_usage environment variable if explicitly specified
-    if getattr(args, "include_usage", None) is not None:
-        import os
-
-        os.environ["MEDARC_INCLUDE_USAGE"] = "true" if args.include_usage else "false"
-
-    config_path = Path(args.config).expanduser()
-    if config_path.suffix.lower() in {".yaml", ".yml"}:
-        logger.warning("YAML benchmark configs will be removed; convert to TOML.")
-    env_root_override = Path(args.env_config_root).expanduser().resolve() if args.env_config_root else None
-    run_config = load_run_config(config_path, env_default_root=env_root_override)
-
-    run_name = args.name or run_config.name
-    output_dir = Path(args.output_dir).expanduser() if args.output_dir else Path(run_config.output_dir).expanduser()
-    output_dir = output_dir.resolve()
-    run_id = args.run_id  # May be None when using --auto-resume discovery
-    if run_id is not None:
-        try:
-            run_id = validate_simple_name(run_id, flag="--run-id")
-        except ValueError as exc:
-            logger.error("Invalid --run-id '%s': %s", run_id, exc)
-            logger.error("Suggested safe value: --run-id %s", slugify(run_id))
-            return 1
-
-    if args.restart:
-        restart_raw = args.restart
-        restart_path = Path(restart_raw).expanduser()
-        try:
-            if restart_path.exists():
-                if restart_path.is_dir():
-                    args.restart = str(restart_path)
-                elif restart_path.is_file() and restart_path.name == MANIFEST_FILENAME:
-                    args.restart = str(restart_path.parent)
-                else:
-                    logger.error(
-                        "Invalid --restart '%s': expected a run directory or %s file.",
-                        restart_raw,
-                        MANIFEST_FILENAME,
-                    )
-                    return 1
-            else:
-                args.restart = validate_simple_name(restart_raw, flag="--restart")
-        except OSError as exc:
-            logger.error("Invalid --restart '%s': %s", restart_raw, exc)
-            return 1
-        except ValueError as exc:
-            logger.error("Invalid --restart '%s': %s", restart_raw, exc)
-            return 1
-
-    if args.model_call_retries > 0 and not args.dry_run:
-        from datetime import datetime
-
-        from medarc_verifiers.utils.retry import patch_verifiers_model_response_retry
-
-        cwd = Path.cwd()
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        retry_log_path = cwd / "logs" / f"medarc_model_retry_{ts}.log"
-        patch_verifiers_model_response_retry(
-            attempts=args.model_call_retries,
-            log_path=retry_log_path,
-        )
-
-    jobs = build_jobs(run_config)
-    if not jobs:
-        logger.error("Configuration %s did not produce any jobs.", config_path)
-        return 1
-
-    selected_jobs = _filter_jobs(jobs, args.job_id)
-    if not selected_jobs:
-        logger.error("No jobs matched the provided filters.")
-        return 1
-
-    env_args_map, sampling_args_map = _build_effective_args(jobs)
-    config_checksum = compute_snapshot_checksum(run_config.model_dump())
-    forced_envs = _parse_forced_envs(args.forced)
-    forced_envs.update(_collect_rerun_envs(run_config.envs))
-
-    planner = ManifestPlanner(
-        output_dir=output_dir,
-        run_id=run_id,
-        run_name=run_name,
-        config_path=config_path,
-        config_checksum=config_checksum,
-        jobs=jobs,
-        env_args_map=env_args_map,
-        sampling_args_map=sampling_args_map,
-        restart_source=args.restart,
-        auto_resume=bool(args.auto_resume),
-        persist=not bool(args.dry_run),
-    )
-
-    try:
-        manifest_plan = planner.plan(force_all=bool(args.force), forced_envs=forced_envs)
-    except ValueError as exc:
-        logger.error("%s", exc)
-        return 1
-
-    runnable_ids = manifest_plan.runnable_job_ids
-    selected_ids = {job.job_id for job in selected_jobs}
-    planned_jobs = [job for job in jobs if job.job_id in runnable_ids and job.job_id in selected_ids]
-
-    _print_job_plan(
-        selected_jobs,
-        manifest=manifest_plan.manifest,
-        runnable_job_ids=runnable_ids,
-        discovered_total=len(jobs),
-        dry_run=bool(args.dry_run),
-    )
-
-    if not planned_jobs:
-        if manifest_plan.reused_job_ids:
-            logger.info(
-                "All jobs already completed (reused %d job(s) from prior manifests).",
-                len(manifest_plan.reused_job_ids),
-            )
-        else:
-            logger.info("No jobs were scheduled after applying filters and resume settings.")
-
-        # Check if all selected jobs are completed (not just filtered out)
-        all_completed = all(
-            manifest_plan.manifest.job_entry(job.job_id)
-            and manifest_plan.manifest.job_entry(job.job_id).status == "completed"
-            for job in selected_jobs
-        )
-
-        if all_completed and selected_jobs and not args.dry_run and not args.force:
-            choice = args.on_complete
-            if choice == "prompt":
-                choice = _prompt_completed_jobs_action()
-            if choice == "new":
-                logger.info("Creating a new run with all jobs...")
-                # Create a fresh run by disabling auto-resume and forcing a new run_id
-                # Recursively call with updated args to create new manifest
-                new_args = argparse.Namespace(**vars(args))
-                new_args.auto_resume = False
-                new_args.run_id = None  # Force generation of new run_id
-                new_args.restart = None
-                return _execute_batch(new_args)
-            elif choice == "rerun":
-                logger.info("Rerunning all completed jobs...")
-                # Set all selected jobs to runnable
-                runnable_ids = {job.job_id for job in selected_jobs}
-                planned_jobs = [job for job in jobs if job.job_id in runnable_ids and job.job_id in selected_ids]
-                # Continue execution below
-            elif choice == "exit":
-                logger.info("Exiting without running jobs.")
-                _log_summary([], manifest_plan.manifest)
-                return 0
-            else:  # continue/skip
-                logger.info("Continuing without running jobs.")
-                _log_summary([], manifest_plan.manifest)
-                return 0
-        else:
-            _log_summary([], manifest_plan.manifest)
-            return 0
-
-    if not planned_jobs:
-        # After prompting, still no planned jobs (shouldn't happen, but safety check)
-        _log_summary([], manifest_plan.manifest)
-        return 0
-
-    forced_job_ids = _compute_forced_job_ids(
-        planned_jobs=planned_jobs,
-        runnable_job_ids=runnable_ids,
-        manifest=manifest_plan.manifest,
-        force_all=bool(args.force),
-        forced_envs=forced_envs,
-    )
-
-    settings = ExecutorSettings(
-        run_id=manifest_plan.manifest.model.run_id or "",
-        output_dir=output_dir,
-        env_dir=Path(args.env_dir).expanduser(),
-        endpoints_path=Path(args.endpoints_path).expanduser() if args.endpoints_path else None,
-        endpoints_path_explicit=bool(getattr(args, "endpoints_path_explicit", False)),
-        default_api_key_var=args.default_api_key_var,
-        default_api_key_var_explicit=bool(getattr(args, "default_api_key_var_explicit", False)),
-        default_api_base_url=args.default_api_base_url,
-        api_base_url_override=args.api_base_url,
-        log_level="DEBUG" if args.verbose else "INFO",
-        verbose=args.verbose,
-        save_results=args.save_results,
-        save_to_hf_hub=args.save_to_hf_hub,
-        hf_hub_dataset_name=_coerce_optional_str(args.hf_hub_dataset_name),
-        max_concurrent_generation=args.max_concurrent_generation,
-        max_concurrent_scoring=args.max_concurrent_scoring,
-        max_concurrent=args.max_concurrent,  # CLI override (None if not provided)
-        http_max_retries=args.http_max_retries,
-        rollout_max_retries=args.rollout_max_retries,
-        timeout=args.timeout,
-        sleep=args.sleep,
-        dry_run=args.dry_run,
-        cli_env_args=getattr(args, "cli_env_args", None),
-        cli_sampling_args=getattr(args, "cli_sampling_args", None),
-        forced_job_ids=forced_job_ids,
-    )
-
-    logger.info(
-        "Loaded %d job(s); executing %d after filters (%d reusable).",
-        len(jobs),
-        len(planned_jobs),
-        len(manifest_plan.reused_job_ids),
-    )
-
-    endpoints_cache: dict[str, Any] = {}
-    env_metadata_cache: dict[str, Any] = {}
-
-    results = execute_jobs(
-        planned_jobs,
-        settings,
-        endpoints_cache=endpoints_cache,
-        env_metadata_cache=env_metadata_cache,
-        manifest=None if args.dry_run else manifest_plan.manifest,
-    )
-
-    _log_summary(results, manifest_plan.manifest)
-
-    has_failures = any(result.status == "failed" for result in results if result.status != "skipped")
-    return 1 if has_failures else 0
-
-
 def _validate_toml_selection_args(args: argparse.Namespace, *, parser: argparse.ArgumentParser) -> None:
     for attr, flag in (("eval_index", "--eval-index"), ("start_at", "--start-at"), ("stop_after", "--stop-after")):
         value = getattr(args, attr, None)
@@ -1635,6 +1283,10 @@ def _prepare_toml_raw_configs(raw_configs: Sequence[dict[str, Any]], args: argpa
         item.setdefault("save_results", True)
         if args.max_concurrent is None and "max_concurrent" not in item:
             item["max_concurrent"] = 1
+        if args.timeout is not None:
+            item["timeout"] = args.timeout
+        if args.rollout_max_retries is not None:
+            item["max_retries"] = args.rollout_max_retries
         prepared.append(item)
     return prepared
 
@@ -1846,31 +1498,6 @@ def _print_toml_bench_plan(eval_configs: Sequence[Any], path_plans: Sequence[Eva
     console.print(table)
 
 
-def _build_effective_args(
-    jobs: Sequence[ResolvedJob],
-) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
-    env_map: dict[str, dict[str, Any]] = {}
-    sampling_map: dict[str, dict[str, Any]] = {}
-    for job in jobs:
-        env_map[job.job_id] = dict(job.env_args)
-        sampling_map[job.job_id] = dict(job.sampling_args)
-    return env_map, sampling_map
-
-
-def _parse_forced_envs(values: Sequence[str] | None) -> set[str]:
-    forced: set[str] = set()
-    if not values:
-        return forced
-    for chunk in values:
-        if not chunk:
-            continue
-        for item in chunk.split(","):
-            value = item.strip()
-            if value:
-                forced.add(value.lower())
-    return forced
-
-
 def _parse_repeatable_csv(values: Sequence[str] | None) -> list[str]:
     parsed: list[str] = []
     for chunk in values or ():
@@ -1888,23 +1515,6 @@ def _option_was_provided(argv: Sequence[str], long_flag: str) -> bool:
         if token == long_flag or token.startswith(f"{long_flag}="):
             return True
     return False
-
-
-def _resolve_model_call_retries(model_call_retries: int | None, deprecated_toggle: bool | None) -> int:
-    if model_call_retries is not None:
-        if model_call_retries < 0:
-            raise ValueError("--model-call-retries must be >= 0.")
-        if deprecated_toggle is not None:
-            logger.warning(
-                "Ignoring deprecated --enable-additional-retries because --model-call-retries was explicitly set."
-            )
-        return model_call_retries
-
-    if deprecated_toggle is None:
-        return 0
-
-    logger.warning("Flag --enable-additional-retries is deprecated; use --model-call-retries <attempts> instead.")
-    return 3 if deprecated_toggle else 0
 
 
 def _filter_winrate_datasets(
@@ -1926,132 +1536,16 @@ def _filter_winrate_datasets(
     return filtered
 
 
-def _collect_rerun_envs(envs: Mapping[str, EnvironmentConfigSchema]) -> set[str]:
-    rerun: set[str] = set()
-    for env in envs.values():
-        if getattr(env, "rerun", False):
-            for key in (env.id, env.module, env.matrix_base_id):
-                if key:
-                    rerun.add(str(key).lower())
-    return rerun
-
-
-def _compute_forced_job_ids(
-    *,
-    planned_jobs: Sequence[ResolvedJob],
-    runnable_job_ids: set[str],
-    manifest: RunManifest | None,
-    force_all: bool,
-    forced_envs: set[str],
-) -> set[str]:
-    forced_ids: set[str] = set()
-    if force_all:
-        return {job.job_id for job in planned_jobs}
-
-    for job in planned_jobs:
-        entry = manifest.job_entry(job.job_id) if manifest is not None else None
-        env_forced = any(key in forced_envs for key in _force_keys_for_job(job, entry))
-        completed_but_runnable = bool(
-            entry is not None and entry.status == "completed" and job.job_id in runnable_job_ids
-        )
-        if env_forced or completed_but_runnable:
-            forced_ids.add(job.job_id)
-    return forced_ids
-
-
-def _force_keys_for_job(job: ResolvedJob, entry: ManifestJobEntry | None) -> set[str]:
-    keys: set[str] = {job.job_id.lower()}
-    for value in (
-        getattr(job.env, "id", None),
-        getattr(job.env, "module", None),
-        getattr(job.env, "matrix_base_id", None),
-        getattr(entry, "env_id", None),
-    ):
-        if value:
-            keys.add(str(value).lower())
-    return keys
-
-
-def _filter_jobs(jobs: Sequence[ResolvedJob], job_filters: Sequence[str] | None) -> list[ResolvedJob]:
-    if not job_filters:
-        return list(jobs)
-    filters = set(job_filters)
-    selected = [job for job in jobs if job.job_id in filters]
-    missing = filters - {job.job_id for job in selected}
-    if missing:
-        logger.warning("Unknown job ids requested: %s", ", ".join(sorted(missing)))
-    return selected
-
-
-def _coerce_optional_str(value: str | None) -> str | None:
-    if value is None or value == "":
-        return None
-    return value
-
-
-def _prompt_completed_jobs_action() -> str:
-    """Prompt user to choose what to do when all jobs are completed.
-
-    Returns:
-        "new", "rerun", "continue", or "exit"
-    """
-    console = Console()
-
-    message = "\n[bold yellow]All jobs are already completed.[/bold yellow]\n"
-    message += "What would you like to do?\n"
-    message += "  [bold cyan]n[/bold cyan] - Create a new run\n"
-    message += "  [bold cyan]r[/bold cyan] - Rerun all jobs (ignore completion status)\n"
-    message += "  [bold cyan]c[/bold cyan] - Continue without running (default)\n"
-    message += "  [bold cyan]e[/bold cyan] - Exit\n"
-
-    console.print(message)
-
-    try:
-        response = input("Choose [n/r/c/e]: ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print()  # New line after Ctrl+C
-        return "exit"
-
-    if response == "n" or response == "new":
-        return "new"
-    elif response == "r" or response == "rerun":
-        return "rerun"
-    elif response == "e" or response == "exit":
-        return "exit"
-    else:
-        # Default to continue for any other input (including empty/enter)
-        return "continue"
-
-
-def _log_summary(results: Sequence[JobExecutionResult], manifest: RunManifest | None = None) -> None:
-    if manifest is not None:
-        summary = manifest.summary
-        logger.info(
-            "Run complete: %d completed, %d pending, %d failed, %d skipped (total %d).",
-            summary.get("completed", 0),
-            summary.get("pending", 0),
-            summary.get("failed", 0),
-            summary.get("skipped", 0),
-            summary.get("total", 0),
-        )
-        return
-    total = len(results)
-    succeeded = sum(result.status == "succeeded" for result in results)
-    skipped = sum(result.status == "skipped" for result in results)
-    failed = sum(result.status == "failed" for result in results)
-    logger.info("Run complete: %d succeeded, %d skipped, %d failed (total %d).", succeeded, skipped, failed, total)
-
-
 def _print_general_help() -> None:
     message = dedent(
         f"""\
         Usage:
           {COMMAND} <ENV> [options]                 # Single run (ENV must be first; use ENV --help for details)
-          {COMMAND} {BENCH_COMMAND} --config CONFIG.yaml ...  # Batch run (see: {COMMAND} {BENCH_COMMAND} --help)
+          {COMMAND} {BENCH_COMMAND} --config CONFIG.toml ...  # Sequential TOML bench
           {COMMAND} {PROCESS_COMMAND} [options]               # Export raw runs to parquet (see: {COMMAND} {PROCESS_COMMAND} --help)
           {COMMAND} {WINRATE_COMMAND} [options]               # Compute win rates from processed parquet outputs
 
-        First argument must be the environment slug for single runs. Use '{COMMAND} {BENCH_COMMAND} --help' for batch mode options."""
+        First argument must be the environment slug for single runs. Use '{COMMAND} {BENCH_COMMAND} --help' for TOML bench options."""
     )
     print(message)
 
@@ -2131,73 +1625,6 @@ def _load_env_export_map(root: Path | None) -> dict[str, EnvironmentExportConfig
                 export_map[key] = env_cfg.export
 
     return export_map
-
-
-def _print_job_plan(
-    jobs: Sequence[ResolvedJob],
-    *,
-    manifest: RunManifest | None,
-    runnable_job_ids: set[str],
-    discovered_total: int,
-    dry_run: bool,
-) -> None:
-    """Render a human-friendly summary of the jobs scheduled for execution."""
-    listed_total = len(jobs)
-    scheduled_total = sum(1 for job in jobs if job.job_id in runnable_job_ids)
-    caption_parts: list[str] = [f"{listed_total} job(s) listed"]
-    caption_parts.append(f"{scheduled_total} to {'dry-run' if dry_run else 'run'}")
-    if discovered_total != listed_total:
-        caption_parts.append(f"{discovered_total} discovered")
-    caption = " | ".join(part for part in caption_parts if part)
-
-    if not jobs:
-        logger.info("No jobs to display (%s).", caption)
-        return
-
-    def _format_label(primary: str | None, secondary: str | None) -> str:
-        if primary and secondary and primary != secondary:
-            return f"{primary} ({secondary})"
-        return primary or secondary or "-"
-
-    def _resolve_status(job_id: str, entry: ManifestJobEntry | None) -> str:
-        if job_id in runnable_job_ids:
-            return "next"
-        if entry and entry.status == "completed":
-            return "completed"
-        return "pending"
-
-    entries = {}
-    if manifest is not None:
-        entries = {entry.job_id: entry for entry in manifest.jobs if entry.job_id}
-
-    console = Console()
-    table = Table(title="Planned Jobs", caption=caption, expand=True)
-    table.add_column("#", justify="right", style="dim")
-    table.add_column("Job ID", style="bold cyan", overflow="fold")
-    table.add_column("Status", style="yellow")
-    table.add_column("Name", style="white", overflow="fold")
-    table.add_column("Model", style="magenta", overflow="fold")
-    table.add_column("Environment", style="green", overflow="fold")
-    table.add_column("Examples", justify="right")
-    table.add_column("Rollouts", justify="right")
-
-    for index, job in enumerate(jobs, start=1):
-        entry = entries.get(job.job_id)
-        model_label = _format_label(job.model.id, job.model.model)
-        env_label = _format_label(job.env.id, job.env.module)
-        status = _resolve_status(job.job_id, entry)
-        table.add_row(
-            str(index),
-            job.job_id,
-            status,
-            job.name or "-",
-            model_label,
-            env_label,
-            str(job.env.num_examples),
-            str(job.env.rollouts_per_example),
-        )
-
-    console.print(table)
 
 
 if __name__ == "__main__":  # pragma: no cover
