@@ -5,7 +5,7 @@ description = "MedCalc-Bench clinical calculator evaluation"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
-    "verifiers>=0.1.4",
+    "verifiers>=0.1.12,<0.2",
     "datasets>=4.0.0",
     "numpy>=1.26.0",
     "simpleeval>=0.9.10",

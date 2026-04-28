@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "medarc-verifiers>=0.1.0",
-    "verifiers>=0.1.10",
+    "verifiers>=0.1.12,<0.2",
     "datasets",
     "requests",
     "pydantic",

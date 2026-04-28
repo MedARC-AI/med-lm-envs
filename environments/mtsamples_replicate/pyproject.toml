@@ -12,7 +12,7 @@ tags = [
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "verifiers>=0.1.4",
+    "verifiers>=0.1.12,<0.2",
     "datasets>=4.1.1",
     "openai>=2.1.0",
     "medarc-verifiers>=0.1.0",
