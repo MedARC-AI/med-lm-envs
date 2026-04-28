@@ -74,6 +74,7 @@ class RunIdentity:
     rollout_index: int | None
     job_run_id: str
     output_env_id: str
+    variant_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +149,7 @@ def load_normalized_metadata(
         rollout_index=resolved_rollout_index,
         job_run_id=record.manifest.job_run_id,
         output_env_id=context.base_env_id or context.manifest_env_id or record.job_id,
+        variant_id=context.variant_id,
     )
 
     return NormalizedMetadata(

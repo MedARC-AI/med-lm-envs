@@ -30,7 +30,6 @@ from medarc_verifiers.cli.utils.shared import (
 
 logger = logging.getLogger(__name__)
 PROCESS_DEFAULT_STATUS_FILTER: tuple[str, ...] = ("completed",)
-VARIANT_AGGREGATION_NOT_IMPLEMENTED = "variant aggregation not implemented yet"
 
 
 @dataclass(slots=True)
@@ -325,7 +324,6 @@ def select_work_items(
         exclude_datasets=options.exclude_datasets,
         exclude_models=options.exclude_models,
     )
-    _raise_for_variant_aggregation(work_items)
     _validate_replace_targets(work_items, options)
     work_items, skipped_by_delta = _apply_additive_delta(work_items, options=options, index_files=index_files)
     _validate_selected_results_completeness(work_items, max_results_missing_pct=options.max_results_missing_pct)
@@ -456,7 +454,11 @@ def _apply_exclusions(
     filtered: list[PlannedWorkItem] = []
     skipped = 0
     for item in work_items:
-        if exclude_dataset_set and _env_is_excluded(item.identity.output_env_id, exclude_dataset_set):
+        if exclude_dataset_set and _env_is_excluded(
+            item.identity.output_env_id,
+            exclude_dataset_set,
+            variant_id=item.identity.variant_id,
+        ):
             skipped += 1
             continue
         if exclude_model_set and model_is_excluded(item.identity.model_id, exclude_model_set):
@@ -464,30 +466,6 @@ def _apply_exclusions(
             continue
         filtered.append(item)
     return filtered, skipped
-
-
-def _raise_for_variant_aggregation(work_items: Sequence[PlannedWorkItem]) -> None:
-    variant_records: list[str] = []
-    for item in work_items:
-        for planned in item.records:
-            normalized = planned.normalized
-            if not normalized.variant_id:
-                continue
-            record = normalized.record
-            variant_records.append(
-                "model_id={model_id} output_env_id={output_env_id} variant_id={variant_id} "
-                "job_run_id={job_run_id} results_path={results_path}".format(
-                    model_id=item.identity.model_id,
-                    output_env_id=item.identity.output_env_id,
-                    variant_id=normalized.variant_id,
-                    job_run_id=record.manifest.job_run_id,
-                    results_path=record.results_path,
-                )
-            )
-    if not variant_records:
-        return
-    details = "\n".join(f"  - {record}" for record in sorted(variant_records))
-    raise RuntimeError(f"{VARIANT_AGGREGATION_NOT_IMPLEMENTED}:\n{details}")
 
 
 def _validate_replace_targets(work_items: Sequence[PlannedWorkItem], options: ProcessOptions) -> None:
@@ -539,6 +517,7 @@ def _apply_additive_delta(
             options.output_dir,
             model_id=item.identity.model_id,
             env_id=item.identity.output_env_id,
+            variant_id=item.identity.variant_id,
         )
         if not output_path.exists():
             filtered.append(item)
@@ -893,10 +872,15 @@ def _source_updated_at(record: discovery.RunRecord) -> str:
     return record.manifest.updated_at or record.manifest.created_at or ""
 
 
-def _env_is_excluded(env_id: str, exclude_set: set[str]) -> bool:
+def _env_is_excluded(env_id: str, exclude_set: set[str], *, variant_id: str | None = None) -> bool:
     env_identifier = str(env_id or "").strip()
     base_env_id, _ = rollout.derive_base_env_id(env_identifier)
-    return dataset_is_excluded(env_identifier, exclude_set, base_dataset_id=base_env_id)
+    dataset_id = f"{env_identifier}::{variant_id}" if variant_id else env_identifier
+    if dataset_is_excluded(dataset_id, exclude_set, base_dataset_id=base_env_id):
+        return True
+    if variant_id:
+        return dataset_is_excluded(env_identifier, exclude_set, base_dataset_id=base_env_id)
+    return False
 
 
 def _strip_env_group_rows(group: AggregatedEnvRows) -> AggregatedEnvRows:
@@ -904,6 +888,8 @@ def _strip_env_group_rows(group: AggregatedEnvRows) -> AggregatedEnvRows:
         env_id=group.env_id,
         base_env_id=group.base_env_id,
         model_id=group.model_id,
+        variant_id=group.variant_id,
+        variant_payload=group.variant_payload,
         rows=[],
         column_names=group.column_names,
         job_run_ids=group.job_run_ids,

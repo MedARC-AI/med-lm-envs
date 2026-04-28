@@ -337,22 +337,67 @@ def test_run_process_processes_deterministic_eval_outputs(tmp_path: Path) -> Non
     assert group.model_id == "gpt-mini"
 
 
-def test_run_process_rejects_variant_aggregation_until_supported(tmp_path: Path) -> None:
-    runs_dir = _write_deterministic_eval(tmp_path, variant_id="env_args.shuffle_seed-1618")
+def test_run_process_preserves_deterministic_eval_variants(tmp_path: Path) -> None:
+    _write_deterministic_eval(tmp_path, variant_id="env_args.shuffle_seed-1618")
+    runs_dir = _write_deterministic_eval(tmp_path, variant_id="env_args.shuffle_seed-9331")
+    output_dir = tmp_path / "processed"
 
-    with pytest.raises(RuntimeError) as excinfo:
-        run_process(
-            ProcessOptions(
-                runs_dir=runs_dir,
-                output_dir=tmp_path / "processed",
-                dry_run=True,
-                max_workers=1,
-            )
+    result = run_process(
+        ProcessOptions(
+            runs_dir=runs_dir,
+            output_dir=output_dir,
+            dry_run=False,
+            max_workers=1,
         )
+    )
 
-    message = str(excinfo.value)
-    assert "variant aggregation not implemented yet" in message
-    assert "variant_id=env_args.shuffle_seed-1618" in message
+    assert result.records_processed == 2
+    rel_paths = sorted(summary.output_path.relative_to(output_dir).as_posix() for summary in result.env_summaries)
+    assert rel_paths == [
+        "gpt-mini/demo-env__variants/env_args.shuffle_seed-1618.parquet",
+        "gpt-mini/demo-env__variants/env_args.shuffle_seed-9331.parquet",
+    ]
+    index_payload = json.loads((output_dir / "env_index.json").read_text(encoding="utf-8"))
+    assert sorted(index_payload["files"]) == rel_paths
+    assert {
+        entry["variant_id"] for entry in index_payload["files"].values()
+    } == {"env_args.shuffle_seed-1618", "env_args.shuffle_seed-9331"}
+
+
+def test_run_process_excludes_specific_deterministic_eval_variant(tmp_path: Path) -> None:
+    _write_deterministic_eval(tmp_path, variant_id="env_args.shuffle_seed-1618")
+    runs_dir = _write_deterministic_eval(tmp_path, variant_id="env_args.shuffle_seed-9331")
+
+    result = run_process(
+        ProcessOptions(
+            runs_dir=runs_dir,
+            output_dir=tmp_path / "processed",
+            exclude_datasets=("demo-env::env_args.shuffle_seed-1618",),
+            dry_run=True,
+            max_workers=1,
+        )
+    )
+
+    assert result.records_processed == 1
+    assert result.env_groups[0].variant_id == "env_args.shuffle_seed-9331"
+
+
+def test_run_process_excludes_deterministic_eval_variants_by_base_env(tmp_path: Path) -> None:
+    _write_deterministic_eval(tmp_path, variant_id="env_args.shuffle_seed-1618")
+    runs_dir = _write_deterministic_eval(tmp_path, variant_id="env_args.shuffle_seed-9331")
+
+    result = run_process(
+        ProcessOptions(
+            runs_dir=runs_dir,
+            output_dir=tmp_path / "processed",
+            exclude_datasets=("demo-env",),
+            dry_run=True,
+            max_workers=1,
+        )
+    )
+
+    assert result.records_processed == 0
+    assert result.env_groups == []
 
 
 def test_run_process_resolves_base_env_id(tmp_path: Path) -> None:

@@ -759,8 +759,13 @@ def _models_present(df_avg: pl.DataFrame) -> list[str]:
 
 
 def _is_dataset_excluded(dataset_name: str, exclude_set: set[str]) -> bool:
-    base, _ = derive_base_env_id(dataset_name)
-    return dataset_is_excluded(dataset_name, exclude_set, base_dataset_id=base)
+    env_name, _, variant_id = dataset_name.partition("::")
+    base, _ = derive_base_env_id(env_name)
+    if dataset_is_excluded(dataset_name, exclude_set, base_dataset_id=base):
+        return True
+    if variant_id:
+        return dataset_is_excluded(env_name, exclude_set, base_dataset_id=base)
+    return False
 
 
 def _filter_models(
