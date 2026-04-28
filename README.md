@@ -102,12 +102,12 @@ Once your tooling is set up you can install MedARC-maintained environments direc
 
 ## medarc-eval CLI
 
-`medarc-eval` wraps the upstream `vf-eval` flow, adding environment-specific flags and batch orchestration. See [full documentation](docs/medarc-eval.md).
+`medarc-eval` wraps the upstream `verifiers` eval flow, adding environment-specific flags and a TOML bench workflow. See [full documentation](docs/medarc-eval.md).
 
 | Command | Description |
 |---------|-------------|
 | [`medarc-eval <ENV>`](docs/medarc-eval-single-run.md) | Run a single benchmark with auto-discovered environment flags |
-| [`medarc-eval bench`](docs/medarc-eval-bench.md) | Run multiple benchmarks from a YAML config with resume support |
+| [`medarc-eval bench`](docs/medarc-eval-bench.md) | Run upstream TOML eval configs with deterministic MedARC paths |
 | [`medarc-eval process`](docs/medarc-eval-process.md) | Convert raw outputs to parquet for analysis |
 | [`medarc-eval winrate`](docs/medarc-eval-winrate.md) | Compute HELM-style win rates across models |
 
@@ -118,10 +118,10 @@ Once your tooling is set up you can install MedARC-maintained environments direc
 uv run medarc-eval medqa -m gpt-4.1-mini -n 25
 
 # Run batch evaluations from config
-uv run medarc-eval bench --config configs/job-gpt-oss-20b.yaml
+uv run medarc-eval bench --config configs/eval/smoke.toml
 
 # Process results and compute win rates
-uv run medarc-eval process
+uv run medarc-eval process --runs-dir runs/evals
 uv run medarc-eval winrate
 ```
 
@@ -145,51 +145,52 @@ uv run medarc-eval careqa --env-args '{"split": "open", "judge_model": "gpt-4o"}
 
 ## Batch Evaluations
 
-Use `medarc-eval bench` to run multiple model × environment evaluations from a config file. See [full batch mode documentation](docs/medarc-eval-bench.md).
+Use `medarc-eval bench` to run upstream `verifiers` TOML eval configs
+sequentially with deterministic MedARC output paths. See [full bench mode
+documentation](docs/medarc-eval-bench.md).
 
-```yaml
-name: gpt-oss-20b-med
+```toml
+model = "openai/gpt-4.1-mini"
+save_results = true
+output_dir = "runs/evals"
 
-models:
-  gpt-oss-20b:
-    model: openai/gpt-oss-20b
-    api_base_url: http://localhost:8000/v1
-    sampling_args:
-      temperature: 1.0
-      reasoning_effort: medium
-
-jobs:
-  - model: gpt-oss-20b
-    env: [m_arc, medcalc_bench, medxpertqa]
+[[eval]]
+env_id = "medqa"
+num_examples = 25
+rollouts_per_example = 1
+env_args = { shuffle_answers = true, shuffle_seed = 1618 }
 ```
 
 ```bash
 # Run the batch
-uv run medarc-eval bench --config configs/job-gpt-oss-20b.yaml
+uv run medarc-eval bench --config configs/eval/medarc-mcq.toml
 
 # Preview without executing
-uv run medarc-eval bench --config configs/job-gpt-oss-20b.yaml --dry-run
+uv run medarc-eval bench --config configs/eval/medarc-mcq.toml --dry-run
 ```
 
-Batch mode supports automatic resume, job manifests, and matrix sweeps for parameter grids. See the [batch mode documentation](docs/medarc-eval-bench.md) for config file format, resume/restart options, and advanced features.
+Bench mode resumes matching deterministic result directories and supports
+`[[ablation]]` sweeps for parameter grids. The removed YAML job/manifest runner
+is documented only in the migration notes in the [bench mode docs](docs/medarc-eval-bench.md).
 
-### Matrix Sweeps
+### Ablation Sweeps
 
-Environment configs support matrix expansion for parameter grid runs:
+Use upstream TOML ablations for parameter grid runs:
 
-```yaml
-- id: medconceptsqa
-  module: medconceptsqa
-  num_examples: -1
-  env_args:
-    shuffle_answers: true
-  matrix:
-    difficulty: [easy, medium, hard]
-    shuffle_seed: [1618, 9331]
-  matrix_id_format: "{base}-{difficulty}-s{shuffle_seed}"
+```toml
+[[ablation]]
+env_id = "medconceptsqa"
+num_examples = -1
+env_args = { shuffle_answers = true }
+
+[ablation.sweep.env_args]
+difficulty = ["easy", "medium", "hard"]
+shuffle_seed = [1618, 9331]
 ```
 
-This expands into six variants (`medconceptsqa-base-easy-s1618`, …). See [batch mode docs](docs/medarc-eval-bench.md) for full details on matrix expansion, exclusions, and split config files.
+This expands into deterministic variant directories under
+`runs/evals/<model>/medconceptsqa/`. See [bench mode docs](docs/medarc-eval-bench.md)
+for details.
 
 ## Processing and Win Rates
 
@@ -197,7 +198,7 @@ After running benchmarks, convert results to parquet and compute model compariso
 
 ```bash
 # Process raw outputs to parquet
-uv run medarc-eval process
+uv run medarc-eval process --runs-dir runs/evals
 
 # Compute HELM-style win rates
 uv run medarc-eval winrate

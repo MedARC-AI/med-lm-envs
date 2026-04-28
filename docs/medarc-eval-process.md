@@ -5,11 +5,11 @@ Convert raw benchmark outputs into analysis-ready parquet files. This step prepa
 ## Quick Start
 
 ```bash
-# Process all completed jobs (uses defaults)
-medarc-eval process
+# Process outputs from the current TOML bench runner
+medarc-eval process --runs-dir runs/evals --output-dir runs/processed
 
-# Specify directories explicitly
-medarc-eval process --runs-dir runs/raw --output-dir runs/processed
+# Process legacy manifest outputs (default runs dir)
+medarc-eval process
 
 # Preview what would be processed
 medarc-eval process --dry-run
@@ -17,8 +17,8 @@ medarc-eval process --dry-run
 
 ## What Processing Does
 
-1. **Discovers** jobs in `runs/raw/` and filters by manifest status (default: `completed`)
-2. **Extracts** results from each job's output files
+1. **Discovers** eval outputs in `runs/evals/` and legacy manifest jobs in `runs/raw/`
+2. **Extracts** results from each eval output directory
 3. **Normalizes** data into a fixed output schema
 4. **Writes** parquet files organized by model and environment
 5. **Creates** an index (`env_index.json`) for downstream tools
@@ -43,7 +43,7 @@ On-disk model and env path components are slugified, so filenames may not exactl
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--runs-dir PATH` | Directory containing raw runs | `runs/raw` |
+| `--runs-dir PATH` | Directory containing raw run outputs. Use `runs/evals` for new TOML bench runs. | `runs/raw` |
 | `--output-dir PATH` | Where to write processed files | `runs/processed` |
 | `--max-workers N` | Parallel worker processes | 4 |
 | `--dry-run` | Show what would be processed | - |
@@ -55,9 +55,15 @@ On-disk model and env path components are slugified, so filenames may not exactl
 
 ### By Completion Status
 
-By default, `medarc-eval process` only selects jobs whose manifest status is `completed`.
+For current TOML bench outputs, processing discovers valid eval result
+directories under `runs/evals` and reads their `metadata.json`.
 
-Note: successful jobs are written to `run_manifest.json` with `status: completed`.
+For legacy YAML-runner outputs, `medarc-eval process` reads
+`runs/raw/<run_id>/run_manifest.json` and only selects jobs whose manifest
+status is `completed` by default.
+
+Note: successful legacy jobs are written to `run_manifest.json` with
+`status: completed`.
 
 To override that default, pass one or more explicit status filters:
 
@@ -75,12 +81,18 @@ medarc-eval process --max-results-missing-pct 2.5
 medarc-eval process --max-results-missing-pct 100
 ```
 
-This gate uses manifest job metadata only:
+For TOML bench outputs, this gate uses `metadata.json` values for expected rows
+and the observed `results.jsonl` row count:
+
+- `expected_rows = num_examples * rollouts_per_example`
+- `observed_rows = results.jsonl row count`
+
+For legacy manifest outputs, the same gate uses manifest job fields:
 
 - `expected_rows = num_examples * rollouts_per_example`
 - `observed_rows = row_count`
 
-It is computed per selected job record and enforced only on the latest selected run for each processed model/environment output. It does not use manifest `summary.completed` / `summary.total`, and it does not fall back to older runs if the latest one is too incomplete.
+It is computed per selected job record and enforced only on the latest selected run for each processed model/environment output. For legacy manifests, it does not use manifest `summary.completed` / `summary.total`, and it does not fall back to older runs if the latest one is too incomplete.
 
 Selected records with missing `results.jsonl` fail processing immediately.
 
@@ -106,7 +118,7 @@ Store common options in a YAML file:
 
 ```yaml
 # process-config.yaml
-runs_dir: runs/raw
+runs_dir: runs/evals
 
 process:
   dir: processed
@@ -130,7 +142,7 @@ CLI flags override config values.
 
 Supported config schema for `medarc-eval process`:
 
-- Top-level `runs_dir`: raw run root.
+- Top-level `runs_dir`: raw run root. Use `runs/evals` for new TOML bench outputs and `runs/raw` for legacy manifest outputs.
 - Top-level `process:`: process-specific defaults.
 - Optional top-level `winrate:`: embedded post-process winrate step.
 - Optional top-level `hf:`: shared HF settings. For embedded winrate uploads, use `hf.winrate_dir`.
@@ -143,7 +155,7 @@ Path shortcuts:
 Example:
 
 ```yaml
-runs_dir: runs/raw
+runs_dir: runs/evals
 
 process:
   dir: processed
@@ -163,7 +175,7 @@ Sync processed datasets to/from the Hugging Face Hub:
 
 ```yaml
 # process-config.yaml
-runs_dir: runs/raw
+runs_dir: runs/evals
 process:
   dir: processed
 
@@ -225,10 +237,10 @@ This runs `medarc-eval winrate` automatically after processing completes when th
 
 ```bash
 # 1. Run benchmarks
-medarc-eval bench --config my-eval.yaml
+medarc-eval bench --config configs/eval/medarc-mcq.toml
 
 # 2. Process results
-medarc-eval process
+medarc-eval process --runs-dir runs/evals
 
 # 3. Compute win rates
 medarc-eval winrate
@@ -249,8 +261,8 @@ medarc-eval process \
 ### Incremental Updates
 
 ```bash
-# Process only new runs (default behavior)
-medarc-eval process
+# Process only new TOML bench outputs
+medarc-eval process --runs-dir runs/evals
 
 # env_index.json tracks what's already processed
 ```
@@ -280,12 +292,13 @@ When both flags are present, processing only rebuilds outputs that match both fi
 
 Check that:
 1. `--runs-dir` points to the correct location
-2. Runs have completed (check `run_manifest.json` `jobs[*].status`)
-3. Use `--status pending` or `--status running` to include non-completed jobs
+2. For TOML bench outputs, each eval directory contains `results.jsonl` and `metadata.json`
+3. For legacy manifest outputs, runs have completed (check `run_manifest.json` `jobs[*].status`)
+4. Use `--status pending` or `--status running` to include non-completed legacy jobs
 
 ### Missing data in output
 
-By default, only jobs with `completed` status are included. In addition, `--max-results-missing-pct` fails if a selected latest job record is missing more than 2.5% of its expected `results.jsonl` rows, using manifest job fields:
+By default, current TOML bench outputs are selected from valid eval directories, while legacy manifest outputs include only jobs with `completed` status. In addition, `--max-results-missing-pct` fails if a selected latest job record is missing more than 2.5% of its expected `results.jsonl` rows. TOML bench outputs use eval metadata plus the observed JSONL row count; legacy manifest outputs use manifest job fields:
 
 - `row_count`
 - `num_examples`

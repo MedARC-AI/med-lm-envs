@@ -2,7 +2,7 @@
 
 `medarc-eval` is a command-line tool for evaluating language models on medical benchmarks. It handles the full pipeline: running benchmarks, processing results, and computing model comparisons.
 
-> **Note:** `medarc-eval <ENV>` and `medarc-eval bench` are wrappers around the [verifiers](https://github.com/primeintellect-ai/verifiers) `vf-eval` command, adding medical-specific environments, batch orchestration, and environment-specific CLI flags inferred from each benchmark's `load_environment()` signature.
+> **Note:** `medarc-eval <ENV>` and `medarc-eval bench` are wrappers around the [verifiers](https://github.com/primeintellect-ai/verifiers) eval flow. Single-run mode adds environment-specific CLI flags inferred from each benchmark's `load_environment()` signature; bench mode runs upstream TOML eval configs sequentially with deterministic MedARC output paths.
 
 ## Quick Start
 
@@ -11,10 +11,10 @@
 medarc-eval medqa -m gpt-4.1-mini -n 25
 
 # Run a batch of benchmarks from a config file
-medarc-eval bench --config configs/job-gpt-oss-20b.yaml
+medarc-eval bench --config configs/eval/smoke.toml
 
 # Process raw results into analysis-ready parquet files
-medarc-eval process
+medarc-eval process --runs-dir runs/evals
 
 # Compute win rates across models
 medarc-eval winrate
@@ -27,7 +27,7 @@ medarc-eval winrate
    (bench or single)       (process)               (winrate)
         |                      |                        |
         v                      v                        v
-    runs/raw/           runs/processed/    runs/processed/winrate/
+    runs/evals/         runs/processed/    runs/processed/winrate/
 ```
 
 ## Commands
@@ -46,8 +46,8 @@ medarc-eval winrate
 medarc-eval medqa -m gpt-4.1-mini -n 50
 
 # Subcommands: keyword comes first
-medarc-eval bench --config configs/my-run.yaml
-medarc-eval process --runs-dir runs/raw
+medarc-eval bench --config configs/eval/medarc-mcq.toml
+medarc-eval process --runs-dir runs/evals
 medarc-eval winrate --processed-dir runs/processed
 ```
 
@@ -70,17 +70,17 @@ medarc-eval longhealth --help
 
 ### Batch Mode (`medarc-eval bench`)
 
-**Best for:** Systematic evaluation across multiple models and benchmarks.
+**Best for:** Systematic evaluation across TOML eval configs.
 
 ```bash
 # Run all jobs defined in config
-medarc-eval bench --config configs/job-gpt-oss-20b.yaml
+medarc-eval bench --config configs/eval/medarc-mcq.toml
 
 # Preview what would run without executing
-medarc-eval bench --config configs/job-gpt-oss-20b.yaml --dry-run
+medarc-eval bench --config configs/eval/medarc-mcq.toml --dry-run
 
 # Force all jobs to use a specific API endpoint
-medarc-eval bench --config configs/job-gpt-oss-20b.yaml --api-base-url http://127.0.0.1:8000/v1
+medarc-eval bench --config configs/eval/medarc-mcq.toml --api-base-url http://127.0.0.1:8000/v1 --provider local
 ```
 
 ### Processing Mode (`medarc-eval process`)
@@ -88,11 +88,11 @@ medarc-eval bench --config configs/job-gpt-oss-20b.yaml --api-base-url http://12
 **Best for:** Preparing results for analysis after batch runs complete.
 
 ```bash
-# Process all completed runs
-medarc-eval process
+# Process current TOML bench outputs
+medarc-eval process --runs-dir runs/evals
 
 # Process specific directory
-medarc-eval process --runs-dir runs/raw --output-dir runs/processed
+medarc-eval process --runs-dir runs/evals --output-dir runs/processed
 ```
 
 ### Win Rate Mode (`medarc-eval winrate`)
@@ -111,15 +111,14 @@ medarc-eval winrate --list-models
 
 ```
 runs/
-├── raw/                          # Raw benchmark outputs (from bench/single-run)
-│   └── <run_id>/
-│       ├── run_manifest.json     # Run metadata and job status
-│       └── <job_id>/             # Per-job results
+├── evals/                        # Raw TOML bench outputs
+│   └── <model>/
+│       └── <env>/
 │           ├── results.jsonl
-│           └── summary.json
+│           └── metadata.json
 ├── processed/                    # Analysis-ready parquet files (from process)
 │   ├── env_index.json            # Dataset inventory
-│   └── <env>/<model>.parquet
+│   └── <model>/<env>.parquet
 └── winrate/                      # Model comparison outputs (from winrate)
     ├── latest.json
     └── latest.csv
@@ -129,7 +128,7 @@ runs/
 
 ```bash
 medarc-eval --help              # General usage
-medarc-eval bench --help        # Batch mode options
+medarc-eval bench --help        # TOML bench options
 medarc-eval process --help      # Processing options
 medarc-eval winrate --help      # Win rate options
 medarc-eval medqa --help        # Environment-specific options
@@ -166,6 +165,6 @@ prime env install owner/environment-name@0.1.3
 ## Detailed Documentation
 
 - [Single-Run Mode](medarc-eval-single-run.md) - Run individual benchmarks with custom options
-- [Batch Mode](medarc-eval-bench.md) - Configure and run systematic evaluations
+- [TOML Bench Mode](medarc-eval-bench.md) - Configure and run systematic evaluations
 - [Processing](medarc-eval-process.md) - Prepare results for analysis
 - [Win Rates](medarc-eval-winrate.md) - Compare models across benchmarks

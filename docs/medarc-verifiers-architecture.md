@@ -4,264 +4,231 @@ This is a coding agents guide to `medarc_verifiers/`.
 
 ## What `medarc_verifiers` is
 
-`medarc_verifiers` is the repository’s Python package that wraps and extends the upstream `verifiers` evaluation framework with:
+`medarc_verifiers` wraps and extends the upstream `verifiers` evaluation
+framework with:
 
-- A unified CLI (`medarc-eval`) for running many medical benchmark environments consistently.
-- Batch orchestration with durable run manifests (resume/restart/force).
-- A processing pipeline that converts raw run artifacts into analysis-ready Parquet datasets.
+- A unified CLI (`medarc-eval`) for medical benchmark environments.
+- A TOML bench wrapper for sequential local benchmark runs with deterministic output paths.
+- A processing pipeline that converts raw eval artifacts into analysis-ready Parquet datasets.
 - HELM-style win rate computation across models from processed outputs.
-- Shared building blocks used by environments (parsers, rewards, shuffling utilities, judge helpers).
+- Shared environment utilities for parsers, rewards, shuffling, and judging.
 
-At a high level, everything funnels into a three-stage workflow:
+The current workflow is:
 
-1. **Run** evals (single or batch) → `runs/raw/<run_id>/...`
-2. **Process** raw outputs → `runs/processed/<model>/<env>.parquet` + `env_index.json`
-3. **Winrate** on processed outputs → `runs/processed/winrate/*.json` and `*.csv`
+1. **Run** evals with single-run mode or TOML bench -> `runs/evals/<model>/<env>/...`
+2. **Process** raw outputs -> `runs/processed/<model>/<env>.parquet` plus `env_index.json`
+3. **Winrate** on processed outputs -> `runs/processed/winrate/*.json` and `*.csv`
 
-## Important side effects (auto-installed patches)
+Historical YAML-runner outputs under `runs/raw/<run_id>/...` remain readable by
+`medarc-eval process`, but the YAML benchmark runner itself has been removed.
 
-Importing `medarc_verifiers` installs monkey patches into `verifiers` by default (`medarc_verifiers/__init__.py`):
+## Import Side Effects
 
-- **Judge cache namespacing**: cached judge responses are keyed by `base_url::model` so multi-judge runs don’t collide (`medarc_verifiers/judging/judge_cache_fix.py`).
+Importing `medarc_verifiers` installs monkey patches into `verifiers` by default
+(`medarc_verifiers/__init__.py`):
 
-`token_usage` is now produced by upstream `verifiers` output serialization and is flattened into explicit columns during `medarc-eval process`.
+- **Judge cache namespacing**: cached judge responses are keyed by
+  `base_url::model` so multi-judge runs do not collide
+  (`medarc_verifiers/judging/judge_cache_fix.py`).
 
-## `medarc-eval` CLI: modes and code layout
+`token_usage` is produced by upstream `verifiers` output serialization and is
+flattened into explicit columns during `medarc-eval process`.
+
+## `medarc-eval` CLI
 
 Entry point and router: `medarc_verifiers/cli/main.py`.
 
 It supports:
 
 - **Single-run mode**: `medarc-eval <ENV> ...`
-  - Special rule: the environment name must be the first token.
+  - The environment name must be the first token.
   - Implemented in `medarc_verifiers/cli/_single_run.py`.
-- **Batch mode**: `medarc-eval bench --config <yaml>`
-  - Loads config, expands job matrix, creates/updates a run manifest, then executes jobs.
-  - Implemented across:
-    - Config loading + matrix expansion: `medarc_verifiers/cli/_config_loader.py`
-    - Schemas: `medarc_verifiers/cli/_schemas.py`
-    - Job expansion: `medarc_verifiers/cli/_job_builder.py`
-    - Manifest creation + conflict detection: `medarc_verifiers/cli/_manifest.py`
-    - Resume/restart planning: `medarc_verifiers/cli/_manifest_planner.py`
-    - Execution loop: `medarc_verifiers/cli/_job_executor.py`
+- **TOML bench mode**: `medarc-eval bench --config <config.toml>`
+  - Loads upstream `verifiers` TOML eval configs, expands ablations, plans
+    deterministic output directories, validates MedARC fingerprints, then runs
+    evals sequentially.
+  - Main implementation: `medarc_verifiers/cli/main.py`
+  - Eval config adapter: `medarc_verifiers/cli/verifiers_adapter.py`
+  - Deterministic identity/path helpers: `medarc_verifiers/cli/eval_identity.py`
 - **Processing**: `medarc-eval process ...`
   - Pipeline wiring: `medarc_verifiers/cli/process/pipeline.py`
 - **Win rates**: `medarc-eval winrate ...`
-  - Runner that reads processed datasets and writes results: `medarc_verifiers/cli/winrate/runner.py`
-  - Core computations live in `medarc_verifiers/cli/winrate/api.py`.
+  - Runner: `medarc_verifiers/cli/winrate/runner.py`
+  - Core math: `medarc_verifiers/cli/winrate/api.py`
 
-Shared CLI constants (paths, command strings): `medarc_verifiers/cli/_constants.py`.
+Shared CLI constants live in `medarc_verifiers/cli/_constants.py`.
 
-### How single-run “dynamic env flags” works
+## Dynamic Env Flags
 
-Single-run mode introspects each environment’s `load_environment()` signature (and docstring) to generate argparse flags on the fly:
+Single-run mode introspects each environment's `load_environment()` signature
+and docstring to generate argparse flags dynamically:
 
-- Introspection + validation: `medarc_verifiers/cli/utils/env_args.py`
+- Introspection and validation: `medarc_verifiers/cli/utils/env_args.py`
 
-That’s why `medarc-eval longhealth --help` shows environment-specific flags even though they aren’t hardcoded. For anything too complex for flags, both single/batch support:
+That is why `medarc-eval longhealth --help` shows environment-specific flags
+even though they are not hardcoded. For anything too complex for flags,
+single-run and TOML bench both support:
 
 - `--env-args '{...json...}'`
 - `--env-arg key=value` (repeatable; smart type coercion)
 
-Override parsing helper: `medarc_verifiers/cli/utils/overrides.py`.
+Override parsing lives in `medarc_verifiers/cli/utils/overrides.py`.
 
-## Config + override semantics (batch mode)
+## TOML Bench Config Semantics
 
-Batch configs (YAML) validate into pydantic models in `medarc_verifiers/cli/_schemas.py`. After validation:
+Bench configs use upstream `verifiers` TOML shape: top-level defaults plus one
+or more `[[eval]]` entries. Upstream `[[ablation]]` tables expand into repeated
+eval configs. MedARC adds deterministic paths and config-safe resume around the
+resolved upstream eval configs.
 
-- Environment matrices expand into multiple env variants (IDs can be formatted) in `medarc_verifiers/cli/_config_loader.py`.
-- Jobs expand into concrete “model × env variant” runs in `medarc_verifiers/cli/_job_builder.py`.
+`env_args` precedence is low to high:
 
-### `env_args` precedence
+1. Environment package `[tool.verifiers.eval]` defaults, when discoverable
+2. TOML top-level defaults
+3. Per-`[[eval]]` values
+4. Expanded `[[ablation]]` values
+5. CLI overrides (`--env-args` / `--env-arg`)
 
-`env_args` are merged in layers. Think “low → high priority”:
+`sampling_args` follow the same TOML -> eval -> ablation -> CLI override model,
+then are sanitized for OpenAI-compatible clients:
 
-1. Environment config `env.env_args` (from `configs/envs/*.yaml`)
-2. Model config `model.env_args`
-3. Model env-specific override `model.env_overrides[...]` (lookup tries: env id → matrix base id → module)
-4. Job-level overrides `job.env_args`
-5. CLI overrides (`--env-args` / `--env-arg`) applied later when building `EvalConfig`
-
-The merge is handled by `medarc_verifiers/cli/utils/env_args.py` (with optional metadata validation).
-
-### `sampling_args` precedence and sanitation
-
-`sampling_args` merge from model → job → CLI, and are then sanitized for OpenAI-compatible clients:
-
-- Unknown parameters are moved under `extra_body` so they can be forwarded to compatible servers (e.g., vLLM).
+- Unknown parameters move under `extra_body` for compatible servers such as vLLM.
 - Sanitizer: `medarc_verifiers/utils/sampling_args.py`
-- Merge point: `medarc_verifiers/cli/_eval_builder.py`
+- Merge/adaptation point: `medarc_verifiers/cli/verifiers_adapter.py`
 
-## Endpoints and Prime Inference integration
+The old YAML `models`, `envs`, `jobs`, matrix expansion, job builder, and
+manifest planner modules have been deleted.
+
+## Endpoints and Prime Inference
 
 There are two related concepts:
 
-1. **Endpoint registry** (optional): resolves a model alias to an endpoint URL and key env var.
-   - Loader + cache: `medarc_verifiers/cli/utils/endpoint_utils.py`
-   - CLI default path: `configs/endpoints.toml` (TOML-first, aligned with upstream verifiers)
-   - Legacy Python registries remain usable via explicit `--endpoints-path configs/endpoints.py`.
+1. **Endpoint registry**: optional aliases for endpoint URL and key env var.
+   - Loader and cache: `medarc_verifiers/cli/utils/endpoint_utils.py`
+   - CLI default path: `configs/endpoints.toml`
 2. **Prime Inference overrides**:
-   - Adds `X-Prime-Team-ID` header (if `PRIME_TEAM_ID` is set and base URL is Prime Inference).
-   - Optionally injects `extra_body.usage.include = true` for usage reporting.
+   - Adds `X-Prime-Team-ID` from `PRIME_TEAM_ID`.
    - Selects `PRIME_API_KEY` when available for Prime Inference endpoints.
+   - Enables usage reporting unless disabled by `MEDARC_INCLUDE_USAGE=false`.
    - Implementation: `medarc_verifiers/utils/prime_inference.py`
 
 Relevant env vars:
 
-- `OPENAI_API_KEY` (default model key var)
-- `PRIME_API_KEY`, `PRIME_TEAM_ID` (Prime Inference)
-- `MEDARC_INCLUDE_USAGE` (force usage reporting true/false globally)
+- `OPENAI_API_KEY`
+- `PRIME_API_KEY`, `PRIME_TEAM_ID`
+- `MEDARC_INCLUDE_USAGE`
 
-Programmatic usage (build headers/sampling overrides for a base URL):
+## Resume and Deterministic Paths
 
-```python
-from medarc_verifiers.utils.prime_inference import prime_inference_overrides
+TOML bench writes eval outputs under deterministic directories:
 
-headers, sampling_overrides, api_key_var = prime_inference_overrides(base_url)
-```
+- Non-variant evals: `runs/evals/<model>/<env>/`
+- Variant evals: `runs/evals/<model>/<env>/<variant_id>/`
 
-### Judge defaults and judge API keys
+Before resuming an existing deterministic directory, bench validates the
+MedARC-specific config fingerprint in `metadata.json`. The fingerprint covers
+semantic benchmark identity such as `env_id`, `env_args`, and normalized
+sampling args. It excludes operational fields such as endpoint URL, timeout,
+API key variable, and concurrency.
 
-Judging defaults are centralized and provider-tuned:
+`medarc_verifiers/cli/_manifest.py` now only contains the legacy manifest schema
+needed by processing to read historical `runs/raw` outputs.
 
-- `medarc_verifiers/utils/judge_helpers.py`
+## Raw Outputs
 
-Key env vars:
-
-- `JUDGE_API_KEY` (preferred for judge calls)
-- fallback to `PRIME_API_KEY` (if judging via Prime Inference) or `OPENAI_API_KEY`.
-
-## Resume, restart, and manifests (batch mode)
-
-Batch mode writes `runs/raw/<run_id>/run_manifest.json` (manifest v3).
-
-- Manifest schema + update methods: `medarc_verifiers/cli/_manifest.py`
-- Planning which jobs to run vs reuse: `medarc_verifiers/cli/_manifest_planner.py`
-
-Important concepts:
-
-- A **job** is a resolved combination of model + environment variant + args (plus sampling args).
-- Auto-resume tries to find the newest run matching the config checksum and skip completed jobs.
-- Restart can “seed” a new run from an old run, reusing outputs when job signatures match.
-- Conflict detection is conservative for most fields, but treats some model fields as “resume tolerant” (e.g., base URLs/timeouts) so you can move between providers without being blocked.
-
-## Raw outputs (what eval produces)
-
-Raw outputs are expected under `runs/raw/<run_id>/<job_id>/` and include:
+TOML bench outputs include:
 
 - `results.jsonl`: per-example rollouts
-- `summary.json`: aggregated job metrics
-- `metadata.json`: job configuration snapshot (env/model/sampling args, etc.)
+- `metadata.json`: eval configuration and metrics snapshot
 
-The runner executes via `verifiers.utils.eval_utils.run_evaluation()` (called from `medarc_verifiers/cli/_single_run.py` and `medarc_verifiers/cli/_job_executor.py`).
+The runner executes via `verifiers.utils.eval_utils.run_evaluation()` from
+single-run mode and the TOML bench code in `medarc_verifiers/cli/main.py`.
 
-## Processing pipeline (raw → parquet)
+## Processing Pipeline
 
 Docs: `docs/medarc-eval-process.md`.
 
-Entry point: `medarc_verifiers/cli/process/pipeline.py` (via `run_process()`).
+Entry point: `medarc_verifiers/cli/process/pipeline.py`.
 
-### What processing does
+Processing:
 
-1. **Discover** job outputs from `runs/raw` by reading run manifests:
-   - `medarc_verifiers/cli/process/discovery.py`
-2. **Normalize metadata** by merging manifest fields with `metadata.json`:
-   - `medarc_verifiers/cli/process/metadata.py`
-3. **Handle rollouts**:
-   - MedARC sometimes “fakes” multiple rollouts by running the same base environment multiple times with different settings (e.g., different seeds).
-   - These fake rollouts are identified by a rollout suffix in the **manifest env id** like `env-a-rollout7` or `env-a-r7` (fallback: parse the results directory name).
-   - This suffix-derived rollout index is only used when rollouts are faked this way. Native verifiers rollouts (below) use the per-row JSONL field.
-   - `medarc_verifiers/cli/process/rollout.py`
-4. **Load rows from `results.jsonl`**:
-   - Always drops large fields (`prompt`, `completion`).
-   - Allows selecting extra per-env columns into a JSON-encoded `extras` column.
-   - If the JSONL provides a per-row `rollout_index` (native verifiers multi-rollout runs), it is treated as authoritative and preserved.
-   - If `rollout_index` is missing but the JSONL contains multiple rows per `example_id`, computes a data-driven `rollout_index` based on occurrence count.
-   - Flattens `token_usage` into explicit columns like `model_token_total`, `judge_cost`, etc.
-   - `medarc_verifiers/cli/process/rows.py`
-5. **Aggregate** rows per `(model_id, base_env_id)` and union schemas:
-   - `medarc_verifiers/cli/process/aggregate.py`
-   - When aggregating fake rollouts (manifest env ids include rollout suffixes), ensures every row has a `rollout_index` (derived from the suffix if missing) and normalizes indices to `0..K-1` within the dataset.
-   - When aggregating native verifiers rollouts (no rollout suffixes), preserves `rollout_index` values as provided by `results.jsonl` (no normalization).
-6. **Write Parquet**:
-   - Output path is `<processed_dir>/<slug(model_id)>/<slug(env_id)>.parquet`.
-   - Output columns are restricted to a fixed allowlist schema for downstream compatibility.
-   - Adds exporter metadata under a Parquet schema metadata key.
-   - Writes `env_index.json` (v2) and `dataset_infos.json` for HF datasets UX.
-   - `medarc_verifiers/cli/process/writer.py`, `medarc_verifiers/cli/process/env_index.py`
+1. Discovers TOML bench outputs from `runs/evals` and legacy manifest outputs
+   from `runs/raw`.
+2. Normalizes metadata from `metadata.json` and, for legacy outputs, manifest
+   fields.
+3. Loads rows from `results.jsonl`, drops large prompt/completion fields, and
+   flattens `token_usage`.
+4. Aggregates rows per model and environment, preserving variant ids.
+5. Writes Parquet files plus `env_index.json` and `dataset_infos.json`.
 
-### Delta processing and HF baselines
+Important modules:
 
-Processing can use `env_index.json` to do incremental updates (delta processing). It also supports pulling/pushing processed artifacts to/from Hugging Face:
+- Discovery: `medarc_verifiers/cli/process/discovery.py`
+- Metadata normalization: `medarc_verifiers/cli/process/metadata.py`
+- Row loading: `medarc_verifiers/cli/process/rows.py`
+- Aggregation: `medarc_verifiers/cli/process/aggregate.py`
+- Writing/indexing: `medarc_verifiers/cli/process/writer.py`,
+  `medarc_verifiers/cli/process/env_index.py`
 
-- HF baseline management (download/copy policies): `medarc_verifiers/cli/process/workspace.py`
-- HF sync operations: `medarc_verifiers/cli/hf/sync.py`
-
-## Win rates (processed parquet → comparisons)
+## Win Rates
 
 Docs: `docs/medarc-eval-winrate.md`.
 
-`medarc-eval winrate` reads dataset inventory from `env_index.json`, averages rollouts per `(example_id, model_id)`, then computes pairwise model comparisons.
+`medarc-eval winrate` reads dataset inventory from `env_index.json`, averages
+rollouts per `(example_id, model_id)`, and computes pairwise model comparisons.
 
-- Dataset discovery via `env_index.json`: `medarc_verifiers/cli/winrate/runner.py`
-- Core math + weighting policies: `medarc_verifiers/cli/winrate/api.py`
-- Outputs:
-  - timestamped `winrates-<timestamp>.json` and `.csv`
-  - `latest.json` and `latest.csv`
-  - JSON shape is model-centric: top-level `models` and `datasets`
-  - CSV contains aggregate winrates plus per-dataset average rewards, not pairwise `vs_*` columns
+- Dataset discovery: `medarc_verifiers/cli/winrate/runner.py`
+- Core math and weighting policies: `medarc_verifiers/cli/winrate/api.py`
+- Outputs: timestamped `winrates-<timestamp>.json` / `.csv` plus
+  `latest.json` / `latest.csv`
 
-## Shared building blocks used by environments
+## Environment Utilities
 
-These utilities are frequently imported by environment packages under `environments/*`:
+Frequently imported utilities under `environments/*`:
 
 - Prompts and answer format constants: `medarc_verifiers/prompts.py`
-- Parsers:
-  - XML parser (supports raw string or chat messages): `medarc_verifiers/parsers/xml_parser.py`
-  - JSON parser (field alternatives, optional pydantic schema validation, “format reward”): `medarc_verifiers/parsers/json_parser.py`
-- Rewards:
-  - Robust MCQ grading with CoT/anchored patterns + answer-text fallback: `medarc_verifiers/rewards/multiple_choice_accuracy.py`
-  - Normalize judge dimension scores (1–5 → 0–1): `medarc_verifiers/rewards/normalize_helm_reward.py`
-- MCQ shuffling with deterministic seeding and “anchor option” preservation:
-  - Skips shuffling entirely if options reference other labels (“A or B”, “Both A and C”), to avoid corrupting the question.
-  - `medarc_verifiers/utils/randomize_multiple_choice.py`
+- XML parser: `medarc_verifiers/parsers/xml_parser.py`
+- JSON parser: `medarc_verifiers/parsers/json_parser.py`
+- MCQ grading: `medarc_verifiers/rewards/multiple_choice_accuracy.py`
+- HELM reward normalization: `medarc_verifiers/rewards/normalize_helm_reward.py`
+- Deterministic MCQ shuffling: `medarc_verifiers/utils/randomize_multiple_choice.py`
+- Judge helpers: `medarc_verifiers/utils/judge_helpers.py`
 
-## Judging and multi-judge support
+## Judging and Multi-Judge Support
 
-Some environments use “LLM-as-judge” scoring. `medarc_verifiers` provides:
+Some environments use LLM-as-judge scoring. `medarc_verifiers` provides:
 
-- A safer judge call wrapper with clearer errors: `medarc_verifiers/judging/judge_core.py`
-- A `MultiJudge` that runs multiple judge models concurrently: `medarc_verifiers/judging/multi_judge.py`
-- A `verifiers`-compatible rubric wrapper: `medarc_verifiers/judging/multi_judge_rubric.py`
+- Judge call wrapper: `medarc_verifiers/judging/judge_core.py`
+- Multi-judge runner: `medarc_verifiers/judging/multi_judge.py`
+- Verifiers-compatible rubric wrapper: `medarc_verifiers/judging/multi_judge_rubric.py`
 
-## vLLM orchestrator (local Docker) – separate CLI
+## vLLM Orchestrator
 
 Docs: `docs/medarc-orchestrate.md`.
 
-This is a separate tool (`medarc-orchestrate`) for running batch configs against locally hosted vLLM containers with GPU/port scheduling across Docker or Slurm+Pyxis runtimes.
+`medarc-orchestrate` runs TOML bench configs against locally hosted vLLM
+containers with GPU/port scheduling across Docker or Slurm+Pyxis runtimes.
 
 - CLI entry: `medarc_verifiers/orchestrate/cli.py`
 - Runtime loop: `medarc_verifiers/orchestrate/run.py`
 
-It essentially:
+It:
 
-1. Launches vLLM containers
-2. Waits for readiness
-3. Runs `uv run medarc-eval bench --config ... --api-base-url <allocated>`
-4. Tracks orchestration state under `outputs/orchestrator/<run_id>/`
+1. Launches vLLM containers.
+2. Waits for readiness.
+3. Runs `uv run medarc-eval bench --config <job.toml> --api-base-url <allocated> --provider local`.
+4. Tracks orchestration state under `outputs/orchestrator/<run_id>/`.
 
-## Where to change things (quick mental index)
+## Where To Change Things
 
-- Add/adjust CLI flags or command behavior:
+- CLI flags or routing:
   - `medarc_verifiers/cli/main.py`, `medarc_verifiers/cli/_single_run.py`
-- Change config semantics (matrix, normalization, validation):
-  - `medarc_verifiers/cli/_config_loader.py`, `medarc_verifiers/cli/_schemas.py`
-- Fix resume/restart quirks:
-  - `medarc_verifiers/cli/_manifest.py`, `medarc_verifiers/cli/_manifest_planner.py`
-- Add new columns or modify processed dataset schema:
-  - extraction: `medarc_verifiers/cli/process/rows.py`
-  - allowed columns/output schema: `medarc_verifiers/cli/process/writer.py`
-- Change winrate math/output:
+- TOML bench behavior, deterministic paths, or resume fingerprints:
+  - `medarc_verifiers/cli/main.py`, `medarc_verifiers/cli/eval_identity.py`,
+    `medarc_verifiers/cli/verifiers_adapter.py`
+- Processed dataset schema:
+  - `medarc_verifiers/cli/process/rows.py`, `medarc_verifiers/cli/process/writer.py`
+- Winrate math/output:
   - `medarc_verifiers/cli/winrate/api.py`, `medarc_verifiers/cli/winrate/runner.py`
-- Adjust judging defaults/provider behaviors:
+- Judging/provider behavior:
   - `medarc_verifiers/utils/judge_helpers.py`, `medarc_verifiers/utils/prime_inference.py`

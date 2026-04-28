@@ -1,300 +1,183 @@
-# Batch Mode
+# TOML Bench Mode
 
-Run multiple benchmarks across multiple models using a configuration file. Batch mode handles job scheduling, progress tracking, and automatic resume.
+`medarc-eval bench` runs upstream `verifiers` TOML eval configs sequentially with
+MedARC-specific deterministic output paths. It is the supported path for
+systematic local benchmark runs.
 
-Each job invokes the verifiers [`vf-eval`](https://github.com/primeintellect-ai/verifiers) evaluation loop under the hood, with configuration-driven environment and sampling arguments.
+The old MedARC YAML benchmark runner has been removed. `bench --config` now
+accepts `.toml` files only.
 
 ## Quick Start
 
 ```bash
-# Run all jobs from config
-medarc-eval bench --config configs/job-gpt-oss-20b.yaml
+# Preview the repository smoke config
+medarc-eval bench --config configs/eval/smoke.toml --dry-run
 
-# Preview what would run
-medarc-eval bench --config configs/job-gpt-oss-20b.yaml --dry-run
+# Run the MCQ production suite
+medarc-eval bench --config configs/eval/medarc-mcq.toml
 
-# Force all jobs to use a specific API endpoint
-medarc-eval bench --config configs/job-gpt-oss-20b.yaml --api-base-url http://127.0.0.1:8000/v1
+# Run the aggregate suite against a local OpenAI-compatible server
+medarc-eval bench \
+  --config configs/eval/medarc-all.toml \
+  --api-base-url http://127.0.0.1:8000/v1 \
+  --provider local \
+  --model openai/my-local-model
 ```
 
-## Writing a Config File
+Repository suite configs live in `configs/eval/`:
 
-A minimal config defines models and which benchmarks to run:
+| Config | Purpose |
+|--------|---------|
+| `smoke.toml` | Small smoke test used by CLI tests |
+| `medarc-mcq.toml` | Multiple-choice benchmark suite |
+| `medarc-judge.toml` | Judge/free-form benchmark suite |
+| `medarc-all.toml` | Aggregate production suite |
 
-```yaml
-name: gpt-oss-20b-med
+## Config Format
 
-models:
-  gpt-oss-20b:
-    model: openai/gpt-oss-20b
-    api_base_url: http://localhost:8000/v1
-    sampling_args:
-      temperature: 1.0
-      top_p: 1.0
-      top_k: 0
-      reasoning_effort: medium
+Bench configs use upstream `verifiers` TOML semantics: top-level defaults plus
+one or more `[[eval]]` blocks. MedARC adds deterministic output planning around
+the resolved evals; it does not use YAML `models`, `envs`, or `jobs` sections.
 
-jobs:
-  - model: gpt-oss-20b
-    env:
-      - m_arc
-      - medcalc_bench
-      - medxpertqa
+```toml
+model = "openai/gpt-4.1-mini"
+save_results = true
+output_dir = "runs/evals"
+
+[[eval]]
+env_id = "medqa"
+num_examples = 25
+rollouts_per_example = 1
+env_args = { shuffle_answers = true, shuffle_seed = 1618 }
+sampling_args = { temperature = 0.0 }
+
+[[eval]]
+env_id = "pubmedqa"
+num_examples = 25
+rollouts_per_example = 1
 ```
 
-This creates 3 jobs: gpt-oss-20b evaluated on m_arc, medcalc_bench, and medxpertqa.
+Per-environment defaults can also live in an environment package
+`pyproject.toml` under `[tool.verifiers.eval]`. Production suite configs keep
+explicit `num_examples` and `rollouts_per_example` values so they remain stable
+across editable and wheel installs.
 
-### Config Structure
+## Ablations and Variants
 
-| Field | Description |
-|-------|-------------|
-| `name` | Human-readable run name |
-| `output_dir` | Where to save results (default: `runs/raw`) |
-| `models` | Map of model ID → model configuration |
-| `jobs` | List of model + environment combinations to run |
+Use upstream `[[ablation]]` tables to sweep values. The upstream env id stays
+unchanged, and MedARC writes each differing config to a deterministic variant
+directory.
 
-### Model Configuration
+```toml
+model = "openai/gpt-4.1-mini"
+save_results = true
+output_dir = "runs/evals"
 
-```yaml
-models:
-  gpt-oss-20b:
-    model: openai/gpt-oss-20b       # Model identifier
-    api_base_url: http://localhost:8000/v1  # API endpoint (local or remote)
-    api_key_var: OPENAI_API_KEY     # Optional: env var for API key
-    max_concurrent: 10              # Optional: parallel request limit
-    timeout: 120                    # Optional: request timeout (seconds)
-    sampling_args:
-      temperature: 1.0
-      top_p: 1.0
-      reasoning_effort: medium
+[[ablation]]
+env_id = "medqa"
+num_examples = -1
+rollouts_per_example = 1
+env_args = { shuffle_answers = true }
+
+[ablation.sweep.env_args]
+shuffle_seed = [1618, 9331]
 ```
 
-### Runtime API Base URL Override
+Example output paths:
 
-Use `--api-base-url` to override `models.*.api_base_url` for all jobs at runtime:
+```text
+runs/evals/openai-gpt-4.1-mini/medqa/env_args.shuffle_seed-1618/
+runs/evals/openai-gpt-4.1-mini/medqa/env_args.shuffle_seed-9331/
+```
+
+Non-variant evals write to `runs/evals/<model>/<env>/`.
+
+## Resume and Force
+
+Bench writes each eval to a deterministic result directory and stores a narrow
+MedARC config fingerprint in `metadata.json`. Re-running the same TOML config
+resumes the same directory when the fingerprint matches.
 
 ```bash
-medarc-eval bench --config my-config.yaml --api-base-url http://127.0.0.1:8000/v1
+# Resume matching deterministic outputs
+medarc-eval bench --config configs/eval/medarc-all.toml
+
+# Archive existing deterministic outputs and rerun
+medarc-eval bench --config configs/eval/medarc-all.toml --force
 ```
 
-### Environment Configuration
-
-Benchmarks are configured in `configs/envs/`. Each file defines one or more environment variants:
-
-```yaml
-# configs/envs/medqa.yaml
-- id: medqa
-  module: medqa
-  num_examples: -1              # -1 = all examples
-  rollouts_per_example: 1
-  env_args:
-    shuffle_answers: true
-    shuffle_seed: 1618
-```
-
-#### Matrix Sweeps
-
-Run the same benchmark with different parameter combinations:
-
-```yaml
-- id: medqa
-  module: medqa
-  num_examples: -1
-  env_args:
-    shuffle_answers: true
-  matrix:
-    shuffle_seed: [1618, 9331, 2718]
-  matrix_id_format: "{base}-seed{shuffle_seed}"
-```
-
-This creates three variants: `medqa-seed1618`, `medqa-seed9331`, `medqa-seed2718`.
-
-## Resume and Restart
-
-Batch mode automatically tracks job status and can resume interrupted runs.
-
-### Automatic Resume (Default)
-
-When you re-run the same config, completed jobs are skipped:
-
-```bash
-# First run - runs all jobs
-medarc-eval bench --config my-config.yaml
-
-# Interrupted, re-run - skips completed jobs
-medarc-eval bench --config my-config.yaml
-```
-
-### Force Fresh Run
-
-```bash
-# Disable auto-resume, create new run directory
-medarc-eval bench --config my-config.yaml --no-auto-resume
-
-# Re-run everything, even completed jobs
-medarc-eval bench --config my-config.yaml --force
-```
-
-### Restart from Previous Run
-
-Copy completed jobs from an old run to seed a new one:
-
-```bash
-medarc-eval bench --config updated-config.yaml --restart old-run-id
-```
-
-### Re-run Specific Environments
-
-```bash
-# Re-run only medqa jobs (keep other completed jobs)
-medarc-eval bench --config my-config.yaml --forced medqa
-
-# Re-run multiple environments
-medarc-eval bench --config my-config.yaml --forced medqa,pubmedqa
-```
+Fingerprint checks protect semantic benchmark identity such as `env_id`,
+`env_args`, and normalized sampling args. Operational details such as host URL,
+timeout, key variable, and concurrency do not define the benchmark identity.
 
 ## Common Flags
 
-### Job Selection
-
 | Flag | Description |
 |------|-------------|
-| `--config PATH` | **Required.** Path to config YAML |
-| `--endpoints-path PATH` | Endpoint registry path (default: `configs/endpoints.toml`) |
-| `--job-id ID` | Run only specific job(s) by ID (repeatable) |
-| `--dry-run` | Show plan without executing |
+| `--config PATH` | Required path to an upstream TOML eval config |
+| `--dry-run` | Resolve evals and print the deterministic plan |
+| `--force` | Archive existing deterministic output and rerun |
+| `--output-dir PATH` | Override the config output directory |
+| `--env-dir PATH` | Directory containing local environments |
+| `--endpoints-path PATH` | Endpoint registry path, default `configs/endpoints.toml` |
+| `--api-base-url URL` | Override API base URL for every eval |
+| `--api-key-var NAME` | Override API key environment variable |
+| `--provider NAME` | Override upstream provider shorthand |
+| `--model MODEL` | Override model for every eval |
+| `--eval-index N` | Run one resolved eval by 1-based index |
+| `--start-at N` / `--stop-after N` | Run a contiguous 1-based eval range |
+| `--continue-on-error` | Continue after a failed eval |
+| `--env-arg KEY=VALUE` / `--env-args JSON` | Apply environment arg overrides |
+| `--sampling-arg KEY=VALUE` / `--sampling-args JSON` | Apply sampling arg overrides |
+| `--max-concurrent N` | Override max concurrency for every eval |
+| `--timeout SEC` | Override request timeout for every eval |
+| `--max-retries N` | Override upstream rollout retries for every eval |
+| `--sleep SEC` | Sleep after each eval |
 
-### Output Control
+## Prime Inference
 
-| Flag | Description |
-|------|-------------|
-| `--output-dir PATH` | Override output directory |
-| `--run-id ID` | Force specific run directory name |
-| `--name NAME` | Override run name in manifest |
+When `--api-base-url` or a config points at Prime Inference
+(`https://api.pinference.ai/api/v1`), MedARC applies the same Prime helpers used
+by single-run mode:
 
-### Override All Jobs
-
-| Flag | Description |
-|------|-------------|
-| `--env-args JSON` | Override environment args for all jobs |
-| `--sampling-args JSON` | Override sampling args for all jobs |
-| `--max-concurrent N` | Override concurrency for all jobs |
-| `--timeout SEC` | Override timeout for all jobs |
-| `--include-usage` / `--no-include-usage` | Enable/disable usage reporting (auto-detected for Prime Inference) |
-
-### Prime Inference
-
-When using Prime Inference (`https://api.pinference.ai/api/v1`), the CLI automatically:
-- Uses `PRIME_API_KEY` for authentication (if set)
-- Adds `X-Prime-Team-ID` header from the `PRIME_TEAM_ID` env var
-- Enables usage reporting in API requests
-
-Just set the environment variables and the config stays simple:
+- `PRIME_API_KEY` is preferred when available.
+- `X-Prime-Team-ID` is added from `PRIME_TEAM_ID`.
+- Usage reporting is enabled unless `MEDARC_INCLUDE_USAGE=false` is set.
 
 ```bash
-export PRIME_API_KEY=your-api-key
-export PRIME_TEAM_ID=your-team-id
+export PRIME_API_KEY=...
+export PRIME_TEAM_ID=...
+
+medarc-eval bench \
+  --config configs/eval/medarc-mcq.toml \
+  --api-base-url https://api.pinference.ai/api/v1
 ```
 
-```yaml
-models:
-  my-model:
-    model: openai/gpt-5-nano
-    api_base_url: https://api.pinference.ai/api/v1
-```
+## Processing Outputs
 
-Manual configuration is only needed to override auto-detection:
-
-```yaml
-models:
-  my-model:
-    model: openai/gpt-5-nano
-    api_base_url: https://api.pinference.ai/api/v1
-    api_key_var: PRIME_API_KEY
-    headers:
-      X-Prime-Team-ID: override-team-id
-    sampling_args:
-      extra_body:
-        usage:
-          include: false  # disable usage reporting
-```
-
-### Endpoints Registry Migration (`endpoints.py` -> `endpoints.toml`)
-
-Batch mode now defaults `--endpoints-path` to `configs/endpoints.toml`.
-
-If your project still uses a Python registry, pass it explicitly:
+After a TOML bench run, process the deterministic eval outputs:
 
 ```bash
-medarc-eval bench --config my-config.yaml --endpoints-path configs/endpoints.py
+medarc-eval process --runs-dir runs/evals --output-dir runs/processed
+medarc-eval winrate --processed-dir runs/processed
 ```
 
-## Output Structure
+Processing still supports legacy `runs/raw/<run_id>/run_manifest.json` outputs
+for migration, but new bench runs should use `runs/evals`.
 
-```
-runs/raw/<run_id>/
-├── run_manifest.json           # Run metadata, job status, checksums
-├── <job_id>/
-│   ├── results.jsonl           # Per-example results
-│   ├── summary.json            # Aggregate metrics
-│   └── metadata.json           # Job configuration snapshot
-└── <job_id>/
-    └── ...
-```
+## Migrating from the Removed YAML Runner
 
-The manifest tracks:
-- Job status (pending, running, completed, failed)
-- Configuration checksums for resume detection
-- Timing information
-- Output paths
+Move old YAML `models` entries into top-level TOML defaults or explicit
+`[[eval]]` blocks. Move old `envs` and matrix variants into repeated `[[eval]]`
+blocks or upstream `[[ablation]]` sweeps.
 
-## Example Workflows
+Removed YAML-runner concepts no longer exist in `medarc-eval bench`:
 
-### Evaluate Multiple Models on Core Benchmarks
+- YAML `models`, `envs`, and `jobs` schemas
+- `run_manifest.json` creation for new bench runs
+- `--run-id`, `--restart`, `--auto-resume`, `--no-auto-resume`
+- `--job-id`, `--forced`, `--on-complete`
+- custom YAML job status and manifest planning
 
-```yaml
-name: model-comparison
-
-models:
-  gpt-oss-20b:
-    model: openai/gpt-oss-20b
-    api_base_url: http://192.168.1.152:8000/v1
-    sampling_args:
-      temperature: 1.0
-      reasoning_effort: medium
-
-  gpt-oss-20b-low:
-    model: openai/gpt-oss-20b
-    api_base_url: http://192.168.1.152:8000/v1
-    sampling_args:
-      temperature: 0.7
-      reasoning_effort: low
-
-jobs:
-  - model: gpt-oss-20b
-    env: [m_arc, medcalc_bench, medxpertqa]
-  - model: gpt-oss-20b-low
-    env: [m_arc, medcalc_bench, medxpertqa]
-```
-
-### Override Parameters at Runtime
-
-```bash
-# Lower concurrency for rate-limited API
-medarc-eval bench --config my-config.yaml --max-concurrent 5
-
-# Change temperature for all jobs
-medarc-eval bench --config my-config.yaml --sampling-args '{"temperature": 0.5}'
-
-# Enable usage reporting for all jobs
-medarc-eval bench --config my-config.yaml --include-usage
-
-# Disable usage reporting (overrides auto-detection for Prime Inference)
-medarc-eval bench --config my-config.yaml --no-include-usage
-```
-
-## Next Steps
-
-After batch runs complete:
-1. [Process results](medarc-eval-process.md) into parquet format
-2. [Compute win rates](medarc-eval-winrate.md) to compare models
+Old raw outputs remain processable through the legacy manifest reader, so
+historical runs do not need to be converted before processing.
