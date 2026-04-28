@@ -30,6 +30,7 @@ from medarc_verifiers.cli.utils.shared import (
 
 logger = logging.getLogger(__name__)
 PROCESS_DEFAULT_STATUS_FILTER: tuple[str, ...] = ("completed",)
+VARIANT_AGGREGATION_NOT_IMPLEMENTED = "variant aggregation not implemented yet"
 
 
 @dataclass(slots=True)
@@ -324,6 +325,7 @@ def select_work_items(
         exclude_datasets=options.exclude_datasets,
         exclude_models=options.exclude_models,
     )
+    _raise_for_variant_aggregation(work_items)
     _validate_replace_targets(work_items, options)
     work_items, skipped_by_delta = _apply_additive_delta(work_items, options=options, index_files=index_files)
     _validate_selected_results_completeness(work_items, max_results_missing_pct=options.max_results_missing_pct)
@@ -372,9 +374,9 @@ def _plan_selection_record(
 
 
 def _raise_for_latest_invalid_selection(records: Sequence[SelectionRecord]) -> None:
-    latest_by_target: dict[tuple[str, str], SelectionRecord] = {}
+    latest_by_target: dict[tuple[str, str, str], SelectionRecord] = {}
     for planned in records:
-        selection_key = (planned.identity.output_env_id, planned.record.job_id)
+        selection_key = (planned.identity.output_env_id, planned.identity.variant_id or "", planned.record.job_id)
         current = latest_by_target.get(selection_key)
         if current is None or _run_sort_key(
             _source_updated_at(planned.record),
@@ -397,14 +399,14 @@ def _raise_for_latest_invalid_selection(records: Sequence[SelectionRecord]) -> N
 
 
 def _select_latest_work_items(records: Sequence[SelectionRecord]) -> list[SelectionWorkItem]:
-    grouped: dict[tuple[str, str], dict[str, list[SelectionRecord]]] = {}
+    grouped: dict[tuple[str, str, str], dict[str, list[SelectionRecord]]] = {}
     run_timestamps: dict[str, str] = {}
 
     for planned in records:
         identity = planned.identity
         if not identity.model_id:
             continue
-        group_key = (identity.model_id, identity.output_env_id)
+        group_key = (identity.model_id, identity.output_env_id, identity.variant_id or "")
         grouped.setdefault(group_key, {}).setdefault(identity.job_run_id, []).append(planned)
         run_timestamps.setdefault(identity.job_run_id, _source_updated_at(planned.record))
 
@@ -462,6 +464,30 @@ def _apply_exclusions(
             continue
         filtered.append(item)
     return filtered, skipped
+
+
+def _raise_for_variant_aggregation(work_items: Sequence[PlannedWorkItem]) -> None:
+    variant_records: list[str] = []
+    for item in work_items:
+        for planned in item.records:
+            normalized = planned.normalized
+            if not normalized.variant_id:
+                continue
+            record = normalized.record
+            variant_records.append(
+                "model_id={model_id} output_env_id={output_env_id} variant_id={variant_id} "
+                "job_run_id={job_run_id} results_path={results_path}".format(
+                    model_id=item.identity.model_id,
+                    output_env_id=item.identity.output_env_id,
+                    variant_id=normalized.variant_id,
+                    job_run_id=record.manifest.job_run_id,
+                    results_path=record.results_path,
+                )
+            )
+    if not variant_records:
+        return
+    details = "\n".join(f"  - {record}" for record in sorted(variant_records))
+    raise RuntimeError(f"{VARIANT_AGGREGATION_NOT_IMPLEMENTED}:\n{details}")
 
 
 def _validate_replace_targets(work_items: Sequence[PlannedWorkItem], options: ProcessOptions) -> None:

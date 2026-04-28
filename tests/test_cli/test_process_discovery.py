@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from medarc_verifiers.cli.process.discovery import RunManifestInfo, discover_run_records
+from medarc_verifiers.cli.process.metadata import load_normalized_metadata
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -249,3 +250,100 @@ def test_discover_run_records_fallbacks_to_job_dir_when_results_relpath_is_broke
     assert len(records) == 1
     assert records[0].has_results is True
     assert records[0].has_metadata is True
+
+
+def _write_eval_output(path: Path, metadata: dict | None = None) -> None:
+    _write_json(
+        path / "metadata.json",
+        {
+            "env_id": "medqa",
+            "model": "gpt-5-mini",
+            "env_args": {"split": "test"},
+            "sampling_args": {"temperature": 0},
+            "num_examples": 1,
+            "rollouts_per_example": 1,
+            **(metadata or {}),
+        },
+    )
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "results.jsonl").write_text(json.dumps({"example_id": "ex-1", "reward": 1.0}) + "\n", encoding="utf-8")
+
+
+def test_discover_run_records_includes_deterministic_eval_outputs(tmp_path: Path) -> None:
+    raw_dir = tmp_path / "runs" / "raw"
+    eval_dir = tmp_path / "runs" / "evals" / "gpt-5-mini" / "medqa"
+    _write_eval_output(eval_dir)
+
+    records = discover_run_records(raw_dir, filter_status=("completed",))
+
+    assert len(records) == 1
+    record = records[0]
+    assert record.model_id == "gpt-5-mini"
+    assert record.manifest_env_id == "medqa"
+    assert record.results_dir == eval_dir
+    assert record.row_count == 1
+    assert record.env_args == {"split": "test"}
+    assert record.sampling_args == {"temperature": 0}
+
+
+def test_discover_run_records_includes_deterministic_eval_variants(tmp_path: Path) -> None:
+    eval_dir = tmp_path / "runs" / "evals" / "gpt-5-mini" / "medqa" / "env_args.shuffle_seed-1618"
+    _write_eval_output(
+        eval_dir,
+        {
+            "variant_id": "env_args.shuffle_seed-1618",
+            "variant_payload": {"env_args": {"shuffle_seed": 1618}},
+            "medarc_config_fingerprint": "abc123",
+            "medarc_config_fingerprint_payload": {"env_id": "medqa"},
+        },
+    )
+
+    records = discover_run_records(tmp_path / "runs" / "raw", filter_status=("completed",))
+
+    assert len(records) == 1
+    normalized = load_normalized_metadata(records[0])
+    assert normalized.variant_id == "env_args.shuffle_seed-1618"
+    assert normalized.variant_payload == {"env_args": {"shuffle_seed": 1618}}
+    assert normalized.medarc_config_fingerprint == "abc123"
+    assert normalized.medarc_config_fingerprint_payload == {"env_id": "medqa"}
+
+
+def test_discover_run_records_includes_direct_upstream_uuid_outputs(tmp_path: Path) -> None:
+    upstream_dir = tmp_path / "runs" / "evals" / "medqa--gpt-5-mini" / "016f4b4a-92a4-4a5b-a7c1-853af3318c52"
+    _write_eval_output(upstream_dir)
+
+    records = discover_run_records(tmp_path / "runs" / "raw", filter_status=("completed",))
+
+    assert len(records) == 1
+    record = records[0]
+    assert record.model_id == "gpt-5-mini"
+    assert record.manifest_env_id == "medqa"
+    assert record.manifest.job_run_id == "016f4b4a-92a4-4a5b-a7c1-853af3318c52"
+
+
+def test_discover_run_records_deduplicates_overlapping_eval_roots(tmp_path: Path) -> None:
+    eval_dir = tmp_path / "runs" / "evals" / "gpt-5-mini" / "medqa"
+    _write_eval_output(eval_dir)
+
+    records = discover_run_records(tmp_path / "runs", filter_status=("completed",))
+
+    assert len(records) == 1
+    assert records[0].results_dir == eval_dir
+
+
+def test_discover_run_records_parent_baseline_and_child_variant_once(tmp_path: Path) -> None:
+    baseline_dir = tmp_path / "runs" / "evals" / "gpt-5-mini" / "medqa"
+    variant_dir = baseline_dir / "env_args.shuffle_seed-1618"
+    _write_eval_output(baseline_dir)
+    _write_eval_output(
+        variant_dir,
+        {
+            "variant_id": "env_args.shuffle_seed-1618",
+            "variant_payload": {"env_args": {"shuffle_seed": 1618}},
+        },
+    )
+
+    records = discover_run_records(tmp_path / "runs" / "raw", filter_status=("completed",))
+
+    assert len(records) == 2
+    assert {record.results_dir for record in records} == {baseline_dir, variant_dir}

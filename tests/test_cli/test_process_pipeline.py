@@ -241,6 +241,43 @@ def _write_run(
     return runs_dir
 
 
+def _write_deterministic_eval(
+    tmp_path: Path,
+    *,
+    model_id: str = "gpt-mini",
+    env_id: str = "demo-env",
+    variant_id: str | None = None,
+) -> Path:
+    runs_dir = tmp_path / "runs"
+    results_dir = runs_dir / "evals" / model_id / env_id
+    metadata = {
+        "env_id": env_id,
+        "model": model_id,
+        "env_args": {},
+        "sampling_args": {},
+        "num_examples": 1,
+        "rollouts_per_example": 1,
+        "medarc_config_fingerprint": "abc123",
+        "medarc_config_fingerprint_payload": {
+            "env_id": env_id,
+            "model": model_id,
+            "env_args": {},
+            "sampling_args": {},
+            "num_examples": 1,
+            "rollouts_per_example": 1,
+        },
+        "variant_id": None,
+        "variant_payload": None,
+    }
+    if variant_id is not None:
+        results_dir = results_dir / variant_id
+        metadata["variant_id"] = variant_id
+        metadata["variant_payload"] = {"env_args": {"shuffle_seed": 1618}}
+    _write_json(results_dir / "metadata.json", metadata)
+    (results_dir / "results.jsonl").write_text(json.dumps({"example_id": "ex-1", "reward": 1.0}) + "\n", encoding="utf-8")
+    return runs_dir / "raw"
+
+
 def _remove_model_id(tmp_path: Path, run_id: str) -> None:
     manifest_path = tmp_path / "runs" / run_id / "run_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -279,6 +316,43 @@ def test_run_process_respects_env_export_defaults(tmp_path: Path) -> None:
     assert group.env_id == "demo-env"
     assert group.base_env_id == "demo-env"
     assert group.model_id == "gpt-mini"
+
+
+def test_run_process_processes_deterministic_eval_outputs(tmp_path: Path) -> None:
+    runs_dir = _write_deterministic_eval(tmp_path)
+
+    result = run_process(
+        ProcessOptions(
+            runs_dir=runs_dir,
+            output_dir=tmp_path / "processed",
+            dry_run=True,
+            max_workers=1,
+        )
+    )
+
+    assert result.records_processed == 1
+    assert result.rows_processed == 1
+    group = result.env_groups[0]
+    assert group.env_id == "demo-env"
+    assert group.model_id == "gpt-mini"
+
+
+def test_run_process_rejects_variant_aggregation_until_supported(tmp_path: Path) -> None:
+    runs_dir = _write_deterministic_eval(tmp_path, variant_id="env_args.shuffle_seed-1618")
+
+    with pytest.raises(RuntimeError) as excinfo:
+        run_process(
+            ProcessOptions(
+                runs_dir=runs_dir,
+                output_dir=tmp_path / "processed",
+                dry_run=True,
+                max_workers=1,
+            )
+        )
+
+    message = str(excinfo.value)
+    assert "variant aggregation not implemented yet" in message
+    assert "variant_id=env_args.shuffle_seed-1618" in message
 
 
 def test_run_process_resolves_base_env_id(tmp_path: Path) -> None:
