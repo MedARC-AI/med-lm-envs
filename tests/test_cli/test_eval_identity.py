@@ -49,6 +49,20 @@ def test_duplicate_model_env_paths_use_deterministic_variants(tmp_path: Path) ->
     assert plans[1].results_path == tmp_path / "gpt-5-mini" / "medqa" / "env_args.shuffle_seed-9331"
 
 
+def test_duplicate_model_env_baseline_gets_explicit_variant(tmp_path: Path) -> None:
+    plans = plan_eval_paths(
+        [
+            {"model": "gpt-5-mini", "env_id": "medqa"},
+            {"model": "gpt-5-mini", "env_id": "medqa", "env_args": {"shuffle_seed": 1618}},
+        ],
+        output_root=tmp_path,
+    )
+
+    assert [plan.identity.variant_id for plan in plans] == ["baseline", "env_args.shuffle_seed-1618"]
+    assert plans[0].identity.variant_payload == {"env_args": {}}
+    assert plans[0].results_path == tmp_path / "gpt-5-mini" / "medqa" / "baseline"
+
+
 def test_duplicate_model_env_variant_can_use_sampling_args(tmp_path: Path) -> None:
     plans = plan_eval_paths(
         [

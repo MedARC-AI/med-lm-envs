@@ -22,6 +22,7 @@ from medarc_verifiers.cli._constants import (
     DEFAULT_API_BASE_URL,
     DEFAULT_API_KEY_VAR,
     DEFAULT_ENDPOINTS_PATH,
+    DEFAULT_EVALS_DIR,
     DEFAULT_ENV_CONFIG_ROOT,
     DEFAULT_ENV_DIR,
     DEFAULT_PROCESSED_DIR,
@@ -35,6 +36,7 @@ from medarc_verifiers.cli._manifest import MANIFEST_FILENAME, ManifestJobEntry, 
 from medarc_verifiers.cli._manifest_planner import ManifestPlanner
 from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, EnvironmentExportConfig
 from medarc_verifiers.cli._single_run import run_single_mode
+from medarc_verifiers.cli.eval_identity import EvalPathPlan, plan_eval_paths
 from medarc_verifiers.cli.hf import HFSyncConfig, sync_files_to_hub
 from medarc_verifiers.cli.process import PROCESS_DEFAULT_STATUS_FILTER, ProcessOptions, ProcessResult, run_process
 from medarc_verifiers.cli.utils.config_io import load_mapping_file
@@ -46,6 +48,7 @@ from medarc_verifiers.cli.utils.shared import (
     slugify,
     validate_simple_name,
 )
+from medarc_verifiers.cli.verifiers_adapter import EvalConfigOverrides, build_eval_config, load_toml_eval_configs
 from medarc_verifiers.utils.pathing import resolve_under
 from medarc_verifiers.cli.winrate import (
     WinrateConfig,
@@ -65,7 +68,7 @@ def build_batch_parser() -> argparse.ArgumentParser:
         prog=COMMAND,
         description="Run MedARC evaluations using unified configuration files.",
     )
-    parser.add_argument("-c", "--config", required=True, type=Path, help="Path to a run configuration YAML file.")
+    parser.add_argument("-c", "--config", required=True, type=Path, help="Path to a benchmark configuration file.")
     parser.add_argument(
         "--run-id",
         help="Override the generated run identifier (simple name only: no slashes, no '..', not absolute).",
@@ -139,6 +142,9 @@ def build_batch_parser() -> argparse.ArgumentParser:
             "Useful when pointing a config at a dynamically assigned endpoint."
         ),
     )
+    parser.add_argument("--api-key-var", default=None, help="Override API key environment variable for TOML bench.")
+    parser.add_argument("--provider", default=None, help="Override provider shorthand for TOML bench.")
+    parser.add_argument("--model", "-m", default=None, help="Override model for every TOML eval.")
     parser.add_argument(
         "--job-id", action="append", help="Run only the specified job identifier (repeat to select multiple)."
     )
@@ -548,6 +554,16 @@ def _run_batch_mode(argv: Sequence[str]) -> int:
             raise ValueError("--rollout-max-retries must be >= 0.")
     except ValueError as exc:
         parser.error(str(exc))
+
+    config_path = Path(args.config).expanduser()
+    if config_path.suffix.lower() == ".toml":
+        if not args.dry_run:
+            parser.error("TOML bench execution is not available yet; use --dry-run in this transition commit.")
+        try:
+            return _dry_run_toml_bench(args)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("TOML bench dry-run failed: %s", exc)
+            return 1
 
     if args.restart:
         args.auto_resume = False
@@ -1346,6 +1362,8 @@ def _execute_batch(args: argparse.Namespace) -> int:
         os.environ["MEDARC_INCLUDE_USAGE"] = "true" if args.include_usage else "false"
 
     config_path = Path(args.config).expanduser()
+    if config_path.suffix.lower() in {".yaml", ".yml"}:
+        logger.warning("YAML benchmark configs will be removed; convert to TOML.")
     env_root_override = Path(args.env_config_root).expanduser().resolve() if args.env_config_root else None
     run_config = load_run_config(config_path, env_default_root=env_root_override)
 
@@ -1556,6 +1574,66 @@ def _execute_batch(args: argparse.Namespace) -> int:
 
     has_failures = any(result.status == "failed" for result in results if result.status != "skipped")
     return 1 if has_failures else 0
+
+
+def _dry_run_toml_bench(args: argparse.Namespace) -> int:
+    config_path = Path(args.config).expanduser()
+    raw_configs = load_toml_eval_configs(config_path)
+    overrides = EvalConfigOverrides(
+        model=args.model,
+        provider=args.provider,
+        api_base_url=args.api_base_url,
+        api_key_var=args.api_key_var,
+        endpoints_path=args.endpoints_path if getattr(args, "endpoints_path_explicit", False) else None,
+        max_concurrent=args.max_concurrent,
+        env_args=getattr(args, "cli_env_args", None),
+        sampling_args=getattr(args, "cli_sampling_args", None),
+    )
+    eval_configs = [build_eval_config(raw, overrides=overrides) for raw in raw_configs]
+    plan_inputs = [_eval_config_identity_payload(config) for config in eval_configs]
+    output_root = Path(args.output_dir).expanduser() if args.output_dir else DEFAULT_EVALS_DIR
+    path_plans = plan_eval_paths(plan_inputs, output_root=output_root)
+
+    _print_toml_bench_plan(eval_configs, path_plans)
+    return 0
+
+
+def _eval_config_identity_payload(config: Any) -> dict[str, Any]:
+    return {
+        "env_args": dict(config.env_args or {}),
+        "env_id": config.env_id,
+        "model": config.model,
+        "num_examples": config.num_examples,
+        "rollouts_per_example": config.rollouts_per_example,
+        "sampling_args": dict(config.sampling_args or {}),
+    }
+
+
+def _print_toml_bench_plan(eval_configs: Sequence[Any], path_plans: Sequence[EvalPathPlan]) -> None:
+    console = Console(width=240)
+    table = Table(title="TOML Bench Dry Run", caption=f"{len(eval_configs)} eval(s) to dry-run", expand=True)
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("Model", style="magenta", overflow="fold")
+    table.add_column("Environment", style="green", overflow="fold")
+    table.add_column("Variant", style="cyan", overflow="fold")
+    table.add_column("Examples", justify="right")
+    table.add_column("Rollouts", justify="right")
+    table.add_column("Max Concurrency", justify="right")
+    table.add_column("Output Path", overflow="fold")
+
+    for index, (config, path_plan) in enumerate(zip(eval_configs, path_plans), start=1):
+        table.add_row(
+            str(index),
+            config.model,
+            config.env_id,
+            path_plan.identity.variant_id or "-",
+            str(config.num_examples),
+            str(config.rollouts_per_example),
+            str(config.max_concurrent),
+            str(path_plan.results_path),
+        )
+
+    console.print(table)
 
 
 def _build_effective_args(

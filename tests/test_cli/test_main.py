@@ -169,6 +169,102 @@ def test_cli_runs_configuration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert manifest["jobs"][0]["status"] == "completed"
 
 
+def test_toml_bench_dry_run_expands_evals_and_ablations(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path = tmp_path / "bench.toml"
+    _write_config(
+        config_path,
+        """
+        model = "gpt-5-mini"
+        save_results = true
+
+        [[eval]]
+        env_id = "medqa"
+        num_examples = 1
+        rollouts_per_example = 1
+
+        [[ablation]]
+        env_id = "medqa"
+        num_examples = 1
+        rollouts_per_example = 1
+        env_args = { shuffle_answers = true }
+
+        [ablation.sweep.env_args]
+        shuffle_seed = [1618, 9331]
+        """,
+    )
+
+    def fail_execute_jobs(*_args, **_kwargs):
+        raise AssertionError("execute_jobs should not be called for TOML dry-run")
+
+    monkeypatch.setattr(main, "execute_jobs", fail_execute_jobs)
+    exit_code = main.main(
+        [
+            "bench",
+            "--config",
+            str(config_path),
+            "--dry-run",
+            "--output-dir",
+            str(tmp_path / "evals"),
+            "--max-concurrent",
+            "1",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "TOML Bench Dry Run" in output
+    assert "3 eval(s) to dry-run" in output
+    assert "baseline" in output
+    assert "env_args.shuffle_seed-1618" in output
+    assert "env_args.shuffle_seed-9331" in output
+    assert str(tmp_path / "evals" / "gpt-5-mini" / "medqa" / "baseline") in output
+
+
+def test_toml_bench_dry_run_model_override(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path = tmp_path / "bench.toml"
+    _write_config(
+        config_path,
+        """
+        model = "config-model"
+
+        [[eval]]
+        env_id = "medqa"
+        num_examples = 1
+        rollouts_per_example = 1
+        """,
+    )
+
+    exit_code = main.main(["bench", "--config", str(config_path), "--dry-run", "--model", "cli-model"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "cli-model" in output
+    assert "config-model" not in output
+
+
+def test_toml_bench_without_dry_run_fails_explicitly(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    config_path = tmp_path / "bench.toml"
+    _write_config(
+        config_path,
+        """
+        [[eval]]
+        env_id = "medqa"
+        """,
+    )
+
+    with pytest.raises(SystemExit):
+        main.main(["bench", "--config", str(config_path)])
+
+    assert "TOML bench execution is not available yet" in capsys.readouterr().err
+
+
 def test_batch_api_base_url_override_forces_endpoint(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     _write_config(

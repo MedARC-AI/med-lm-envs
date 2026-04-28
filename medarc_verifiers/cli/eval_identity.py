@@ -151,6 +151,9 @@ def generate_variant_id(payload: Mapping[str, Any]) -> str:
         else:
             segments.append(_variant_segment(key, value))
 
+    if not segments:
+        return "baseline"
+
     variant_id = "__".join(segments)
     if len(variant_id) <= _MAX_VARIANT_ID_LENGTH and all(not segment.endswith("-hash") for segment in segments):
         return variant_id
