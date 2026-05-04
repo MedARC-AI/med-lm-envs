@@ -50,6 +50,17 @@ def test_build_container_args_renders_tensor_parallel_and_flags() -> None:
     ]
 
 
+def test_build_container_args_renders_async_scheduling_when_requested() -> None:
+    args = build_container_args(
+        "some/model",
+        tensor_parallel_size=None,
+        data_parallel_size=None,
+        serve={"async_scheduling": True},
+    )
+
+    assert args == ["--model", "some/model", "--async-scheduling"]
+
+
 def test_normalize_volume_mounts_parses_mount_strings() -> None:
     mounts = normalize_volume_mounts(["/host/cache:/root/.cache/huggingface:ro", "/host/data:/data"])
 

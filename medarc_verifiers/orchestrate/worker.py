@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib
 import json
 import os
+import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,7 +48,7 @@ from medarc_verifiers.orchestrate.state import (
     write_task_result,
     write_text,
 )
-from medarc_verifiers.orchestrate.task_naming import bench_run_id
+from medarc_verifiers.orchestrate.task_naming import bench_run_id, sanitize_task_dirname
 from medarc_verifiers.orchestrate.topology import ResolvedTopology, resolve_task_spec_topology
 from medarc_verifiers.orchestrate.vllm_args import build_container_args, normalize_volume_mounts
 
@@ -163,11 +165,25 @@ class TaskWorker:
             raise RuntimeError(f"Missing container image for task {self._spec.task_id}.")
         manifest.image = image
 
+        serve_args = _effective_serve_args(self._spec.serve_args, topology=topology)
+        if serve_args.get("async_scheduling") is not self._spec.serve_args.get("async_scheduling"):
+            log(
+                f"JOB info task={self._spec.task_id} async_scheduling_disabled=true "
+                f"reason=data_parallel_size_gt_1 data_parallel_size={topology.data_parallel_size}"
+            )
+        if serve_args.get("gpu_memory_utilization") != self._spec.serve_args.get("gpu_memory_utilization"):
+            log(
+                f"JOB info task={self._spec.task_id} gpu_memory_utilization_adjusted=true "
+                f"reason=data_parallel_rank0_overhead data_parallel_size={topology.data_parallel_size} "
+                f"base={self._spec.serve_args.get('gpu_memory_utilization', 0.9)} "
+                f"adjusted={serve_args['gpu_memory_utilization']}"
+            )
+
         container_args = build_container_args(
             self._spec.model_id,
             tensor_parallel_size=topology.tensor_parallel_size if topology.tensor_parallel_size > 1 else None,
             data_parallel_size=topology.data_parallel_size if topology.data_parallel_size > 1 else None,
-            serve=dict(self._spec.serve_args),
+            serve=serve_args,
         )
         env = _load_runtime_env(self._spec, allocation=self._allocation, options=self._options)
         volume_mounts = normalize_volume_mounts(self._spec.volume_mounts)
@@ -247,9 +263,10 @@ class TaskWorker:
                 return
             log(f"JOB ready task={self._spec.task_id} attempts={readiness.attempts}")
 
+            effective_bench_run_id = _effective_bench_run_id(self._options.run_id, self._spec)
             command_context = {
                 "base_url": self._active_handle.base_url,
-                "bench_run_id": bench_run_id(self._options.run_id, self._spec.task_id),
+                "bench_run_id": effective_bench_run_id,
                 "host_port": str(_require_server_port(self._allocation)),
                 "model_key": self._spec.model_key,
                 "model_id": self._spec.model_id,
@@ -259,7 +276,7 @@ class TaskWorker:
                 "job_config_path": self._spec.bundled_eval_config_path,
             }
             command = render_command(self._command_template, command_context)
-            manifest.bench_run_id = command_context["bench_run_id"]
+            manifest.bench_run_id = effective_bench_run_id
             restart_source = _resolved_restart_source(paths.state_path, self._spec)
             if restart_source:
                 manifest.restart_source = restart_source
@@ -439,7 +456,29 @@ def _load_runtime_env(
     if spec.container_env_file:
         env.update(_load_env_file(spec.container_env_file, base_dir=Path(spec.original_job_config_path).parent))
     env.update(dict(allocation.runtime_env))
+    if not env.get("HF_TOKEN"):
+        token = _load_hf_token_from_login()
+        if token:
+            env["HF_TOKEN"] = token
     return env
+
+
+def _load_hf_token_from_login() -> str | None:
+    try:
+        module = importlib.import_module("huggingface_hub")
+    except ImportError:
+        return None
+    get_token = getattr(module, "get_token", None)
+    if not callable(get_token):
+        return None
+    try:
+        token = get_token()
+    except Exception:
+        return None
+    if token is None:
+        return None
+    text = str(token).strip()
+    return text or None
 
 
 def _resolved_restart_source(state_path: Path, spec: ResolvedTaskSpec) -> str | None:
@@ -467,6 +506,92 @@ def _normalize_allocation(allocation: ExecutionAllocation, *, task_spec: Resolve
         constraints=dict(allocation.constraints),
         runtime_env=dict(allocation.runtime_env),
     )
+
+
+def _effective_serve_args(serve_args: dict[str, object] | Mapping[str, object], *, topology: ResolvedTopology) -> dict[str, object]:
+    effective = dict(serve_args)
+    if topology.data_parallel_size > 1 and effective.get("async_scheduling") is True:
+        effective["async_scheduling"] = False
+    adjusted_gpu_memory_utilization = _adjust_gpu_memory_utilization_for_dp(
+        effective.get("gpu_memory_utilization"),
+        data_parallel_size=topology.data_parallel_size,
+    )
+    if adjusted_gpu_memory_utilization is not None:
+        effective["gpu_memory_utilization"] = adjusted_gpu_memory_utilization
+    return effective
+
+
+def _adjust_gpu_memory_utilization_for_dp(
+    current_value: object,
+    *,
+    data_parallel_size: int,
+) -> float | None:
+    if data_parallel_size <= 1:
+        return float(current_value) if current_value is not None else None
+    deduction = _dp_gpu_memory_utilization_deduction(data_parallel_size)
+    if deduction <= 0:
+        return float(current_value) if current_value is not None else None
+    base_value = float(current_value) if current_value is not None else 0.9
+    adjusted = max(0.5, base_value - deduction)
+    return round(adjusted, 3)
+
+
+def _dp_gpu_memory_utilization_deduction(data_parallel_size: int) -> float:
+    return {
+        2: 0.01,
+        4: 0.03,
+        8: 0.05,
+    }.get(data_parallel_size, 0.0)
+
+
+_RUN_ID_TIMESTAMP_RE = re.compile(r"(\d{8}-\d{6})")
+
+
+def _effective_bench_run_id(run_id: str, spec: ResolvedTaskSpec) -> str:
+    short_from_timestamp = _short_bench_run_id_from_timestamp(run_id, spec)
+    if short_from_timestamp is not None:
+        return short_from_timestamp
+    task_slug = sanitize_task_dirname(spec.task_id, max_len=80)
+    if run_id.endswith(task_slug):
+        return run_id
+    return bench_run_id(run_id, spec.task_id)
+
+
+def _short_bench_run_id_from_timestamp(run_id: str, spec: ResolvedTaskSpec) -> str | None:
+    match = _RUN_ID_TIMESTAMP_RE.search(run_id)
+    if match is None:
+        return None
+    timestamp = match.group(1)
+    short_name = _short_bench_name_from_task_id(spec.task_id)
+    if short_name is None:
+        return None
+    return f"{sanitize_task_dirname(short_name, max_len=80)}-{timestamp}"
+
+
+def _short_bench_name_from_task_id(task_id: str) -> str | None:
+    job_name, _, model_name = task_id.partition(":")
+    candidates = [_normalize_short_bench_name_part(job_name)]
+    if model_name:
+        candidates.append(_normalize_short_bench_name_part(model_name))
+    candidates = [candidate for candidate in candidates if candidate]
+    if not candidates:
+        return None
+    primary = candidates[0]
+    for candidate in candidates[1:]:
+        if _canonical_short_bench_name(primary) == _canonical_short_bench_name(candidate):
+            return primary
+    return primary
+
+
+def _normalize_short_bench_name_part(value: str) -> str:
+    normalized = value.strip()
+    if normalized.startswith("job-") and len(normalized) > 4:
+        normalized = normalized[4:]
+    return normalized.strip()
+
+
+def _canonical_short_bench_name(value: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9]+", "-", value).strip("-").lower()
 
 
 def _infer_allocated_gpu_count_from_environment() -> int | None:

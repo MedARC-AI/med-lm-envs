@@ -9,6 +9,8 @@ from medarc_verifiers.orchestrate.config import PlanConfig, TaskSpec
 from medarc_verifiers.orchestrate.resources import ResourceError, ResourceManager
 from medarc_verifiers.orchestrate.run import OrchestratorOptions, OrchestratorRunner
 from medarc_verifiers.orchestrate.runtime import RuntimeHandle
+from medarc_verifiers.orchestrate.slurm.plan import slug_task_id
+from medarc_verifiers.orchestrate.task_naming import task_root_for_id
 
 
 class DummyResourceManager:
@@ -98,8 +100,21 @@ class FakeRuntimeAdapter:
         return None
 
 
-def _task(tmp_path: Path, task_id: str, *, gpus: int = 2, tensor_parallel_size: int = 2, data_parallel_size: int = 1) -> TaskSpec:
+def _task(
+    tmp_path: Path,
+    task_id: str,
+    *,
+    gpus: int = 2,
+    tensor_parallel_size: int = 2,
+    data_parallel_size: int = 1,
+    async_scheduling: bool = False,
+    gpu_memory_utilization: float | None = None,
+) -> TaskSpec:
     job_config_path = tmp_path / f"{task_id}.yaml"
+    async_scheduling_block = "      async_scheduling: true\n" if async_scheduling else ""
+    gpu_memory_utilization_block = (
+        f"      gpu_memory_utilization: {gpu_memory_utilization}\n" if gpu_memory_utilization is not None else ""
+    )
     job_config_path.write_text(
         (
             "models:\n"
@@ -112,10 +127,17 @@ def _task(tmp_path: Path, task_id: str, *, gpus: int = 2, tensor_parallel_size: 
             f"    gpus: {gpus}\n"
             f"    tensor_parallel_size: {tensor_parallel_size}\n"
             f"    data_parallel_size: {data_parallel_size}\n"
-            "    serve: {}\n"
+            "    serve:\n"
+            f"{async_scheduling_block}"
+            f"{gpu_memory_utilization_block}"
         ),
         encoding="utf-8",
     )
+    serve_args: dict[str, object] = {}
+    if async_scheduling:
+        serve_args["async_scheduling"] = True
+    if gpu_memory_utilization is not None:
+        serve_args["gpu_memory_utilization"] = gpu_memory_utilization
     return TaskSpec(
         task_id=task_id,
         job_config_path=job_config_path,
@@ -127,7 +149,7 @@ def _task(tmp_path: Path, task_id: str, *, gpus: int = 2, tensor_parallel_size: 
                 "gpus": gpus,
                 "tensor_parallel_size": tensor_parallel_size,
                 "data_parallel_size": data_parallel_size,
-                "serve": {},
+                "serve": serve_args,
             },
         },
     )
@@ -300,6 +322,8 @@ async def test_parallel_launch_records_gpu_accounting_and_dp_args(
         "2",
         "--data-parallel-size",
         "4",
+        "--gpu-memory-utilization",
+        "0.87",
     ]
 
     manifest = json.loads((options.output_root / "tasks" / "task-1" / "runtime" / "task_manifest.json").read_text())
@@ -312,6 +336,470 @@ async def test_parallel_launch_records_gpu_accounting_and_dp_args(
     assert manifest["allocated_gpu_hours"] is not None
     assert manifest["gpu_hours"] is not None
 
+
+@pytest.mark.asyncio
+async def test_parallel_launch_does_not_duplicate_task_slug_in_bench_run_id(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    task = _task(tmp_path, "task-1", gpus=1, tensor_parallel_size=1, data_parallel_size=1)
+    plan = PlanConfig(job_configs=[task.job_config_path])
+    options = OrchestratorOptions(
+        run_id="run-1-task-1",
+        output_root=tmp_path / "outputs",
+        readiness_timeout_s=1,
+        max_parallel=1,
+    )
+    adapter = FakeRuntimeAdapter()
+    runner = OrchestratorRunner(
+        plan,
+        [task],
+        DummyResourceManager(),
+        options=options,
+        runtime="docker",
+        runtime_adapter=adapter,
+        use_dashboard=False,
+    )
+
+    async def fake_wait_for_readiness_async(*args, **kwargs):
+        class Result:
+            ready = True
+            elapsed_s = 0.1
+            attempts = 1
+            last_error = None
+
+        return Result()
+
+    async def fake_start_benchmark(*args, **kwargs):
+        class Proc:
+            pass
+
+        return Proc()
+
+    async def fake_wait_benchmark(proc):
+        class Result:
+            exit_code = 0
+            duration_s = 0.0
+            terminated = False
+
+        return Result()
+
+    async def fake_to_thread(func, /, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_for_readiness_async", fake_wait_for_readiness_async)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.start_benchmark", fake_start_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_benchmark", fake_wait_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.run._register_signal_handlers", lambda loop, handler: None)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.asyncio.to_thread", fake_to_thread)
+
+    await runner._run_async()
+
+    manifest = json.loads((options.output_root / "tasks" / "task-1" / "runtime" / "task_manifest.json").read_text())
+    assert manifest["bench_run_id"] == "run-1-task-1"
+
+
+@pytest.mark.asyncio
+async def test_parallel_launch_does_not_duplicate_hashed_slurm_task_slug_in_bench_run_id(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    task_id = "job-qwen-3.0_6b-thinking:qwen-3.0_6b-thinking"
+    task = _task(tmp_path, task_id, gpus=1, tensor_parallel_size=1, data_parallel_size=1)
+    slurm_style_run_id = f"qwen-small-test-20260315-171932-{slug_task_id(task_id)}"
+    plan = PlanConfig(job_configs=[task.job_config_path])
+    options = OrchestratorOptions(
+        run_id=slurm_style_run_id,
+        output_root=tmp_path / "outputs",
+        readiness_timeout_s=1,
+        max_parallel=1,
+    )
+    adapter = FakeRuntimeAdapter()
+    runner = OrchestratorRunner(
+        plan,
+        [task],
+        DummyResourceManager(),
+        options=options,
+        runtime="docker",
+        runtime_adapter=adapter,
+        use_dashboard=False,
+    )
+
+    async def fake_wait_for_readiness_async(*args, **kwargs):
+        class Result:
+            ready = True
+            elapsed_s = 0.1
+            attempts = 1
+            last_error = None
+
+        return Result()
+
+    async def fake_start_benchmark(*args, **kwargs):
+        class Proc:
+            pass
+
+        return Proc()
+
+    async def fake_wait_benchmark(proc):
+        class Result:
+            exit_code = 0
+            duration_s = 0.0
+            terminated = False
+
+        return Result()
+
+    async def fake_to_thread(func, /, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_for_readiness_async", fake_wait_for_readiness_async)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.start_benchmark", fake_start_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_benchmark", fake_wait_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.run._register_signal_handlers", lambda loop, handler: None)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.asyncio.to_thread", fake_to_thread)
+
+    await runner._run_async()
+
+    manifest = json.loads((task_root_for_id(options.output_root, task.task_id) / "runtime" / "task_manifest.json").read_text())
+    assert manifest["bench_run_id"] == "qwen-3.0_6b-thinking-20260315-171932"
+
+@pytest.mark.asyncio
+async def test_parallel_launch_disables_async_scheduling_when_dp_is_active(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    plan = PlanConfig(job_configs=[tmp_path / "job.yaml"])
+    tasks = [_task(tmp_path, "task-1", gpus=8, tensor_parallel_size=2, data_parallel_size=4, async_scheduling=True)]
+    options = OrchestratorOptions(
+        run_id="run-1",
+        output_root=tmp_path / "outputs",
+        readiness_timeout_s=1,
+        max_parallel=1,
+        allocated_gpu_count=8,
+    )
+    adapter = FakeRuntimeAdapter()
+    runner = OrchestratorRunner(
+        plan,
+        tasks,
+        PortOnlyDummyResourceManager(),
+        options=options,
+        runtime="pyxis",
+        runtime_adapter=adapter,
+        use_dashboard=False,
+    )
+    log_messages: list[str] = []
+
+    async def fake_wait_for_readiness_async(*args, **kwargs):
+        class Result:
+            ready = True
+            elapsed_s = 0.1
+            attempts = 1
+            last_error = None
+
+        return Result()
+
+    async def fake_start_benchmark(*args, **kwargs):
+        class Proc:
+            pass
+
+        return Proc()
+
+    async def fake_wait_benchmark(proc):
+        class Result:
+            exit_code = 0
+            duration_s = 0.0
+            terminated = False
+
+        return Result()
+
+    async def fake_to_thread(func, /, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_for_readiness_async", fake_wait_for_readiness_async)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.start_benchmark", fake_start_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_benchmark", fake_wait_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.run._register_signal_handlers", lambda loop, handler: None)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.asyncio.to_thread", fake_to_thread)
+
+    original_log = runner._dashboard.log
+    runner._dashboard.log = lambda message: log_messages.append(message)
+    try:
+        await runner._run_async()
+    finally:
+        runner._dashboard.log = original_log
+
+    launch = adapter.launch_calls[0]
+    assert "--async-scheduling" not in launch["container_args"]
+    assert any("async_scheduling_disabled=true" in message for message in log_messages)
+    assert any("reason=data_parallel_size_gt_1" in message for message in log_messages)
+
+    request_payload = json.loads((options.output_root / "tasks" / "task-1" / "serve" / "container_create_request.json").read_text())
+    assert "--async-scheduling" not in request_payload["command"]
+
+
+@pytest.mark.asyncio
+async def test_parallel_launch_adjusts_gpu_memory_utilization_for_dp(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    plan = PlanConfig(job_configs=[tmp_path / "job.yaml"])
+    tasks = [_task(tmp_path, "task-1", gpus=8, tensor_parallel_size=2, data_parallel_size=4, gpu_memory_utilization=0.9)]
+    options = OrchestratorOptions(
+        run_id="run-1",
+        output_root=tmp_path / "outputs",
+        readiness_timeout_s=1,
+        max_parallel=1,
+        allocated_gpu_count=8,
+    )
+    adapter = FakeRuntimeAdapter()
+    runner = OrchestratorRunner(
+        plan,
+        tasks,
+        PortOnlyDummyResourceManager(),
+        options=options,
+        runtime="pyxis",
+        runtime_adapter=adapter,
+        use_dashboard=False,
+    )
+    log_messages: list[str] = []
+
+    async def fake_wait_for_readiness_async(*args, **kwargs):
+        class Result:
+            ready = True
+            elapsed_s = 0.1
+            attempts = 1
+            last_error = None
+
+        return Result()
+
+    async def fake_start_benchmark(*args, **kwargs):
+        class Proc:
+            pass
+
+        return Proc()
+
+    async def fake_wait_benchmark(proc):
+        class Result:
+            exit_code = 0
+            duration_s = 0.0
+            terminated = False
+
+        return Result()
+
+    async def fake_to_thread(func, /, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_for_readiness_async", fake_wait_for_readiness_async)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.start_benchmark", fake_start_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_benchmark", fake_wait_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.run._register_signal_handlers", lambda loop, handler: None)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.asyncio.to_thread", fake_to_thread)
+
+    original_log = runner._dashboard.log
+    runner._dashboard.log = lambda message: log_messages.append(message)
+    try:
+        await runner._run_async()
+    finally:
+        runner._dashboard.log = original_log
+
+    launch = adapter.launch_calls[0]
+    assert "--gpu-memory-utilization" in launch["container_args"]
+    idx = launch["container_args"].index("--gpu-memory-utilization")
+    assert launch["container_args"][idx + 1] == "0.87"
+    assert any("gpu_memory_utilization_adjusted=true" in message for message in log_messages)
+
+    request_payload = json.loads((options.output_root / "tasks" / "task-1" / "serve" / "container_create_request.json").read_text())
+    idx = request_payload["command"].index("--gpu-memory-utilization")
+    assert request_payload["command"][idx + 1] == "0.87"
+
+
+@pytest.mark.asyncio
+async def test_parallel_launch_defaults_gpu_memory_utilization_for_dp_when_unset(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    plan = PlanConfig(job_configs=[tmp_path / "job.yaml"])
+    tasks = [_task(tmp_path, "task-1", gpus=8, tensor_parallel_size=2, data_parallel_size=4)]
+    options = OrchestratorOptions(
+        run_id="run-1",
+        output_root=tmp_path / "outputs",
+        readiness_timeout_s=1,
+        max_parallel=1,
+        allocated_gpu_count=8,
+    )
+    adapter = FakeRuntimeAdapter()
+    runner = OrchestratorRunner(
+        plan,
+        tasks,
+        PortOnlyDummyResourceManager(),
+        options=options,
+        runtime="pyxis",
+        runtime_adapter=adapter,
+        use_dashboard=False,
+    )
+
+    async def fake_wait_for_readiness_async(*args, **kwargs):
+        class Result:
+            ready = True
+            elapsed_s = 0.1
+            attempts = 1
+            last_error = None
+
+        return Result()
+
+    async def fake_start_benchmark(*args, **kwargs):
+        class Proc:
+            pass
+
+        return Proc()
+
+    async def fake_wait_benchmark(proc):
+        class Result:
+            exit_code = 0
+            duration_s = 0.0
+            terminated = False
+
+        return Result()
+
+    async def fake_to_thread(func, /, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_for_readiness_async", fake_wait_for_readiness_async)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.start_benchmark", fake_start_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_benchmark", fake_wait_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.run._register_signal_handlers", lambda loop, handler: None)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.asyncio.to_thread", fake_to_thread)
+
+    await runner._run_async()
+
+    launch = adapter.launch_calls[0]
+    assert "--gpu-memory-utilization" in launch["container_args"]
+    idx = launch["container_args"].index("--gpu-memory-utilization")
+    assert launch["container_args"][idx + 1] == "0.87"
+
+
+@pytest.mark.asyncio
+async def test_parallel_launch_keeps_gpu_memory_utilization_unchanged_without_dp(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    plan = PlanConfig(job_configs=[tmp_path / "job.yaml"])
+    tasks = [_task(tmp_path, "task-1", gpus=1, tensor_parallel_size=1, data_parallel_size=1, gpu_memory_utilization=0.9)]
+    options = OrchestratorOptions(
+        run_id="run-1",
+        output_root=tmp_path / "outputs",
+        readiness_timeout_s=1,
+        max_parallel=1,
+    )
+    adapter = FakeRuntimeAdapter()
+    runner = OrchestratorRunner(
+        plan,
+        tasks,
+        DummyResourceManager(),
+        options=options,
+        runtime="docker",
+        runtime_adapter=adapter,
+        use_dashboard=False,
+    )
+
+    async def fake_wait_for_readiness_async(*args, **kwargs):
+        class Result:
+            ready = True
+            elapsed_s = 0.1
+            attempts = 1
+            last_error = None
+
+        return Result()
+
+    async def fake_start_benchmark(*args, **kwargs):
+        class Proc:
+            pass
+
+        return Proc()
+
+    async def fake_wait_benchmark(proc):
+        class Result:
+            exit_code = 0
+            duration_s = 0.0
+            terminated = False
+
+        return Result()
+
+    async def fake_to_thread(func, /, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_for_readiness_async", fake_wait_for_readiness_async)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.start_benchmark", fake_start_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_benchmark", fake_wait_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.run._register_signal_handlers", lambda loop, handler: None)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.asyncio.to_thread", fake_to_thread)
+
+    await runner._run_async()
+
+    launch = adapter.launch_calls[0]
+    idx = launch["container_args"].index("--gpu-memory-utilization")
+    assert launch["container_args"][idx + 1] == "0.9"
+
+
+@pytest.mark.asyncio
+async def test_parallel_launch_keeps_async_scheduling_when_dp_is_one(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    plan = PlanConfig(job_configs=[tmp_path / "job.yaml"])
+    tasks = [_task(tmp_path, "task-1", gpus=1, tensor_parallel_size=1, data_parallel_size=1, async_scheduling=True)]
+    options = OrchestratorOptions(
+        run_id="run-1",
+        output_root=tmp_path / "outputs",
+        readiness_timeout_s=1,
+        max_parallel=1,
+    )
+    adapter = FakeRuntimeAdapter()
+    runner = OrchestratorRunner(
+        plan,
+        tasks,
+        DummyResourceManager(),
+        options=options,
+        runtime="docker",
+        runtime_adapter=adapter,
+        use_dashboard=False,
+    )
+
+    async def fake_wait_for_readiness_async(*args, **kwargs):
+        class Result:
+            ready = True
+            elapsed_s = 0.1
+            attempts = 1
+            last_error = None
+
+        return Result()
+
+    async def fake_start_benchmark(*args, **kwargs):
+        class Proc:
+            pass
+
+        return Proc()
+
+    async def fake_wait_benchmark(proc):
+        class Result:
+            exit_code = 0
+            duration_s = 0.0
+            terminated = False
+
+        return Result()
+
+    async def fake_to_thread(func, /, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_for_readiness_async", fake_wait_for_readiness_async)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.start_benchmark", fake_start_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_benchmark", fake_wait_benchmark)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.run._register_signal_handlers", lambda loop, handler: None)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.asyncio.to_thread", fake_to_thread)
+
+    await runner._run_async()
+
+    launch = adapter.launch_calls[0]
+    assert "--async-scheduling" in launch["container_args"]
 
 @pytest.mark.asyncio
 async def test_runner_persists_discovered_restart_source(tmp_path: Path, monkeypatch) -> None:

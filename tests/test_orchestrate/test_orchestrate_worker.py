@@ -1,3 +1,5 @@
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -7,7 +9,7 @@ from medarc_verifiers.orchestrate.config import expand_tasks, load_plan
 from medarc_verifiers.orchestrate.state import TaskManifest
 from medarc_verifiers.orchestrate.runtime import RuntimeLaunchError
 from medarc_verifiers.orchestrate.podman_vllm import PodmanRuntimeAdapter
-from medarc_verifiers.orchestrate.worker import main as worker_main
+from medarc_verifiers.orchestrate.worker import _load_runtime_env, main as worker_main
 
 
 def _write_job_config(
@@ -238,6 +240,58 @@ def test_worker_cli_infers_allocated_gpus_from_visible_devices(tmp_path: Path, m
 
     assert rc == 0
     assert captured["allocated_gpus"] == 4
+
+
+def test_load_runtime_env_falls_back_to_huggingface_login(tmp_path: Path, monkeypatch) -> None:
+    tasks, bundle = _bundle(tmp_path)
+    task_bundle = bundle.tasks[tasks[0].task_id]
+    fake_module = types.SimpleNamespace(get_token=lambda: "hf-login-token")
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_module)
+
+    env = _load_runtime_env(
+        task_bundle.spec,
+        allocation=ExecutionAllocation(task_id=tasks[0].task_id),
+        options=type("Options", (), {"env_file": None})(),
+    )
+
+    assert env["HF_TOKEN"] == "hf-login-token"
+
+
+def test_load_runtime_env_prefers_explicit_hf_token_over_huggingface_login(tmp_path: Path, monkeypatch) -> None:
+    tasks, bundle = _bundle(tmp_path)
+    task_bundle = bundle.tasks[tasks[0].task_id]
+    fake_module = types.SimpleNamespace(get_token=lambda: "hf-login-token")
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_module)
+
+    env = _load_runtime_env(
+        task_bundle.spec,
+        allocation=ExecutionAllocation(task_id=tasks[0].task_id, runtime_env={"HF_TOKEN": "explicit-token"}),
+        options=type("Options", (), {"env_file": None})(),
+    )
+
+    assert env["HF_TOKEN"] == "explicit-token"
+
+
+def test_load_runtime_env_skips_huggingface_login_when_library_missing(tmp_path: Path, monkeypatch) -> None:
+    tasks, bundle = _bundle(tmp_path)
+    task_bundle = bundle.tasks[tasks[0].task_id]
+    monkeypatch.delitem(sys.modules, "huggingface_hub", raising=False)
+    original_import_module = __import__("importlib").import_module
+
+    def fake_import_module(name: str, package=None):
+        if name == "huggingface_hub":
+            raise ImportError("missing")
+        return original_import_module(name, package)
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.importlib.import_module", fake_import_module)
+
+    env = _load_runtime_env(
+        task_bundle.spec,
+        allocation=ExecutionAllocation(task_id=tasks[0].task_id),
+        options=type("Options", (), {"env_file": None})(),
+    )
+
+    assert "HF_TOKEN" not in env
 
 
 def test_podman_runtime_adapter_launch_builds_expected_command(monkeypatch, tmp_path: Path) -> None:
