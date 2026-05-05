@@ -25,6 +25,15 @@ from medarc_verifiers.orchestrate.topology import minimum_required_gpus, resolve
 from medarc_verifiers.utils.run_naming import generate_run_id
 
 
+def build_record_failure_parser(*, prog: str = "medarc-orchestrate record-failure") -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog=prog, description="Record a bundled orchestrator task failure before worker start.")
+    parser.add_argument("--task-spec", type=Path, required=True, help="Path to bundled task.yaml.")
+    parser.add_argument("--allocation", type=Path, required=True, help="Path to execution allocation JSON.")
+    parser.add_argument("--reason", required=True, help="Machine-readable failure reason.")
+    parser.add_argument("--message", required=True, help="Human-readable failure message.")
+    return parser
+
+
 def _add_local_arguments(parser: argparse.ArgumentParser) -> None:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--plan", type=Path, help="Path to orchestrator plan YAML.")
@@ -280,12 +289,61 @@ def main(argv: list[str] | None = None) -> int:
         from medarc_verifiers.orchestrate.worker import main as worker_main
 
         return worker_main(argv[1:])
+    if argv and argv[0] == "record-failure":
+        return _run_record_failure(build_record_failure_parser().parse_args(argv[1:]))
     parser = build_parser()
     args = parser.parse_args(argv)
     return args.handler(args)
 
 
-__all__ = ["build_local_parser", "build_parser", "main"]
+__all__ = ["build_local_parser", "build_parser", "build_record_failure_parser", "main"]
+
+
+def _run_record_failure(args: argparse.Namespace) -> int:
+    from medarc_verifiers.orchestrate.bundle import RuntimeState, load_execution_allocation, load_task_spec, write_runtime_state
+    from medarc_verifiers.orchestrate.state import (
+        JobState,
+        TaskManifest,
+        TaskPaths,
+        upsert_summary_entry,
+        write_task_manifest,
+        write_task_result,
+    )
+
+    task_spec = load_task_spec(args.task_spec.expanduser().resolve())
+    allocation = load_execution_allocation(args.allocation.expanduser().resolve())
+    if allocation is None:
+        raise FileNotFoundError(f"Execution allocation not found: {args.allocation}")
+    paths = TaskPaths(Path(task_spec.output_paths.root))
+    manifest = TaskManifest(
+        task_id=task_spec.task_id,
+        config_path=task_spec.bundled_eval_config_path,
+        model_key=task_spec.model_key,
+        model_id=task_spec.model_id,
+        state=JobState.failed,
+        failure_reason=str(args.reason),
+        error=str(args.message),
+        gpu_ids=list(allocation.gpu_ids),
+        port=allocation.server_port,
+        gpus=task_spec.gpus,
+        tensor_parallel_size=task_spec.tensor_parallel_size,
+        data_parallel_size=task_spec.data_parallel_size,
+        allocated_gpus=allocation.allocated_gpus,
+    )
+    manifest.completed_at = manifest.updated_at
+    write_task_manifest(paths, manifest)
+    write_task_result(paths, {"state": JobState.failed, "failure_reason": manifest.failure_reason, "error": manifest.error})
+    write_runtime_state(
+        paths.state_path,
+        RuntimeState(
+            task_id=task_spec.task_id,
+            state=JobState.failed,
+            restart_source=task_spec.restart_source,
+            restart_source_strategy=task_spec.restart_source_strategy,
+        ),
+    )
+    upsert_summary_entry(paths.root.parents[1] / "summary.json", manifest)
+    return 0
 
 
 def _default_local_runtime() -> str:

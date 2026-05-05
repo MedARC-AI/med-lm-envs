@@ -200,6 +200,49 @@ Important `slurm` flags:
 - Execution on the compute node uses `--runtime pyxis`.
 - Tasks are ordered by largest minimum `gpus` first, with `tensor_parallel_size` as the tie-breaker.
 
+#### Slurm sidecars
+
+`medarc-orchestrate slurm` supports optional task-local sidecars under `orchestrate.sidecars`. Sidecars run as background
+`srun --overlap` Pyxis steps in the same Slurm allocation before the worker starts. They are intended for node-local
+services such as a MedAgentBench FHIR server that the benchmark reaches through `127.0.0.1`.
+
+Example:
+
+```yaml
+orchestrate:
+  sidecars:
+    medagentbench-fhir:
+      runtime: pyxis
+      image: /path/to/medagentbench_withsh.sqsh
+      srun_args:
+        - --mem=16G
+        - --no-container-entrypoint
+        - --container-env=JAVA_TOOL_OPTIONS
+      env:
+        JAVA_TOOL_OPTIONS: "-XX:+UseSerialGC -Xms256m -Xmx1024m"
+      command:
+        - /usr/bin/java
+        - --class-path
+        - /app/main.war
+        - "-Dloader.path=main.war!/WEB-INF/classes/,main.war!/WEB-INF/,/app/extra-classes"
+        - org.springframework.boot.loader.PropertiesLauncher
+      readiness:
+        url: http://127.0.0.1:8080/fhir/metadata
+        timeout_s: 240
+        interval_s: 2
+```
+
+Sidecar constraints:
+
+- Supported only in `slurm` mode with Pyxis.
+- Sidecars start sequentially in YAML order and must pass readiness before the worker starts.
+- Logs are written under `tasks/<task-slug>/sidecars/<name>.log`.
+- Cleanup sends `SIGTERM` to each background `srun` PID through a single `EXIT` trap.
+- `srun_args` may add step options, but renderer-owned/resource-conflicting flags such as `--overlap`, `--nodes`,
+  `--ntasks`, `--container-image`, `--cpus-per-task`, `--cpus-per-gpu`, GPU, GRES, and TRES flags are rejected.
+- If a sidecar exits or times out before readiness, the generated script runs `medarc-orchestrate record-failure` so
+  `runtime/state.json`, `runtime/result.json`, `runtime/task_manifest.json`, and `summary.json` show a failed task.
+
 ### Outputs
 
 Orchestrator-owned artifacts are written under `outputs/orchestrate/<run_id>/`.
@@ -212,6 +255,9 @@ Typical files:
 - `tasks/<task-slug>/eval-config.yaml`
 - `tasks/<task-slug>/runtime/allocation.json`
 - `tasks/<task-slug>/runtime/state.json`
+- `tasks/<task-slug>/runtime/result.json`
+- `tasks/<task-slug>/runtime/task_manifest.json`
+- `tasks/<task-slug>/sidecars/*.log` when sidecars are configured
 - `tasks/<task-slug>/submit.sh` for Slurm submission
 
 `medarc-eval bench` raw outputs still live under `runs/raw/<bench_run_id>/`.

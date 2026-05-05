@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+import re
 import shlex
 
 from medarc_verifiers.orchestrate.bundle import (
     ExecutionAllocation,
     PlannedTaskBundle,
+    SidecarSpec,
     ensure_run_bundle,
     write_execution_allocation,
 )
@@ -218,10 +220,107 @@ def write_script(
         'source "$ACTIVATE_SCRIPT"',
         f"export MEDARC_ALLOCATED_GPU_COUNT={node_gpus}",
         "",
+        *_render_sidecars(task_bundle.spec.sidecars, task_bundle=task_bundle),
         " ".join(shlex.quote(arg) for arg in command),
         "",
     ]
     script_path.write_text("\n".join(lines + body_lines), encoding="utf-8")
+
+
+def _render_sidecars(sidecars: list[SidecarSpec], *, task_bundle: PlannedTaskBundle) -> list[str]:
+    if not sidecars:
+        return []
+    lines: list[str] = [
+        "SIDECAR_PIDS=()",
+        "",
+        "cleanup_sidecars() {",
+        '    for pid in "${SIDECAR_PIDS[@]}"; do',
+        '        kill "$pid" 2>/dev/null || true',
+        "    done",
+        "}",
+        "trap cleanup_sidecars EXIT",
+        "",
+        "record_sidecar_failure() {",
+        '    reason="$1"',
+        '    message="$2"',
+        "    medarc-orchestrate record-failure \\",
+        f"        --task-spec {shlex.quote(task_bundle.spec.output_paths.task_spec_path)} \\",
+        f"        --allocation {shlex.quote(task_bundle.spec.output_paths.allocation_path)} \\",
+        '        --reason "$reason" \\',
+        '        --message "$message"',
+        "}",
+        "",
+    ]
+    for sidecar in sidecars:
+        lines.extend(_render_sidecar(sidecar, task_bundle=task_bundle))
+        lines.append("")
+    return lines
+
+
+def _render_sidecar(sidecar: SidecarSpec, *, task_bundle: PlannedTaskBundle) -> list[str]:
+    suffix = _sidecar_shell_suffix(sidecar.name)
+    log_var = f"SIDECAR_LOG_{suffix}"
+    pid_var = f"SIDECAR_PID_{suffix}"
+    log_path = str(Path(task_bundle.spec.output_paths.sidecar_dir) / f"{sidecar.name}.log")
+    lines: list[str] = [
+        f"{log_var}={shlex.quote(log_path)}",
+        f'mkdir -p "$(dirname "${log_var}")"',
+        _render_sidecar_srun(sidecar, log_var=log_var),
+        f"{pid_var}=$!",
+        f'SIDECAR_PIDS+=("${{{pid_var}}}")',
+    ]
+    if sidecar.readiness.enabled:
+        lines.extend(_render_sidecar_readiness(sidecar, log_var=log_var, pid_var=pid_var))
+    return lines
+
+
+def _render_sidecar_srun(sidecar: SidecarSpec, *, log_var: str) -> str:
+    env_assignments = [f"{key}={shlex.quote(value)}" for key, value in sidecar.env.items()]
+    command = [
+        "srun",
+        "--overlap",
+        "--nodes=1",
+        "--ntasks=1",
+        f"--container-image={sidecar.image}",
+        *sidecar.srun_args,
+        *sidecar.command,
+    ]
+    tokens = [*env_assignments, *(shlex.quote(arg) for arg in command)]
+    return f'{" ".join(tokens)} >"${log_var}" 2>&1 &'
+
+
+def _render_sidecar_readiness(sidecar: SidecarSpec, *, log_var: str, pid_var: str) -> list[str]:
+    name = sidecar.name
+    message_exited = f"Sidecar {name} exited before readiness"
+    message_timeout = f"Timed out waiting for sidecar {name}"
+    probe = [
+        "python3",
+        "-c",
+        "import sys, urllib.request; urllib.request.urlopen(sys.argv[1], timeout=2).read(1)",
+        sidecar.readiness.url or "",
+    ]
+    return [
+        f"deadline=$((SECONDS + {sidecar.readiness.timeout_s}))",
+        f"until {' '.join(shlex.quote(arg) for arg in probe)} >/dev/null 2>&1; do",
+        f'    if ! kill -0 "${pid_var}" 2>/dev/null; then',
+        f"        echo {shlex.quote(message_exited)} >&2",
+        f'        tail -100 "${log_var}" >&2 || true',
+        f"        record_sidecar_failure sidecar_exited_before_readiness {shlex.quote(message_exited)}",
+        "        exit 1",
+        "    fi",
+        '    if [ "$SECONDS" -ge "$deadline" ]; then',
+        f"        echo {shlex.quote(message_timeout)} >&2",
+        f'        tail -100 "${log_var}" >&2 || true',
+        f"        record_sidecar_failure sidecar_readiness_timeout {shlex.quote(message_timeout)}",
+        "        exit 1",
+        "    fi",
+        f"    sleep {sidecar.readiness.interval_s}",
+        "done",
+    ]
+
+
+def _sidecar_shell_suffix(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]", "_", name).upper()
 
 
 def _sbatch_line(flag: str, value: object) -> str | None:

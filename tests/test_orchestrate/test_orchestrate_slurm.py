@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from medarc_verifiers.orchestrate.bundle import (
+    ensure_run_bundle,
     load_execution_allocation,
     load_run_bundle_manifest,
     load_runtime_state,
@@ -57,6 +58,42 @@ def _write_job_config(
             "    serve: {}\n"
             f"{slurm_block}"
         ),
+        encoding="utf-8",
+    )
+
+
+def _write_sidecar_job_config(path: Path, *, name: str = "medagentbench-fhir", image: str = "/tmp/image with space.sqsh") -> None:
+    path.write_text(
+        f"""
+models:
+  foo:
+    model: Foo/Bar
+orchestrate:
+  vllm-container:
+    image: fake
+  pyxis:
+    srun_extra_args: []
+  foo:
+    gpus: 1
+    serve: {{}}
+  sidecars:
+    {name}:
+      runtime: pyxis
+      image: "{image}"
+      srun_args:
+        - --mem=16G
+        - --container-env=JAVA_TOOL_OPTIONS
+      env:
+        JAVA_TOOL_OPTIONS: "-XX:+UseSerialGC -Xms256m -Xmx1024m"
+      command:
+        - /usr/bin/java
+        - --class-path
+        - "/app/main war"
+      readiness:
+        url: "http://127.0.0.1:8080/fhir/metadata?x=a b"
+        timeout_s: 12
+        interval_s: 3
+""".lstrip(),
         encoding="utf-8",
     )
 
@@ -283,6 +320,362 @@ def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
 
     run_manifest = load_run_bundle_manifest(tmp_path / "outputs" / "run_manifest.json")
     assert run_manifest.tasks[0].bundled_eval_config_path == entry.effective_job_config_path
+
+
+def test_bundle_parses_sidecars(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    _write_sidecar_job_config(job_cfg)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+
+    plan = ensure_run_bundle(
+        tasks=tasks,
+        run_id="bundle",
+        output_root=tmp_path / "outputs",
+        mode="slurm",
+        runtime="pyxis",
+    )
+
+    spec = plan.tasks[tasks[0].task_id].spec
+    assert spec.output_paths.sidecar_dir.endswith("/sidecars")
+    assert len(spec.sidecars) == 1
+    sidecar = spec.sidecars[0]
+    assert sidecar.name == "medagentbench-fhir"
+    assert sidecar.runtime == "pyxis"
+    assert sidecar.image == "/tmp/image with space.sqsh"
+    assert sidecar.srun_args == ["--mem=16G", "--container-env=JAVA_TOOL_OPTIONS"]
+    assert sidecar.env["JAVA_TOOL_OPTIONS"] == "-XX:+UseSerialGC -Xms256m -Xmx1024m"
+    assert sidecar.command == ["/usr/bin/java", "--class-path", "/app/main war"]
+    assert sidecar.readiness.url == "http://127.0.0.1:8080/fhir/metadata?x=a b"
+    assert sidecar.readiness.timeout_s == 12
+    assert sidecar.readiness.interval_s == 3
+    assert "--overlap" in spec.pyxis_srun_extra_args
+
+
+def test_slurm_render_starts_sidecar_before_worker(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    _write_sidecar_job_config(job_cfg)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    planned = build_submission_plan(
+        tasks,
+        run_id="bundle",
+        node_gpus=1,
+        max_simultaneous_nodes=1,
+        run_simultaneously=False,
+        base_dependency=None,
+        cli_overrides=SlurmCliOverrides(),
+    )
+
+    manifest = render_bundle(
+        planned_tasks=planned,
+        bundle_root=tmp_path / "outputs",
+        run_id="bundle",
+        node_gpus=1,
+        source_dir=tmp_path,
+        activate_script=tmp_path / ".venv" / "bin" / "activate",
+        env_file=None,
+        readiness_timeout_s=None,
+        prune_logs_on_success=False,
+    )
+    script = Path(manifest.entries[0].script_path).read_text(encoding="utf-8")
+
+    assert script.index("srun --overlap") < script.index("medarc-orchestrate worker")
+    assert "'--container-image=/tmp/image with space.sqsh'" in script
+    assert "/usr/bin/java --class-path '/app/main war'" in script
+    assert "--overlap" in load_task_spec(Path(manifest.entries[0].task_spec_path)).pyxis_srun_extra_args
+
+
+def test_slurm_render_sidecar_has_exit_trap(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    _write_sidecar_job_config(job_cfg)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    planned = build_submission_plan(
+        tasks,
+        run_id="bundle",
+        node_gpus=1,
+        max_simultaneous_nodes=1,
+        run_simultaneously=False,
+        base_dependency=None,
+        cli_overrides=SlurmCliOverrides(),
+    )
+
+    manifest = render_bundle(
+        planned_tasks=planned,
+        bundle_root=tmp_path / "outputs",
+        run_id="bundle",
+        node_gpus=1,
+        source_dir=tmp_path,
+        activate_script=tmp_path / ".venv" / "bin" / "activate",
+        env_file=None,
+        readiness_timeout_s=None,
+        prune_logs_on_success=False,
+    )
+    script = Path(manifest.entries[0].script_path).read_text(encoding="utf-8")
+
+    assert "cleanup_sidecars() {" in script
+    assert 'kill "$pid" 2>/dev/null || true' in script
+    assert "trap cleanup_sidecars EXIT" in script
+
+
+def test_slurm_render_sidecar_readiness_failure_tails_log(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    _write_sidecar_job_config(job_cfg)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    planned = build_submission_plan(
+        tasks,
+        run_id="bundle",
+        node_gpus=1,
+        max_simultaneous_nodes=1,
+        run_simultaneously=False,
+        base_dependency=None,
+        cli_overrides=SlurmCliOverrides(),
+    )
+
+    manifest = render_bundle(
+        planned_tasks=planned,
+        bundle_root=tmp_path / "outputs",
+        run_id="bundle",
+        node_gpus=1,
+        source_dir=tmp_path,
+        activate_script=tmp_path / ".venv" / "bin" / "activate",
+        env_file=None,
+        readiness_timeout_s=None,
+        prune_logs_on_success=False,
+    )
+    script = Path(manifest.entries[0].script_path).read_text(encoding="utf-8")
+
+    assert script.count('tail -100 "$SIDECAR_LOG_MEDAGENTBENCH_FHIR" >&2 || true') == 2
+    assert "record_sidecar_failure sidecar_exited_before_readiness" in script
+    assert "record_sidecar_failure sidecar_readiness_timeout" in script
+
+
+def test_sidecar_validation_rejects_missing_image_or_command(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    _write_sidecar_job_config(job_cfg, image="")
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+
+    with pytest.raises(ValueError, match="image is required"):
+        ensure_run_bundle(tasks=tasks, run_id="bundle", output_root=tmp_path / "outputs", mode="slurm", runtime="pyxis")
+
+
+def test_sidecar_validation_rejects_non_slurm_mode(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    _write_sidecar_job_config(job_cfg)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+
+    with pytest.raises(ValueError, match="only supported in slurm mode"):
+        ensure_run_bundle(tasks=tasks, run_id="bundle", output_root=tmp_path / "outputs", mode="local", runtime="pyxis")
+
+
+def test_sidecar_validation_rejects_reserved_srun_args(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    _write_sidecar_job_config(job_cfg)
+    payload = load_job_config(job_cfg)
+    payload["orchestrate"]["sidecars"]["medagentbench-fhir"]["srun_args"].extend(["--nodes", "1"])
+    from omegaconf import OmegaConf
+
+    OmegaConf.save(config=OmegaConf.create(payload), f=str(job_cfg))
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+
+    with pytest.raises(ValueError, match="renderer-owned flag --nodes"):
+        ensure_run_bundle(tasks=tasks, run_id="bundle", output_root=tmp_path / "outputs", mode="slurm", runtime="pyxis")
+
+
+def test_sidecar_validation_rejects_shell_suffix_collision(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    _write_sidecar_job_config(job_cfg, name="fhir-v2")
+    payload = load_job_config(job_cfg)
+    payload["orchestrate"]["sidecars"]["fhir.v2"] = {
+        "runtime": "pyxis",
+        "image": "/tmp/other.sqsh",
+        "command": ["/bin/sh", "-lc", "sleep 60"],
+        "readiness": {"enabled": False},
+    }
+    from omegaconf import OmegaConf
+
+    OmegaConf.save(config=OmegaConf.create(payload), f=str(job_cfg))
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+
+    with pytest.raises(ValueError, match="same shell variable suffix"):
+        ensure_run_bundle(tasks=tasks, run_id="bundle", output_root=tmp_path / "outputs", mode="slurm", runtime="pyxis")
+
+
+def test_slurm_render_uses_single_cleanup_trap_for_multiple_sidecars(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    _write_sidecar_job_config(job_cfg)
+    payload = load_job_config(job_cfg)
+    payload["orchestrate"]["sidecars"]["audit"] = {
+        "runtime": "pyxis",
+        "image": "/tmp/audit.sqsh",
+        "command": ["/bin/sh", "-lc", "sleep 60"],
+        "readiness": {"enabled": False},
+    }
+    from omegaconf import OmegaConf
+
+    OmegaConf.save(config=OmegaConf.create(payload), f=str(job_cfg))
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    planned = build_submission_plan(
+        tasks,
+        run_id="bundle",
+        node_gpus=1,
+        max_simultaneous_nodes=1,
+        run_simultaneously=False,
+        base_dependency=None,
+        cli_overrides=SlurmCliOverrides(),
+    )
+
+    manifest = render_bundle(
+        planned_tasks=planned,
+        bundle_root=tmp_path / "outputs",
+        run_id="bundle",
+        node_gpus=1,
+        source_dir=tmp_path,
+        activate_script=tmp_path / ".venv" / "bin" / "activate",
+        env_file=None,
+        readiness_timeout_s=None,
+        prune_logs_on_success=False,
+    )
+    script = Path(manifest.entries[0].script_path).read_text(encoding="utf-8")
+
+    assert script.count("cleanup_sidecars() {") == 1
+    assert script.count("trap cleanup_sidecars EXIT") == 1
+    assert script.count("srun --overlap") == 2
+    assert script.count("until python3") == 1
+    first_readiness_done = script.index("done", script.index("until python3"))
+    assert first_readiness_done < script.index("--container-image=/tmp/audit.sqsh")
+
+
+def test_slurm_render_shell_quotes_sidecar_values(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    _write_sidecar_job_config(job_cfg)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    planned = build_submission_plan(
+        tasks,
+        run_id="bundle",
+        node_gpus=1,
+        max_simultaneous_nodes=1,
+        run_simultaneously=False,
+        base_dependency=None,
+        cli_overrides=SlurmCliOverrides(),
+    )
+
+    manifest = render_bundle(
+        planned_tasks=planned,
+        bundle_root=tmp_path / "outputs with space",
+        run_id="bundle",
+        node_gpus=1,
+        source_dir=tmp_path,
+        activate_script=tmp_path / ".venv" / "bin" / "activate",
+        env_file=None,
+        readiness_timeout_s=None,
+        prune_logs_on_success=False,
+    )
+    script = Path(manifest.entries[0].script_path).read_text(encoding="utf-8")
+
+    assert "JAVA_TOOL_OPTIONS='-XX:+UseSerialGC -Xms256m -Xmx1024m' srun --overlap" in script
+    assert "SIDECAR_LOG_MEDAGENTBENCH_FHIR='" in script
+    assert "'http://127.0.0.1:8080/fhir/metadata?x=a b'" in script
+    assert "'/app/main war'" in script
+    assert "export JAVA_TOOL_OPTIONS" not in script
+
+
+def test_record_failure_writes_pre_worker_failure_artifacts(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    _write_sidecar_job_config(job_cfg)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    planned = build_submission_plan(
+        tasks,
+        run_id="bundle",
+        node_gpus=1,
+        max_simultaneous_nodes=1,
+        run_simultaneously=False,
+        base_dependency=None,
+        cli_overrides=SlurmCliOverrides(),
+    )
+    manifest = render_bundle(
+        planned_tasks=planned,
+        bundle_root=tmp_path / "outputs",
+        run_id="bundle",
+        node_gpus=1,
+        source_dir=tmp_path,
+        activate_script=tmp_path / ".venv" / "bin" / "activate",
+        env_file=None,
+        readiness_timeout_s=None,
+        prune_logs_on_success=False,
+    )
+    entry = manifest.entries[0]
+
+    rc = orchestrate_main(
+        [
+            "record-failure",
+            "--task-spec",
+            entry.task_spec_path,
+            "--allocation",
+            entry.allocation_path,
+            "--reason",
+            "sidecar_readiness_timeout",
+            "--message",
+            "Timed out waiting for sidecar medagentbench-fhir",
+        ]
+    )
+
+    task_root = Path(entry.task_spec_path).parent
+    state = json.loads((task_root / "runtime" / "state.json").read_text(encoding="utf-8"))
+    result = json.loads((task_root / "runtime" / "result.json").read_text(encoding="utf-8"))
+    task_manifest = json.loads((task_root / "runtime" / "task_manifest.json").read_text(encoding="utf-8"))
+    summary = json.loads((tmp_path / "outputs" / "summary.json").read_text(encoding="utf-8"))
+
+    assert rc == 0
+    assert state["state"] == "failed"
+    assert result["failure_reason"] == "sidecar_readiness_timeout"
+    assert task_manifest["state"] == "failed"
+    assert task_manifest["error"] == "Timed out waiting for sidecar medagentbench-fhir"
+    assert summary["tasks"][0]["failure_reason"] == "sidecar_readiness_timeout"
+
+
+def test_old_task_spec_version_fails_before_missing_field_parsing(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    _write_job_config(job_cfg)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    plan = ensure_run_bundle(
+        tasks=tasks,
+        run_id="bundle",
+        output_root=tmp_path / "outputs",
+        mode="slurm",
+        runtime="pyxis",
+    )
+    task_spec_path = plan.tasks[tasks[0].task_id].paths.task_spec_path
+    payload = load_job_config(task_spec_path)
+    payload["spec_version"] = 1
+    payload.pop("sidecars", None)
+    payload["output_paths"].pop("sidecar_dir", None)
+    from omegaconf import OmegaConf
+
+    OmegaConf.save(config=OmegaConf.create(payload), f=str(task_spec_path))
+
+    with pytest.raises(ValueError, match="Unsupported task spec_version=1"):
+        load_task_spec(task_spec_path)
+
+
+def test_v2_task_spec_requires_sidecar_fields(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    _write_job_config(job_cfg)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    plan = ensure_run_bundle(
+        tasks=tasks,
+        run_id="bundle",
+        output_root=tmp_path / "outputs",
+        mode="slurm",
+        runtime="pyxis",
+    )
+    task_spec_path = plan.tasks[tasks[0].task_id].paths.task_spec_path
+    payload = load_job_config(task_spec_path)
+    payload.pop("sidecars", None)
+    from omegaconf import OmegaConf
+
+    OmegaConf.save(config=OmegaConf.create(payload), f=str(task_spec_path))
+
+    with pytest.raises(ValueError, match="missing required sidecars"):
+        load_task_spec(task_spec_path)
 
 
 def test_render_bundle_assigns_unique_ports_per_task(tmp_path: Path) -> None:

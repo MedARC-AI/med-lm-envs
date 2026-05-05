@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
@@ -16,7 +17,21 @@ from omegaconf import OmegaConf
 from medarc_verifiers.orchestrate.config import TaskSpec, load_job_config
 from medarc_verifiers.orchestrate.task_naming import sanitize_task_dirname
 
-SPEC_VERSION = 1
+SPEC_VERSION = 2
+_SIDECAR_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_RESERVED_SIDECAR_SRUN_FLAGS = {
+    "--overlap",
+    "--nodes",
+    "--ntasks",
+    "--container-image",
+    "--cpus-per-task",
+    "--cpus-per-gpu",
+    "--tres-per-task",
+    "--gpus",
+    "--gpus-per-task",
+    "--gres",
+}
 
 
 def _now() -> str:
@@ -115,6 +130,10 @@ class TaskBundlePaths:
         return self.root / "bench"
 
     @property
+    def sidecar_dir(self) -> Path:
+        return self.root / "sidecars"
+
+    @property
     def submit_script_path(self) -> Path:
         return self.root / "submit.sh"
 
@@ -128,7 +147,27 @@ class TaskOutputPaths:
     state_path: str
     serve_dir: str
     bench_dir: str
+    sidecar_dir: str
     submit_script_path: str
+
+
+@dataclass(frozen=True)
+class SidecarReadinessSpec:
+    enabled: bool = True
+    url: str | None = None
+    timeout_s: int = 240
+    interval_s: int = 2
+
+
+@dataclass(frozen=True)
+class SidecarSpec:
+    name: str
+    runtime: str
+    image: str
+    srun_args: list[str]
+    env: Mapping[str, str]
+    command: list[str]
+    readiness: SidecarReadinessSpec
 
 
 @dataclass(frozen=True)
@@ -154,6 +193,7 @@ class ResolvedTaskSpec:
     volume_mounts: list[str]
     pyxis_srun_extra_args: list[str]
     serve_args: Mapping[str, Any]
+    sidecars: list[SidecarSpec]
     restart_source: str | None
     restart_source_strategy: str
     output_paths: TaskOutputPaths
@@ -162,10 +202,16 @@ class ResolvedTaskSpec:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, payload: Mapping[str, Any]) -> "ResolvedTaskSpec":
+    def from_dict(cls, payload: Mapping[str, Any], *, allow_missing_v2_fields: bool = False) -> "ResolvedTaskSpec":
         output_paths = payload.get("output_paths")
         if not isinstance(output_paths, Mapping):
             raise ValueError("Resolved task spec output_paths must be a mapping.")
+        if "sidecars" not in payload and not allow_missing_v2_fields:
+            raise ValueError("Resolved task spec is missing required sidecars field.")
+        if "sidecar_dir" not in output_paths and not allow_missing_v2_fields:
+            raise ValueError("Resolved task spec output_paths is missing required sidecar_dir field.")
+        sidecars = [_sidecar_from_dict(item) for item in payload.get("sidecars", [])]
+        root = str(output_paths["root"])
         return cls(
             spec_version=int(payload["spec_version"]),
             task_id=str(payload["task_id"]),
@@ -194,19 +240,25 @@ class ResolvedTaskSpec:
             volume_mounts=[str(item) for item in payload.get("volume_mounts", [])],
             pyxis_srun_extra_args=[str(item) for item in payload.get("pyxis_srun_extra_args", [])],
             serve_args=dict(payload.get("serve_args") or {}),
+            sidecars=sidecars,
             restart_source=(str(payload["restart_source"]) if payload.get("restart_source") is not None else None),
             restart_source_strategy=str(payload.get("restart_source_strategy") or "none"),
             output_paths=TaskOutputPaths(
-                root=str(output_paths["root"]),
+                root=root,
                 task_spec_path=str(output_paths["task_spec_path"]),
                 eval_config_path=str(output_paths["eval_config_path"]),
                 allocation_path=str(output_paths["allocation_path"]),
                 state_path=str(output_paths["state_path"]),
                 serve_dir=str(output_paths["serve_dir"]),
                 bench_dir=str(output_paths["bench_dir"]),
+                sidecar_dir=str(output_paths.get("sidecar_dir") or (Path(root) / "sidecars")),
                 submit_script_path=str(output_paths["submit_script_path"]),
             ),
         )
+
+
+class UnsupportedTaskSpecVersionError(ValueError):
+    """Raised when a persisted task bundle uses a spec version this code cannot execute."""
 
 
 @dataclass(frozen=True)
@@ -386,9 +438,16 @@ def write_run_bundle_manifest(path: Path, manifest: RunBundleManifest) -> None:
 
 def load_task_spec(path: Path) -> ResolvedTaskSpec:
     payload = dict(load_job_config(path))
+    raw_version = payload.get("spec_version")
+    try:
+        spec_version = int(raw_version)
+    except (TypeError, ValueError) as exc:
+        raise UnsupportedTaskSpecVersionError(f"Unsupported task spec_version={raw_version!r}; expected {SPEC_VERSION}.") from exc
+    if spec_version != SPEC_VERSION:
+        raise UnsupportedTaskSpecVersionError(
+            f"Unsupported task spec_version={spec_version}; expected {SPEC_VERSION}."
+        )
     spec = ResolvedTaskSpec.from_dict(payload)
-    if spec.spec_version != SPEC_VERSION:
-        raise ValueError(f"Unsupported task spec_version={spec.spec_version}; expected {SPEC_VERSION}.")
     bundled_eval_path = Path(spec.bundled_eval_config_path)
     if not bundled_eval_path.exists():
         raise FileNotFoundError(f"Bundled eval config not found: {bundled_eval_path}")
@@ -507,6 +566,7 @@ def _ensure_task_bundle(
     paths.root.mkdir(parents=True, exist_ok=True)
     paths.serve_dir.mkdir(parents=True, exist_ok=True)
     paths.bench_dir.mkdir(parents=True, exist_ok=True)
+    paths.sidecar_dir.mkdir(parents=True, exist_ok=True)
     expected_payload, expected_spec = _build_task_spec(
         task=task,
         paths=paths,
@@ -516,12 +576,17 @@ def _ensure_task_bundle(
     )
 
     if paths.task_spec_path.exists() and paths.eval_config_path.exists():
-        loaded_spec = load_task_spec(paths.task_spec_path)
-        if loaded_spec.to_dict() == expected_spec.to_dict():
-            spec = loaded_spec
-        else:
+        try:
+            loaded_spec = load_task_spec(paths.task_spec_path)
+        except UnsupportedTaskSpecVersionError:
             _write_task_bundle(paths=paths, eval_payload=expected_payload, spec=expected_spec)
             spec = expected_spec
+        else:
+            if loaded_spec.to_dict() == expected_spec.to_dict():
+                spec = loaded_spec
+            else:
+                _write_task_bundle(paths=paths, eval_payload=expected_payload, spec=expected_spec)
+                spec = expected_spec
     else:
         _write_task_bundle(paths=paths, eval_payload=expected_payload, spec=expected_spec)
         spec = expected_spec
@@ -611,6 +676,15 @@ def _build_task_spec(
         fallback_key="vllm-docker",
     )
     pyxis_cfg = _resolve_orchestrate_section(source_payload, key="pyxis", task_id=task.task_id)
+    sidecars = _parse_sidecars(
+        source_payload.get("orchestrate"),
+        task_id=task.task_id,
+        mode=mode,
+        runtime=runtime,
+    )
+    pyxis_srun_extra_args = [str(item) for item in pyxis_cfg.get("srun_extra_args", []) or []]
+    if sidecars and not _srun_args_include_flag(pyxis_srun_extra_args, "--overlap"):
+        pyxis_srun_extra_args.append("--overlap")
     spec = ResolvedTaskSpec(
         spec_version=SPEC_VERSION,
         task_id=task.task_id,
@@ -635,8 +709,9 @@ def _build_task_spec(
             str(container_cfg["env_file"]).strip() if container_cfg.get("env_file") is not None else None
         ),
         volume_mounts=[str(item) for item in container_cfg.get("volumes", []) or []],
-        pyxis_srun_extra_args=[str(item) for item in pyxis_cfg.get("srun_extra_args", []) or []],
+        pyxis_srun_extra_args=pyxis_srun_extra_args,
         serve_args=dict(model_cfg.get("serve") or {}),
+        sidecars=sidecars,
         restart_source=restart_source,
         restart_source_strategy=restart_strategy,
         output_paths=TaskOutputPaths(
@@ -647,10 +722,161 @@ def _build_task_spec(
             state_path=str(paths.state_path),
             serve_dir=str(paths.serve_dir),
             bench_dir=str(paths.bench_dir),
+            sidecar_dir=str(paths.sidecar_dir),
             submit_script_path=str(paths.submit_script_path),
         ),
     )
     return source_payload, spec
+
+
+def _sidecar_from_dict(payload: Mapping[str, Any]) -> SidecarSpec:
+    readiness_payload = payload.get("readiness") or {}
+    if not isinstance(readiness_payload, Mapping):
+        raise ValueError("Sidecar readiness must be a mapping.")
+    return SidecarSpec(
+        name=str(payload["name"]),
+        runtime=str(payload["runtime"]),
+        image=str(payload["image"]),
+        srun_args=[str(item) for item in payload.get("srun_args", [])],
+        env={str(key): str(value) for key, value in dict(payload.get("env") or {}).items()},
+        command=[str(item) for item in payload.get("command", [])],
+        readiness=SidecarReadinessSpec(
+            enabled=bool(readiness_payload.get("enabled", True)),
+            url=str(readiness_payload["url"]) if readiness_payload.get("url") is not None else None,
+            timeout_s=int(readiness_payload.get("timeout_s", 240) or 240),
+            interval_s=int(readiness_payload.get("interval_s", 2) or 2),
+        ),
+    )
+
+
+def _parse_sidecars(
+    orchestrate: object,
+    *,
+    task_id: str,
+    mode: str,
+    runtime: str,
+) -> list[SidecarSpec]:
+    if not isinstance(orchestrate, Mapping):
+        return []
+    raw_sidecars = orchestrate.get("sidecars")
+    if raw_sidecars is None:
+        return []
+    if mode != "slurm":
+        raise ValueError(f"Task {task_id} configures sidecars, but sidecars are only supported in slurm mode.")
+    if not isinstance(raw_sidecars, Mapping):
+        raise ValueError(f"Task {task_id} orchestrate.sidecars must be a mapping.")
+    specs: list[SidecarSpec] = []
+    suffixes: dict[str, str] = {}
+    for raw_name, raw_cfg in raw_sidecars.items():
+        name = str(raw_name)
+        if _SIDECAR_NAME_RE.fullmatch(name) is None:
+            raise ValueError(f"Task {task_id} sidecar name {name!r} must match [A-Za-z0-9_.-]+.")
+        suffix = _sidecar_shell_suffix(name)
+        previous = suffixes.get(suffix)
+        if previous is not None:
+            raise ValueError(
+                f"Task {task_id} sidecar names {previous!r} and {name!r} produce the same shell variable suffix."
+            )
+        suffixes[suffix] = name
+        if not isinstance(raw_cfg, Mapping):
+            raise ValueError(f"Task {task_id} sidecar {name} must be a mapping.")
+        cfg = dict(raw_cfg)
+        sidecar_runtime = str(cfg.get("runtime", "")).strip().lower()
+        if sidecar_runtime != "pyxis":
+            raise ValueError(f"Task {task_id} sidecar {name} runtime must be 'pyxis' in v1.")
+        if runtime != "pyxis":
+            raise ValueError(f"Task {task_id} sidecar {name} requires orchestrate runtime 'pyxis'.")
+        image = _required_string(cfg.get("image"), f"Task {task_id} sidecar {name} image")
+        command = _required_string_list(cfg.get("command"), f"Task {task_id} sidecar {name} command")
+        srun_args = _optional_string_list(cfg.get("srun_args", []), f"Task {task_id} sidecar {name} srun_args")
+        _validate_sidecar_srun_args(srun_args, task_id=task_id, sidecar_name=name)
+        env = _sidecar_env(cfg.get("env", {}), task_id=task_id, sidecar_name=name)
+        readiness = _sidecar_readiness(cfg.get("readiness", {}), task_id=task_id, sidecar_name=name)
+        specs.append(
+            SidecarSpec(
+                name=name,
+                runtime=sidecar_runtime,
+                image=image,
+                srun_args=srun_args,
+                env=env,
+                command=command,
+                readiness=readiness,
+            )
+        )
+    return specs
+
+
+def _sidecar_shell_suffix(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]", "_", name).upper()
+
+
+def _required_string(value: object, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{label} is required and must be a non-empty string.")
+    return value
+
+
+def _required_string_list(value: object, label: str) -> list[str]:
+    items = _optional_string_list(value, label)
+    if not items:
+        raise ValueError(f"{label} is required and must be a non-empty list of strings.")
+    return items
+
+
+def _optional_string_list(value: object, label: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"{label} must be a list of strings.")
+    for item in value:
+        if not isinstance(item, str):
+            raise ValueError(f"{label} must be a list of strings.")
+    return list(value)
+
+
+def _sidecar_env(value: object, *, task_id: str, sidecar_name: str) -> dict[str, str]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"Task {task_id} sidecar {sidecar_name} env must be a mapping.")
+    env: dict[str, str] = {}
+    for key, item in value.items():
+        env_key = str(key)
+        if _ENV_NAME_RE.fullmatch(env_key) is None:
+            raise ValueError(f"Task {task_id} sidecar {sidecar_name} env key {env_key!r} is not shell-safe.")
+        if not isinstance(item, str):
+            raise ValueError(f"Task {task_id} sidecar {sidecar_name} env values must be strings.")
+        env[env_key] = item
+    return env
+
+
+def _sidecar_readiness(value: object, *, task_id: str, sidecar_name: str) -> SidecarReadinessSpec:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"Task {task_id} sidecar {sidecar_name} readiness must be a mapping.")
+    enabled = bool(value.get("enabled", True))
+    url = value.get("url")
+    if enabled and (not isinstance(url, str) or not url.strip()):
+        raise ValueError(f"Task {task_id} sidecar {sidecar_name} readiness.url is required unless readiness.enabled=false.")
+    timeout_s = int(value.get("timeout_s", 240) or 240)
+    interval_s = int(value.get("interval_s", 2) or 2)
+    if timeout_s <= 0:
+        raise ValueError(f"Task {task_id} sidecar {sidecar_name} readiness.timeout_s must be positive.")
+    if interval_s <= 0:
+        raise ValueError(f"Task {task_id} sidecar {sidecar_name} readiness.interval_s must be positive.")
+    return SidecarReadinessSpec(enabled=enabled, url=str(url) if url is not None else None, timeout_s=timeout_s, interval_s=interval_s)
+
+
+def _validate_sidecar_srun_args(args: list[str], *, task_id: str, sidecar_name: str) -> None:
+    for arg in args:
+        if not arg.startswith("--"):
+            continue
+        key = _srun_arg_key(arg)
+        if key in _RESERVED_SIDECAR_SRUN_FLAGS:
+            raise ValueError(f"Task {task_id} sidecar {sidecar_name} srun_args cannot set renderer-owned flag {key}.")
+
+
+def _srun_args_include_flag(args: list[str], flag: str) -> bool:
+    return any(_srun_arg_key(arg) == flag for arg in args if arg.startswith("--"))
+
+
+def _srun_arg_key(arg: str) -> str:
+    return arg.split("=", maxsplit=1)[0]
 
 
 def _write_task_bundle(*, paths: TaskBundlePaths, eval_payload: Mapping[str, Any], spec: ResolvedTaskSpec) -> None:
@@ -690,6 +916,8 @@ __all__ = [
     "RunBundleEntry",
     "RunBundleManifest",
     "RuntimeState",
+    "SidecarReadinessSpec",
+    "SidecarSpec",
     "SPEC_VERSION",
     "TaskBundlePaths",
     "default_output_root",
