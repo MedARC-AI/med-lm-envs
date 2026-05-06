@@ -875,7 +875,7 @@ def test_single_run_resume_auto_discovery_sets_eval_resume_path(
         return discovered
 
     monkeypatch.setattr(
-        "medarc_verifiers.cli.verifiers_adapter.find_latest_incomplete_eval_results_path",
+        "medarc_verifiers.cli.utils.resume.find_latest_incomplete_eval_results_path",
         fake_find_latest_incomplete_eval_results_path,
     )
 

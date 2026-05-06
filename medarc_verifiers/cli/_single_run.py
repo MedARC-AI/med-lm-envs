@@ -27,6 +27,7 @@ from medarc_verifiers.cli.utils.resume import (
     format_resume_mismatch_lines,
     is_resume_metadata_mismatch_error,
     load_resume_metadata_values,
+    resolve_resume_path,
 )
 from medarc_verifiers.cli.utils.shared import (
     HEADER_SEPARATOR,
@@ -176,8 +177,18 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
 
     try:
         eval_config = build_eval_config(raw_config)
+        resume_path = resolve_resume_path(
+            resume_arg=args.resume,
+            env_id=eval_config.env_id,
+            model=eval_config.model,
+            num_examples=eval_config.num_examples,
+            rollouts_per_example=eval_config.rollouts_per_example,
+            env_dir_path=eval_config.env_dir_path,
+        )
     except ValueError as exc:
         parser.error(str(exc))
+    if resume_path is not None:
+        eval_config = eval_config.model_copy(update={"resume_path": resume_path, "save_results": True})
 
     if args.dry_run:
         print(eval_config.model_dump_json(indent=2))

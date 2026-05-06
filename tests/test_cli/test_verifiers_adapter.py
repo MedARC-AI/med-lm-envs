@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib
-import json
 from pathlib import Path
 
 import pytest
@@ -97,10 +96,6 @@ image = "vllm/vllm-openai:latest"
 
 def test_build_eval_config_resolves_endpoint_alias_and_core_fields(tmp_path: Path) -> None:
     endpoints_path = _write_endpoints(tmp_path / "endpoints.toml")
-    resume_path = tmp_path / "resume"
-    resume_path.mkdir()
-    (resume_path / "results.jsonl").write_text("")
-    (resume_path / "metadata.json").write_text("{}")
 
     config = build_eval_config(
         {
@@ -119,7 +114,6 @@ def test_build_eval_config_resolves_endpoint_alias_and_core_fields(tmp_path: Pat
             "timeout": 45.0,
             "state_columns": ["question_id", "split"],
             "save_results": True,
-            "resume_path": str(resume_path),
             "independent_scoring": True,
             "save_to_hf_hub": True,
             "hf_hub_dataset_name": "org/dataset",
@@ -145,7 +139,7 @@ def test_build_eval_config_resolves_endpoint_alias_and_core_fields(tmp_path: Pat
     assert config.extra_env_kwargs == {"timeout_seconds": 45.0}
     assert config.state_columns == ["question_id", "split"]
     assert config.save_results is True
-    assert config.resume_path == resume_path
+    assert config.resume_path is None
     assert config.independent_scoring is True
     assert config.save_to_hf_hub is True
     assert config.hf_hub_dataset_name == "org/dataset"
@@ -265,48 +259,3 @@ rollouts_per_example = 4
 
     assert config.num_examples == 11
     assert config.rollouts_per_example == 4
-
-
-def test_build_eval_config_rejects_invalid_resume_path(tmp_path: Path) -> None:
-    invalid_resume_path = tmp_path / "missing"
-
-    with pytest.raises(ValueError, match="not a valid evaluation results path"):
-        build_eval_config(
-            {
-                "env_id": "medqa",
-                "provider": "openai",
-                "model": "openai/gpt-4.1-mini",
-                "resume": str(invalid_resume_path),
-            }
-        )
-
-
-def test_build_eval_config_auto_resume_uses_upstream_path_lookup(tmp_path: Path) -> None:
-    output_dir = tmp_path / "outputs"
-    run_dir = output_dir / "evals" / "medqa--openai--gpt-4.1-mini" / "abc12345"
-    run_dir.mkdir(parents=True)
-    (run_dir / "results.jsonl").write_text(json.dumps({"example_id": "0"}) + "\n")
-    (run_dir / "metadata.json").write_text(
-        json.dumps(
-            {
-                "env_id": "medqa",
-                "model": "openai/gpt-4.1-mini",
-                "num_examples": 2,
-                "rollouts_per_example": 1,
-            }
-        )
-    )
-
-    config = build_eval_config(
-        {
-            "env_id": "medqa",
-            "provider": "openai",
-            "model": "openai/gpt-4.1-mini",
-            "num_examples": 2,
-            "rollouts_per_example": 1,
-            "output_dir": str(output_dir),
-            "resume": True,
-        }
-    )
-
-    assert config.resume_path == run_dir

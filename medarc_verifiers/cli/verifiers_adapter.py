@@ -24,7 +24,6 @@ from verifiers.types import (
 )
 from verifiers.utils.eval_utils import load_endpoints, load_toml_config, resolve_endpoints_file
 from verifiers.utils.import_utils import load_toml
-from verifiers.utils.path_utils import find_latest_incomplete_eval_results_path, is_valid_eval_results_path
 
 from medarc_verifiers.utils.prime_inference import prime_inference_overrides
 from medarc_verifiers.utils.sampling_args import sanitize_sampling_args_for_openai
@@ -134,13 +133,6 @@ def build_eval_config(raw: Mapping[str, Any], *, overrides: EvalConfigOverrides 
     model, resolved_endpoint_id, client_config = _build_client_config(merged_raw, endpoints, endpoints_path)
 
     sampling_args = _build_sampling_args(merged_raw, client_config.api_base_url)
-    resume_path = _resolve_resume_path(
-        merged_raw,
-        env_id=env_id,
-        model=model,
-        num_examples=num_examples,
-        rollouts_per_example=rollouts_per_example,
-    )
 
     extra_env_kwargs = dict(merged_raw.get("extra_env_kwargs", {}))
     if merged_raw.get("timeout") is not None:
@@ -166,7 +158,7 @@ def build_eval_config(raw: Mapping[str, Any], *, overrides: EvalConfigOverrides 
         verbose=merged_raw.get("verbose", False),
         state_columns=merged_raw.get("state_columns", []),
         save_results=merged_raw.get("save_results", False),
-        resume_path=resume_path,
+        resume_path=None,
         independent_scoring=merged_raw.get("independent_scoring", False),
         save_to_hf_hub=merged_raw.get("save_to_hf_hub", False),
         hf_hub_dataset_name=merged_raw.get("hf_hub_dataset_name", ""),
@@ -391,43 +383,6 @@ def _merge_sampling_args(
     if temperature is not None and (not prefer_existing_keys or "temperature" not in merged_sampling_args):
         merged_sampling_args["temperature"] = temperature
     return merged_sampling_args
-
-
-def _resolve_resume_path(
-    raw: Mapping[str, Any],
-    *,
-    env_id: str,
-    model: str,
-    num_examples: int,
-    rollouts_per_example: int,
-) -> Path | None:
-    resume_arg = raw.get("resume")
-    if resume_arg is None and raw.get("resume_path") is not None:
-        resume_arg = raw["resume_path"]
-
-    if isinstance(resume_arg, str):
-        resume_path = Path(resume_arg)
-        if not is_valid_eval_results_path(resume_path):
-            raise ValueError(f"Resume path {resume_path} is not a valid evaluation results path")
-        logger.info("Resuming from explicit path: %s", resume_path)
-        return resume_path
-    if resume_arg is True:
-        auto_resume_path = find_latest_incomplete_eval_results_path(
-            env_id=env_id,
-            model=model,
-            num_examples=num_examples,
-            rollouts_per_example=rollouts_per_example,
-            env_dir_path=raw.get("env_dir_path", DEFAULT_ENV_DIR_PATH),
-            output_dir=raw.get("output_dir"),
-        )
-        if auto_resume_path is not None:
-            logger.info("Auto-resuming from: %s", auto_resume_path)
-            return auto_resume_path
-        logger.info("No matching incomplete run found for --resume; starting a new run")
-        return None
-    if resume_arg in (None, False):
-        return None
-    raise ValueError(f"Invalid value for --resume: {resume_arg!r}")
 
 
 def _build_extra_headers(raw: Mapping[str, Any]) -> dict[str, str]:

@@ -82,9 +82,7 @@ srun_extra_args = []
 
 Config notes:
 
-- `medarc.orchestrate.vllm-container` is the preferred key.
-- `medarc.orchestrate.vllm-docker` is still accepted as a deprecated alias.
-- Do not set both keys in the same job config.
+- `medarc.orchestrate.vllm-container` is required.
 - `ipc_mode` is Docker-only and is ignored in `--runtime pyxis`.
 - `medarc.orchestrate.pyxis` is Pyxis-only and is ignored in `--runtime docker`.
 - In Pyxis mode, Slurm allocates GPUs per `srun` step. The orchestrator only reserves localhost ports.

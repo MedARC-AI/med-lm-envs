@@ -1,4 +1,3 @@
-import warnings
 from pathlib import Path
 
 import pytest
@@ -9,20 +8,22 @@ from medarc_verifiers.orchestrate.config import expand_tasks, load_plan
 def test_plan_job_configs_resolve_relative_to_plan_file(tmp_path: Path):
     configs_dir = tmp_path / "configs"
     configs_dir.mkdir()
-    job_cfg = configs_dir / "job-foo.yaml"
+    job_cfg = configs_dir / "job-foo.toml"
     job_cfg.write_text(
         """
-models:
-  foo:
-    model: Foo/Bar
-orchestrate:
-  restart: runs/raw/example-run
-  vllm-container:
-    image: vllm/vllm-openai:latest
-  foo:
-    gpus: 1
-    serve:
-      dtype: bfloat16
+model = "Foo/Bar"
+
+[medarc.orchestrate]
+restart = "runs/raw/example-run"
+
+[medarc.orchestrate.vllm-container]
+image = "vllm/vllm-openai:latest"
+
+[medarc.orchestrate.foo]
+gpus = 1
+
+[medarc.orchestrate.foo.serve]
+dtype = "bfloat16"
 """.lstrip(),
         encoding="utf-8",
     )
@@ -31,7 +32,7 @@ orchestrate:
         """
 name: test
 job_configs:
-  - configs/job-foo.yaml
+  - configs/job-foo.toml
 gpu_range: "0-3"
 port_range: "8100-8199"
 run_id: "hello"
@@ -95,54 +96,34 @@ dtype = "bfloat16"
     assert tasks[0].orchestrate["foo"]["serve"]["dtype"] == "bfloat16"
 
 
-def test_expand_tasks_accepts_deprecated_vllm_docker_with_warning(tmp_path: Path) -> None:
+def test_expand_tasks_rejects_non_toml_job_config(tmp_path: Path) -> None:
     job_cfg = tmp_path / "job.yaml"
     job_cfg.write_text(
         """
-models:
-  foo:
-    model: Foo/Bar
-orchestrate:
-  vllm-docker:
-    image: vllm/vllm-openai:latest
-  foo:
-    gpus: 1
-    serve: {}
+model: Foo/Bar
 """.lstrip(),
         encoding="utf-8",
     )
     plan_path = tmp_path / "plan.yaml"
     plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\n", encoding="utf-8")
 
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        tasks = expand_tasks(load_plan(plan_path))
-
-    assert tasks[0].orchestrate["vllm-container"]["image"] == "vllm/vllm-openai:latest"
-    assert "vllm-docker" not in tasks[0].orchestrate
-    assert any("deprecated orchestrate.vllm-docker" in str(item.message) for item in caught)
+    with pytest.raises(ValueError, match="Unsupported job config format"):
+        expand_tasks(load_plan(plan_path))
 
 
-def test_expand_tasks_rejects_ambiguous_container_keys(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
+def test_expand_tasks_rejects_missing_vllm_container(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.toml"
     job_cfg.write_text(
         """
-models:
-  foo:
-    model: Foo/Bar
-orchestrate:
-  vllm-container:
-    image: new
-  vllm-docker:
-    image: old
-  foo:
-    gpus: 1
-    serve: {}
+model = "Foo/Bar"
+
+[medarc.orchestrate.foo]
+gpus = 1
 """.lstrip(),
         encoding="utf-8",
     )
     plan_path = tmp_path / "plan.yaml"
     plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="defines both orchestrate.vllm-container and orchestrate.vllm-docker"):
+    with pytest.raises(ValueError, match="must define medarc.orchestrate.vllm-container settings"):
         expand_tasks(load_plan(plan_path))

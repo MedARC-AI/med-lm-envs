@@ -6,13 +6,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 import tomllib
-import warnings
 
 from omegaconf import OmegaConf
 from pydantic import BaseModel, Field, ValidationError
 
 
-_ORCHESTRATE_NON_MODEL_KEYS = {"restart", "vllm-container", "vllm-docker", "pyxis"}
+_ORCHESTRATE_NON_MODEL_KEYS = {"restart", "vllm-container", "pyxis"}
 
 
 class PlanConfig(BaseModel):
@@ -80,6 +79,8 @@ def load_plan(path: Path) -> PlanConfig:
 
 def load_job_config(path: Path) -> Mapping[str, Any]:
     resolved = path.expanduser().resolve()
+    if resolved.suffix != ".toml":
+        raise ValueError(f"Unsupported job config format: {resolved} (expected .toml)")
     return _load_mapping(resolved)
 
 
@@ -124,20 +125,9 @@ def _load_mapping(path: Path) -> Mapping[str, Any]:
 
 
 def _extract_task_model(payload: Mapping[str, Any], *, source: Path) -> tuple[str, Mapping[str, Any]]:
-    models = payload.get("models")
-    if isinstance(models, Mapping):
-        keys = list(models.keys())
-        if len(keys) != 1:
-            raise ValueError(f"Job config {source} must define exactly one model; found {len(keys)}.")
-        model_key = str(keys[0])
-        model_entry = models.get(model_key)
-        if not isinstance(model_entry, Mapping):
-            raise ValueError(f"Job config {source} models.{model_key} must be a mapping.")
-        return model_key, model_entry
-
     model_id = str(payload.get("model", "")).strip()
     if not model_id:
-        raise ValueError(f"Job config {source} must define either one models entry or a top-level model.")
+        raise ValueError(f"Job config {source} must define a top-level model.")
     orchestrate, table_name = _extract_orchestrate_root(payload, source=source)
     model_keys = [str(key) for key, value in orchestrate.items() if key not in _ORCHESTRATE_NON_MODEL_KEYS]
     if len(model_keys) != 1:
@@ -149,27 +139,11 @@ def _extract_task_model(payload: Mapping[str, Any], *, source: Path) -> tuple[st
 
 def _extract_orchestrate_config(payload: Mapping[str, Any], *, model_key: str, source: Path) -> Mapping[str, Any]:
     orchestrate, table_name = _extract_orchestrate_root(payload, source=source)
-    has_container = "vllm-container" in orchestrate
-    has_docker = "vllm-docker" in orchestrate
-    if has_container and has_docker:
-        raise ValueError(f"Job config {source} defines both {table_name}.vllm-container and {table_name}.vllm-docker.")
-    if not has_container and not has_docker:
+    if "vllm-container" not in orchestrate:
         raise ValueError(f"Job config {source} must define {table_name}.vllm-container settings.")
     if model_key not in orchestrate:
         raise ValueError(f"Job config {source} must define {table_name}.{model_key} settings.")
-    normalized = dict(orchestrate)
-    if has_docker:
-        warnings.warn(
-            (
-                f"Job config {source} uses deprecated {table_name}.vllm-docker; "
-                f"rename it to {table_name}.vllm-container."
-            ),
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        normalized["vllm-container"] = orchestrate["vllm-docker"]
-        del normalized["vllm-docker"]
-    return normalized
+    return orchestrate
 
 
 def _extract_orchestrate_root(payload: Mapping[str, Any], *, source: Path) -> tuple[Mapping[str, Any], str]:
@@ -182,10 +156,6 @@ def _extract_orchestrate_root(payload: Mapping[str, Any], *, source: Path) -> tu
             if not isinstance(medarc_orchestrate, Mapping):
                 raise ValueError(f"Job config {source} medarc.orchestrate must be a mapping.")
             return medarc_orchestrate, "medarc.orchestrate"
-
-    orchestrate = payload.get("orchestrate")
-    if isinstance(orchestrate, Mapping):
-        return orchestrate, "orchestrate"
 
     raise ValueError(f"Job config {source} must define a [medarc.orchestrate] mapping.")
 

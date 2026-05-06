@@ -439,7 +439,6 @@ def _run_batch_mode(argv: Sequence[str]) -> int:
     parser = build_batch_parser()
     args = parser.parse_args(argv)
     args.endpoints_path_explicit = _option_was_provided(argv, "--endpoints-path")
-    args.default_api_key_var_explicit = _option_was_provided(argv, "--default-api-key-var")
 
     try:
         args.cli_env_args = build_cli_override(

@@ -73,18 +73,17 @@ def test_cli_runtime_flag_parses() -> None:
 
 
 def test_cli_runtime_precedence_cli_over_plan(monkeypatch, tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
+    job_cfg = tmp_path / "job.toml"
     job_cfg.write_text(
         """
-models:
-  foo:
-    model: Foo/Bar
-orchestrate:
-  vllm-container:
-    image: fake
-  foo:
-    gpus: 1
-    serve: {}
+model = "Foo/Bar"
+
+[medarc.orchestrate.vllm-container]
+image = "fake"
+
+[medarc.orchestrate.foo]
+gpus = 1
+serve = {}
 """.lstrip(),
         encoding="utf-8",
     )
