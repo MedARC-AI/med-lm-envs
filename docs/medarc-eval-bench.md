@@ -36,8 +36,7 @@ Repository suite configs live in `configs/eval/`:
 
 Bench configs use upstream `verifiers` TOML semantics: top-level defaults plus
 one or more `[[eval]]` blocks. MedARC adds deterministic output planning around
-the resolved evals and writes a required `bench_index.json` sidecar; it does not
-use YAML `models`, `envs`, or `jobs` sections.
+the resolved evals; it does not use YAML `models`, `envs`, or `jobs` sections.
 
 ```toml
 model = "openai/gpt-4.1-mini"
@@ -75,6 +74,7 @@ output_dir = "runs/evals"
 
 [[ablation]]
 env_id = "medqa"
+name = "shuffle_seed-{env_args.shuffle_seed}"
 num_examples = -1
 rollouts_per_example = 1
 env_args = { shuffle_answers = true }
@@ -86,42 +86,45 @@ shuffle_seed = [1618, 9331]
 Example output paths:
 
 ```text
-runs/evals/openai-gpt-4.1-mini/medqa/env_args.shuffle_seed-1618/
-runs/evals/openai-gpt-4.1-mini/medqa/env_args.shuffle_seed-9331/
+runs/evals/openai-gpt-4.1-mini/medqa/shuffle_seed-1618/
+runs/evals/openai-gpt-4.1-mini/medqa/shuffle_seed-9331/
 ```
 
-Non-variant evals write to `runs/evals/<model>/<env>/`.
+Non-variant evals use the reserved variant id `base` and write to
+`runs/evals/<model>/<env>/base/`. Duplicate `(model, env)` evals must provide
+an explicit `variant_id` or `name`. `name` may use simple templates such as
+`shuffle_seed-{env_args.shuffle_seed}` after ablation expansion.
 
-## Output Sidecar
+## MedARC Metadata
 
-Every bench output root contains `bench_index.json`. It records one entry for
-each successfully materialized eval output, including `results_path`, `model`,
-`env_id`, optional variant identity, resolved args, and a `plan_digest`.
+Upstream `metadata.json` remains a normal `verifiers` file. MedARC-specific
+identity lives in a small model-level helper:
 
-Processing prefers this sidecar over path inference for bench outputs. Failed
-evals are omitted from the sidecar until their `metadata.json` and
-`results.jsonl` exist, so `--continue-on-error` runs leave successful siblings
-processable.
+```text
+runs/evals/<model>/.medarc_eval_metadata.json
+```
+
+The helper maps model-relative results paths such as `medqa/base` to `env_id`
+and `variant_id`. Processing scans output directories first, so stale helper
+entries do not hide or create process records.
 
 ## Resume and Force
 
-Bench writes each eval to a deterministic result directory. Re-running the same
-TOML config reuses the same directory only when the matching `bench_index.json`
-entry has the same `plan_digest` and existing `metadata.json` contains matching
-MedARC identity fields.
+Bench writes each eval to a deterministic result directory. Existing output
+reuse is explicit:
 
 ```bash
-# Resume matching deterministic outputs
-medarc-eval bench --config configs/eval/medmarks-verified.toml
+# Resume an existing deterministic output using upstream resume behavior
+medarc-eval bench --config configs/eval/medmarks-verified.toml --resume
 
 # Archive existing deterministic outputs and rerun
 medarc-eval bench --config configs/eval/medmarks-verified.toml --force
 ```
 
-The `plan_digest` and MedARC metadata identity payload are based on canonical
-JSON for the planned eval identity, including unknown `sampling_args`. MedARC
-does not maintain a sampling-argument allowlist for resume safety; new provider
-arguments pass through to upstream.
+Without `--resume` or `--force`, an existing deterministic output fails.
+`--resume` delegates compatibility checks to upstream `verifiers`; MedARC does
+not maintain a sampling-argument allowlist or fingerprint blocker for resume
+safety. New provider arguments pass through to upstream.
 
 ## Common Flags
 
@@ -130,6 +133,7 @@ arguments pass through to upstream.
 | `--config PATH` | Required path to an upstream TOML eval config |
 | `--dry-run` | Resolve evals and print the deterministic plan |
 | `--force` | Archive existing deterministic output and rerun |
+| `--resume` | Resume an existing deterministic output via upstream `verifiers` |
 | `--output-dir PATH` | Override the config output directory |
 | `--env-dir PATH` | Directory containing local environments |
 | `--endpoints-path PATH` | Endpoint registry path, default `configs/endpoints.toml` |

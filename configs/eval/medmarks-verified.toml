@@ -13,6 +13,7 @@ rollouts_per_example = 1
 
 [[ablation]]
 env_id = "medqa"
+name = "shuffle_seed-{env_args.shuffle_seed}"
 num_examples = -1
 rollouts_per_example = 1
 env_args = { shuffle_answers = true }
@@ -27,6 +28,7 @@ rollouts_per_example = 1
 
 [[ablation]]
 env_id = "med_mcqa"
+name = "shuffle_seed-{env_args.shuffle_seed}"
 num_examples = -1
 rollouts_per_example = 1
 env_args = { shuffle_answers = true }
@@ -41,6 +43,7 @@ rollouts_per_example = 1
 
 [[ablation]]
 env_id = "pubmedqa"
+name = "shuffle_seed-{env_args.shuffle_seed}"
 num_examples = -1
 rollouts_per_example = 1
 env_args = { shuffle_answers = true }
@@ -55,6 +58,7 @@ rollouts_per_example = 1
 
 [[ablation]]
 env_id = "mmlu_pro_health"
+name = "shuffle_seed-{env_args.shuffle_seed}"
 num_examples = -1
 rollouts_per_example = 1
 env_args = { shuffle_answers = true }
@@ -69,6 +73,7 @@ rollouts_per_example = 1
 
 [[ablation]]
 env_id = "m_arc"
+name = "shuffle_seed-{env_args.shuffle_seed}"
 num_examples = -1
 rollouts_per_example = 1
 env_args = { shuffle_answers = true }
@@ -84,6 +89,7 @@ env_args = { split = "en" }
 
 [[ablation]]
 env_id = "careqa"
+name = "shuffle_seed-{env_args.shuffle_seed}"
 num_examples = -1
 rollouts_per_example = 1
 env_args = { split = "en", shuffle_answers = true }
@@ -93,6 +99,7 @@ shuffle_seed = [1618, 9331]
 
 [[ablation]]
 env_id = "medbullets"
+name = "num_options-{env_args.num_options}"
 num_examples = -1
 rollouts_per_example = 1
 
@@ -101,6 +108,7 @@ num_options = [4, 5]
 
 [[ablation]]
 env_id = "medbullets"
+name = "num_options-{env_args.num_options}__shuffle_seed-{env_args.shuffle_seed}"
 num_examples = -1
 rollouts_per_example = 1
 env_args = { shuffle_answers = true }
@@ -111,6 +119,7 @@ shuffle_seed = [1618, 9331]
 
 [[ablation]]
 env_id = "medxpertqa"
+name = "{env_args.question_type}"
 num_examples = -1
 rollouts_per_example = 1
 
@@ -119,6 +128,7 @@ question_type = ["reasoning", "understanding"]
 
 [[ablation]]
 env_id = "medxpertqa"
+name = "{env_args.question_type}__shuffle_seed-{env_args.shuffle_seed}"
 num_examples = -1
 rollouts_per_example = 1
 env_args = { shuffle_answers = true }
@@ -129,6 +139,7 @@ shuffle_seed = [1618, 9331]
 
 [[ablation]]
 env_id = "supergpqa_medicine"
+name = "{env_args.difficulty}"
 num_examples = -1
 rollouts_per_example = 1
 
@@ -137,6 +148,7 @@ difficulty = ["easy", "hard"]
 
 [[ablation]]
 env_id = "supergpqa_medicine"
+name = "{env_args.difficulty}__shuffle_seed-{env_args.shuffle_seed}"
 num_examples = -1
 rollouts_per_example = 1
 env_args = { shuffle_answers = true }
@@ -147,6 +159,7 @@ shuffle_seed = [1618, 9331]
 
 [[ablation]]
 env_id = "medconceptsqa"
+name = "{env_args.difficulty}"
 num_examples = -1
 rollouts_per_example = 1
 env_args = { vocab = "icd10cm_sample" }
@@ -156,6 +169,7 @@ difficulty = ["easy", "medium", "hard"]
 
 [[ablation]]
 env_id = "medconceptsqa"
+name = "{env_args.difficulty}__shuffle_seed-{env_args.shuffle_seed}"
 num_examples = -1
 rollouts_per_example = 1
 env_args = { vocab = "icd10cm_sample", shuffle_answers = true }
@@ -177,6 +191,7 @@ env_args = { split = "reviewed" }
 
 [[ablation]]
 env_id = "pubhealthbench"
+name = "shuffle_seed-{env_args.shuffle_seed}"
 num_examples = -1
 rollouts_per_example = 1
 env_args = { split = "reviewed", shuffle_answers = true }

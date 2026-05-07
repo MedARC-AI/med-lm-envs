@@ -40,6 +40,7 @@ DEFAULT_CLIENT_TYPE = "openai_chat_completions"
 DEFAULT_PROVIDER = "prime"
 ADAPTER_TOML_FIELDS = {"debug", "header_from_state", "headers_from_state", "timeout"}
 MEDARC_TOML_METADATA_FIELD = "medarc"
+MEDARC_TOML_IDENTITY_FIELDS = {"name", "variant_id"}
 
 PROVIDER_CONFIGS: dict[str, dict[str, str]] = {
     "prime": {
@@ -100,7 +101,9 @@ class EvalConfigOverrides:
 def load_toml_eval_configs(path: str | Path, *, extra_valid_fields: set[str] | None = None) -> list[dict[str, Any]]:
     """Load upstream TOML eval configs, including ``[[ablation]]`` expansion."""
 
-    valid_fields = ADAPTER_TOML_FIELDS | {MEDARC_TOML_METADATA_FIELD} | (extra_valid_fields or set())
+    valid_fields = ADAPTER_TOML_FIELDS | {MEDARC_TOML_METADATA_FIELD} | MEDARC_TOML_IDENTITY_FIELDS | (
+        extra_valid_fields or set()
+    )
     return [_strip_medarc_metadata(raw) for raw in load_toml_config(Path(path), extra_valid_fields=valid_fields)]
 
 

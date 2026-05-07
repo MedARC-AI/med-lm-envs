@@ -11,16 +11,15 @@ from typing import Any, Mapping, MutableMapping
 
 from pydantic import BaseModel, Field, ValidationError
 
-from medarc_verifiers.cli.eval_identity import (
-    MEDARC_CONFIG_FINGERPRINT_KEY,
-    MEDARC_CONFIG_FINGERPRINT_PAYLOAD_KEY,
-    MEDARC_VARIANT_ID_KEY,
-    MEDARC_VARIANT_PAYLOAD_KEY,
-)
 from medarc_verifiers.cli.process.discovery import RunRecord
 from medarc_verifiers.cli.process.rollout import derive_base_env_id, extract_rollout_index
 
 logger = logging.getLogger(__name__)
+
+MEDARC_CONFIG_FINGERPRINT_KEY = "medarc_config_fingerprint"
+MEDARC_CONFIG_FINGERPRINT_PAYLOAD_KEY = "medarc_config_fingerprint_payload"
+MEDARC_VARIANT_ID_KEY = "variant_id"
+MEDARC_VARIANT_PAYLOAD_KEY = "variant_payload"
 
 
 class _MetadataPayload(BaseModel):

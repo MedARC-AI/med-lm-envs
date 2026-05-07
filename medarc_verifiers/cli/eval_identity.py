@@ -5,34 +5,31 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections import Counter, defaultdict
-from collections.abc import Mapping, Sequence
+from collections import Counter
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-MEDARC_CONFIG_FINGERPRINT_KEY = "medarc_config_fingerprint"
-MEDARC_CONFIG_FINGERPRINT_PAYLOAD_KEY = "medarc_config_fingerprint_payload"
 MEDARC_VARIANT_ID_KEY = "variant_id"
-MEDARC_VARIANT_PAYLOAD_KEY = "variant_payload"
+MEDARC_EVAL_METADATA_FILENAME = ".medarc_eval_metadata.json"
+BASE_VARIANT_ID = "base"
 
 _SLUG_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
 _MAX_SEGMENT_LENGTH = 80
 _MAX_VARIANT_ID_LENGTH = 160
 
+
 @dataclass(frozen=True)
 class EvalIdentity:
-    """Resolved model/env identity plus optional variant metadata."""
+    """Resolved model/env identity plus semantic variant metadata."""
 
     model_id: str
     env_id: str
-    variant_id: str | None = None
-    variant_payload: dict[str, Any] | None = None
+    variant_id: str = BASE_VARIANT_ID
 
     @property
     def dataset_id(self) -> str:
-        if self.variant_id is None:
-            return self.env_id
         return f"{self.env_id}::{self.variant_id}"
 
 
@@ -52,64 +49,15 @@ def slug_component(value: Any, *, max_length: int = _MAX_SEGMENT_LENGTH) -> str:
         slug = "value"
     if len(slug) <= max_length:
         return slug
-    digest = short_fingerprint(str(value), length=10)
+    digest = _short_text_digest(str(value), length=10)
     return f"{slug[: max_length - 11].rstrip('-._')}-{digest}"
 
 
-def plan_eval_paths(raw_configs: Sequence[Mapping[str, Any]], *, output_root: str | Path) -> list[EvalPathPlan]:
-    """Plan deterministic output paths, adding variants for colliding model/env pairs."""
-
-    keys = [(_model_id(config), _env_id(config)) for config in raw_configs]
-    counts = Counter(keys)
-    semantic_payloads = [_semantic_variant_source(config) for config in raw_configs]
-    differing_fields = _differing_fields_by_key(semantic_payloads, keys)
-
-    plans: list[EvalPathPlan] = []
-    for idx, (config, key) in enumerate(zip(raw_configs, keys)):
-        model_id, env_id = key
-        variant_payload: dict[str, Any] | None = None
-        variant_id: str | None = None
-        if counts[key] > 1:
-            variant_payload = extract_variant_payload(semantic_payloads[idx], differing_fields[key])
-            variant_id = generate_variant_id(variant_payload)
-
-        identity = EvalIdentity(
-            model_id=model_id, env_id=env_id, variant_id=variant_id, variant_payload=variant_payload
-        )
-        path = Path(output_root) / slug_component(model_id) / slug_component(env_id)
-        if variant_id is not None:
-            path = path / slug_component(variant_id, max_length=_MAX_VARIANT_ID_LENGTH)
-        plans.append(EvalPathPlan(identity=identity, results_path=path))
-
-    _ensure_unique_paths(plans)
-    return plans
-
-
-def extract_variant_payload(config: Mapping[str, Any], field_names: Sequence[str]) -> dict[str, Any]:
-    """Return the subset of config fields that distinguishes a variant."""
-
-    payload: dict[str, Any] = {}
-    for field_name in field_names:
-        if "." in field_name:
-            root, nested_key = field_name.split(".", 1)
-            value = config.get(root)
-            if isinstance(value, Mapping):
-                nested_payload = payload.setdefault(root, {})
-                if isinstance(nested_payload, dict) and nested_key in value:
-                    nested_payload[nested_key] = _canonicalize(value[nested_key])
-            else:
-                payload.setdefault(root, {})
-            continue
-        if field_name in config:
-            payload[field_name] = _canonicalize(config[field_name])
-    return payload
-
-
 def generate_variant_id(payload: Mapping[str, Any]) -> str:
-    """Generate a stable human-readable variant ID from distinguishing fields."""
+    """Generate a stable human-readable variant id for legacy export config keys."""
 
     if not payload:
-        return f"variant-{short_fingerprint(payload)}"
+        return BASE_VARIANT_ID
 
     segments: list[str] = []
     for key, value in sorted(payload.items()):
@@ -120,180 +68,132 @@ def generate_variant_id(payload: Mapping[str, Any]) -> str:
             segments.append(_variant_segment(key, value))
 
     if not segments:
-        return "baseline"
+        return BASE_VARIANT_ID
 
     variant_id = "__".join(segments)
     if len(variant_id) <= _MAX_VARIANT_ID_LENGTH and all(not segment.endswith("-hash") for segment in segments):
         return variant_id
-    return f"{variant_id[:120].rstrip('-._')}__{short_fingerprint(payload, length=12)}"
+    return f"{variant_id[:120].rstrip('-._')}__{_short_json_digest(payload, length=12)}"
 
 
-def build_fingerprint_payload(config: Mapping[str, Any]) -> dict[str, Any]:
-    """Build the narrow semantic payload used for config-safe resume checks."""
+def plan_eval_paths(raw_configs: Sequence[Mapping[str, Any]], *, output_root: str | Path) -> list[EvalPathPlan]:
+    """Plan deterministic output paths for TOML bench eval configs."""
 
-    payload: dict[str, Any] = {
-        "env_args": _canonicalize(config.get("env_args", {})),
-        "env_id": _env_id(config),
-        "model": _model_id(config),
-        "num_examples": config.get("num_examples"),
-        "rollouts_per_example": config.get("rollouts_per_example"),
-        "sampling_args": normalize_semantic_sampling_args(_sampling_args_with_top_level(config)),
-    }
-    return payload
+    keys = [(_model_id(config), _env_id(config)) for config in raw_configs]
+    plans: list[EvalPathPlan] = []
+    for idx, (config, key) in enumerate(zip(raw_configs, keys)):
+        model_id, env_id = key
+        variant_id = _variant_id(config, index=idx + 1)
 
+        identity = EvalIdentity(model_id=model_id, env_id=env_id, variant_id=variant_id)
+        path = (
+            Path(output_root)
+            / slug_component(model_id)
+            / slug_component(env_id)
+            / slug_component(variant_id, max_length=_MAX_VARIANT_ID_LENGTH)
+        )
+        plans.append(EvalPathPlan(identity=identity, results_path=path))
 
-def config_fingerprint(config: Mapping[str, Any]) -> str:
-    """Return the stable fingerprint for an eval config's benchmark identity."""
-
-    return short_fingerprint(build_fingerprint_payload(config), length=32)
-
-
-def normalize_semantic_sampling_args(sampling_args: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Canonicalize generation arguments for fingerprinting."""
-
-    if not sampling_args:
-        return {}
-
-    normalized: dict[str, Any] = {}
-    for key, value in sampling_args.items():
-        if key == "extra_body":
-            _merge_extra_body_semantics(normalized, value)
-        elif key == "reasoning_effort":
-            normalized["reasoning_effort"] = _canonicalize(value)
-        elif key == "reasoning":
-            effort = _extract_reasoning_effort(value)
-            if effort is not None:
-                normalized["reasoning_effort"] = _canonicalize(effort)
-            else:
-                normalized[key] = _canonicalize(value)
-        else:
-            normalized[key] = _canonicalize(value)
-
-    return dict(sorted(normalized.items()))
+    _ensure_unique_identities(plans)
+    _ensure_unique_slugs(plans)
+    return plans
 
 
-def metadata_identity_fields(config: Mapping[str, Any], identity: EvalIdentity) -> dict[str, Any]:
-    """Return MedARC metadata fields to write alongside upstream metadata."""
-
-    payload = build_fingerprint_payload(config)
-    return {
-        MEDARC_CONFIG_FINGERPRINT_KEY: short_fingerprint(payload, length=32),
-        MEDARC_CONFIG_FINGERPRINT_PAYLOAD_KEY: payload,
-        MEDARC_VARIANT_ID_KEY: identity.variant_id,
-        MEDARC_VARIANT_PAYLOAD_KEY: identity.variant_payload,
-    }
-
-
-def short_fingerprint(value: Any, *, length: int = 12) -> str:
-    encoded = _canonical_json(value).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()[:length]
+def _ensure_unique_identities(plans: Sequence[EvalPathPlan]) -> None:
+    identities = [(plan.identity.model_id, plan.identity.env_id, plan.identity.variant_id) for plan in plans]
+    duplicates = sorted(identity for identity, count in Counter(identities).items() if count > 1)
+    if duplicates:
+        rendered = ", ".join(
+            f"model={model!r}, env_id={env_id!r}, variant_id={variant_id!r}"
+            for model, env_id, variant_id in duplicates
+        )
+        raise ValueError(f"Duplicate TOML eval identity; add a distinct variant_id/name: {rendered}")
 
 
-def _semantic_variant_source(config: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        "env_args": _canonicalize(config.get("env_args", {})),
-        "num_examples": config.get("num_examples"),
-        "rollouts_per_example": config.get("rollouts_per_example"),
-        "sampling_args": normalize_semantic_sampling_args(_sampling_args_with_top_level(config)),
-    }
+def _ensure_unique_slugs(plans: Sequence[EvalPathPlan]) -> None:
+    _raise_slug_collisions(
+        "model",
+        ((slug_component(plan.identity.model_id), plan.identity.model_id) for plan in plans),
+    )
 
-
-def _sampling_args_with_top_level(config: Mapping[str, Any]) -> dict[str, Any]:
-    sampling_args = dict(config.get("sampling_args", {}) or {})
-    for key in ("max_tokens", "temperature"):
-        if key in config and key not in sampling_args:
-            sampling_args[key] = config[key]
-    return sampling_args
-
-
-def _differing_fields_by_key(
-    semantic_payloads: Sequence[Mapping[str, Any]], keys: Sequence[tuple[str, str]]
-) -> dict[tuple[str, str], list[str]]:
-    grouped: dict[tuple[str, str], list[Mapping[str, Any]]] = defaultdict(list)
-    for payload, key in zip(semantic_payloads, keys):
-        grouped[key].append(payload)
-
-    differing: dict[tuple[str, str], list[str]] = {}
-    for key, configs in grouped.items():
-        if len(configs) < 2:
-            differing[key] = []
-            continue
-        field_names = sorted(set().union(*(payload.keys() for payload in configs)))
-        differing[key] = []
-        for field_name in field_names:
-            values = [payload.get(field_name) for payload in configs]
-            if all(isinstance(value, Mapping) for value in values if value is not None):
-                nested_names = sorted(
-                    {
-                        str(nested_key)
-                        for value in values
-                        if isinstance(value, Mapping)
-                        for nested_key in value.keys()
-                    }
-                )
-                differing[key].extend(
-                    f"{field_name}.{nested_name}"
-                    for nested_name in nested_names
-                    if len(
-                        {
-                            _canonical_json(value.get(nested_name) if isinstance(value, Mapping) else None)
-                            for value in values
-                        }
+    _raise_slug_collisions(
+        "env",
+        (
+            (
+                f"{slug_component(plan.identity.model_id)}/{slug_component(plan.identity.env_id)}",
+                f"{plan.identity.model_id}/{plan.identity.env_id}",
+            )
+            for plan in plans
+        ),
+    )
+    _raise_slug_collisions(
+        "variant",
+        (
+            (
+                "/".join(
+                    (
+                        slug_component(plan.identity.model_id),
+                        slug_component(plan.identity.env_id),
+                        slug_component(plan.identity.variant_id, max_length=_MAX_VARIANT_ID_LENGTH),
                     )
-                    > 1
-                )
-                continue
-            if len({_canonical_json(value) for value in values}) > 1:
-                differing[key].append(field_name)
-    return differing
+                ),
+                f"{plan.identity.model_id}/{plan.identity.env_id}/{plan.identity.variant_id}",
+            )
+            for plan in plans
+        ),
+    )
 
-
-def _ensure_unique_paths(plans: Sequence[EvalPathPlan]) -> None:
     paths = [plan.results_path for plan in plans]
     duplicate_paths = sorted(path for path, count in Counter(paths).items() if count > 1)
     if duplicate_paths:
         rendered = ", ".join(str(path) for path in duplicate_paths)
-        raise ValueError(f"Deterministic eval path collision after variant planning: {rendered}")
+        raise ValueError(f"Deterministic eval path collision: {rendered}")
 
 
-def _variant_segment(key: str, value: Any) -> str:
-    key_slug = slug_component(key, max_length=40)
-    value_slug = slug_component(_variant_value_text(value), max_length=80)
-    if isinstance(value, Mapping | Sequence) and not isinstance(value, str | bytes | bytearray):
-        return f"{key_slug}-{value_slug}-{short_fingerprint(value, length=8)}"
-    return f"{key_slug}-{value_slug}"
-
-
-def _variant_value_text(value: Any) -> str:
-    if isinstance(value, bool):
-        return str(value).lower()
-    if value is None:
-        return "none"
-    if isinstance(value, int | float | str):
-        return str(value)
-    return "hash"
-
-
-def _merge_extra_body_semantics(normalized: dict[str, Any], extra_body: Any) -> None:
-    if not isinstance(extra_body, Mapping):
-        normalized["extra_body"] = _canonicalize(extra_body)
+def _raise_slug_collisions(label: str, pairs: Iterable[tuple[str, str]]) -> None:
+    values_by_slug: dict[str, set[str]] = {}
+    for slug, value in pairs:
+        values_by_slug.setdefault(slug, set()).add(value)
+    collisions = {slug: sorted(values) for slug, values in values_by_slug.items() if len(values) > 1}
+    if not collisions:
         return
-
-    for key, value in extra_body.items():
-        if key == "reasoning":
-            effort = _extract_reasoning_effort(value)
-            if effort is not None:
-                normalized["reasoning_effort"] = _canonicalize(effort)
-            else:
-                normalized[key] = _canonicalize(value)
-        else:
-            normalized[key] = _canonicalize(value)
+    rendered = "; ".join(f"{slug}: {values}" for slug, values in sorted(collisions.items()))
+    raise ValueError(f"Deterministic eval {label} slug collision: {rendered}")
 
 
-def _extract_reasoning_effort(value: Any) -> Any:
-    if not isinstance(value, Mapping):
+def _variant_id(config: Mapping[str, Any], *, index: int) -> str:
+    raw_variant = config.get("variant_id")
+    raw_name = config.get("name")
+    variant = _normalize_variant(raw_variant, config=config, field="variant_id", index=index)
+    name = _normalize_variant(raw_name, config=config, field="name", index=index)
+    if variant and name and variant != name:
+        raise ValueError(
+            f"TOML eval {index} has conflicting variant_id/name values: {variant!r} != {name!r}."
+        )
+    return variant or name or BASE_VARIANT_ID
+
+
+def _normalize_variant(value: Any, *, config: Mapping[str, Any], field: str, index: int) -> str | None:
+    if value is None:
         return None
-    return value.get("effort") or value.get("reasoning_effort")
+    text = _expand_variant_template(str(value).strip(), config)
+    if not text:
+        raise ValueError(f"TOML eval {index} {field} must not be empty.")
+    return text
+
+
+def _expand_variant_template(template: str, config: Mapping[str, Any]) -> str:
+    def replace(match: re.Match[str]) -> str:
+        path = match.group(1).strip()
+        value: Any = config
+        for part in path.split("."):
+            if isinstance(value, Mapping) and part in value:
+                value = value[part]
+            else:
+                raise ValueError(f"Variant template references unknown field: {path}")
+        return str(value)
+
+    return re.sub(r"\{([^{}]+)\}", replace, template).strip()
 
 
 def _model_id(config: Mapping[str, Any]) -> str:
@@ -312,8 +212,31 @@ def _env_id(config: Mapping[str, Any]) -> str:
     return str(value)
 
 
-def _canonical_json(value: Any) -> str:
-    return json.dumps(_canonicalize(value), sort_keys=True, separators=(",", ":"), default=str)
+def _short_text_digest(value: str, *, length: int) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:length]
+
+
+def _short_json_digest(value: Any, *, length: int) -> str:
+    encoded = json.dumps(_canonicalize(value), sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:length]
+
+
+def _variant_segment(key: str, value: Any) -> str:
+    key_slug = slug_component(key, max_length=40)
+    value_slug = slug_component(_variant_value_text(value), max_length=80)
+    if isinstance(value, Mapping | Sequence) and not isinstance(value, str | bytes | bytearray):
+        return f"{key_slug}-{value_slug}-{_short_json_digest(value, length=8)}"
+    return f"{key_slug}-{value_slug}"
+
+
+def _variant_value_text(value: Any) -> str:
+    if isinstance(value, bool):
+        return str(value).lower()
+    if value is None:
+        return "none"
+    if isinstance(value, int | float | str):
+        return str(value)
+    return "hash"
 
 
 def _canonicalize(value: Any) -> Any:
@@ -329,19 +252,12 @@ def _canonicalize(value: Any) -> Any:
 
 
 __all__ = [
+    "BASE_VARIANT_ID",
     "EvalIdentity",
     "EvalPathPlan",
-    "MEDARC_CONFIG_FINGERPRINT_KEY",
-    "MEDARC_CONFIG_FINGERPRINT_PAYLOAD_KEY",
+    "MEDARC_EVAL_METADATA_FILENAME",
     "MEDARC_VARIANT_ID_KEY",
-    "MEDARC_VARIANT_PAYLOAD_KEY",
-    "build_fingerprint_payload",
-    "config_fingerprint",
-    "extract_variant_payload",
     "generate_variant_id",
-    "metadata_identity_fields",
-    "normalize_semantic_sampling_args",
     "plan_eval_paths",
-    "short_fingerprint",
     "slug_component",
 ]

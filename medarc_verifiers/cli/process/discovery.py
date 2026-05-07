@@ -11,12 +11,9 @@ from typing import Any, Dict, Iterator, Mapping, Sequence
 
 from pydantic import ValidationError
 
-from medarc_verifiers.cli.bench_index import BENCH_INDEX_FILENAME, read_bench_index, validate_bench_index
 from medarc_verifiers.cli.eval_identity import (
-    MEDARC_CONFIG_FINGERPRINT_KEY,
-    MEDARC_CONFIG_FINGERPRINT_PAYLOAD_KEY,
+    MEDARC_EVAL_METADATA_FILENAME,
     MEDARC_VARIANT_ID_KEY,
-    MEDARC_VARIANT_PAYLOAD_KEY,
 )
 from medarc_verifiers.cli._manifest import (
     MANIFEST_FILENAME,
@@ -371,20 +368,18 @@ def _candidate_evals_roots(runs_path: Path) -> tuple[Path, ...]:
 
 def _iter_eval_output_records(evals_root: Path) -> Iterator[RunRecord]:
     """Yield synthetic run records for upstream eval output directories."""
-    bench_index_path = evals_root / BENCH_INDEX_FILENAME
-    if bench_index_path.exists():
-        yield from _iter_bench_index_records(evals_root, bench_index_path)
-        return
-
     try:
         results_paths = sorted(evals_root.rglob(RESULTS_FILENAME))
     except OSError as exc:  # noqa: FBT003
         logger.warning("Failed to scan eval outputs under %s: %s", evals_root, exc)
         return
 
+    helper_entries = _load_model_helper_entries(evals_root)
     seen: set[Path] = set()
     for results_path in results_paths:
         results_dir = results_path.parent
+        if results_path.name == RESULTS_FILENAME and results_dir.name == "__pycache__":
+            continue
         key = _dedupe_key(results_dir)
         if key in seen:
             continue
@@ -392,113 +387,22 @@ def _iter_eval_output_records(evals_root: Path) -> Iterator[RunRecord]:
         metadata_path = results_dir / METADATA_FILENAME
         if not metadata_path.exists():
             continue
-        record = _build_eval_output_record(evals_root, results_dir)
+        record = _build_eval_output_record(evals_root, results_dir, helper_entries.get(_dedupe_key(results_dir)))
         if record is not None:
             yield record
 
 
-def _iter_bench_index_records(evals_root: Path, bench_index_path: Path) -> Iterator[RunRecord]:
-    bench_index = read_bench_index(bench_index_path)
-    if bench_index is None:
-        return
-    validate_bench_index(bench_index, output_root=evals_root, require_artifacts=True)
-    entries = bench_index.get("evals", [])
-    if not isinstance(entries, list):
-        return
-    source_config = _string_or_none(bench_index.get("source_config"))
-    for entry in entries:
-        if not isinstance(entry, Mapping):
-            continue
-        record = _build_bench_index_record(evals_root, bench_index_path, entry, source_config=source_config)
-        if record is not None:
-            yield record
-
-
-def _build_bench_index_record(
+def _build_eval_output_record(
     evals_root: Path,
-    bench_index_path: Path,
-    entry: Mapping[str, Any],
-    *,
-    source_config: str | None,
+    results_dir: Path,
+    helper_entry: Mapping[str, Any] | None = None,
 ) -> RunRecord | None:
-    results_dir = Path(str(entry["results_path"]))
     metadata_path = results_dir / METADATA_FILENAME
     metadata_payload = _read_metadata_payload(metadata_path)
     if metadata_payload is None:
         return None
 
-    model_id = str(entry["model"])
-    env_id = str(entry["env_id"])
-    variant_id = _string_or_none(entry.get("variant_id"))
-    variant_payload = entry.get("variant_payload") if isinstance(entry.get("variant_payload"), Mapping) else None
-    updated_at = _path_timestamp(metadata_path)
-    job_run_id = "::".join(part for part in (model_id, env_id, variant_id) if part)
-    env_args = _mapping_or_empty(entry.get("env_args")) or _mapping_or_empty(metadata_payload.get("env_args"))
-    sampling_args = _mapping_or_empty(entry.get("sampling_args")) or _mapping_or_empty(
-        metadata_payload.get("sampling_args")
-    )
-    plan_digest = _string_or_none(entry.get("plan_digest"))
-
-    manifest = RunManifestInfo(
-        job_run_id=job_run_id,
-        run_name=job_run_id,
-        summary_completed=1,
-        summary_total=1,
-        summary_total_known=True,
-        manifest_path=bench_index_path,
-        run_dir=evals_root,
-        created_at=updated_at,
-        updated_at=updated_at,
-        config_source=source_config,
-        config_checksum=plan_digest,
-        run_summary_path=results_dir / "summary.json",
-        models={model_id: {"sampling_args": sampling_args}},
-        env_templates={env_id: {"module": env_id}},
-    )
-
-    return RunRecord(
-        manifest=manifest,
-        job_id=results_dir.name,
-        model_id=model_id,
-        manifest_env_id=env_id,
-        results_dir_name=results_dir.name,
-        results_dir=results_dir,
-        metadata_path=metadata_path,
-        results_path=results_dir / RESULTS_FILENAME,
-        summary_path=results_dir / "summary.json",
-        has_metadata=True,
-        has_results=True,
-        has_summary=(results_dir / "summary.json").exists(),
-        status="completed",
-        duration_seconds=None,
-        reason=None,
-        started_at=None,
-        ended_at=None,
-        avg_reward=_float_or_none(metadata_payload.get("avg_reward")),
-        num_examples=_int_or_none(entry.get("num_examples")) or _int_or_none(metadata_payload.get("num_examples")),
-        rollouts_per_example=_int_or_none(entry.get("rollouts_per_example"))
-        or _int_or_none(metadata_payload.get("rollouts_per_example")),
-        row_count=_count_results_rows(results_dir / RESULTS_FILENAME),
-        env_args=env_args,
-        sampling_args=sampling_args,
-        env_config={
-            "id": env_id,
-            "module": env_id,
-            "variant_id": variant_id,
-            "variant_payload": variant_payload,
-            "plan_digest": plan_digest,
-        },
-        model_config={"sampling_args": sampling_args},
-    )
-
-
-def _build_eval_output_record(evals_root: Path, results_dir: Path) -> RunRecord | None:
-    metadata_path = results_dir / METADATA_FILENAME
-    metadata_payload = _read_metadata_payload(metadata_path)
-    if metadata_payload is None:
-        return None
-
-    layout = _infer_eval_output_layout(evals_root, results_dir, metadata_payload)
+    layout = _infer_eval_output_layout(evals_root, results_dir, metadata_payload, helper_entry)
     updated_at = _path_timestamp(metadata_path)
     job_run_id = layout["job_run_id"]
     job_id = layout["job_id"]
@@ -516,7 +420,7 @@ def _build_eval_output_record(evals_root: Path, results_dir: Path) -> RunRecord 
         created_at=updated_at,
         updated_at=updated_at,
         config_source=None,
-        config_checksum=_string_or_none(metadata_payload.get(MEDARC_CONFIG_FINGERPRINT_KEY)),
+        config_checksum=None,
         run_summary_path=results_dir / "summary.json",
         models={model_id: {"sampling_args": _mapping_or_empty(metadata_payload.get("sampling_args"))}},
         env_templates={env_id: {"module": env_id}},
@@ -552,16 +456,18 @@ def _build_eval_output_record(evals_root: Path, results_dir: Path) -> RunRecord 
         env_config={
             "id": env_id,
             "module": env_id,
-            "variant_id": metadata_payload.get(MEDARC_VARIANT_ID_KEY),
-            "variant_payload": metadata_payload.get(MEDARC_VARIANT_PAYLOAD_KEY),
-            "medarc_config_fingerprint": metadata_payload.get(MEDARC_CONFIG_FINGERPRINT_KEY),
-            "medarc_config_fingerprint_payload": metadata_payload.get(MEDARC_CONFIG_FINGERPRINT_PAYLOAD_KEY),
+            "variant_id": layout.get("variant_id"),
         },
         model_config={"sampling_args": sampling_args},
     )
 
 
-def _infer_eval_output_layout(evals_root: Path, results_dir: Path, metadata_payload: Mapping[str, Any]) -> dict[str, str]:
+def _infer_eval_output_layout(
+    evals_root: Path,
+    results_dir: Path,
+    metadata_payload: Mapping[str, Any],
+    helper_entry: Mapping[str, Any] | None = None,
+) -> dict[str, str]:
     try:
         parts = results_dir.relative_to(evals_root).parts
     except ValueError:
@@ -569,16 +475,21 @@ def _infer_eval_output_layout(evals_root: Path, results_dir: Path, metadata_payl
 
     metadata_env_id = _string_or_none(metadata_payload.get("env_id"))
     metadata_model = _string_or_none(metadata_payload.get("model"))
+    helper_env_id = _string_or_none(helper_entry.get("env_id") if helper_entry else None)
+    helper_variant_id = _string_or_none(helper_entry.get("variant_id") if helper_entry else None)
     parent_name = results_dir.parent.name
     if "--" in parent_name and len(parts) >= 2:
         env_from_parent, model_from_parent = parent_name.split("--", 1)
-        env_id = metadata_env_id or env_from_parent
+        env_id = helper_env_id or metadata_env_id or env_from_parent
         model_id = metadata_model or model_from_parent
         job_run_id = results_dir.name
+        variant_id = helper_variant_id
     else:
         model_id = metadata_model or (parts[0] if len(parts) >= 1 else "unknown")
-        env_id = metadata_env_id or (parts[1] if len(parts) >= 2 else results_dir.name)
-        variant_id = _string_or_none(metadata_payload.get(MEDARC_VARIANT_ID_KEY))
+        env_id = helper_env_id or metadata_env_id or (parts[1] if len(parts) >= 2 else results_dir.name)
+        variant_id = helper_variant_id or (
+            parts[2] if len(parts) >= 3 else _string_or_none(metadata_payload.get(MEDARC_VARIANT_ID_KEY))
+        )
         job_run_id = "::".join(part for part in (model_id, env_id, variant_id) if part)
 
     return {
@@ -586,7 +497,44 @@ def _infer_eval_output_layout(evals_root: Path, results_dir: Path, metadata_payl
         "job_id": results_dir.name,
         "model_id": model_id,
         "env_id": env_id,
+        "variant_id": variant_id or "",
     }
+
+
+def _load_model_helper_entries(evals_root: Path) -> dict[Path, Mapping[str, Any]]:
+    entries: dict[Path, Mapping[str, Any]] = {}
+    try:
+        helper_paths = sorted(evals_root.glob(f"*/{MEDARC_EVAL_METADATA_FILENAME}"))
+    except OSError as exc:  # noqa: FBT003
+        logger.warning("Failed to scan eval metadata helpers under %s: %s", evals_root, exc)
+        return entries
+
+    for helper_path in helper_paths:
+        payload = _read_metadata_payload(helper_path)
+        if payload is None:
+            continue
+        raw_outputs = payload.get("outputs")
+        if not isinstance(raw_outputs, Mapping):
+            continue
+        model_dir = helper_path.parent
+        for key, raw_entry in raw_outputs.items():
+            if not isinstance(raw_entry, Mapping):
+                continue
+            raw_results_path = raw_entry.get("results_path") or key
+            if not isinstance(raw_results_path, str) or not raw_results_path:
+                continue
+            relative_results_path = Path(raw_results_path)
+            if relative_results_path.is_absolute():
+                continue
+            results_dir = (model_dir / relative_results_path).resolve()
+            try:
+                results_dir.relative_to(model_dir.resolve())
+            except ValueError:
+                continue
+            if not (results_dir / METADATA_FILENAME).exists() or not (results_dir / RESULTS_FILENAME).exists():
+                continue
+            entries[_dedupe_key(results_dir)] = raw_entry
+    return entries
 
 
 def _read_metadata_payload(path: Path) -> Mapping[str, Any] | None:

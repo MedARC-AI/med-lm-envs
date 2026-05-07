@@ -112,11 +112,12 @@ medarc-eval winrate --list-models
 ```
 runs/
 ├── evals/                        # Raw TOML bench outputs
-│   ├── bench_index.json           # Bench identity and results-path sidecar
 │   └── <model>/
+│       ├── .medarc_eval_metadata.json
 │       └── <env>/
-│           ├── results.jsonl
-│           └── metadata.json
+│           └── <variant>/
+│               ├── results.jsonl
+│               └── metadata.json
 ├── processed/                    # Analysis-ready parquet files (from process)
 │   ├── env_index.json            # Dataset inventory
 │   └── <model>/<env>.parquet

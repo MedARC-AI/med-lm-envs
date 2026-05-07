@@ -45,8 +45,8 @@ It supports:
   - Implemented in `medarc_verifiers/cli/_single_run.py`.
 - **TOML bench mode**: `medarc-eval bench --config <config.toml>`
   - Loads upstream `verifiers` TOML eval configs, expands ablations, plans
-    deterministic output directories, writes `bench_index.json`, then runs evals
-    sequentially through upstream execution.
+    deterministic output directories, then runs evals sequentially through
+    upstream execution.
   - Main implementation: `medarc_verifiers/cli/main.py`
   - Upstream eval boundary: `medarc_verifiers/cli/upstream_eval.py`
   - Deterministic identity/path helpers: `medarc_verifiers/cli/eval_identity.py`
@@ -78,8 +78,9 @@ Override parsing lives in `medarc_verifiers/cli/utils/overrides.py`.
 
 Bench configs use upstream `verifiers` TOML shape: top-level defaults plus one
 or more `[[eval]]` entries. Upstream `[[ablation]]` tables expand into repeated
-eval configs. MedARC adds deterministic paths and a required `bench_index.json`
-sidecar around the resolved upstream eval configs.
+eval configs. MedARC adds deterministic paths around the resolved upstream eval
+configs. Duplicate `(model, env)` outputs must use explicit `variant_id` or
+`name` identity; the reserved default variant id is `base`.
 
 `env_args` precedence is low to high:
 
@@ -124,19 +125,18 @@ Relevant env vars:
 
 TOML bench writes eval outputs under deterministic directories:
 
-- Non-variant evals: `runs/evals/<model>/<env>/`
+- Non-variant evals: `runs/evals/<model>/<env>/base/`
 - Variant evals: `runs/evals/<model>/<env>/<variant_id>/`
 
-Before reusing an existing deterministic directory, bench validates the matching
-`bench_index.json` entry and its `plan_digest`, and also checks MedARC identity
-fields in existing `metadata.json`. Both are based on the canonical planned eval
-payload, including unknown `sampling_args`, so new provider arguments pass
-through instead of hitting a MedARC allowlist.
+Existing output reuse is explicit. Without `--resume` or `--force`, bench fails
+when the target directory already exists. `--resume` passes the deterministic
+target as upstream `EvalConfig.resume_path` and trusts upstream resume
+validation. `--force` archives the existing target and reruns.
 
-`medarc-eval bench` does not monkey-patch upstream metadata saving. MedARC
-identity fields are merged into `metadata.json` only after successful upstream
-execution, and process discovery uses `bench_index.json` as the durable bench
-identity contract.
+`medarc-eval bench` does not monkey-patch upstream metadata saving and does not
+write MedARC identity into upstream `metadata.json`. MedARC-specific identity
+lives in `runs/evals/<model>/.medarc_eval_metadata.json`, keyed by
+model-relative results paths such as `medqa/base`.
 
 `medarc_verifiers/cli/_manifest.py` now only contains the legacy manifest schema
 needed by processing to read historical `runs/raw` outputs.
@@ -145,9 +145,9 @@ needed by processing to read historical `runs/raw` outputs.
 
 TOML bench outputs include:
 
-- `bench_index.json`: bench identity sidecar at the output root
 - `results.jsonl`: per-example rollouts
 - `metadata.json`: eval configuration and metrics snapshot
+- `.medarc_eval_metadata.json`: minimal model-level MedARC identity helper
 
 The runner executes via `verifiers.utils.eval_utils.run_evaluation()` from
 single-run mode and the TOML bench code in `medarc_verifiers/cli/main.py`.
@@ -160,10 +160,10 @@ Entry point: `medarc_verifiers/cli/process/pipeline.py`.
 
 Processing:
 
-1. Discovers TOML bench outputs from `runs/evals` using `bench_index.json` when
-   present, and legacy manifest outputs from `runs/raw`.
-2. Normalizes identity from the bench sidecar plus `metadata.json`; legacy
-   outputs still use manifest fields.
+1. Discovers TOML bench outputs from `runs/evals` by scanning directories, and
+   legacy manifest outputs from `runs/raw`.
+2. Normalizes identity from upstream `metadata.json`, paths, and optional
+   model-level helper metadata; legacy outputs still use manifest fields.
 3. Loads rows from `results.jsonl`, drops large prompt/completion fields, and
    flattens `token_usage`.
 4. Aggregates rows per model and environment, preserving variant ids.

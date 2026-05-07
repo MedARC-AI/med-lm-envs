@@ -35,16 +35,13 @@ from medarc_verifiers.cli._constants import (
 )
 from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, EnvironmentExportConfig
 from medarc_verifiers.cli._single_run import run_single_mode
-from medarc_verifiers.cli.bench_index import (
-    BENCH_INDEX_FILENAME,
-    build_bench_index,
-    find_entry_for_results_path,
-    read_bench_index,
-    validate_bench_index,
-    write_bench_index,
+from medarc_verifiers.cli.eval_identity import (
+    MEDARC_EVAL_METADATA_FILENAME,
+    EvalPathPlan,
+    generate_variant_id,
+    plan_eval_paths,
+    slug_component,
 )
-from medarc_verifiers.cli.eval_identity import EvalPathPlan, generate_variant_id, plan_eval_paths
-from medarc_verifiers.cli.eval_identity import metadata_identity_fields
 from medarc_verifiers.cli.hf import HFSyncConfig, sync_files_to_hub
 from medarc_verifiers.cli.process import PROCESS_DEFAULT_STATUS_FILTER, ProcessOptions, ProcessResult, run_process
 from medarc_verifiers.cli.utils.config_io import load_mapping_file
@@ -76,6 +73,7 @@ def build_batch_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("-c", "--config", required=True, type=Path, help="Path to an upstream TOML eval config file.")
     parser.add_argument("--force", action="store_true", help="Archive existing deterministic output and rerun.")
+    parser.add_argument("--resume", action="store_true", help="Resume an existing deterministic output path.")
     parser.add_argument("--output-dir", type=Path, help="Override the output directory from the configuration.")
     parser.add_argument(
         "--env-dir",
@@ -1260,7 +1258,10 @@ def _validate_toml_selection_args(args: argparse.Namespace, *, parser: argparse.
 
 def _run_toml_bench(args: argparse.Namespace) -> int:
     config_path = Path(args.config).expanduser()
-    raw_configs = _prepare_toml_raw_configs(load_toml_eval_configs(config_path), args)
+    raw_configs = _prepare_toml_raw_configs(
+        load_toml_eval_configs(config_path, extra_valid_fields={"name", "variant_id"}),
+        args,
+    )
     overrides = EvalConfigOverrides(
         model=args.model,
         provider=args.provider,
@@ -1272,22 +1273,15 @@ def _run_toml_bench(args: argparse.Namespace) -> int:
         sampling_args=getattr(args, "cli_sampling_args", None),
     )
     eval_configs = [build_eval_config(raw, overrides=overrides) for raw in raw_configs]
-    plan_inputs = [_eval_config_identity_payload(config) for config in eval_configs]
+    plan_inputs = [_eval_config_identity_payload(config, raw) for config, raw in zip(eval_configs, raw_configs)]
     output_root = _resolve_toml_output_root(eval_configs, args)
     path_plans = plan_eval_paths(plan_inputs, output_root=output_root)
     eval_configs, path_plans, plan_inputs = _select_toml_plan(eval_configs, path_plans, plan_inputs, args)
-    bench_index = build_bench_index(
-        output_root=output_root,
-        source_config=config_path,
-        eval_configs=eval_configs,
-        path_plans=path_plans,
-        plan_payloads=plan_inputs,
-    )
 
     _print_toml_bench_plan(eval_configs, path_plans, dry_run=bool(args.dry_run))
     if args.dry_run:
         return 0
-    return _execute_toml_plan(eval_configs, path_plans, plan_inputs, bench_index, output_root, args)
+    return _execute_toml_plan(eval_configs, path_plans, output_root, args)
 
 
 def _prepare_toml_raw_configs(raw_configs: Sequence[dict[str, Any]], args: argparse.Namespace) -> list[dict[str, Any]]:
@@ -1343,59 +1337,23 @@ def _select_toml_plan(
 def _execute_toml_plan(
     eval_configs: Sequence[Any],
     path_plans: Sequence[EvalPathPlan],
-    plan_inputs: Sequence[Mapping[str, Any]],
-    bench_index: Mapping[str, Any],
     output_root: Path,
     args: argparse.Namespace,
 ) -> int:
     failures = 0
-    bench_index_path = output_root / BENCH_INDEX_FILENAME
-    existing_bench_index = _validate_existing_bench_index(
-        bench_index_path, bench_index, output_root=output_root, force=bool(args.force)
-    )
-    effective_bench_index = _merge_bench_index(existing_bench_index, bench_index, output_root=output_root)
-    persisted_base_index = existing_bench_index
-    if args.force and existing_bench_index is not None:
-        persisted_base_index = _bench_index_without_paths(
-            existing_bench_index,
-            [path_plan.results_path for path_plan in path_plans],
-        )
-    persisted_bench_index = _merge_bench_index(
-        persisted_base_index,
-        _bench_index_with_entries(bench_index, []),
-        output_root=output_root,
-    )
-    write_bench_index(bench_index_path, persisted_bench_index)
-    for index, (config, path_plan, _plan_input) in enumerate(zip(eval_configs, path_plans, plan_inputs), start=1):
-        metadata_fields = metadata_identity_fields(_eval_config_identity_payload(config), path_plan.identity)
+    _validate_model_eval_metadata_for_plan(output_root, path_plans)
+    for index, (config, path_plan) in enumerate(zip(eval_configs, path_plans), start=1):
         results_path = path_plan.results_path
-        sidecar_entry = find_entry_for_results_path(effective_bench_index, results_path)
-        if sidecar_entry is None:
-            raise ValueError(f"Internal bench planning error: missing {BENCH_INDEX_FILENAME} entry for {results_path}.")
         try:
             _prepare_toml_results_dir(
                 results_path,
-                metadata_fields,
-                config,
-                sidecar_entry=sidecar_entry,
-                output_root=output_root,
                 force=bool(args.force),
+                resume=bool(args.resume),
             )
             run_config = config.model_copy(update={"resume_path": results_path, "save_results": True})
             logger.info("Running TOML eval %d/%d: %s on %s", index, len(eval_configs), config.env_id, config.model)
             asyncio.run(_run_one_toml_eval(run_config))
-            _merge_metadata_fields(results_path, metadata_fields)
-            validate_bench_index(
-                {"version": 1, "evals": [dict(sidecar_entry)]},
-                output_root=output_root,
-                require_artifacts=True,
-            )
-            persisted_bench_index = _merge_bench_index(
-                persisted_bench_index,
-                _bench_index_with_entries(bench_index, [sidecar_entry]),
-                output_root=output_root,
-            )
-            write_bench_index(bench_index_path, persisted_bench_index)
+            _write_model_eval_metadata(output_root, path_plan)
         except Exception as exc:  # noqa: BLE001
             failures += 1
             logger.exception("TOML eval %d failed: %s", index, exc)
@@ -1405,8 +1363,6 @@ def _execute_toml_plan(
             import time
 
             time.sleep(float(args.sleep))
-    if failures == 0:
-        validate_bench_index(persisted_bench_index, output_root=output_root, require_artifacts=True)
     return 1 if failures else 0
 
 
@@ -1416,166 +1372,31 @@ async def _run_one_toml_eval(config: Any) -> Any:
 
 def _prepare_toml_results_dir(
     results_path: Path,
-    metadata_fields: Mapping[str, Any],
-    config: Any,
     *,
-    sidecar_entry: Mapping[str, Any],
-    output_root: Path,
     force: bool,
+    resume: bool,
 ) -> None:
     if results_path.exists() and force:
         _archive_existing_path(results_path)
 
     metadata_path = results_path / "metadata.json"
     results_file = results_path / "results.jsonl"
-    has_existing_state = metadata_path.exists() or results_file.exists()
-    if has_existing_state:
-        _validate_toml_resume_sidecar(results_path, sidecar_entry, output_root=output_root)
-        _validate_toml_resume_metadata(results_path, metadata_fields)
-
-    if has_existing_state:
-        _merge_metadata_fields(results_path, metadata_fields)
+    if results_path.exists():
+        has_metadata = metadata_path.is_file()
+        has_results = results_file.is_file()
+        if not resume:
+            raise ValueError(
+                f"Output already exists: {results_path}. Use --resume to continue this output, "
+                "--force to archive and rerun, or add variant_id/name if this is a distinct eval."
+            )
+        if not (has_metadata and has_results):
+            raise ValueError(
+                f"Cannot resume {results_path}: metadata.json and results.jsonl are both required. "
+                "Use --force to archive and rerun."
+            )
         return
 
     results_path.mkdir(parents=True, exist_ok=True)
-
-
-def _validate_existing_bench_index(
-    bench_index_path: Path,
-    planned_index: Mapping[str, Any],
-    *,
-    output_root: Path,
-    force: bool,
-) -> Mapping[str, Any] | None:
-    existing = read_bench_index(bench_index_path)
-    if existing is None:
-        if force:
-            return None
-        for entry in planned_index.get("evals", []):
-            if not isinstance(entry, Mapping):
-                continue
-            results_path = Path(str(entry.get("results_path", "")))
-            if (results_path / "metadata.json").exists() or (results_path / "results.jsonl").exists():
-                raise ValueError(
-                    f"Cannot reuse deterministic bench path {results_path}: {BENCH_INDEX_FILENAME} is missing. "
-                    "Use --force to archive and rerun."
-                )
-        return None
-    validate_bench_index(existing, output_root=output_root, require_artifacts=False)
-    if force:
-        return existing
-    for entry in planned_index.get("evals", []):
-        if not isinstance(entry, Mapping):
-            continue
-        results_path = Path(str(entry.get("results_path", "")))
-        existing_entry = find_entry_for_results_path(existing, results_path)
-        if existing_entry is None:
-            if (results_path / "metadata.json").exists() or (results_path / "results.jsonl").exists():
-                raise ValueError(
-                    f"Cannot reuse deterministic bench path {results_path}: {BENCH_INDEX_FILENAME} has no entry "
-                    "for that path. Use --force to archive and rerun."
-                )
-            continue
-        if existing_entry.get("plan_digest") != entry.get("plan_digest"):
-            raise ValueError(
-                f"Cannot reuse deterministic bench path {results_path}: {BENCH_INDEX_FILENAME} plan_digest mismatch "
-                f"(saved={existing_entry.get('plan_digest')!r}, current={entry.get('plan_digest')!r}). "
-                "Use --force to archive and rerun."
-            )
-    return existing
-
-
-def _merge_bench_index(
-    existing_index: Mapping[str, Any] | None,
-    planned_index: Mapping[str, Any],
-    *,
-    output_root: Path,
-) -> dict[str, Any]:
-    if existing_index is None:
-        return dict(planned_index)
-
-    merged_entries: list[dict[str, Any]] = []
-    planned_by_path = {
-        Path(str(entry["results_path"])).resolve(): dict(entry)
-        for entry in planned_index.get("evals", [])
-        if isinstance(entry, Mapping) and entry.get("results_path")
-    }
-    emitted_paths: set[Path] = set()
-    for entry in existing_index.get("evals", []):
-        if not isinstance(entry, Mapping) or not entry.get("results_path"):
-            continue
-        path = Path(str(entry["results_path"])).resolve()
-        merged_entries.append(planned_by_path.get(path, dict(entry)))
-        emitted_paths.add(path)
-    for path, entry in planned_by_path.items():
-        if path not in emitted_paths:
-            merged_entries.append(entry)
-    for index, entry in enumerate(merged_entries, start=1):
-        entry["index"] = index
-
-    merged = dict(planned_index)
-    merged["evals"] = merged_entries
-    validate_bench_index(merged, output_root=output_root, require_artifacts=False)
-    return merged
-
-
-def _bench_index_with_entries(
-    bench_index: Mapping[str, Any], entries: Sequence[Mapping[str, Any]]
-) -> dict[str, Any]:
-    subset = dict(bench_index)
-    subset["evals"] = [dict(entry) for entry in entries]
-    return subset
-
-
-def _bench_index_without_paths(bench_index: Mapping[str, Any], paths: Sequence[Path]) -> dict[str, Any]:
-    excluded = {path.resolve() for path in paths}
-    entries = [
-        dict(entry)
-        for entry in bench_index.get("evals", [])
-        if isinstance(entry, Mapping)
-        and entry.get("results_path")
-        and Path(str(entry["results_path"])).resolve() not in excluded
-    ]
-    return _bench_index_with_entries(bench_index, entries)
-
-
-def _validate_toml_resume_sidecar(
-    results_path: Path,
-    sidecar_entry: Mapping[str, Any],
-    *,
-    output_root: Path,
-) -> None:
-    validate_bench_index(
-        {"version": 1, "evals": [dict(sidecar_entry)]},
-        output_root=output_root,
-        require_artifacts=False,
-    )
-
-
-def _validate_toml_resume_metadata(results_path: Path, metadata_fields: Mapping[str, Any]) -> None:
-    metadata_path = results_path / "metadata.json"
-    if not metadata_path.exists():
-        raise ValueError(f"Cannot resume {results_path}: metadata.json is missing.")
-    try:
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Cannot resume {results_path}: metadata.json is invalid JSON.") from exc
-    expected = metadata_fields.get("medarc_config_fingerprint")
-    current = metadata.get("medarc_config_fingerprint") if isinstance(metadata, Mapping) else None
-    if current != expected:
-        raise ValueError(
-            f"Cannot resume {results_path}: MedARC config fingerprint mismatch "
-            f"(saved={current!r}, current={expected!r}). Use --force to archive and rerun."
-        )
-
-
-def _merge_metadata_fields(results_path: Path, metadata_fields: Mapping[str, Any]) -> None:
-    metadata_path = results_path / "metadata.json"
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_path.exists() else {}
-    if not isinstance(metadata, dict):
-        metadata = {}
-    metadata.update(metadata_fields)
-    _write_json(metadata_path, metadata)
 
 
 def _archive_existing_path(path: Path) -> Path:
@@ -1589,13 +1410,72 @@ def _archive_existing_path(path: Path) -> Path:
     return candidate
 
 
-def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
+def _validate_model_eval_metadata_for_plan(output_root: Path, path_plans: Sequence[EvalPathPlan]) -> None:
+    for path_plan in path_plans:
+        model_dir = output_root / slug_component(path_plan.identity.model_id)
+        helper_path = model_dir / MEDARC_EVAL_METADATA_FILENAME
+        if not helper_path.exists():
+            continue
+        try:
+            loaded = json.loads(helper_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Cannot update {helper_path}: invalid JSON.") from exc
+        if not isinstance(loaded, dict):
+            continue
+        existing_model = loaded.get("model")
+        if existing_model and existing_model != path_plan.identity.model_id:
+            raise ValueError(
+                f"Cannot update {helper_path}: model slug is already associated with {existing_model!r}, "
+                f"not {path_plan.identity.model_id!r}."
+            )
+
+
+def _write_model_eval_metadata(output_root: Path, path_plan: EvalPathPlan) -> None:
+    model_dir = output_root / slug_component(path_plan.identity.model_id)
+    try:
+        relative_results_path = path_plan.results_path.relative_to(model_dir).as_posix()
+    except ValueError as exc:
+        raise ValueError(f"Internal bench planning error: {path_plan.results_path} is outside {model_dir}.") from exc
+
+    helper_path = model_dir / MEDARC_EVAL_METADATA_FILENAME
+    payload: dict[str, Any] = {"version": 1, "model": path_plan.identity.model_id, "outputs": {}}
+    if helper_path.exists():
+        try:
+            loaded = json.loads(helper_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Cannot update {helper_path}: invalid JSON.") from exc
+        if isinstance(loaded, dict):
+            payload.update(loaded)
+        existing_model = payload.get("model")
+        if existing_model and existing_model != path_plan.identity.model_id:
+            raise ValueError(
+                f"Cannot update {helper_path}: model slug is already associated with {existing_model!r}, "
+                f"not {path_plan.identity.model_id!r}."
+            )
+
+    outputs = payload.get("outputs")
+    if not isinstance(outputs, dict):
+        outputs = {}
+    outputs[relative_results_path] = {
+        "env_id": path_plan.identity.env_id,
+        "variant_id": path_plan.identity.variant_id,
+        "results_path": relative_results_path,
+    }
+    payload["version"] = 1
+    payload["model"] = path_plan.identity.model_id
+    payload["outputs"] = outputs
+    _write_json_atomic(helper_path, payload)
+
+
+def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, default=make_serializable, sort_keys=True), encoding="utf-8")
+    tmp_path = path.with_name(f".{path.name}.tmp")
+    tmp_path.write_text(json.dumps(payload, default=make_serializable, sort_keys=True), encoding="utf-8")
+    tmp_path.replace(path)
 
 
-def _eval_config_identity_payload(config: Any) -> dict[str, Any]:
-    return {
+def _eval_config_identity_payload(config: Any, raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    payload = {
         "env_args": dict(config.env_args or {}),
         "env_id": config.env_id,
         "model": config.model,
@@ -1603,6 +1483,12 @@ def _eval_config_identity_payload(config: Any) -> dict[str, Any]:
         "rollouts_per_example": config.rollouts_per_example,
         "sampling_args": dict(config.sampling_args or {}),
     }
+    if raw:
+        if "variant_id" in raw:
+            payload["variant_id"] = raw["variant_id"]
+        if "name" in raw:
+            payload["name"] = raw["name"]
+    return payload
 
 
 def _print_toml_bench_plan(eval_configs: Sequence[Any], path_plans: Sequence[EvalPathPlan], *, dry_run: bool) -> None:

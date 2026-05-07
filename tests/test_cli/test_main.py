@@ -119,6 +119,7 @@ def test_toml_bench_dry_run_expands_evals_and_ablations(
 
         [[ablation]]
         env_id = "medqa"
+        name = "shuffle_seed-{env_args.shuffle_seed}"
         num_examples = 1
         rollouts_per_example = 1
         env_args = { shuffle_answers = true }
@@ -145,10 +146,10 @@ def test_toml_bench_dry_run_expands_evals_and_ablations(
     assert exit_code == 0
     assert "TOML Bench Dry Run" in output
     assert "3 eval(s) to dry-run" in output
-    assert "baseline" in output
-    assert "env_args.shuffle_seed-1618" in output
-    assert "env_args.shuffle_seed-9331" in output
-    assert str(tmp_path / "evals" / "gpt-5-mini" / "medqa" / "baseline") in output
+    assert "base" in output
+    assert "shuffle_seed-1618" in output
+    assert "shuffle_seed-9331" in output
+    assert str(tmp_path / "evals" / "gpt-5-mini" / "medqa" / "base") in output
 
 
 def test_repository_smoke_toml_config_dry_runs(capsys: pytest.CaptureFixture[str]) -> None:
@@ -218,8 +219,8 @@ def test_repository_verified_toml_config_dry_run_shows_ablation_variants(capsys:
     output = capsys.readouterr().out
     assert exit_code == 0
     assert "medqa" in output
-    assert "env_args.shuffle_seed-1618" in output
-    assert "runs/evals/openai-gpt-4.1-mini/medqa/env_args.shuffle_answers-true__env_args.shuffle_seed-1618" in output
+    assert "shuffle_seed-1618" in output
+    assert "runs/evals/openai-gpt-4.1-mini/medqa/shuffle_seed-1618" in output
 
 
 def test_repository_open_ended_toml_config_loads_expected_judge_args() -> None:
@@ -276,7 +277,7 @@ def test_toml_bench_dry_run_uses_toml_output_dir(
 
     assert main.main(["bench", "--config", str(config_path), "--dry-run"]) == 0
 
-    assert str(output_dir / "gpt-5-mini" / "medqa") in capsys.readouterr().out
+    assert str(output_dir / "gpt-5-mini" / "medqa" / "base") in capsys.readouterr().out
 
 
 def test_toml_bench_executes_sequentially_to_deterministic_path(
@@ -312,14 +313,26 @@ def test_toml_bench_executes_sequentially_to_deterministic_path(
 
     exit_code = main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir)])
 
-    results_path = output_dir / "gpt-5-mini" / "medqa"
+    results_path = output_dir / "gpt-5-mini" / "medqa" / "base"
     assert exit_code == 0
     assert calls == [results_path]
     assert (results_path / "results.jsonl").exists()
     metadata = json.loads((results_path / "metadata.json").read_text())
-    assert metadata["medarc_config_fingerprint"]
-    assert metadata["variant_id"] is None
-    assert metadata["variant_payload"] is None
+    assert "medarc_config_fingerprint" not in metadata
+    assert "variant_id" not in metadata
+    assert "variant_payload" not in metadata
+    helper = json.loads((output_dir / "gpt-5-mini" / ".medarc_eval_metadata.json").read_text())
+    assert helper == {
+        "model": "gpt-5-mini",
+        "outputs": {
+            "medqa/base": {
+                "env_id": "medqa",
+                "results_path": "medqa/base",
+                "variant_id": "base",
+            }
+        },
+        "version": 1,
+    }
 
 
 def test_toml_bench_defaults_max_concurrent_to_one(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -363,7 +376,7 @@ def test_toml_bench_defaults_max_concurrent_to_one(monkeypatch: pytest.MonkeyPat
     assert captured == [4]
 
 
-def test_toml_bench_refuses_mismatched_resume(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_toml_bench_refuses_existing_output_without_resume(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     config_path = tmp_path / "bench.toml"
     output_dir = tmp_path / "evals"
     _write_config(
@@ -384,6 +397,15 @@ def test_toml_bench_refuses_mismatched_resume(monkeypatch: pytest.MonkeyPatch, t
     monkeypatch.setattr(main, "run_evaluation", fake_run)
 
     assert main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir)]) == 0
+    assert main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir)]) == 1
+
+
+def test_toml_bench_resume_refuses_malformed_existing_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "bench.toml"
+    output_dir = tmp_path / "evals"
     _write_config(
         config_path,
         """
@@ -391,11 +413,22 @@ def test_toml_bench_refuses_mismatched_resume(monkeypatch: pytest.MonkeyPatch, t
 
         [[eval]]
         env_id = "medqa"
-        env_args = { shuffle_seed = 9331 }
         """,
     )
+    results_path = output_dir / "gpt-5-mini" / "medqa" / "base"
+    (results_path / "metadata.json").mkdir(parents=True)
+    (results_path / "results.jsonl").write_text(json.dumps({"example_id": "0"}) + "\n")
+    calls = 0
 
-    assert main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir)]) == 1
+    async def fake_run(config, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return {"outputs": [], "metadata": {}}
+
+    monkeypatch.setattr(main, "run_evaluation", fake_run)
+
+    assert main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir), "--resume"]) == 1
+    assert calls == 0
 
 
 def test_toml_bench_force_archives_existing_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -418,15 +451,55 @@ def test_toml_bench_force_archives_existing_output(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(main, "run_evaluation", fake_run)
 
     assert main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir)]) == 0
-    results_path = output_dir / "gpt-5-mini" / "medqa"
+    results_path = output_dir / "gpt-5-mini" / "medqa" / "base"
     (results_path / "sentinel.txt").write_text("old")
 
     assert main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir), "--force"]) == 0
 
-    archived = list((output_dir / "gpt-5-mini").glob("medqa__old_*"))
+    archived = list((output_dir / "gpt-5-mini" / "medqa").glob("base__old_*"))
     assert len(archived) == 1
     assert (archived[0] / "sentinel.txt").read_text() == "old"
     assert not (results_path / "sentinel.txt").exists()
+
+
+def test_toml_bench_refuses_existing_model_helper_slug_collision_before_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "bench.toml"
+    output_dir = tmp_path / "evals"
+    _write_config(
+        config_path,
+        """
+        model = "gpt/5-mini"
+
+        [[eval]]
+        env_id = "medqa"
+        """,
+    )
+    helper_path = output_dir / "gpt-5-mini" / ".medarc_eval_metadata.json"
+    helper_path.parent.mkdir(parents=True)
+    helper_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "model": "gpt 5-mini",
+                "outputs": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls = 0
+
+    async def fake_run(config, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return {"outputs": [], "metadata": {}}
+
+    monkeypatch.setattr(main, "run_evaluation", fake_run)
+
+    assert main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir)]) == 1
+    assert calls == 0
 
 
 def test_toml_bench_resume_preserves_existing_metadata(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -463,13 +536,13 @@ def test_toml_bench_resume_preserves_existing_metadata(monkeypatch: pytest.Monke
     monkeypatch.setattr(main, "run_evaluation", fake_run)
 
     assert main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir)]) == 0
-    assert main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir)]) == 0
+    assert main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir), "--resume"]) == 0
 
-    metadata = json.loads((output_dir / "gpt-5-mini" / "medqa" / "metadata.json").read_text())
+    metadata = json.loads((output_dir / "gpt-5-mini" / "medqa" / "base" / "metadata.json").read_text())
     assert metadata["avg_reward"] == 0.75
     assert metadata["avg_metrics"] == {"accuracy": 0.75}
     assert metadata["total_tokens"] == 123
-    assert metadata["medarc_config_fingerprint"]
+    assert "medarc_config_fingerprint" not in metadata
 
 
 def test_toml_bench_does_not_patch_upstream_metadata_saves(
@@ -490,8 +563,10 @@ def test_toml_bench_does_not_patch_upstream_metadata_saves(
     )
     saved_metadata: list[dict[str, Any]] = []
 
-    def fake_save_metadata(metadata, _result_path):
+    def fake_save_metadata(metadata, result_path):
         saved_metadata.append(dict(metadata))
+        Path(result_path).mkdir(parents=True, exist_ok=True)
+        Path(result_path, "metadata.json").write_text(json.dumps(metadata))
 
     async def fake_run(config, on_progress=None, **_kwargs):
         metadata = {}
@@ -507,8 +582,10 @@ def test_toml_bench_does_not_patch_upstream_metadata_saves(
     assert main.main(["bench", "--config", str(config_path), "--output-dir", str(tmp_path / "evals")]) == 0
 
     assert saved_metadata == [{}]
-    metadata = json.loads((tmp_path / "evals" / "gpt-5-mini" / "medqa" / "metadata.json").read_text())
-    assert metadata["medarc_config_fingerprint"]
+    metadata = json.loads((tmp_path / "evals" / "gpt-5-mini" / "medqa" / "base" / "metadata.json").read_text())
+    assert "medarc_config_fingerprint" not in metadata
+    assert "variant_id" not in metadata
+    assert "variant_payload" not in metadata
 
 
 def test_single_run_help_lists_env_section_and_header_option(

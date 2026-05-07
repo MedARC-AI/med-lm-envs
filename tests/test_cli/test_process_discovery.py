@@ -271,7 +271,7 @@ def _write_eval_output(path: Path, metadata: dict | None = None) -> None:
 
 def test_discover_run_records_includes_deterministic_eval_outputs(tmp_path: Path) -> None:
     raw_dir = tmp_path / "runs" / "raw"
-    eval_dir = tmp_path / "runs" / "evals" / "gpt-5-mini" / "medqa"
+    eval_dir = tmp_path / "runs" / "evals" / "gpt-5-mini" / "medqa" / "base"
     _write_eval_output(eval_dir)
 
     records = discover_run_records(raw_dir, filter_status=("completed",))
@@ -284,6 +284,8 @@ def test_discover_run_records_includes_deterministic_eval_outputs(tmp_path: Path
     assert record.row_count == 1
     assert record.env_args == {"split": "test"}
     assert record.sampling_args == {"temperature": 0}
+    normalized = load_normalized_metadata(record)
+    assert normalized.variant_id == "base"
 
 
 def test_discover_run_records_includes_deterministic_eval_variants(tmp_path: Path) -> None:
@@ -308,30 +310,22 @@ def test_discover_run_records_includes_deterministic_eval_variants(tmp_path: Pat
     assert normalized.medarc_config_fingerprint_payload == {"env_id": "medqa"}
 
 
-def test_discover_run_records_prefers_bench_index_identity(tmp_path: Path) -> None:
+def test_discover_run_records_enriches_from_model_helper(tmp_path: Path) -> None:
     evals_root = tmp_path / "runs" / "evals"
     eval_dir = evals_root / "gpt-5-mini" / "medqa" / "seed-1618"
     _write_eval_output(eval_dir, {"env_id": "medqa", "model": "gpt-5-mini"})
     _write_json(
-        evals_root / "bench_index.json",
+        evals_root / "gpt-5-mini" / ".medarc_eval_metadata.json",
         {
             "version": 1,
-            "source_config": "configs/eval/example.toml",
-            "evals": [
-                {
-                    "index": 1,
-                    "results_path": str(eval_dir),
-                    "env_id": "medqa",
-                    "model": "gpt-5-mini",
+            "model": "gpt-5-mini",
+            "outputs": {
+                "medqa/seed-1618": {
+                    "env_id": "medqa-canonical",
                     "variant_id": "seed-1618",
-                    "variant_payload": {"env_args": {"shuffle_seed": 1618}},
-                    "env_args": {"shuffle_seed": 1618},
-                    "sampling_args": {"temperature": 0},
-                    "num_examples": 1,
-                    "rollouts_per_example": 1,
-                    "plan_digest": "sha256:abc",
+                    "results_path": "medqa/seed-1618",
                 }
-            ],
+            },
         },
     )
 
@@ -339,45 +333,63 @@ def test_discover_run_records_prefers_bench_index_identity(tmp_path: Path) -> No
 
     assert len(records) == 1
     record = records[0]
-    assert record.manifest.manifest_path == evals_root / "bench_index.json"
-    assert record.manifest.config_source == "configs/eval/example.toml"
-    assert record.manifest.config_checksum == "sha256:abc"
-    assert record.env_args == {"shuffle_seed": 1618}
+    assert record.manifest.manifest_path == eval_dir / "metadata.json"
+    assert record.manifest.config_source is None
+    assert record.manifest.config_checksum is None
+    assert record.manifest_env_id == "medqa-canonical"
     normalized = load_normalized_metadata(record)
     assert normalized.variant_id == "seed-1618"
-    assert normalized.variant_payload == {"env_args": {"shuffle_seed": 1618}}
+    assert normalized.variant_payload is None
 
 
-def test_discover_run_records_bench_index_rejects_missing_artifacts(tmp_path: Path) -> None:
+def test_discover_run_records_ignores_stale_model_helper_entries(tmp_path: Path) -> None:
     evals_root = tmp_path / "runs" / "evals"
     _write_json(
-        evals_root / "bench_index.json",
+        evals_root / "gpt-5-mini" / ".medarc_eval_metadata.json",
         {
             "version": 1,
-            "evals": [
-                {
-                    "index": 1,
-                    "results_path": str(evals_root / "gpt-5-mini" / "medqa"),
+            "model": "gpt-5-mini",
+            "outputs": {
+                "medqa/base": {
                     "env_id": "medqa",
-                    "model": "gpt-5-mini",
-                    "variant_id": None,
-                    "variant_payload": None,
-                    "env_args": {},
-                    "sampling_args": {},
-                    "num_examples": 1,
-                    "rollouts_per_example": 1,
-                    "plan_digest": "sha256:abc",
+                    "variant_id": "base",
+                    "results_path": "medqa/base",
                 }
-            ],
+            },
         },
     )
 
-    try:
-        discover_run_records(tmp_path / "runs" / "raw", filter_status=("completed",))
-    except ValueError as exc:
-        assert "required artifact is missing" in str(exc)
-    else:
-        raise AssertionError("bench_index with missing artifacts should fail validation")
+    records = discover_run_records(tmp_path / "runs" / "raw", filter_status=("completed",))
+
+    assert records == []
+
+
+def test_discover_run_records_ignores_model_helper_entries_outside_model_dir(tmp_path: Path) -> None:
+    evals_root = tmp_path / "runs" / "evals"
+    eval_dir = evals_root / "gpt-5-mini" / "medqa" / "base"
+    _write_eval_output(eval_dir, {"env_id": "medqa", "model": "gpt-5-mini"})
+    _write_json(
+        evals_root / "other-model" / ".medarc_eval_metadata.json",
+        {
+            "version": 1,
+            "model": "other-model",
+            "outputs": {
+                "../gpt-5-mini/medqa/base": {
+                    "env_id": "wrong-env",
+                    "variant_id": "wrong-variant",
+                    "results_path": "../gpt-5-mini/medqa/base",
+                }
+            },
+        },
+    )
+
+    records = discover_run_records(tmp_path / "runs" / "raw", filter_status=("completed",))
+
+    assert len(records) == 1
+    record = records[0]
+    assert record.manifest_env_id == "medqa"
+    normalized = load_normalized_metadata(record)
+    assert normalized.variant_id == "base"
 
 
 def test_discover_run_records_includes_direct_upstream_uuid_outputs(tmp_path: Path) -> None:
@@ -394,7 +406,7 @@ def test_discover_run_records_includes_direct_upstream_uuid_outputs(tmp_path: Pa
 
 
 def test_discover_run_records_deduplicates_overlapping_eval_roots(tmp_path: Path) -> None:
-    eval_dir = tmp_path / "runs" / "evals" / "gpt-5-mini" / "medqa"
+    eval_dir = tmp_path / "runs" / "evals" / "gpt-5-mini" / "medqa" / "base"
     _write_eval_output(eval_dir)
 
     records = discover_run_records(tmp_path / "runs", filter_status=("completed",))
