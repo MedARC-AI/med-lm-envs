@@ -310,84 +310,16 @@ def test_discover_run_records_includes_deterministic_eval_variants(tmp_path: Pat
     assert normalized.medarc_config_fingerprint_payload == {"env_id": "medqa"}
 
 
-def test_discover_run_records_enriches_from_model_helper(tmp_path: Path) -> None:
-    evals_root = tmp_path / "runs" / "evals"
-    eval_dir = evals_root / "gpt-5-mini" / "medqa" / "seed-1618"
-    _write_eval_output(eval_dir, {"env_id": "medqa", "model": "gpt-5-mini"})
-    _write_json(
-        evals_root / "gpt-5-mini" / ".medarc_eval_metadata.json",
-        {
-            "version": 1,
-            "model": "gpt-5-mini",
-            "outputs": {
-                "medqa/seed-1618": {
-                    "env_id": "medqa-canonical",
-                    "variant_id": "seed-1618",
-                    "results_path": "medqa/seed-1618",
-                }
-            },
-        },
-    )
+def test_discover_run_records_preserves_variant_for_env_slug_with_double_hyphen(tmp_path: Path) -> None:
+    eval_dir = tmp_path / "runs" / "evals" / "gpt-5-mini" / "foo--bar" / "base"
+    _write_eval_output(eval_dir, {"env_id": "foo--bar", "model": "gpt-5-mini"})
 
     records = discover_run_records(tmp_path / "runs" / "raw", filter_status=("completed",))
 
     assert len(records) == 1
     record = records[0]
-    assert record.manifest.manifest_path == eval_dir / "metadata.json"
-    assert record.manifest.config_source is None
-    assert record.manifest.config_checksum is None
-    assert record.manifest_env_id == "medqa-canonical"
-    normalized = load_normalized_metadata(record)
-    assert normalized.variant_id == "seed-1618"
-    assert normalized.variant_payload is None
-
-
-def test_discover_run_records_ignores_stale_model_helper_entries(tmp_path: Path) -> None:
-    evals_root = tmp_path / "runs" / "evals"
-    _write_json(
-        evals_root / "gpt-5-mini" / ".medarc_eval_metadata.json",
-        {
-            "version": 1,
-            "model": "gpt-5-mini",
-            "outputs": {
-                "medqa/base": {
-                    "env_id": "medqa",
-                    "variant_id": "base",
-                    "results_path": "medqa/base",
-                }
-            },
-        },
-    )
-
-    records = discover_run_records(tmp_path / "runs" / "raw", filter_status=("completed",))
-
-    assert records == []
-
-
-def test_discover_run_records_ignores_model_helper_entries_outside_model_dir(tmp_path: Path) -> None:
-    evals_root = tmp_path / "runs" / "evals"
-    eval_dir = evals_root / "gpt-5-mini" / "medqa" / "base"
-    _write_eval_output(eval_dir, {"env_id": "medqa", "model": "gpt-5-mini"})
-    _write_json(
-        evals_root / "other-model" / ".medarc_eval_metadata.json",
-        {
-            "version": 1,
-            "model": "other-model",
-            "outputs": {
-                "../gpt-5-mini/medqa/base": {
-                    "env_id": "wrong-env",
-                    "variant_id": "wrong-variant",
-                    "results_path": "../gpt-5-mini/medqa/base",
-                }
-            },
-        },
-    )
-
-    records = discover_run_records(tmp_path / "runs" / "raw", filter_status=("completed",))
-
-    assert len(records) == 1
-    record = records[0]
-    assert record.manifest_env_id == "medqa"
+    assert record.model_id == "gpt-5-mini"
+    assert record.manifest_env_id == "foo--bar"
     normalized = load_normalized_metadata(record)
     assert normalized.variant_id == "base"
 

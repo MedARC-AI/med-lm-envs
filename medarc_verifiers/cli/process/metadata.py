@@ -221,13 +221,7 @@ def _resolve_metadata_context(
             record.rollouts_per_example,
             metadata_payload.rollouts_per_example if metadata_payload else None,
         ),
-        variant_id=_string_or_none(
-            _raw_metadata_value(
-                raw_metadata,
-                MEDARC_VARIANT_ID_KEY,
-                (metadata_payload.variant_id if metadata_payload else None) or record_variant_id,
-            )
-        ),
+        variant_id=record_variant_id or _string_or_none(metadata_payload.variant_id if metadata_payload else None),
         variant_payload=_mapping_or_none(
             _raw_metadata_value(
                 raw_metadata,

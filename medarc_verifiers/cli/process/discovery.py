@@ -11,10 +11,7 @@ from typing import Any, Dict, Iterator, Mapping, Sequence
 
 from pydantic import ValidationError
 
-from medarc_verifiers.cli.eval_identity import (
-    MEDARC_EVAL_METADATA_FILENAME,
-    MEDARC_VARIANT_ID_KEY,
-)
+from medarc_verifiers.cli.eval_identity import MEDARC_VARIANT_ID_KEY
 from medarc_verifiers.cli._manifest import (
     MANIFEST_FILENAME,
     ManifestJobEntry,
@@ -374,7 +371,6 @@ def _iter_eval_output_records(evals_root: Path) -> Iterator[RunRecord]:
         logger.warning("Failed to scan eval outputs under %s: %s", evals_root, exc)
         return
 
-    helper_entries = _load_model_helper_entries(evals_root)
     seen: set[Path] = set()
     for results_path in results_paths:
         results_dir = results_path.parent
@@ -387,7 +383,7 @@ def _iter_eval_output_records(evals_root: Path) -> Iterator[RunRecord]:
         metadata_path = results_dir / METADATA_FILENAME
         if not metadata_path.exists():
             continue
-        record = _build_eval_output_record(evals_root, results_dir, helper_entries.get(_dedupe_key(results_dir)))
+        record = _build_eval_output_record(evals_root, results_dir)
         if record is not None:
             yield record
 
@@ -395,14 +391,13 @@ def _iter_eval_output_records(evals_root: Path) -> Iterator[RunRecord]:
 def _build_eval_output_record(
     evals_root: Path,
     results_dir: Path,
-    helper_entry: Mapping[str, Any] | None = None,
 ) -> RunRecord | None:
     metadata_path = results_dir / METADATA_FILENAME
     metadata_payload = _read_metadata_payload(metadata_path)
     if metadata_payload is None:
         return None
 
-    layout = _infer_eval_output_layout(evals_root, results_dir, metadata_payload, helper_entry)
+    layout = _infer_eval_output_layout(evals_root, results_dir, metadata_payload)
     updated_at = _path_timestamp(metadata_path)
     job_run_id = layout["job_run_id"]
     job_id = layout["job_id"]
@@ -466,7 +461,6 @@ def _infer_eval_output_layout(
     evals_root: Path,
     results_dir: Path,
     metadata_payload: Mapping[str, Any],
-    helper_entry: Mapping[str, Any] | None = None,
 ) -> dict[str, str]:
     try:
         parts = results_dir.relative_to(evals_root).parts
@@ -475,21 +469,16 @@ def _infer_eval_output_layout(
 
     metadata_env_id = _string_or_none(metadata_payload.get("env_id"))
     metadata_model = _string_or_none(metadata_payload.get("model"))
-    helper_env_id = _string_or_none(helper_entry.get("env_id") if helper_entry else None)
-    helper_variant_id = _string_or_none(helper_entry.get("variant_id") if helper_entry else None)
-    parent_name = results_dir.parent.name
-    if "--" in parent_name and len(parts) >= 2:
-        env_from_parent, model_from_parent = parent_name.split("--", 1)
-        env_id = helper_env_id or metadata_env_id or env_from_parent
+    if len(parts) == 2 and "--" in parts[0]:
+        env_from_parent, model_from_parent = parts[0].split("--", 1)
+        env_id = metadata_env_id or env_from_parent
         model_id = metadata_model or model_from_parent
         job_run_id = results_dir.name
-        variant_id = helper_variant_id
+        variant_id = None
     else:
         model_id = metadata_model or (parts[0] if len(parts) >= 1 else "unknown")
-        env_id = helper_env_id or metadata_env_id or (parts[1] if len(parts) >= 2 else results_dir.name)
-        variant_id = helper_variant_id or (
-            parts[2] if len(parts) >= 3 else _string_or_none(metadata_payload.get(MEDARC_VARIANT_ID_KEY))
-        )
+        env_id = metadata_env_id or (parts[1] if len(parts) >= 2 else results_dir.name)
+        variant_id = parts[2] if len(parts) >= 3 else _string_or_none(metadata_payload.get(MEDARC_VARIANT_ID_KEY))
         job_run_id = "::".join(part for part in (model_id, env_id, variant_id) if part)
 
     return {
@@ -499,43 +488,6 @@ def _infer_eval_output_layout(
         "env_id": env_id,
         "variant_id": variant_id or "",
     }
-
-
-def _load_model_helper_entries(evals_root: Path) -> dict[Path, Mapping[str, Any]]:
-    entries: dict[Path, Mapping[str, Any]] = {}
-    try:
-        helper_paths = sorted(evals_root.glob(f"*/{MEDARC_EVAL_METADATA_FILENAME}"))
-    except OSError as exc:  # noqa: FBT003
-        logger.warning("Failed to scan eval metadata helpers under %s: %s", evals_root, exc)
-        return entries
-
-    for helper_path in helper_paths:
-        payload = _read_metadata_payload(helper_path)
-        if payload is None:
-            continue
-        raw_outputs = payload.get("outputs")
-        if not isinstance(raw_outputs, Mapping):
-            continue
-        model_dir = helper_path.parent
-        for key, raw_entry in raw_outputs.items():
-            if not isinstance(raw_entry, Mapping):
-                continue
-            raw_results_path = raw_entry.get("results_path") or key
-            if not isinstance(raw_results_path, str) or not raw_results_path:
-                continue
-            relative_results_path = Path(raw_results_path)
-            if relative_results_path.is_absolute():
-                continue
-            results_dir = (model_dir / relative_results_path).resolve()
-            try:
-                results_dir.relative_to(model_dir.resolve())
-            except ValueError:
-                continue
-            if not (results_dir / METADATA_FILENAME).exists() or not (results_dir / RESULTS_FILENAME).exists():
-                continue
-            entries[_dedupe_key(results_dir)] = raw_entry
-    return entries
-
 
 def _read_metadata_payload(path: Path) -> Mapping[str, Any] | None:
     try:

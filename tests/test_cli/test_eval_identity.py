@@ -77,6 +77,29 @@ def test_conflicting_name_and_variant_id_fail(tmp_path: Path) -> None:
         )
 
 
+def test_variant_id_must_be_path_safe(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="variant_id .* is not path-safe"):
+        plan_eval_paths(
+            [{"model": "gpt-5-mini", "env_id": "medqa", "variant_id": "shuffle seed = 1618"}],
+            output_root=tmp_path,
+        )
+
+
+def test_name_template_result_must_be_path_safe(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="name .* is not path-safe"):
+        plan_eval_paths(
+            [
+                {
+                    "model": "gpt-5-mini",
+                    "env_id": "medqa",
+                    "env_args": {"difficulty": "very hard"},
+                    "name": "{env_args.difficulty}",
+                }
+            ],
+            output_root=tmp_path,
+        )
+
+
 def test_duplicate_model_env_requires_explicit_variant(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Duplicate TOML eval identity"):
         plan_eval_paths(

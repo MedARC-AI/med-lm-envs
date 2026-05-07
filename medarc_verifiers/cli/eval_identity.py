@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 MEDARC_VARIANT_ID_KEY = "variant_id"
-MEDARC_EVAL_METADATA_FILENAME = ".medarc_eval_metadata.json"
 BASE_VARIANT_ID = "base"
 
 _SLUG_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
@@ -86,12 +85,7 @@ def plan_eval_paths(raw_configs: Sequence[Mapping[str, Any]], *, output_root: st
         variant_id = _variant_id(config, index=idx + 1)
 
         identity = EvalIdentity(model_id=model_id, env_id=env_id, variant_id=variant_id)
-        path = (
-            Path(output_root)
-            / slug_component(model_id)
-            / slug_component(env_id)
-            / slug_component(variant_id, max_length=_MAX_VARIANT_ID_LENGTH)
-        )
+        path = Path(output_root) / slug_component(model_id) / slug_component(env_id) / variant_id
         plans.append(EvalPathPlan(identity=identity, results_path=path))
 
     _ensure_unique_identities(plans)
@@ -179,6 +173,11 @@ def _normalize_variant(value: Any, *, config: Mapping[str, Any], field: str, ind
     text = _expand_variant_template(str(value).strip(), config)
     if not text:
         raise ValueError(f"TOML eval {index} {field} must not be empty.")
+    if slug_component(text, max_length=_MAX_VARIANT_ID_LENGTH) != text:
+        raise ValueError(
+            f'TOML eval {index} {field} {text!r} is not path-safe. '
+            'Use only letters, numbers, ".", "_", and "-", for example "shuffle_seed-1618".'
+        )
     return text
 
 
@@ -255,7 +254,6 @@ __all__ = [
     "BASE_VARIANT_ID",
     "EvalIdentity",
     "EvalPathPlan",
-    "MEDARC_EVAL_METADATA_FILENAME",
     "MEDARC_VARIANT_ID_KEY",
     "generate_variant_id",
     "plan_eval_paths",

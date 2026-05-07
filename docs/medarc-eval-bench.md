@@ -95,18 +95,17 @@ Non-variant evals use the reserved variant id `base` and write to
 an explicit `variant_id` or `name`. `name` may use simple templates such as
 `shuffle_seed-{env_args.shuffle_seed}` after ablation expansion.
 
-## MedARC Metadata
+`variant_id` and `name` are path identities. They must already be path-safe:
+use only letters, numbers, `.`, `_`, and `-`. For example,
+`variant_id = "shuffle_seed-1618"` is valid, while
+`variant_id = "shuffle seed = 1618"` fails with a clear error.
 
-Upstream `metadata.json` remains a normal `verifiers` file. MedARC-specific
-identity lives in a small model-level helper:
+## Metadata
 
-```text
-runs/evals/<model>/.medarc_eval_metadata.json
-```
-
-The helper maps model-relative results paths such as `medqa/base` to `env_id`
-and `variant_id`. Processing scans output directories first, so stale helper
-entries do not hide or create process records.
+Upstream `metadata.json` remains a normal `verifiers` file. MedARC does not
+write separate bench metadata. Processing recovers exact model and environment
+identity from upstream metadata, and recovers variant identity from the
+deterministic path segment.
 
 ## Resume and Force
 

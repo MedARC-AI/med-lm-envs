@@ -134,9 +134,9 @@ target as upstream `EvalConfig.resume_path` and trusts upstream resume
 validation. `--force` archives the existing target and reruns.
 
 `medarc-eval bench` does not monkey-patch upstream metadata saving and does not
-write MedARC identity into upstream `metadata.json`. MedARC-specific identity
-lives in `runs/evals/<model>/.medarc_eval_metadata.json`, keyed by
-model-relative results paths such as `medqa/base`.
+write MedARC identity into upstream `metadata.json`. Variant identity is the
+deterministic path segment, so `variant_id` / `name` values must already be
+path-safe.
 
 `medarc_verifiers/cli/_manifest.py` now only contains the legacy manifest schema
 needed by processing to read historical `runs/raw` outputs.
@@ -147,7 +147,6 @@ TOML bench outputs include:
 
 - `results.jsonl`: per-example rollouts
 - `metadata.json`: eval configuration and metrics snapshot
-- `.medarc_eval_metadata.json`: minimal model-level MedARC identity helper
 
 The runner executes via `verifiers.utils.eval_utils.run_evaluation()` from
 single-run mode and the TOML bench code in `medarc_verifiers/cli/main.py`.
@@ -162,8 +161,8 @@ Processing:
 
 1. Discovers TOML bench outputs from `runs/evals` by scanning directories, and
    legacy manifest outputs from `runs/raw`.
-2. Normalizes identity from upstream `metadata.json`, paths, and optional
-   model-level helper metadata; legacy outputs still use manifest fields.
+2. Normalizes identity from upstream `metadata.json` and paths; legacy outputs
+   still use manifest fields.
 3. Loads rows from `results.jsonl`, drops large prompt/completion fields, and
    flattens `token_usage`.
 4. Aggregates rows per model and environment, preserving variant ids.

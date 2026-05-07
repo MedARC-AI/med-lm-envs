@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import logging
 import os
 import shutil
@@ -19,7 +18,6 @@ from pydantic import ValidationError
 from rich.console import Console
 from rich.table import Table
 from verifiers.utils.eval_utils import run_evaluation
-from verifiers.utils.save_utils import make_serializable
 
 from medarc_verifiers.cli._constants import (
     BENCH_COMMAND,
@@ -36,11 +34,9 @@ from medarc_verifiers.cli._constants import (
 from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, EnvironmentExportConfig
 from medarc_verifiers.cli._single_run import run_single_mode
 from medarc_verifiers.cli.eval_identity import (
-    MEDARC_EVAL_METADATA_FILENAME,
     EvalPathPlan,
     generate_variant_id,
     plan_eval_paths,
-    slug_component,
 )
 from medarc_verifiers.cli.hf import HFSyncConfig, sync_files_to_hub
 from medarc_verifiers.cli.process import PROCESS_DEFAULT_STATUS_FILTER, ProcessOptions, ProcessResult, run_process
@@ -1281,7 +1277,7 @@ def _run_toml_bench(args: argparse.Namespace) -> int:
     _print_toml_bench_plan(eval_configs, path_plans, dry_run=bool(args.dry_run))
     if args.dry_run:
         return 0
-    return _execute_toml_plan(eval_configs, path_plans, output_root, args)
+    return _execute_toml_plan(eval_configs, path_plans, args)
 
 
 def _prepare_toml_raw_configs(raw_configs: Sequence[dict[str, Any]], args: argparse.Namespace) -> list[dict[str, Any]]:
@@ -1337,11 +1333,9 @@ def _select_toml_plan(
 def _execute_toml_plan(
     eval_configs: Sequence[Any],
     path_plans: Sequence[EvalPathPlan],
-    output_root: Path,
     args: argparse.Namespace,
 ) -> int:
     failures = 0
-    _validate_model_eval_metadata_for_plan(output_root, path_plans)
     for index, (config, path_plan) in enumerate(zip(eval_configs, path_plans), start=1):
         results_path = path_plan.results_path
         try:
@@ -1353,7 +1347,6 @@ def _execute_toml_plan(
             run_config = config.model_copy(update={"resume_path": results_path, "save_results": True})
             logger.info("Running TOML eval %d/%d: %s on %s", index, len(eval_configs), config.env_id, config.model)
             asyncio.run(_run_one_toml_eval(run_config))
-            _write_model_eval_metadata(output_root, path_plan)
         except Exception as exc:  # noqa: BLE001
             failures += 1
             logger.exception("TOML eval %d failed: %s", index, exc)
@@ -1408,70 +1401,6 @@ def _archive_existing_path(path: Path) -> Path:
         suffix += 1
     shutil.move(str(path), str(candidate))
     return candidate
-
-
-def _validate_model_eval_metadata_for_plan(output_root: Path, path_plans: Sequence[EvalPathPlan]) -> None:
-    for path_plan in path_plans:
-        model_dir = output_root / slug_component(path_plan.identity.model_id)
-        helper_path = model_dir / MEDARC_EVAL_METADATA_FILENAME
-        if not helper_path.exists():
-            continue
-        try:
-            loaded = json.loads(helper_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Cannot update {helper_path}: invalid JSON.") from exc
-        if not isinstance(loaded, dict):
-            continue
-        existing_model = loaded.get("model")
-        if existing_model and existing_model != path_plan.identity.model_id:
-            raise ValueError(
-                f"Cannot update {helper_path}: model slug is already associated with {existing_model!r}, "
-                f"not {path_plan.identity.model_id!r}."
-            )
-
-
-def _write_model_eval_metadata(output_root: Path, path_plan: EvalPathPlan) -> None:
-    model_dir = output_root / slug_component(path_plan.identity.model_id)
-    try:
-        relative_results_path = path_plan.results_path.relative_to(model_dir).as_posix()
-    except ValueError as exc:
-        raise ValueError(f"Internal bench planning error: {path_plan.results_path} is outside {model_dir}.") from exc
-
-    helper_path = model_dir / MEDARC_EVAL_METADATA_FILENAME
-    payload: dict[str, Any] = {"version": 1, "model": path_plan.identity.model_id, "outputs": {}}
-    if helper_path.exists():
-        try:
-            loaded = json.loads(helper_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Cannot update {helper_path}: invalid JSON.") from exc
-        if isinstance(loaded, dict):
-            payload.update(loaded)
-        existing_model = payload.get("model")
-        if existing_model and existing_model != path_plan.identity.model_id:
-            raise ValueError(
-                f"Cannot update {helper_path}: model slug is already associated with {existing_model!r}, "
-                f"not {path_plan.identity.model_id!r}."
-            )
-
-    outputs = payload.get("outputs")
-    if not isinstance(outputs, dict):
-        outputs = {}
-    outputs[relative_results_path] = {
-        "env_id": path_plan.identity.env_id,
-        "variant_id": path_plan.identity.variant_id,
-        "results_path": relative_results_path,
-    }
-    payload["version"] = 1
-    payload["model"] = path_plan.identity.model_id
-    payload["outputs"] = outputs
-    _write_json_atomic(helper_path, payload)
-
-
-def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f".{path.name}.tmp")
-    tmp_path.write_text(json.dumps(payload, default=make_serializable, sort_keys=True), encoding="utf-8")
-    tmp_path.replace(path)
 
 
 def _eval_config_identity_payload(config: Any, raw: Mapping[str, Any] | None = None) -> dict[str, Any]:

@@ -113,7 +113,6 @@ medarc-eval winrate --list-models
 runs/
 ├── evals/                        # Raw TOML bench outputs
 │   └── <model>/
-│       ├── .medarc_eval_metadata.json
 │       └── <env>/
 │           └── <variant>/
 │               ├── results.jsonl

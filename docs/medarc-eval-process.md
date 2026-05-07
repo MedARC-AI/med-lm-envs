@@ -57,10 +57,9 @@ On-disk model and env path components are slugified, so filenames may not exactl
 ### By Completion Status
 
 For current TOML bench outputs, processing scans for directories containing
-`metadata.json` and `results.jsonl`. When a model-level
-`.medarc_eval_metadata.json` helper exists, processing uses it only to enrich
-matching scanned paths with MedARC `env_id` / `variant_id`. Stale helper entries
-are ignored. Ad hoc upstream outputs fall back to metadata/path inference.
+`metadata.json` and `results.jsonl`. Model and environment identity come from
+upstream metadata when available; variant identity comes from the deterministic
+path segment. Ad hoc upstream outputs fall back to metadata/path inference.
 
 For legacy YAML-runner outputs, `medarc-eval process` reads
 `runs/raw/<run_id>/run_manifest.json` and only selects jobs whose manifest
@@ -86,9 +85,7 @@ medarc-eval process --max-results-missing-pct 100
 ```
 
 For TOML bench outputs, this gate uses `metadata.json` values for expected rows
-and the observed `results.jsonl` row count. Model and environment identity come
-from upstream metadata and path inference, with variant identity enriched by the
-model-level helper when present:
+and the observed `results.jsonl` row count:
 
 - `expected_rows = num_examples * rollouts_per_example`
 - `observed_rows = results.jsonl row count`

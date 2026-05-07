@@ -321,18 +321,7 @@ def test_toml_bench_executes_sequentially_to_deterministic_path(
     assert "medarc_config_fingerprint" not in metadata
     assert "variant_id" not in metadata
     assert "variant_payload" not in metadata
-    helper = json.loads((output_dir / "gpt-5-mini" / ".medarc_eval_metadata.json").read_text())
-    assert helper == {
-        "model": "gpt-5-mini",
-        "outputs": {
-            "medqa/base": {
-                "env_id": "medqa",
-                "results_path": "medqa/base",
-                "variant_id": "base",
-            }
-        },
-        "version": 1,
-    }
+    assert not (output_dir / "gpt-5-mini" / ".medarc_eval_metadata.json").exists()
 
 
 def test_toml_bench_defaults_max_concurrent_to_one(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -460,46 +449,6 @@ def test_toml_bench_force_archives_existing_output(monkeypatch: pytest.MonkeyPat
     assert len(archived) == 1
     assert (archived[0] / "sentinel.txt").read_text() == "old"
     assert not (results_path / "sentinel.txt").exists()
-
-
-def test_toml_bench_refuses_existing_model_helper_slug_collision_before_run(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    config_path = tmp_path / "bench.toml"
-    output_dir = tmp_path / "evals"
-    _write_config(
-        config_path,
-        """
-        model = "gpt/5-mini"
-
-        [[eval]]
-        env_id = "medqa"
-        """,
-    )
-    helper_path = output_dir / "gpt-5-mini" / ".medarc_eval_metadata.json"
-    helper_path.parent.mkdir(parents=True)
-    helper_path.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "model": "gpt 5-mini",
-                "outputs": {},
-            }
-        ),
-        encoding="utf-8",
-    )
-    calls = 0
-
-    async def fake_run(config, **_kwargs):
-        nonlocal calls
-        calls += 1
-        return {"outputs": [], "metadata": {}}
-
-    monkeypatch.setattr(main, "run_evaluation", fake_run)
-
-    assert main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir)]) == 1
-    assert calls == 0
 
 
 def test_toml_bench_resume_preserves_existing_metadata(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
