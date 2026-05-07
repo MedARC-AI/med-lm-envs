@@ -20,7 +20,7 @@ from medarc_verifiers.cli._constants import (
     DEFAULT_API_KEY_VAR,
     DEFAULT_ENDPOINTS_PATH,
 )
-from medarc_verifiers.cli.verifiers_adapter import build_eval_config
+from medarc_verifiers.cli.upstream_eval import build_eval_config
 from medarc_verifiers.cli.utils.env_args import EnvParam, MissingEnvParamError, gather_env_cli_metadata, merge_env_args
 from medarc_verifiers.cli.utils.overrides import build_cli_override
 from medarc_verifiers.cli.utils.resume import (

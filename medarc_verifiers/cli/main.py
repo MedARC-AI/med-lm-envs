@@ -46,7 +46,7 @@ from medarc_verifiers.cli.utils.shared import (
     normalize_dataset_ids,
     normalize_model_ids,
 )
-from medarc_verifiers.cli.verifiers_adapter import EvalConfigOverrides, build_eval_config, load_toml_eval_configs
+from medarc_verifiers.cli.upstream_eval import EvalConfigOverrides, build_eval_config, load_toml_eval_configs
 from medarc_verifiers.utils.pathing import resolve_under
 from medarc_verifiers.cli.winrate import (
     WinrateConfig,
