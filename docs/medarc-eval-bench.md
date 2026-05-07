@@ -107,23 +107,33 @@ write separate bench metadata. Processing recovers exact model and environment
 identity from upstream metadata, and recovers variant identity from the
 deterministic path segment.
 
-## Resume and Force
+## Output Root, Resume, and Force
 
-Bench writes each eval to a deterministic result directory. Existing output
-reuse is explicit:
+Bench writes each eval to a deterministic result directory. If neither
+`--output-dir` nor TOML `output_dir` is set, the output root defaults to
+`runs/evals`.
+
+Existing valid outputs resume automatically. This makes Slurm retries
+idempotent for a fixed `--eval-index`:
 
 ```bash
-# Resume an existing deterministic output using upstream resume behavior
-medarc-eval bench --config configs/eval/medmarks-verified.toml --resume
+medarc-eval bench --config configs/eval/medmarks-verified.toml --eval-index "$SLURM_ARRAY_TASK_ID"
+```
 
+If the deterministic target already contains both `metadata.json` and
+`results.jsonl`, MedARC passes that path to upstream `verifiers` as
+`resume_path` and lets upstream resume. If the target exists but is malformed or
+partial, bench fails unless `--force` is set:
+
+```bash
 # Archive existing deterministic outputs and rerun
 medarc-eval bench --config configs/eval/medmarks-verified.toml --force
 ```
 
-Without `--resume` or `--force`, an existing deterministic output fails.
-`--resume` delegates compatibility checks to upstream `verifiers`; MedARC does
-not maintain a sampling-argument allowlist or fingerprint blocker for resume
-safety. New provider arguments pass through to upstream.
+`--resume` is still accepted for compatibility, but deterministic bench outputs
+resume automatically when valid artifacts exist. MedARC does not maintain a
+sampling-argument allowlist or fingerprint blocker for resume safety. New
+provider arguments pass through to upstream.
 
 ## Common Flags
 
@@ -132,8 +142,8 @@ safety. New provider arguments pass through to upstream.
 | `--config PATH` | Required path to an upstream TOML eval config |
 | `--dry-run` | Resolve evals and print the deterministic plan |
 | `--force` | Archive existing deterministic output and rerun |
-| `--resume` | Resume an existing deterministic output via upstream `verifiers` |
-| `--output-dir PATH` | Override the config output directory |
+| `--resume` | Compatibility flag; valid deterministic outputs resume automatically |
+| `--output-dir PATH` | Override the config output directory, default `runs/evals` |
 | `--env-dir PATH` | Directory containing local environments |
 | `--endpoints-path PATH` | Endpoint registry path, default `configs/endpoints.toml` |
 | `--api-base-url URL` | Override API base URL for every eval |

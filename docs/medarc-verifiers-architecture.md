@@ -128,10 +128,11 @@ TOML bench writes eval outputs under deterministic directories:
 - Non-variant evals: `runs/evals/<model>/<env>/base/`
 - Variant evals: `runs/evals/<model>/<env>/<variant_id>/`
 
-Existing output reuse is explicit. Without `--resume` or `--force`, bench fails
-when the target directory already exists. `--resume` passes the deterministic
-target as upstream `EvalConfig.resume_path` and trusts upstream resume
-validation. `--force` archives the existing target and reruns.
+If neither `--output-dir` nor TOML `output_dir` is set, the output root
+defaults to `runs/evals`. Existing valid outputs resume automatically: bench
+passes the deterministic target as upstream `EvalConfig.resume_path` and trusts
+upstream resume validation. Partial or malformed existing targets fail unless
+`--force` archives the existing target and reruns.
 
 `medarc-eval bench` does not monkey-patch upstream metadata saving and does not
 write MedARC identity into upstream `metadata.json`. Variant identity is the

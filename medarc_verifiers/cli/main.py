@@ -69,7 +69,11 @@ def build_batch_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("-c", "--config", required=True, type=Path, help="Path to an upstream TOML eval config file.")
     parser.add_argument("--force", action="store_true", help="Archive existing deterministic output and rerun.")
-    parser.add_argument("--resume", action="store_true", help="Resume an existing deterministic output path.")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Accepted for compatibility; deterministic bench outputs resume automatically when valid artifacts exist.",
+    )
     parser.add_argument("--output-dir", type=Path, help="Override the output directory from the configuration.")
     parser.add_argument(
         "--env-dir",
@@ -1342,7 +1346,6 @@ def _execute_toml_plan(
             _prepare_toml_results_dir(
                 results_path,
                 force=bool(args.force),
-                resume=bool(args.resume),
             )
             run_config = config.model_copy(update={"resume_path": results_path, "save_results": True})
             logger.info("Running TOML eval %d/%d: %s on %s", index, len(eval_configs), config.env_id, config.model)
@@ -1367,7 +1370,6 @@ def _prepare_toml_results_dir(
     results_path: Path,
     *,
     force: bool,
-    resume: bool,
 ) -> None:
     if results_path.exists() and force:
         _archive_existing_path(results_path)
@@ -1377,14 +1379,9 @@ def _prepare_toml_results_dir(
     if results_path.exists():
         has_metadata = metadata_path.is_file()
         has_results = results_file.is_file()
-        if not resume:
-            raise ValueError(
-                f"Output already exists: {results_path}. Use --resume to continue this output, "
-                "--force to archive and rerun, or add variant_id/name if this is a distinct eval."
-            )
         if not (has_metadata and has_results):
             raise ValueError(
-                f"Cannot resume {results_path}: metadata.json and results.jsonl are both required. "
+                f"Cannot use existing output {results_path}: metadata.json and results.jsonl are both required. "
                 "Use --force to archive and rerun."
             )
         return
