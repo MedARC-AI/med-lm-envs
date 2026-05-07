@@ -202,6 +202,8 @@ def _resolve_metadata_context(
         alt_index = extract_rollout_index(record.results_dir_name)
         if alt_index:
             rollout_index = alt_index
+    record_variant_id = _string_or_none(record.env_config.get("variant_id") if record.env_config else None)
+    record_variant_payload = _mapping_or_none(record.env_config.get("variant_payload") if record.env_config else None)
     return _ResolvedMetadataContext(
         raw_metadata=raw_metadata,
         manifest_env_id=manifest_env_id,
@@ -221,13 +223,17 @@ def _resolve_metadata_context(
             metadata_payload.rollouts_per_example if metadata_payload else None,
         ),
         variant_id=_string_or_none(
-            _raw_metadata_value(raw_metadata, MEDARC_VARIANT_ID_KEY, metadata_payload.variant_id if metadata_payload else None)
+            _raw_metadata_value(
+                raw_metadata,
+                MEDARC_VARIANT_ID_KEY,
+                (metadata_payload.variant_id if metadata_payload else None) or record_variant_id,
+            )
         ),
         variant_payload=_mapping_or_none(
             _raw_metadata_value(
                 raw_metadata,
                 MEDARC_VARIANT_PAYLOAD_KEY,
-                metadata_payload.variant_payload if metadata_payload else None,
+                (metadata_payload.variant_payload if metadata_payload else None) or record_variant_payload,
             )
         ),
         medarc_config_fingerprint=_string_or_none(

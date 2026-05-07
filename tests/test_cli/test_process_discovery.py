@@ -308,6 +308,78 @@ def test_discover_run_records_includes_deterministic_eval_variants(tmp_path: Pat
     assert normalized.medarc_config_fingerprint_payload == {"env_id": "medqa"}
 
 
+def test_discover_run_records_prefers_bench_index_identity(tmp_path: Path) -> None:
+    evals_root = tmp_path / "runs" / "evals"
+    eval_dir = evals_root / "gpt-5-mini" / "medqa" / "seed-1618"
+    _write_eval_output(eval_dir, {"env_id": "medqa", "model": "gpt-5-mini"})
+    _write_json(
+        evals_root / "bench_index.json",
+        {
+            "version": 1,
+            "source_config": "configs/eval/example.toml",
+            "evals": [
+                {
+                    "index": 1,
+                    "results_path": str(eval_dir),
+                    "env_id": "medqa",
+                    "model": "gpt-5-mini",
+                    "variant_id": "seed-1618",
+                    "variant_payload": {"env_args": {"shuffle_seed": 1618}},
+                    "env_args": {"shuffle_seed": 1618},
+                    "sampling_args": {"temperature": 0},
+                    "num_examples": 1,
+                    "rollouts_per_example": 1,
+                    "plan_digest": "sha256:abc",
+                }
+            ],
+        },
+    )
+
+    records = discover_run_records(tmp_path / "runs" / "raw", filter_status=("completed",))
+
+    assert len(records) == 1
+    record = records[0]
+    assert record.manifest.manifest_path == evals_root / "bench_index.json"
+    assert record.manifest.config_source == "configs/eval/example.toml"
+    assert record.manifest.config_checksum == "sha256:abc"
+    assert record.env_args == {"shuffle_seed": 1618}
+    normalized = load_normalized_metadata(record)
+    assert normalized.variant_id == "seed-1618"
+    assert normalized.variant_payload == {"env_args": {"shuffle_seed": 1618}}
+
+
+def test_discover_run_records_bench_index_rejects_missing_artifacts(tmp_path: Path) -> None:
+    evals_root = tmp_path / "runs" / "evals"
+    _write_json(
+        evals_root / "bench_index.json",
+        {
+            "version": 1,
+            "evals": [
+                {
+                    "index": 1,
+                    "results_path": str(evals_root / "gpt-5-mini" / "medqa"),
+                    "env_id": "medqa",
+                    "model": "gpt-5-mini",
+                    "variant_id": None,
+                    "variant_payload": None,
+                    "env_args": {},
+                    "sampling_args": {},
+                    "num_examples": 1,
+                    "rollouts_per_example": 1,
+                    "plan_digest": "sha256:abc",
+                }
+            ],
+        },
+    )
+
+    try:
+        discover_run_records(tmp_path / "runs" / "raw", filter_status=("completed",))
+    except ValueError as exc:
+        assert "required artifact is missing" in str(exc)
+    else:
+        raise AssertionError("bench_index with missing artifacts should fail validation")
+
+
 def test_discover_run_records_includes_direct_upstream_uuid_outputs(tmp_path: Path) -> None:
     upstream_dir = tmp_path / "runs" / "evals" / "medqa--gpt-5-mini" / "016f4b4a-92a4-4a5b-a7c1-853af3318c52"
     _write_eval_output(upstream_dir)

@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterator, Mapping, Sequence
 
 from pydantic import ValidationError
 
+from medarc_verifiers.cli.bench_index import BENCH_INDEX_FILENAME, read_bench_index, validate_bench_index
 from medarc_verifiers.cli.eval_identity import (
     MEDARC_CONFIG_FINGERPRINT_KEY,
     MEDARC_CONFIG_FINGERPRINT_PAYLOAD_KEY,
@@ -370,6 +371,11 @@ def _candidate_evals_roots(runs_path: Path) -> tuple[Path, ...]:
 
 def _iter_eval_output_records(evals_root: Path) -> Iterator[RunRecord]:
     """Yield synthetic run records for upstream eval output directories."""
+    bench_index_path = evals_root / BENCH_INDEX_FILENAME
+    if bench_index_path.exists():
+        yield from _iter_bench_index_records(evals_root, bench_index_path)
+        return
+
     try:
         results_paths = sorted(evals_root.rglob(RESULTS_FILENAME))
     except OSError as exc:  # noqa: FBT003
@@ -389,6 +395,101 @@ def _iter_eval_output_records(evals_root: Path) -> Iterator[RunRecord]:
         record = _build_eval_output_record(evals_root, results_dir)
         if record is not None:
             yield record
+
+
+def _iter_bench_index_records(evals_root: Path, bench_index_path: Path) -> Iterator[RunRecord]:
+    bench_index = read_bench_index(bench_index_path)
+    if bench_index is None:
+        return
+    validate_bench_index(bench_index, output_root=evals_root, require_artifacts=True)
+    entries = bench_index.get("evals", [])
+    if not isinstance(entries, list):
+        return
+    source_config = _string_or_none(bench_index.get("source_config"))
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        record = _build_bench_index_record(evals_root, bench_index_path, entry, source_config=source_config)
+        if record is not None:
+            yield record
+
+
+def _build_bench_index_record(
+    evals_root: Path,
+    bench_index_path: Path,
+    entry: Mapping[str, Any],
+    *,
+    source_config: str | None,
+) -> RunRecord | None:
+    results_dir = Path(str(entry["results_path"]))
+    metadata_path = results_dir / METADATA_FILENAME
+    metadata_payload = _read_metadata_payload(metadata_path)
+    if metadata_payload is None:
+        return None
+
+    model_id = str(entry["model"])
+    env_id = str(entry["env_id"])
+    variant_id = _string_or_none(entry.get("variant_id"))
+    variant_payload = entry.get("variant_payload") if isinstance(entry.get("variant_payload"), Mapping) else None
+    updated_at = _path_timestamp(metadata_path)
+    job_run_id = "::".join(part for part in (model_id, env_id, variant_id) if part)
+    env_args = _mapping_or_empty(entry.get("env_args")) or _mapping_or_empty(metadata_payload.get("env_args"))
+    sampling_args = _mapping_or_empty(entry.get("sampling_args")) or _mapping_or_empty(
+        metadata_payload.get("sampling_args")
+    )
+    plan_digest = _string_or_none(entry.get("plan_digest"))
+
+    manifest = RunManifestInfo(
+        job_run_id=job_run_id,
+        run_name=job_run_id,
+        summary_completed=1,
+        summary_total=1,
+        summary_total_known=True,
+        manifest_path=bench_index_path,
+        run_dir=evals_root,
+        created_at=updated_at,
+        updated_at=updated_at,
+        config_source=source_config,
+        config_checksum=plan_digest,
+        run_summary_path=results_dir / "summary.json",
+        models={model_id: {"sampling_args": sampling_args}},
+        env_templates={env_id: {"module": env_id}},
+    )
+
+    return RunRecord(
+        manifest=manifest,
+        job_id=results_dir.name,
+        model_id=model_id,
+        manifest_env_id=env_id,
+        results_dir_name=results_dir.name,
+        results_dir=results_dir,
+        metadata_path=metadata_path,
+        results_path=results_dir / RESULTS_FILENAME,
+        summary_path=results_dir / "summary.json",
+        has_metadata=True,
+        has_results=True,
+        has_summary=(results_dir / "summary.json").exists(),
+        status="completed",
+        duration_seconds=None,
+        reason=None,
+        started_at=None,
+        ended_at=None,
+        avg_reward=_float_or_none(metadata_payload.get("avg_reward")),
+        num_examples=_int_or_none(entry.get("num_examples")) or _int_or_none(metadata_payload.get("num_examples")),
+        rollouts_per_example=_int_or_none(entry.get("rollouts_per_example"))
+        or _int_or_none(metadata_payload.get("rollouts_per_example")),
+        row_count=_count_results_rows(results_dir / RESULTS_FILENAME),
+        env_args=env_args,
+        sampling_args=sampling_args,
+        env_config={
+            "id": env_id,
+            "module": env_id,
+            "variant_id": variant_id,
+            "variant_payload": variant_payload,
+            "plan_digest": plan_digest,
+        },
+        model_config={"sampling_args": sampling_args},
+    )
 
 
 def _build_eval_output_record(evals_root: Path, results_dir: Path) -> RunRecord | None:
