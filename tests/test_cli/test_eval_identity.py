@@ -9,7 +9,6 @@ from medarc_verifiers.cli.eval_identity import (
     MEDARC_CONFIG_FINGERPRINT_PAYLOAD_KEY,
     MEDARC_VARIANT_ID_KEY,
     MEDARC_VARIANT_PAYLOAD_KEY,
-    UnclassifiedSamplingArgError,
     build_fingerprint_payload,
     config_fingerprint,
     generate_variant_id,
@@ -273,12 +272,9 @@ def test_extra_body_semantic_args_match_top_level_shape() -> None:
     )
 
 
-def test_unclassified_sampling_args_refuse_fingerprint() -> None:
-    with pytest.raises(UnclassifiedSamplingArgError, match="vendor_knob"):
-        normalize_semantic_sampling_args({"vendor_knob": True})
-
-    with pytest.raises(UnclassifiedSamplingArgError, match="extra_body.vendor_knob"):
-        normalize_semantic_sampling_args({"extra_body": {"vendor_knob": True}})
+def test_unknown_sampling_args_pass_through_fingerprint() -> None:
+    assert normalize_semantic_sampling_args({"vendor_knob": True}) == {"vendor_knob": True}
+    assert normalize_semantic_sampling_args({"extra_body": {"vendor_knob": True}}) == {"vendor_knob": True}
 
 
 def test_endpoint_alias_without_resolved_model_is_rejected() -> None:

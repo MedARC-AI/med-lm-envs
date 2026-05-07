@@ -35,6 +35,14 @@ from medarc_verifiers.cli._constants import (
 )
 from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, EnvironmentExportConfig
 from medarc_verifiers.cli._single_run import run_single_mode
+from medarc_verifiers.cli.bench_index import (
+    BENCH_INDEX_FILENAME,
+    build_bench_index,
+    find_entry_for_results_path,
+    read_bench_index,
+    validate_bench_index,
+    write_bench_index,
+)
 from medarc_verifiers.cli.eval_identity import EvalPathPlan, generate_variant_id, plan_eval_paths
 from medarc_verifiers.cli.eval_identity import metadata_identity_fields
 from medarc_verifiers.cli.hf import HFSyncConfig, sync_files_to_hub
@@ -1267,12 +1275,19 @@ def _run_toml_bench(args: argparse.Namespace) -> int:
     plan_inputs = [_eval_config_identity_payload(config) for config in eval_configs]
     output_root = _resolve_toml_output_root(eval_configs, args)
     path_plans = plan_eval_paths(plan_inputs, output_root=output_root)
-    eval_configs, path_plans = _select_toml_plan(eval_configs, path_plans, args)
+    eval_configs, path_plans, plan_inputs = _select_toml_plan(eval_configs, path_plans, plan_inputs, args)
+    bench_index = build_bench_index(
+        output_root=output_root,
+        source_config=config_path,
+        eval_configs=eval_configs,
+        path_plans=path_plans,
+        plan_payloads=plan_inputs,
+    )
 
     _print_toml_bench_plan(eval_configs, path_plans, dry_run=bool(args.dry_run))
     if args.dry_run:
         return 0
-    return _execute_toml_plan(eval_configs, path_plans, args)
+    return _execute_toml_plan(eval_configs, path_plans, plan_inputs, bench_index, output_root, args)
 
 
 def _prepare_toml_raw_configs(raw_configs: Sequence[dict[str, Any]], args: argparse.Namespace) -> list[dict[str, Any]]:
@@ -1307,9 +1322,10 @@ def _resolve_toml_output_root(eval_configs: Sequence[Any], args: argparse.Namesp
 def _select_toml_plan(
     eval_configs: Sequence[Any],
     path_plans: Sequence[EvalPathPlan],
+    plan_inputs: Sequence[Mapping[str, Any]],
     args: argparse.Namespace,
-) -> tuple[list[Any], list[EvalPathPlan]]:
-    indexed = list(zip(eval_configs, path_plans))
+) -> tuple[list[Any], list[EvalPathPlan], list[Mapping[str, Any]]]:
+    indexed = list(zip(eval_configs, path_plans, plan_inputs))
     if args.eval_index is not None:
         start = args.eval_index - 1
         indexed = indexed[start : start + 1]
@@ -1320,23 +1336,49 @@ def _select_toml_plan(
             indexed = indexed[: args.stop_after - (args.start_at or 1) + 1]
     if not indexed:
         raise ValueError("No TOML evals matched the requested selection.")
-    selected_configs, selected_paths = zip(*indexed)
-    return list(selected_configs), list(selected_paths)
+    selected_configs, selected_paths, selected_plan_inputs = zip(*indexed)
+    return list(selected_configs), list(selected_paths), list(selected_plan_inputs)
 
 
 def _execute_toml_plan(
-    eval_configs: Sequence[Any], path_plans: Sequence[EvalPathPlan], args: argparse.Namespace
+    eval_configs: Sequence[Any],
+    path_plans: Sequence[EvalPathPlan],
+    plan_inputs: Sequence[Mapping[str, Any]],
+    bench_index: Mapping[str, Any],
+    output_root: Path,
+    args: argparse.Namespace,
 ) -> int:
     failures = 0
-    for index, (config, path_plan) in enumerate(zip(eval_configs, path_plans), start=1):
+    bench_index_path = output_root / BENCH_INDEX_FILENAME
+    existing_bench_index = _validate_existing_bench_index(
+        bench_index_path, bench_index, output_root=output_root, force=bool(args.force)
+    )
+    effective_bench_index = _merge_bench_index(existing_bench_index, bench_index, output_root=output_root)
+    write_bench_index(bench_index_path, effective_bench_index)
+    for index, (config, path_plan, _plan_input) in enumerate(zip(eval_configs, path_plans, plan_inputs), start=1):
         metadata_fields = metadata_identity_fields(_eval_config_identity_payload(config), path_plan.identity)
         results_path = path_plan.results_path
+        sidecar_entry = find_entry_for_results_path(effective_bench_index, results_path)
+        if sidecar_entry is None:
+            raise ValueError(f"Internal bench planning error: missing {BENCH_INDEX_FILENAME} entry for {results_path}.")
         try:
-            _prepare_toml_results_dir(results_path, metadata_fields, config, force=bool(args.force))
+            _prepare_toml_results_dir(
+                results_path,
+                metadata_fields,
+                config,
+                sidecar_entry=sidecar_entry,
+                output_root=output_root,
+                force=bool(args.force),
+            )
             run_config = config.model_copy(update={"resume_path": results_path, "save_results": True})
             logger.info("Running TOML eval %d/%d: %s on %s", index, len(eval_configs), config.env_id, config.model)
             asyncio.run(_run_one_toml_eval(run_config, results_path, metadata_fields))
             _merge_metadata_fields(results_path, metadata_fields)
+            validate_bench_index(
+                {"version": 1, "evals": [dict(sidecar_entry)]},
+                output_root=output_root,
+                require_artifacts=True,
+            )
         except Exception as exc:  # noqa: BLE001
             failures += 1
             logger.exception("TOML eval %d failed: %s", index, exc)
@@ -1346,6 +1388,8 @@ def _execute_toml_plan(
             import time
 
             time.sleep(float(args.sleep))
+    if failures == 0:
+        validate_bench_index(effective_bench_index, output_root=output_root, require_artifacts=True)
     return 1 if failures else 0
 
 
@@ -1374,6 +1418,8 @@ def _prepare_toml_results_dir(
     metadata_fields: Mapping[str, Any],
     config: Any,
     *,
+    sidecar_entry: Mapping[str, Any],
+    output_root: Path,
     force: bool,
 ) -> None:
     if results_path.exists() and force:
@@ -1383,6 +1429,7 @@ def _prepare_toml_results_dir(
     results_file = results_path / "results.jsonl"
     has_existing_state = metadata_path.exists() or results_file.exists()
     if has_existing_state:
+        _validate_toml_resume_sidecar(results_path, sidecar_entry, output_root=output_root)
         _validate_toml_resume_metadata(results_path, metadata_fields)
 
     results_path.mkdir(parents=True, exist_ok=True)
@@ -1394,6 +1441,98 @@ def _prepare_toml_results_dir(
     metadata = _initial_toml_metadata(config)
     metadata.update(metadata_fields)
     _write_json(metadata_path, metadata)
+
+
+def _validate_existing_bench_index(
+    bench_index_path: Path,
+    planned_index: Mapping[str, Any],
+    *,
+    output_root: Path,
+    force: bool,
+) -> Mapping[str, Any] | None:
+    existing = read_bench_index(bench_index_path)
+    if existing is None:
+        if force:
+            return None
+        for entry in planned_index.get("evals", []):
+            if not isinstance(entry, Mapping):
+                continue
+            results_path = Path(str(entry.get("results_path", "")))
+            if (results_path / "metadata.json").exists() or (results_path / "results.jsonl").exists():
+                raise ValueError(
+                    f"Cannot reuse deterministic bench path {results_path}: {BENCH_INDEX_FILENAME} is missing. "
+                    "Use --force to archive and rerun."
+                )
+        return None
+    validate_bench_index(existing, output_root=output_root, require_artifacts=False)
+    if force:
+        return existing
+    for entry in planned_index.get("evals", []):
+        if not isinstance(entry, Mapping):
+            continue
+        results_path = Path(str(entry.get("results_path", "")))
+        existing_entry = find_entry_for_results_path(existing, results_path)
+        if existing_entry is None:
+            if (results_path / "metadata.json").exists() or (results_path / "results.jsonl").exists():
+                raise ValueError(
+                    f"Cannot reuse deterministic bench path {results_path}: {BENCH_INDEX_FILENAME} has no entry "
+                    "for that path. Use --force to archive and rerun."
+                )
+            continue
+        if existing_entry.get("plan_digest") != entry.get("plan_digest"):
+            raise ValueError(
+                f"Cannot reuse deterministic bench path {results_path}: {BENCH_INDEX_FILENAME} plan_digest mismatch "
+                f"(saved={existing_entry.get('plan_digest')!r}, current={entry.get('plan_digest')!r}). "
+                "Use --force to archive and rerun."
+            )
+    return existing
+
+
+def _merge_bench_index(
+    existing_index: Mapping[str, Any] | None,
+    planned_index: Mapping[str, Any],
+    *,
+    output_root: Path,
+) -> dict[str, Any]:
+    if existing_index is None:
+        return dict(planned_index)
+
+    merged_entries: list[dict[str, Any]] = []
+    planned_by_path = {
+        Path(str(entry["results_path"])).resolve(): dict(entry)
+        for entry in planned_index.get("evals", [])
+        if isinstance(entry, Mapping) and entry.get("results_path")
+    }
+    emitted_paths: set[Path] = set()
+    for entry in existing_index.get("evals", []):
+        if not isinstance(entry, Mapping) or not entry.get("results_path"):
+            continue
+        path = Path(str(entry["results_path"])).resolve()
+        merged_entries.append(planned_by_path.get(path, dict(entry)))
+        emitted_paths.add(path)
+    for path, entry in planned_by_path.items():
+        if path not in emitted_paths:
+            merged_entries.append(entry)
+    for index, entry in enumerate(merged_entries, start=1):
+        entry["index"] = index
+
+    merged = dict(planned_index)
+    merged["evals"] = merged_entries
+    validate_bench_index(merged, output_root=output_root, require_artifacts=False)
+    return merged
+
+
+def _validate_toml_resume_sidecar(
+    results_path: Path,
+    sidecar_entry: Mapping[str, Any],
+    *,
+    output_root: Path,
+) -> None:
+    validate_bench_index(
+        {"version": 1, "evals": [dict(sidecar_entry)]},
+        output_root=output_root,
+        require_artifacts=False,
+    )
 
 
 def _validate_toml_resume_metadata(results_path: Path, metadata_fields: Mapping[str, Any]) -> None:

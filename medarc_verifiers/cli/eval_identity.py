@@ -211,7 +211,7 @@ def normalize_semantic_sampling_args(sampling_args: Mapping[str, Any] | None) ->
         elif key in _EXCLUDED_SAMPLING_KEYS:
             continue
         else:
-            raise UnclassifiedSamplingArgError(f"Sampling arg '{key}' is not classified for resume fingerprinting.")
+            normalized[key] = _canonicalize(value)
 
     return dict(sorted(normalized.items()))
 
@@ -332,9 +332,7 @@ def _merge_extra_body_semantics(normalized: dict[str, Any], extra_body: Any) -> 
         elif key in _EXCLUDED_EXTRA_BODY_KEYS or key in _EXCLUDED_SAMPLING_KEYS:
             continue
         else:
-            raise UnclassifiedSamplingArgError(
-                f"Sampling arg 'extra_body.{key}' is not classified for resume fingerprinting."
-            )
+            normalized[key] = _canonicalize(value)
 
 
 def _extract_reasoning_effort(value: Any) -> Any:
