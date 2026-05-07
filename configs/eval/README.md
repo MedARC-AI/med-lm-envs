@@ -7,7 +7,7 @@ and `[[ablation]]` sweeps intentionally keep the upstream environment id stable;
 
 ```bash
 medarc-eval bench --config configs/eval/smoke.toml --dry-run
-medarc-eval bench --config configs/eval/medarc-all.toml
+medarc-eval bench --config configs/eval/medmarks-verified.toml
 medarc-eval process --runs-dir runs/evals --output-dir runs/processed
 ```
 

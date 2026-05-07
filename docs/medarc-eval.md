@@ -46,7 +46,7 @@ medarc-eval winrate
 medarc-eval medqa -m gpt-4.1-mini -n 50
 
 # Subcommands: keyword comes first
-medarc-eval bench --config configs/eval/medarc-mcq.toml
+medarc-eval bench --config configs/eval/medmarks-verified.toml
 medarc-eval process --runs-dir runs/evals
 medarc-eval winrate --processed-dir runs/processed
 ```
@@ -74,13 +74,13 @@ medarc-eval longhealth --help
 
 ```bash
 # Run all jobs defined in config
-medarc-eval bench --config configs/eval/medarc-mcq.toml
+medarc-eval bench --config configs/eval/medmarks-verified.toml
 
 # Preview what would run without executing
-medarc-eval bench --config configs/eval/medarc-mcq.toml --dry-run
+medarc-eval bench --config configs/eval/medmarks-verified.toml --dry-run
 
 # Force all jobs to use a specific API endpoint
-medarc-eval bench --config configs/eval/medarc-mcq.toml --api-base-url http://127.0.0.1:8000/v1 --provider local
+medarc-eval bench --config configs/eval/medmarks-verified.toml --api-base-url http://127.0.0.1:8000/v1 --provider local
 ```
 
 ### Processing Mode (`medarc-eval process`)

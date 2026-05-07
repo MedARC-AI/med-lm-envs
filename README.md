@@ -163,10 +163,10 @@ env_args = { shuffle_answers = true, shuffle_seed = 1618 }
 
 ```bash
 # Run the batch
-uv run medarc-eval bench --config configs/eval/medarc-mcq.toml
+uv run medarc-eval bench --config configs/eval/medmarks-verified.toml
 
 # Preview without executing
-uv run medarc-eval bench --config configs/eval/medarc-mcq.toml --dry-run
+uv run medarc-eval bench --config configs/eval/medmarks-verified.toml --dry-run
 ```
 
 Bench mode resumes matching deterministic result directories and supports

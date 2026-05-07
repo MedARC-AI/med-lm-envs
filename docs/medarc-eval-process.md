@@ -242,7 +242,7 @@ This runs `medarc-eval winrate` automatically after processing completes when th
 
 ```bash
 # 1. Run benchmarks
-medarc-eval bench --config configs/eval/medarc-mcq.toml
+medarc-eval bench --config configs/eval/medmarks-verified.toml
 
 # 2. Process results
 medarc-eval process --runs-dir runs/evals

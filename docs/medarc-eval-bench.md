@@ -13,12 +13,12 @@ accepts `.toml` files only.
 # Preview the repository smoke config
 medarc-eval bench --config configs/eval/smoke.toml --dry-run
 
-# Run the MCQ production suite
-medarc-eval bench --config configs/eval/medarc-mcq.toml
+# Run the verified production suite
+medarc-eval bench --config configs/eval/medmarks-verified.toml
 
-# Run the aggregate suite against a local OpenAI-compatible server
+# Run the verified suite against a local OpenAI-compatible server
 medarc-eval bench \
-  --config configs/eval/medarc-all.toml \
+  --config configs/eval/medmarks-verified.toml \
   --api-base-url http://127.0.0.1:8000/v1 \
   --provider local \
   --model openai/my-local-model
@@ -29,9 +29,8 @@ Repository suite configs live in `configs/eval/`:
 | Config | Purpose |
 |--------|---------|
 | `smoke.toml` | Small smoke test used by CLI tests |
-| `medarc-mcq.toml` | Multiple-choice benchmark suite |
-| `medarc-judge.toml` | Judge/free-form benchmark suite |
-| `medarc-all.toml` | Aggregate production suite |
+| `medmarks-verified.toml` | Verified benchmark suite |
+| `medmarks-open_ended.toml` | Open-ended benchmark suite |
 
 ## Config Format
 
@@ -113,10 +112,10 @@ MedARC identity fields.
 
 ```bash
 # Resume matching deterministic outputs
-medarc-eval bench --config configs/eval/medarc-all.toml
+medarc-eval bench --config configs/eval/medmarks-verified.toml
 
 # Archive existing deterministic outputs and rerun
-medarc-eval bench --config configs/eval/medarc-all.toml --force
+medarc-eval bench --config configs/eval/medmarks-verified.toml --force
 ```
 
 The `plan_digest` and MedARC metadata identity payload are based on canonical
@@ -163,7 +162,7 @@ export PRIME_API_KEY=...
 export PRIME_TEAM_ID=...
 
 medarc-eval bench \
-  --config configs/eval/medarc-mcq.toml \
+  --config configs/eval/medmarks-verified.toml \
   --api-base-url https://api.pinference.ai/api/v1
 ```
 

@@ -4,7 +4,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 from types import SimpleNamespace
 
 import pytest
@@ -212,8 +212,8 @@ def test_bench_rejects_removed_yaml_runner_flags(capsys: pytest.CaptureFixture[s
     assert "unrecognized arguments: --restart" in err
 
 
-def test_repository_mcq_toml_config_dry_run_shows_ablation_variants(capsys: pytest.CaptureFixture[str]) -> None:
-    exit_code = main.main(["bench", "--config", "configs/eval/medarc-mcq.toml", "--dry-run", "--eval-index", "9"])
+def test_repository_verified_toml_config_dry_run_shows_ablation_variants(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code = main.main(["bench", "--config", "configs/eval/medmarks-verified.toml", "--dry-run", "--eval-index", "9"])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -222,36 +222,14 @@ def test_repository_mcq_toml_config_dry_run_shows_ablation_variants(capsys: pyte
     assert "runs/evals/openai-gpt-4.1-mini/medqa/env_args.shuffle_answers-true__env_args.shuffle_seed-1618" in output
 
 
-def test_repository_judge_toml_config_loads_expected_judge_args() -> None:
-    configs = main.load_toml_eval_configs("configs/eval/medarc-judge.toml")
+def test_repository_open_ended_toml_config_loads_expected_judge_args() -> None:
+    configs = main.load_toml_eval_configs("configs/eval/medmarks-open_ended.toml")
     healthbench = next(config for config in configs if config["env_id"] == "healthbench")
     medrbench = [config for config in configs if config["env_id"] == "medrbench"]
 
     assert healthbench["env_args"]["judge_model"] == "openai/gpt-5-mini"
     assert healthbench["env_args"]["judge_base_url"] == "https://api.pinference.ai/api/v1"
     assert {config["env_args"]["task"] for config in medrbench} == {"oracle", "1turn", "free_turn"}
-
-
-def test_repository_all_toml_contains_production_suite_entries() -> None:
-    def signature(config: Mapping[str, Any]) -> str:
-        return json.dumps(
-            {
-                "env_id": config["env_id"],
-                "env_args": config.get("env_args", {}),
-                "num_examples": config.get("num_examples"),
-                "rollouts_per_example": config.get("rollouts_per_example"),
-            },
-            sort_keys=True,
-        )
-
-    all_configs = {signature(config) for config in main.load_toml_eval_configs("configs/eval/medarc-all.toml")}
-    production_configs = {
-        signature(config)
-        for path in ("configs/eval/medarc-mcq.toml", "configs/eval/medarc-judge.toml")
-        for config in main.load_toml_eval_configs(path)
-    }
-
-    assert production_configs <= all_configs
 
 
 def test_toml_bench_dry_run_model_override(
