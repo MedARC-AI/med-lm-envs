@@ -37,7 +37,8 @@ Repository suite configs live in `configs/eval/`:
 
 Bench configs use upstream `verifiers` TOML semantics: top-level defaults plus
 one or more `[[eval]]` blocks. MedARC adds deterministic output planning around
-the resolved evals; it does not use YAML `models`, `envs`, or `jobs` sections.
+the resolved evals and writes a required `bench_index.json` sidecar; it does not
+use YAML `models`, `envs`, or `jobs` sections.
 
 ```toml
 model = "openai/gpt-4.1-mini"
@@ -92,11 +93,23 @@ runs/evals/openai-gpt-4.1-mini/medqa/env_args.shuffle_seed-9331/
 
 Non-variant evals write to `runs/evals/<model>/<env>/`.
 
+## Output Sidecar
+
+Every bench output root contains `bench_index.json`. It records one entry for
+each successfully materialized eval output, including `results_path`, `model`,
+`env_id`, optional variant identity, resolved args, and a `plan_digest`.
+
+Processing prefers this sidecar over path inference for bench outputs. Failed
+evals are omitted from the sidecar until their `metadata.json` and
+`results.jsonl` exist, so `--continue-on-error` runs leave successful siblings
+processable.
+
 ## Resume and Force
 
-Bench writes each eval to a deterministic result directory and stores a narrow
-MedARC config fingerprint in `metadata.json`. Re-running the same TOML config
-resumes the same directory when the fingerprint matches.
+Bench writes each eval to a deterministic result directory. Re-running the same
+TOML config reuses the same directory only when the matching `bench_index.json`
+entry has the same `plan_digest` and existing `metadata.json` contains matching
+MedARC identity fields.
 
 ```bash
 # Resume matching deterministic outputs
@@ -106,9 +119,10 @@ medarc-eval bench --config configs/eval/medarc-all.toml
 medarc-eval bench --config configs/eval/medarc-all.toml --force
 ```
 
-Fingerprint checks protect semantic benchmark identity such as `env_id`,
-`env_args`, and normalized sampling args. Operational details such as host URL,
-timeout, key variable, and concurrency do not define the benchmark identity.
+The `plan_digest` and MedARC metadata identity payload are based on canonical
+JSON for the planned eval identity, including unknown `sampling_args`. MedARC
+does not maintain a sampling-argument allowlist for resume safety; new provider
+arguments pass through to upstream.
 
 ## Common Flags
 

@@ -18,6 +18,7 @@ medarc-eval process --dry-run
 ## What Processing Does
 
 1. **Discovers** eval outputs in `runs/evals/` and legacy manifest jobs in `runs/raw/`
+   (`bench_index.json` is preferred when present for bench outputs)
 2. **Extracts** results from each eval output directory
 3. **Normalizes** data into a fixed output schema
 4. **Writes** parquet files organized by model and environment
@@ -55,8 +56,11 @@ On-disk model and env path components are slugified, so filenames may not exactl
 
 ### By Completion Status
 
-For current TOML bench outputs, processing discovers valid eval result
-directories under `runs/evals` and reads their `metadata.json`.
+For current TOML bench outputs, processing first looks for
+`runs/evals/bench_index.json`. When present, every sidecar entry must point to
+an existing `metadata.json` and `results.jsonl`, and sidecar `model` / `env_id`
+must match metadata when those fields are present. If no sidecar exists,
+processing falls back to metadata/path inference for ad hoc upstream outputs.
 
 For legacy YAML-runner outputs, `medarc-eval process` reads
 `runs/raw/<run_id>/run_manifest.json` and only selects jobs whose manifest
@@ -82,7 +86,8 @@ medarc-eval process --max-results-missing-pct 100
 ```
 
 For TOML bench outputs, this gate uses `metadata.json` values for expected rows
-and the observed `results.jsonl` row count:
+and the observed `results.jsonl` row count. Model, environment, and variant
+identity come from `bench_index.json` when the output root has one:
 
 - `expected_rows = num_examples * rollouts_per_example`
 - `observed_rows = results.jsonl row count`

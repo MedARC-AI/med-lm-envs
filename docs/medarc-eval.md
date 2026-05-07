@@ -112,6 +112,7 @@ medarc-eval winrate --list-models
 ```
 runs/
 ├── evals/                        # Raw TOML bench outputs
+│   ├── bench_index.json           # Bench identity and results-path sidecar
 │   └── <model>/
 │       └── <env>/
 │           ├── results.jsonl

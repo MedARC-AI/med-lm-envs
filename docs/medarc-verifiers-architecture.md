@@ -45,10 +45,10 @@ It supports:
   - Implemented in `medarc_verifiers/cli/_single_run.py`.
 - **TOML bench mode**: `medarc-eval bench --config <config.toml>`
   - Loads upstream `verifiers` TOML eval configs, expands ablations, plans
-    deterministic output directories, validates MedARC fingerprints, then runs
-    evals sequentially.
+    deterministic output directories, writes `bench_index.json`, then runs evals
+    sequentially through upstream execution.
   - Main implementation: `medarc_verifiers/cli/main.py`
-  - Eval config adapter: `medarc_verifiers/cli/verifiers_adapter.py`
+  - Upstream eval boundary: `medarc_verifiers/cli/upstream_eval.py`
   - Deterministic identity/path helpers: `medarc_verifiers/cli/eval_identity.py`
 - **Processing**: `medarc-eval process ...`
   - Pipeline wiring: `medarc_verifiers/cli/process/pipeline.py`
@@ -78,8 +78,8 @@ Override parsing lives in `medarc_verifiers/cli/utils/overrides.py`.
 
 Bench configs use upstream `verifiers` TOML shape: top-level defaults plus one
 or more `[[eval]]` entries. Upstream `[[ablation]]` tables expand into repeated
-eval configs. MedARC adds deterministic paths and config-safe resume around the
-resolved upstream eval configs.
+eval configs. MedARC adds deterministic paths and a required `bench_index.json`
+sidecar around the resolved upstream eval configs.
 
 `env_args` precedence is low to high:
 
@@ -94,7 +94,9 @@ then are sanitized for OpenAI-compatible clients:
 
 - Unknown parameters move under `extra_body` for compatible servers such as vLLM.
 - Sanitizer: `medarc_verifiers/utils/sampling_args.py`
-- Merge/adaptation point: `medarc_verifiers/cli/verifiers_adapter.py`
+- Import boundary: `medarc_verifiers/cli/upstream_eval.py`
+- Temporary merge/adaptation adapter behind that boundary:
+  `medarc_verifiers/cli/verifiers_adapter.py`
 
 The old YAML `models`, `envs`, `jobs`, matrix expansion, job builder, and
 manifest planner modules have been deleted.
@@ -125,11 +127,16 @@ TOML bench writes eval outputs under deterministic directories:
 - Non-variant evals: `runs/evals/<model>/<env>/`
 - Variant evals: `runs/evals/<model>/<env>/<variant_id>/`
 
-Before resuming an existing deterministic directory, bench validates the
-MedARC-specific config fingerprint in `metadata.json`. The fingerprint covers
-semantic benchmark identity such as `env_id`, `env_args`, and normalized
-sampling args. It excludes operational fields such as endpoint URL, timeout,
-API key variable, and concurrency.
+Before reusing an existing deterministic directory, bench validates the matching
+`bench_index.json` entry and its `plan_digest`, and also checks MedARC identity
+fields in existing `metadata.json`. Both are based on the canonical planned eval
+payload, including unknown `sampling_args`, so new provider arguments pass
+through instead of hitting a MedARC allowlist.
+
+`medarc-eval bench` does not monkey-patch upstream metadata saving. MedARC
+identity fields are merged into `metadata.json` only after successful upstream
+execution, and process discovery uses `bench_index.json` as the durable bench
+identity contract.
 
 `medarc_verifiers/cli/_manifest.py` now only contains the legacy manifest schema
 needed by processing to read historical `runs/raw` outputs.
@@ -138,6 +145,7 @@ needed by processing to read historical `runs/raw` outputs.
 
 TOML bench outputs include:
 
+- `bench_index.json`: bench identity sidecar at the output root
 - `results.jsonl`: per-example rollouts
 - `metadata.json`: eval configuration and metrics snapshot
 
@@ -152,10 +160,10 @@ Entry point: `medarc_verifiers/cli/process/pipeline.py`.
 
 Processing:
 
-1. Discovers TOML bench outputs from `runs/evals` and legacy manifest outputs
-   from `runs/raw`.
-2. Normalizes metadata from `metadata.json` and, for legacy outputs, manifest
-   fields.
+1. Discovers TOML bench outputs from `runs/evals` using `bench_index.json` when
+   present, and legacy manifest outputs from `runs/raw`.
+2. Normalizes identity from the bench sidecar plus `metadata.json`; legacy
+   outputs still use manifest fields.
 3. Loads rows from `results.jsonl`, drops large prompt/completion fields, and
    flattens `token_usage`.
 4. Aggregates rows per model and environment, preserving variant ids.
@@ -223,9 +231,9 @@ It:
 
 - CLI flags or routing:
   - `medarc_verifiers/cli/main.py`, `medarc_verifiers/cli/_single_run.py`
-- TOML bench behavior, deterministic paths, or resume fingerprints:
+- TOML bench behavior, deterministic paths, or bench sidecar identity:
   - `medarc_verifiers/cli/main.py`, `medarc_verifiers/cli/eval_identity.py`,
-    `medarc_verifiers/cli/verifiers_adapter.py`
+    `medarc_verifiers/cli/upstream_eval.py`, `medarc_verifiers/cli/verifiers_adapter.py`
 - Processed dataset schema:
   - `medarc_verifiers/cli/process/rows.py`, `medarc_verifiers/cli/process/writer.py`
 - Winrate math/output:
