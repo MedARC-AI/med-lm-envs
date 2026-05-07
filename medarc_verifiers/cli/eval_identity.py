@@ -20,48 +20,6 @@ _SLUG_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
 _MAX_SEGMENT_LENGTH = 80
 _MAX_VARIANT_ID_LENGTH = 160
 
-_SEMANTIC_SAMPLING_KEYS = {
-    "frequency_penalty",
-    "logit_bias",
-    "max_completion_tokens",
-    "max_tokens",
-    "min_p",
-    "n",
-    "presence_penalty",
-    "repetition_penalty",
-    "response_format",
-    "seed",
-    "stop",
-    "temperature",
-    "tool_choice",
-    "tools",
-    "top_k",
-    "top_p",
-}
-_EXCLUDED_SAMPLING_KEYS = {
-    "api_base_url",
-    "api_key",
-    "api_key_var",
-    "base_url",
-    "extra_headers",
-    "headers",
-    "max_retries",
-    "metadata",
-    "request_timeout",
-    "stream",
-    "timeout",
-}
-_EXCLUDED_EXTRA_BODY_KEYS = {
-    "metadata",
-    "provider",
-    "usage",
-}
-
-
-class UnclassifiedSamplingArgError(ValueError):
-    """Raised when fingerprinting sees a sampling arg without a policy."""
-
-
 @dataclass(frozen=True)
 class EvalIdentity:
     """Resolved model/env identity plus optional variant metadata."""
@@ -191,7 +149,7 @@ def config_fingerprint(config: Mapping[str, Any]) -> str:
 
 
 def normalize_semantic_sampling_args(sampling_args: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Normalize provider-independent generation semantics for fingerprinting."""
+    """Canonicalize generation arguments for fingerprinting."""
 
     if not sampling_args:
         return {}
@@ -206,10 +164,8 @@ def normalize_semantic_sampling_args(sampling_args: Mapping[str, Any] | None) ->
             effort = _extract_reasoning_effort(value)
             if effort is not None:
                 normalized["reasoning_effort"] = _canonicalize(effort)
-        elif key in _SEMANTIC_SAMPLING_KEYS:
-            normalized[key] = _canonicalize(value)
-        elif key in _EXCLUDED_SAMPLING_KEYS:
-            continue
+            else:
+                normalized[key] = _canonicalize(value)
         else:
             normalized[key] = _canonicalize(value)
 
@@ -320,17 +276,16 @@ def _variant_value_text(value: Any) -> str:
 
 def _merge_extra_body_semantics(normalized: dict[str, Any], extra_body: Any) -> None:
     if not isinstance(extra_body, Mapping):
-        raise UnclassifiedSamplingArgError("sampling_args.extra_body must be a mapping for resume fingerprinting.")
+        normalized["extra_body"] = _canonicalize(extra_body)
+        return
 
     for key, value in extra_body.items():
         if key == "reasoning":
             effort = _extract_reasoning_effort(value)
             if effort is not None:
                 normalized["reasoning_effort"] = _canonicalize(effort)
-        elif key in _SEMANTIC_SAMPLING_KEYS:
-            normalized[key] = _canonicalize(value)
-        elif key in _EXCLUDED_EXTRA_BODY_KEYS or key in _EXCLUDED_SAMPLING_KEYS:
-            continue
+            else:
+                normalized[key] = _canonicalize(value)
         else:
             normalized[key] = _canonicalize(value)
 
@@ -380,7 +335,6 @@ __all__ = [
     "MEDARC_CONFIG_FINGERPRINT_PAYLOAD_KEY",
     "MEDARC_VARIANT_ID_KEY",
     "MEDARC_VARIANT_PAYLOAD_KEY",
-    "UnclassifiedSamplingArgError",
     "build_fingerprint_payload",
     "config_fingerprint",
     "extract_variant_payload",

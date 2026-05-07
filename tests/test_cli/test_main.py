@@ -359,6 +359,7 @@ def test_toml_bench_defaults_max_concurrent_to_one(monkeypatch: pytest.MonkeyPat
 
     async def fake_run(config, **_kwargs):
         captured.append(config.max_concurrent)
+        Path(config.resume_path, "results.jsonl").write_text(json.dumps({"example_id": "0"}) + "\n")
         return {"outputs": [], "metadata": {}}
 
     monkeypatch.setattr(main, "run_evaluation", fake_run)
@@ -469,15 +470,13 @@ def test_toml_bench_resume_preserves_existing_metadata(monkeypatch: pytest.Monke
         calls += 1
         results_path = Path(config.resume_path)
         if calls == 1:
+            (results_path / "results.jsonl").write_text(json.dumps({"example_id": "0"}) + "\n")
             (results_path / "metadata.json").write_text(
                 json.dumps(
                     {
                         "avg_reward": 0.75,
                         "avg_metrics": {"accuracy": 0.75},
                         "total_tokens": 123,
-                        "medarc_config_fingerprint": json.loads((results_path / "metadata.json").read_text())[
-                            "medarc_config_fingerprint"
-                        ],
                     }
                 )
             )
@@ -495,7 +494,7 @@ def test_toml_bench_resume_preserves_existing_metadata(monkeypatch: pytest.Monke
     assert metadata["medarc_config_fingerprint"]
 
 
-def test_toml_bench_injects_medarc_fields_into_upstream_metadata_saves(
+def test_toml_bench_does_not_patch_upstream_metadata_saves(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -521,6 +520,7 @@ def test_toml_bench_injects_medarc_fields_into_upstream_metadata_saves(
         if on_progress is not None:
             on_progress([], [], metadata)
         environment_module.save_metadata({}, Path(config.resume_path))
+        Path(config.resume_path, "results.jsonl").write_text(json.dumps({"example_id": "0"}) + "\n")
         return {"outputs": [], "metadata": metadata}
 
     monkeypatch.setattr(environment_module, "save_metadata", fake_save_metadata)
@@ -528,8 +528,9 @@ def test_toml_bench_injects_medarc_fields_into_upstream_metadata_saves(
 
     assert main.main(["bench", "--config", str(config_path), "--output-dir", str(tmp_path / "evals")]) == 0
 
-    assert saved_metadata
-    assert all(item["medarc_config_fingerprint"] for item in saved_metadata)
+    assert saved_metadata == [{}]
+    metadata = json.loads((tmp_path / "evals" / "gpt-5-mini" / "medqa" / "metadata.json").read_text())
+    assert metadata["medarc_config_fingerprint"]
 
 
 def test_single_run_help_lists_env_section_and_header_option(

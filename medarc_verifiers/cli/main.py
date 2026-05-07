@@ -12,7 +12,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from textwrap import dedent
-from typing import Any, Literal, Mapping, MutableMapping, Sequence
+from typing import Any, Literal, Mapping, Sequence
 
 import yaml
 from pydantic import ValidationError
@@ -1354,7 +1354,18 @@ def _execute_toml_plan(
         bench_index_path, bench_index, output_root=output_root, force=bool(args.force)
     )
     effective_bench_index = _merge_bench_index(existing_bench_index, bench_index, output_root=output_root)
-    write_bench_index(bench_index_path, effective_bench_index)
+    persisted_base_index = existing_bench_index
+    if args.force and existing_bench_index is not None:
+        persisted_base_index = _bench_index_without_paths(
+            existing_bench_index,
+            [path_plan.results_path for path_plan in path_plans],
+        )
+    persisted_bench_index = _merge_bench_index(
+        persisted_base_index,
+        _bench_index_with_entries(bench_index, []),
+        output_root=output_root,
+    )
+    write_bench_index(bench_index_path, persisted_bench_index)
     for index, (config, path_plan, _plan_input) in enumerate(zip(eval_configs, path_plans, plan_inputs), start=1):
         metadata_fields = metadata_identity_fields(_eval_config_identity_payload(config), path_plan.identity)
         results_path = path_plan.results_path
@@ -1372,13 +1383,19 @@ def _execute_toml_plan(
             )
             run_config = config.model_copy(update={"resume_path": results_path, "save_results": True})
             logger.info("Running TOML eval %d/%d: %s on %s", index, len(eval_configs), config.env_id, config.model)
-            asyncio.run(_run_one_toml_eval(run_config, results_path, metadata_fields))
+            asyncio.run(_run_one_toml_eval(run_config))
             _merge_metadata_fields(results_path, metadata_fields)
             validate_bench_index(
                 {"version": 1, "evals": [dict(sidecar_entry)]},
                 output_root=output_root,
                 require_artifacts=True,
             )
+            persisted_bench_index = _merge_bench_index(
+                persisted_bench_index,
+                _bench_index_with_entries(bench_index, [sidecar_entry]),
+                output_root=output_root,
+            )
+            write_bench_index(bench_index_path, persisted_bench_index)
         except Exception as exc:  # noqa: BLE001
             failures += 1
             logger.exception("TOML eval %d failed: %s", index, exc)
@@ -1389,28 +1406,12 @@ def _execute_toml_plan(
 
             time.sleep(float(args.sleep))
     if failures == 0:
-        validate_bench_index(effective_bench_index, output_root=output_root, require_artifacts=True)
+        validate_bench_index(persisted_bench_index, output_root=output_root, require_artifacts=True)
     return 1 if failures else 0
 
 
-async def _run_one_toml_eval(config: Any, results_path: Path, metadata_fields: Mapping[str, Any]) -> Any:
-    import verifiers.envs.environment as environment_module
-
-    def add_medarc_metadata(_all_outputs: Any, _new_outputs: Any, metadata: MutableMapping[str, Any]) -> None:
-        metadata.update(metadata_fields)
-
-    original_save_metadata = environment_module.save_metadata
-
-    def save_metadata_with_medarc_fields(metadata: MutableMapping[str, Any], result_path: Path) -> Any:
-        if Path(result_path) == results_path:
-            metadata.update(metadata_fields)
-        return original_save_metadata(metadata, result_path)
-
-    environment_module.save_metadata = save_metadata_with_medarc_fields
-    try:
-        return await run_evaluation(config, on_progress=add_medarc_metadata)
-    finally:
-        environment_module.save_metadata = original_save_metadata
+async def _run_one_toml_eval(config: Any) -> Any:
+    return await run_evaluation(config)
 
 
 def _prepare_toml_results_dir(
@@ -1432,15 +1433,11 @@ def _prepare_toml_results_dir(
         _validate_toml_resume_sidecar(results_path, sidecar_entry, output_root=output_root)
         _validate_toml_resume_metadata(results_path, metadata_fields)
 
-    results_path.mkdir(parents=True, exist_ok=True)
-    results_file.touch(exist_ok=True)
     if has_existing_state:
         _merge_metadata_fields(results_path, metadata_fields)
         return
 
-    metadata = _initial_toml_metadata(config)
-    metadata.update(metadata_fields)
-    _write_json(metadata_path, metadata)
+    results_path.mkdir(parents=True, exist_ok=True)
 
 
 def _validate_existing_bench_index(
@@ -1522,6 +1519,26 @@ def _merge_bench_index(
     return merged
 
 
+def _bench_index_with_entries(
+    bench_index: Mapping[str, Any], entries: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
+    subset = dict(bench_index)
+    subset["evals"] = [dict(entry) for entry in entries]
+    return subset
+
+
+def _bench_index_without_paths(bench_index: Mapping[str, Any], paths: Sequence[Path]) -> dict[str, Any]:
+    excluded = {path.resolve() for path in paths}
+    entries = [
+        dict(entry)
+        for entry in bench_index.get("evals", [])
+        if isinstance(entry, Mapping)
+        and entry.get("results_path")
+        and Path(str(entry["results_path"])).resolve() not in excluded
+    ]
+    return _bench_index_with_entries(bench_index, entries)
+
+
 def _validate_toml_resume_sidecar(
     results_path: Path,
     sidecar_entry: Mapping[str, Any],
@@ -1550,22 +1567,6 @@ def _validate_toml_resume_metadata(results_path: Path, metadata_fields: Mapping[
             f"Cannot resume {results_path}: MedARC config fingerprint mismatch "
             f"(saved={current!r}, current={expected!r}). Use --force to archive and rerun."
         )
-
-
-def _initial_toml_metadata(config: Any) -> dict[str, Any]:
-    return {
-        "env_id": config.env_id,
-        "env_args": dict(config.env_args or {}),
-        "model": config.model,
-        "base_url": config.client_config.api_base_url,
-        "num_examples": config.num_examples,
-        "rollouts_per_example": config.rollouts_per_example,
-        "sampling_args": dict(config.sampling_args or {}),
-        "avg_reward": None,
-        "avg_metrics": {},
-        "avg_error": None,
-        "state_columns": list(config.state_columns or []),
-    }
 
 
 def _merge_metadata_fields(results_path: Path, metadata_fields: Mapping[str, Any]) -> None:

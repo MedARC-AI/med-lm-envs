@@ -194,7 +194,6 @@ def test_fingerprint_changes_for_semantic_benchmark_changes(changed: dict[str, o
         {"max_concurrent": 1},
         {"max_retries": 5},
         {"headers": {"X-Prime-Team-ID": "team"}},
-        {"sampling_args": {"temperature": 0.2, "extra_body": {"usage": {"include": True}}}},
     ],
 )
 def test_fingerprint_ignores_provider_transport_and_runtime_changes(changed: dict[str, object]) -> None:
@@ -275,6 +274,23 @@ def test_extra_body_semantic_args_match_top_level_shape() -> None:
 def test_unknown_sampling_args_pass_through_fingerprint() -> None:
     assert normalize_semantic_sampling_args({"vendor_knob": True}) == {"vendor_knob": True}
     assert normalize_semantic_sampling_args({"extra_body": {"vendor_knob": True}}) == {"vendor_knob": True}
+    assert normalize_semantic_sampling_args({"extra_body": "provider-default"}) == {"extra_body": "provider-default"}
+
+
+def test_sampling_extra_body_arguments_are_part_of_fingerprint() -> None:
+    base = {
+        "env_id": "medqa",
+        "model": "gpt-5-mini",
+        "sampling_args": {"temperature": 0.2},
+        "num_examples": 10,
+        "rollouts_per_example": 1,
+    }
+    with_usage = {
+        **base,
+        "sampling_args": {"temperature": 0.2, "extra_body": {"usage": {"include": True}}},
+    }
+
+    assert config_fingerprint(base) != config_fingerprint(with_usage)
 
 
 def test_endpoint_alias_without_resolved_model_is_rejected() -> None:
