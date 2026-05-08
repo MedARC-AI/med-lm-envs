@@ -27,7 +27,6 @@ from medarc_verifiers.cli._constants import (
     DEFAULT_ENV_CONFIG_ROOT,
     DEFAULT_ENV_DIR,
     DEFAULT_PROCESSED_DIR,
-    DEFAULT_RUNS_RAW_DIR,
     PROCESS_COMMAND,
     WINRATE_COMMAND,
 )
@@ -39,7 +38,7 @@ from medarc_verifiers.cli.eval_identity import (
     plan_eval_paths,
 )
 from medarc_verifiers.cli.hf import HFSyncConfig, sync_files_to_hub
-from medarc_verifiers.cli.process import PROCESS_DEFAULT_STATUS_FILTER, ProcessOptions, ProcessResult, run_process
+from medarc_verifiers.cli.process import ProcessOptions, ProcessResult, run_process
 from medarc_verifiers.cli.utils.config_io import load_mapping_file
 from medarc_verifiers.cli.utils.overrides import build_cli_override
 from medarc_verifiers.cli.utils.shared import (
@@ -162,7 +161,7 @@ def build_process_parser() -> argparse.ArgumentParser:
         "--runs-dir",
         type=Path,
         default=None,
-        help=f"Directory containing raw run outputs (default: {DEFAULT_RUNS_RAW_DIR}).",
+        help=f"Directory containing eval output directories (default: {DEFAULT_EVALS_DIR}).",
     )
     parser.add_argument(
         "--output-dir",
@@ -175,12 +174,6 @@ def build_process_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help=f"Directory containing environment YAMLs for export settings (default: {DEFAULT_ENV_CONFIG_ROOT}).",
-    )
-    parser.add_argument(
-        "--status",
-        action="append",
-        default=None,
-        help="Filter runs by manifest status (repeatable).",
     )
     parser.add_argument(
         "--exclude-dataset",
@@ -225,10 +218,10 @@ def build_process_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help=(
-            "Fail if a selected latest job record is missing more than this percentage of expected results.jsonl rows "
-            "based on manifest job fields (row_count, num_examples, rollouts_per_example). "
-            "Computed per selected job record and enforced only on the latest selected run; does not use "
-            "manifest summary.completed/summary.total or fall back to older runs (default: 2.5)."
+            "Fail if a selected latest eval output is missing more than this percentage of expected results.jsonl rows "
+            "based on metadata num_examples and rollouts_per_example. "
+            "Computed per selected output and enforced only on the latest selected run; does not fall back to older "
+            "runs (default: 2.5)."
         ),
     )
     parser.add_argument(
@@ -541,11 +534,8 @@ def _build_process_options(args: argparse.Namespace) -> ProcessOptions:
         retries=args.hf_retries,
         max_files_per_commit=args.hf_max_files_per_commit,
     )
-    status_values = list(args.status or [])
-    status_filter = tuple(status_values) if status_values else PROCESS_DEFAULT_STATUS_FILTER
     max_results_missing_pct = float(args.max_results_missing_pct) if args.max_results_missing_pct is not None else 2.5
     processed_with_args = {
-        "status": list(status_filter),
         "max_results_missing_pct": max_results_missing_pct,
         "exclude_datasets": args.exclude_dataset or [],
         "exclude_models": args.exclude_model or [],
@@ -569,7 +559,6 @@ def _build_process_options(args: argparse.Namespace) -> ProcessOptions:
         replace_envs=tuple(args.replace_env or ()),
         processed_at=args.processed_at,
         processed_with_args=processed_with_args,
-        status_filter=status_filter,
         max_results_missing_pct=max_results_missing_pct,
         dry_run=bool(args.dry_run),
         clean=bool(args.clean),
@@ -736,11 +725,15 @@ def _load_config_payload(path: Path, *, mode: Literal["process", "winrate"]) -> 
 def _reject_removed_process_config_keys(payload: Mapping[str, Any]) -> None:
     if "max_run_missing_pct" in payload:
         raise ValueError("Process config field 'max_run_missing_pct' was removed; use 'max_results_missing_pct'.")
+    if "status" in payload:
+        raise ValueError("Process config field 'status' was removed; process now reads completed eval outputs.")
     process_section = payload.get("process")
     if isinstance(process_section, Mapping) and "max_run_missing_pct" in process_section:
         raise ValueError(
             "Process config field 'process.max_run_missing_pct' was removed; use 'process.max_results_missing_pct'."
         )
+    if isinstance(process_section, Mapping) and "status" in process_section:
+        raise ValueError("Process config field 'process.status' was removed; process now reads completed eval outputs.")
 
 
 def _expand_embedded_pipeline_config(payload: dict[str, Any], *, mode: Literal["process", "winrate"]) -> dict[str, Any]:
@@ -788,7 +781,6 @@ def _merge_process_section(
                 "output_dir": "output_dir",
                 "env_config_root": "env_config_root",
                 "processed_at": "processed_at",
-                "status": "status",
                 "exclude_datasets": "exclude_datasets",
                 "exclude_models": "exclude_models",
                 "replace_models": "replace_models",
@@ -861,8 +853,9 @@ def _resolve_process_dir_value(value: Any, *, runs_dir: Any | None) -> Path | No
     candidate = Path(raw)
     if candidate.is_absolute():
         return candidate
-    runs_base = Path(str(runs_dir)).parent if runs_dir is not None else DEFAULT_RUNS_RAW_DIR.parent
-    return runs_base / candidate
+    if runs_dir is not None:
+        return Path(str(runs_dir)).parent / candidate
+    return DEFAULT_EVALS_DIR.parent / candidate
 
 
 def _resolve_winrate_dir_value(value: Any, *, process_output_dir: Path | None) -> Path | None:
@@ -988,7 +981,6 @@ def _load_and_apply_config(
     }[mode]
     repeatable_fields = {
         "process": {
-            "status": "status",
             "exclude_datasets": "exclude_dataset",
             "exclude_models": "exclude_model",
             "replace_models": "replace_model",
@@ -1063,7 +1055,7 @@ def _finalize_config_args(args: argparse.Namespace, *, mode: Literal["process", 
     """Fill any unset process/winrate args with defaults after config + CLI merge."""
     defaults = {
         "process": {
-            "runs_dir": DEFAULT_RUNS_RAW_DIR,
+            "runs_dir": DEFAULT_EVALS_DIR,
             "output_dir": DEFAULT_PROCESSED_DIR,
             "env_config_root": DEFAULT_ENV_CONFIG_ROOT,
             "max_workers": 4,
@@ -1493,7 +1485,7 @@ def _print_general_help() -> None:
         Usage:
           {COMMAND} <ENV> [options]                 # Single run (ENV must be first; use ENV --help for details)
           {COMMAND} {BENCH_COMMAND} --config CONFIG.toml ...  # Sequential TOML bench
-          {COMMAND} {PROCESS_COMMAND} [options]               # Export raw runs to parquet (see: {COMMAND} {PROCESS_COMMAND} --help)
+          {COMMAND} {PROCESS_COMMAND} [options]               # Export eval outputs to parquet (see: {COMMAND} {PROCESS_COMMAND} --help)
           {COMMAND} {WINRATE_COMMAND} [options]               # Compute win rates from processed parquet outputs
 
         First argument must be the environment slug for single runs. Use '{COMMAND} {BENCH_COMMAND} --help' for TOML bench options."""

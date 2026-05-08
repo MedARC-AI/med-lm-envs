@@ -19,6 +19,5 @@ DEFAULT_ENDPOINTS_PATH = Path("configs") / "endpoints.toml"
 DEFAULT_ENV_DIR = Path("environments")
 DEFAULT_ENV_CONFIG_ROOT = Path("configs") / "envs"
 DEFAULT_EVALS_DIR = Path("runs") / "evals"
-DEFAULT_RUNS_RAW_DIR = Path("runs") / "raw"
 DEFAULT_PROCESSED_DIR = Path("runs") / "processed"
 DEFAULT_WINRATE_DIR = DEFAULT_PROCESSED_DIR / "winrate"

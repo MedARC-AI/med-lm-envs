@@ -179,3 +179,11 @@ def test_discover_run_records_parent_baseline_and_child_variant_once(tmp_path: P
 
     assert len(records) == 2
     assert {record.results_dir for record in records} == {baseline_dir, variant_dir}
+
+
+def test_discover_run_records_scans_only_provided_root(tmp_path: Path) -> None:
+    evals_dir = tmp_path / "runs" / "evals"
+    raw_dir = tmp_path / "runs" / "raw"
+    _write_eval_output(evals_dir / "gpt-5-mini" / "medqa" / "base")
+
+    assert discover_run_records(raw_dir, filter_status=("completed",)) == []

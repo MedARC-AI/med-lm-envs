@@ -1099,8 +1099,6 @@ def test_process_cli_builds_options(monkeypatch: pytest.MonkeyPatch, tmp_path: P
             str(tmp_path / "processed"),
             "--env-config-root",
             str(env_root),
-            "--status",
-            "completed",
             "--hf-repo",
             "medarc/demo",
             "--dry-run",
@@ -1109,7 +1107,6 @@ def test_process_cli_builds_options(monkeypatch: pytest.MonkeyPatch, tmp_path: P
 
     assert exit_code == 0
     options = captured["options"]
-    assert options.status_filter == ("completed",)
     assert options.hf_config is not None
     env_map = captured["env_export_map"]
     assert "demo-env" in env_map
@@ -1155,7 +1152,7 @@ def test_process_cli_applies_config_defaults(monkeypatch: pytest.MonkeyPatch, tm
     cfg_path = tmp_path / "process.yaml"
     cfg_path.write_text(
         f"""
-        runs_dir: runs/raw-from-config
+        runs_dir: runs/evals-from-config
         process:
           dir: processed
           env_config_root: {env_root}
@@ -1183,7 +1180,7 @@ def test_process_cli_applies_config_defaults(monkeypatch: pytest.MonkeyPatch, tm
     assert exit_code == 0
 
     options = captured["options"]
-    assert options.runs_dir == Path("runs/raw-from-config")
+    assert options.runs_dir == Path("runs/evals-from-config")
     assert options.output_dir == Path("runs/processed")
     assert options.max_workers == 2
     assert options.hf_pull_policy == "pull"
@@ -1209,7 +1206,7 @@ def test_process_cli_resolves_hf_token_env_reference(monkeypatch: pytest.MonkeyP
     cfg_path = tmp_path / "process.yaml"
     cfg_path.write_text(
         """
-        runs_dir: runs/raw-from-config
+        runs_dir: runs/evals-from-config
         process:
           dir: processed
         hf:
@@ -1238,7 +1235,7 @@ def test_winrate_cli_applies_config_defaults(monkeypatch: pytest.MonkeyPatch, tm
     cfg_path = tmp_path / "winrate.yaml"
     cfg_path.write_text(
         """
-        runs_dir: runs/raw-from-config
+        runs_dir: runs/evals-from-config
         process:
           dir: processed
         winrate:
@@ -1371,7 +1368,7 @@ def test_process_cli_rejects_unset_hf_token_env_reference(
     cfg_path = tmp_path / "process.yaml"
     cfg_path.write_text(
         """
-        runs_dir: runs/raw-from-config
+        runs_dir: runs/evals-from-config
         process:
           dir: processed
         hf:
@@ -1391,7 +1388,7 @@ def test_process_cli_rejects_unset_hf_token_env_reference(
 
 def test_expand_embedded_process_config_promotes_process_section() -> None:
     payload = {
-        "runs_dir": "runs/raw",
+        "runs_dir": "runs/evals",
         "process": {
             "dir": "processed",
             "max_workers": 8,
@@ -1402,12 +1399,26 @@ def test_expand_embedded_process_config_promotes_process_section() -> None:
 
     expanded = main._expand_embedded_pipeline_config(payload, mode="process")
 
-    assert expanded["runs_dir"] == "runs/raw"
+    assert expanded["runs_dir"] == "runs/evals"
     assert expanded["output_dir"] == Path("runs/processed")
     assert expanded["max_workers"] == 8
     assert expanded["replace_models"] == ["model-a"]
     assert "winrate" not in expanded
     assert payload["process"]["dir"] == "processed"
+
+
+def test_expand_embedded_process_config_uses_default_evals_parent_for_relative_dir() -> None:
+    payload = {
+        "process": {
+            "dir": "processed",
+            "max_workers": 8,
+        },
+    }
+
+    expanded = main._expand_embedded_pipeline_config(payload, mode="process")
+
+    assert expanded["output_dir"] == Path("runs/processed")
+    assert expanded["max_workers"] == 8
 
 
 def test_expand_embedded_winrate_config_resolves_relative_dirs() -> None:
@@ -1460,7 +1471,9 @@ def test_process_cli_requires_winrate_config_path(tmp_path: Path) -> None:
         )
 
 
-def test_process_cli_defaults_status_filter_to_completed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_process_cli_records_default_max_results_missing_pct(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     captured: dict[str, Any] = {}
 
     def fake_run_process(options, env_export_map):
@@ -1482,13 +1495,11 @@ def test_process_cli_defaults_status_filter_to_completed(monkeypatch: pytest.Mon
 
     assert exit_code == 0
     options = captured["options"]
-    assert options.status_filter == ("completed",)
-    assert options.processed_with_args["status"] == ["completed"]
     assert options.max_results_missing_pct == pytest.approx(2.5)
     assert options.processed_with_args["max_results_missing_pct"] == pytest.approx(2.5)
 
 
-def test_process_cli_uses_explicit_status_filter(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_process_cli_records_explicit_max_results_missing_pct(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     captured: dict[str, Any] = {}
 
     def fake_run_process(options, env_export_map):
@@ -1504,8 +1515,6 @@ def test_process_cli_uses_explicit_status_filter(monkeypatch: pytest.MonkeyPatch
             str(tmp_path / "runs"),
             "--output-dir",
             str(tmp_path / "processed"),
-            "--status",
-            "failed",
             "--max-results-missing-pct",
             "100",
             "--dry-run",
@@ -1514,8 +1523,6 @@ def test_process_cli_uses_explicit_status_filter(monkeypatch: pytest.MonkeyPatch
 
     assert exit_code == 0
     options = captured["options"]
-    assert options.status_filter == ("failed",)
-    assert options.processed_with_args["status"] == ["failed"]
     assert options.max_results_missing_pct == pytest.approx(100.0)
 
 
@@ -1541,42 +1548,11 @@ def test_process_cli_rejects_negative_max_results_missing_pct(
     assert "--max-results-missing-pct must be non-negative." in err
 
 
-def test_process_config_empty_status_uses_default_filter(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    cfg_path = tmp_path / "process.yaml"
-    cfg_path.write_text(
-        """
-        runs_dir: runs/raw
-        process:
-          dir: processed
-          status: []
-        """,
-        encoding="utf-8",
-    )
-
-    captured: dict[str, Any] = {}
-
-    def fake_run_process(options, env_export_map):
-        captured["options"] = options
-        return ProcessResult(records_processed=0, rows_processed=0, env_groups=[], env_summaries=[], hf_summary=None)
-
-    monkeypatch.setattr(main, "run_process", fake_run_process)
-
-    exit_code = main.main(["process", "--config", str(cfg_path), "--dry-run"])
-
-    assert exit_code == 0
-    options = captured["options"]
-    assert options.status_filter == ("completed",)
-    assert options.processed_with_args["status"] == ["completed"]
-
-
 def test_process_cli_runs_embedded_winrate_post_step(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg_path = tmp_path / "process.yaml"
     cfg_path.write_text(
         """
-        runs_dir: runs/raw
+        runs_dir: runs/evals
         process:
           dir: processed
         winrate:
@@ -1665,7 +1641,7 @@ def test_process_cli_defaults_winrate_output_dir_under_processed(
     cfg_path = tmp_path / "process.yaml"
     cfg_path.write_text(
         """
-        runs_dir: runs/raw
+        runs_dir: runs/evals
         process:
           dir: processed
         winrate:
@@ -1792,7 +1768,7 @@ def test_process_cli_rejects_invalid_typed_config_values(
     cfg_path = tmp_path / "process-invalid.yaml"
     cfg_path.write_text(
         f"""
-        runs_dir: runs/raw
+        runs_dir: runs/evals
         output_dir: runs/processed
         {field}: {value}
         """,
@@ -1815,7 +1791,7 @@ def test_process_cli_rejects_removed_top_level_max_run_missing_pct_config_key(
     cfg_path = tmp_path / "process-removed-top-level.yaml"
     cfg_path.write_text(
         """
-        runs_dir: runs/raw
+        runs_dir: runs/evals
         output_dir: runs/processed
         max_run_missing_pct: 2.5
         """,
@@ -1838,7 +1814,7 @@ def test_process_cli_rejects_removed_embedded_max_run_missing_pct_config_key(
     cfg_path = tmp_path / "process-removed-embedded.yaml"
     cfg_path.write_text(
         """
-        runs_dir: runs/raw
+        runs_dir: runs/evals
         process:
           dir: processed
           max_run_missing_pct: 2.5
@@ -1853,6 +1829,29 @@ def test_process_cli_rejects_removed_embedded_max_run_missing_pct_config_key(
     err = capsys.readouterr().err
     assert "Process config field 'process.max_run_missing_pct' was removed" in err
     assert "process.max_results_missing_pct" in err
+
+
+def test_process_cli_rejects_removed_status_config_key(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cfg_path = tmp_path / "process-removed-status.yaml"
+    cfg_path.write_text(
+        """
+        runs_dir: runs/evals
+        process:
+          dir: processed
+          status: [completed]
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        main.main(["process", "--config", str(cfg_path)])
+
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert "Process config field 'process.status' was removed" in err
 
 
 def test_winrate_cli_ignores_removed_process_only_missing_pct_key(
@@ -1938,7 +1937,7 @@ def test_process_cli_allows_cli_override_of_malformed_numeric_config(
     cfg_path = tmp_path / "process-invalid-override.yaml"
     cfg_path.write_text(
         """
-        runs_dir: runs/raw
+        runs_dir: runs/evals
         output_dir: runs/processed
         max_workers: not-an-int
         """,

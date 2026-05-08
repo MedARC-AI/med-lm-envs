@@ -45,7 +45,6 @@ class ProcessOptions:
     replace_envs: Sequence[str] = field(default_factory=tuple)
     processed_at: str | None = None
     processed_with_args: Mapping[str, Any] = field(default_factory=dict)
-    status_filter: Sequence[str] = field(default_factory=lambda: PROCESS_DEFAULT_STATUS_FILTER)
     dry_run: bool = False
     clean: bool = False
     assume_yes: bool = False
@@ -60,7 +59,6 @@ class ProcessOptions:
         self.max_workers = max(1, int(self.max_workers))
         if not self.processed_at:
             self.processed_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-        self.status_filter = tuple(str(status) for status in self.status_filter)
         self.exclude_datasets = tuple(str(value) for value in self.exclude_datasets if str(value).strip())
         self.exclude_models = tuple(str(value) for value in self.exclude_models if str(value).strip())
         self.replace_models = tuple(str(value) for value in self.replace_models if str(value).strip())
@@ -150,10 +148,7 @@ def run_process(
                 baseline_result = preparation.baseline_result
 
         index_files = {} if options.clean else env_index.read_env_index_files(options.output_dir)
-        discovered = discovery.discover_run_records(
-            options.runs_dir,
-            filter_status=options.status_filter or None,
-        )
+        discovered = discovery.discover_run_records(options.runs_dir)
         selection = select_work_items(
             discovered,
             options=options,
