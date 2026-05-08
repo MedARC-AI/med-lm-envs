@@ -408,30 +408,70 @@ def _string_or_none(value: Any) -> str | None:
     return text or None
 
 
+def _run_conversion_cli(*, raw_dir: Path, output_dir: Path, dry_run: bool, report_path: Path | None) -> int:
+    report = convert_legacy_raw_runs(raw_dir=raw_dir, output_dir=output_dir, dry_run=dry_run)
+    encoded = json.dumps(report.to_dict(), indent=2, sort_keys=True)
+    if report_path:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(encoded + "\n", encoding="utf-8")
+    print(encoded)
+    return 1 if report.failed else 0
+
+
+class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
+    pass
+
+
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--raw-dir", type=Path, default=Path("runs") / "raw")
-    parser.add_argument("--output-dir", type=Path, default=Path("runs") / "evals")
-    parser.add_argument("--dry-run", action="store_true", default=True, help="plan conversion without writing files")
-    parser.add_argument(
-        "--no-dry-run",
-        dest="dry_run",
-        action="store_false",
-        help="write converted eval-output directories",
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=_HelpFormatter,
+        epilog="""
+Examples:
+  python scripts/convert_legacy_raw_runs.py
+      Preview conversion from runs/raw to runs/evals.
+
+  python scripts/convert_legacy_raw_runs.py --no-dry-run --report-path report.json
+      Write converted eval-output directories and save the JSON report.
+
+  python scripts/convert_legacy_raw_runs.py --raw-dir old/runs/raw --output-dir runs/evals
+      Preview conversion from a custom legacy raw-run directory.
+""",
     )
-    parser.add_argument("--report-path", type=Path, help="optional JSON report path")
+    parser.add_argument(
+        "--raw-dir",
+        type=Path,
+        default=Path("runs") / "raw",
+        help="legacy raw-run root directory containing */run_manifest.json files",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("runs") / "evals",
+        help="converted eval-output root directory",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="plan conversion without writing files; use --no-dry-run to write converted outputs",
+    )
+    parser.add_argument(
+        "--report-path",
+        type=Path,
+        help="optional path for a JSON copy of the conversion report",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    report = convert_legacy_raw_runs(raw_dir=args.raw_dir, output_dir=args.output_dir, dry_run=args.dry_run)
-    encoded = json.dumps(report.to_dict(), indent=2, sort_keys=True)
-    if args.report_path:
-        args.report_path.parent.mkdir(parents=True, exist_ok=True)
-        args.report_path.write_text(encoded + "\n", encoding="utf-8")
-    print(encoded)
-    return 1 if report.failed else 0
+    return _run_conversion_cli(
+        raw_dir=args.raw_dir,
+        output_dir=args.output_dir,
+        dry_run=args.dry_run,
+        report_path=args.report_path,
+    )
 
 
 if __name__ == "__main__":

@@ -161,7 +161,7 @@ def test_build_eval_config_resolves_endpoint_alias_and_core_fields(tmp_path: Pat
     assert config.max_concurrent == 4
     assert config.max_retries == 3
     assert config.num_workers == 2
-    assert config.debug is True
+    assert "debug" not in type(config).model_fields
     assert config.extra_env_kwargs == {"timeout_seconds": 45.0}
     assert config.state_columns == ["question_id", "split"]
     assert config.save_results is True

@@ -46,7 +46,12 @@ def load_endpoint_registry(
 
 def load_endpoint_sampling_profiles(path: str | Path) -> dict[str, list[dict[str, Any]]]:
     """Load MedARC endpoint-level sampling defaults from a TOML registry."""
-    resolved = resolve_endpoints_file(str(path))
+    try:
+        resolved = resolve_endpoints_file(str(path))
+    except ValueError:
+        if Path(path).suffix == ".py":
+            return {}
+        raise
     if resolved is None or not resolved.exists() or resolved.suffix != ".toml":
         return {}
 

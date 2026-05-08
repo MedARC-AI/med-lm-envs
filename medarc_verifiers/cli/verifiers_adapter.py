@@ -1,6 +1,6 @@
 """Small adapter for upstream ``verifiers`` eval configuration.
 
-Upstream ``verifiers`` owns TOML loading and eval execution, but in 0.1.12 the
+Upstream ``verifiers`` owns TOML loading and eval execution, but in 0.1.14 the
 ``EvalConfig`` builder lives inside ``verifiers.scripts.eval.main()`` and cannot
 be imported directly. Keep this module deliberately narrow until upstream exposes
 a public builder.
@@ -150,31 +150,31 @@ def build_eval_config(raw: Mapping[str, Any], *, overrides: EvalConfigOverrides 
     if merged_raw.get("timeout") is not None:
         extra_env_kwargs["timeout_seconds"] = merged_raw["timeout"]
 
-    return EvalConfig(
-        env_id=env_id,
-        env_args=merged_raw.get("env_args", {}),
-        env_dir_path=merged_raw.get("env_dir_path", DEFAULT_ENV_DIR_PATH),
-        output_dir=merged_raw.get("output_dir"),
-        extra_env_kwargs=extra_env_kwargs,
-        endpoint_id=resolved_endpoint_id,
-        model=model,
-        client_config=client_config,
-        sampling_args=sampling_args,
-        num_examples=num_examples,
-        rollouts_per_example=rollouts_per_example,
-        max_concurrent=merged_raw.get("max_concurrent", DEFAULT_MAX_CONCURRENT),
-        max_retries=merged_raw.get("max_retries", 0),
-        num_workers=merged_raw.get("num_workers", "auto"),
-        disable_env_server=merged_raw.get("disable_env_server", False),
-        debug=merged_raw.get("debug", False),
-        verbose=merged_raw.get("verbose", False),
-        state_columns=merged_raw.get("state_columns", []),
-        save_results=merged_raw.get("save_results", False),
-        resume_path=None,
-        independent_scoring=merged_raw.get("independent_scoring", False),
-        save_to_hf_hub=merged_raw.get("save_to_hf_hub", False),
-        hf_hub_dataset_name=merged_raw.get("hf_hub_dataset_name", ""),
-    )
+    eval_config_kwargs: dict[str, Any] = {
+        "env_id": env_id,
+        "env_args": merged_raw.get("env_args", {}),
+        "env_dir_path": merged_raw.get("env_dir_path", DEFAULT_ENV_DIR_PATH),
+        "output_dir": merged_raw.get("output_dir"),
+        "extra_env_kwargs": extra_env_kwargs,
+        "endpoint_id": resolved_endpoint_id,
+        "model": model,
+        "client_config": client_config,
+        "sampling_args": sampling_args,
+        "num_examples": num_examples,
+        "rollouts_per_example": rollouts_per_example,
+        "max_concurrent": merged_raw.get("max_concurrent", DEFAULT_MAX_CONCURRENT),
+        "max_retries": merged_raw.get("max_retries", 0),
+        "num_workers": merged_raw.get("num_workers", "auto"),
+        "verbose": merged_raw.get("verbose", False),
+        "disable_env_server": merged_raw.get("disable_env_server", False),
+        "state_columns": merged_raw.get("state_columns", []),
+        "save_results": merged_raw.get("save_results", False),
+        "resume_path": None,
+        "independent_scoring": merged_raw.get("independent_scoring", False),
+        "save_to_hf_hub": merged_raw.get("save_to_hf_hub", False),
+        "hf_hub_dataset_name": merged_raw.get("hf_hub_dataset_name", ""),
+    }
+    return EvalConfig(**eval_config_kwargs)
 
 
 def get_env_eval_defaults(env_id: str) -> dict[str, Any]:
