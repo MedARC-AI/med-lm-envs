@@ -403,11 +403,16 @@ def _build_sampling_args(
         temperature=raw.get("temperature"),
         include_none_max_tokens=include_none_max_tokens,
     )
-    merged = _deep_merge(prime_sampling_overrides, endpoint_sampling)
-    merged = _deep_merge(merged, scalar_sampling_args)
-    merged = _deep_merge(merged, _validate_sampling_mapping(raw.get("sampling_args"), "sampling_args"))
-    merged = _deep_merge(merged, _validate_sampling_mapping(cli_sampling_args, "CLI sampling_args"))
-    return sanitize_sampling_args_for_openai(merged)
+    merged = sanitize_sampling_args_for_openai(prime_sampling_overrides)
+    merged = _deep_merge(merged, sanitize_sampling_args_for_openai(endpoint_sampling))
+    merged = _deep_merge(merged, sanitize_sampling_args_for_openai(scalar_sampling_args))
+    merged = _deep_merge(
+        merged, sanitize_sampling_args_for_openai(_validate_sampling_mapping(raw.get("sampling_args"), "sampling_args"))
+    )
+    merged = _deep_merge(
+        merged, sanitize_sampling_args_for_openai(_validate_sampling_mapping(cli_sampling_args, "CLI sampling_args"))
+    )
+    return merged
 
 
 def _merge_sampling_args(

@@ -350,6 +350,31 @@ sampling_args = { extra_body = { top_k = 1 } }
     assert config.sampling_args["extra_body"]["top_k"] == 3
 
 
+def test_build_eval_config_extra_body_key_overrides_lower_precedence_direct_unknown_arg(tmp_path: Path) -> None:
+    endpoints_path = tmp_path / "endpoints.toml"
+    endpoints_path.write_text(
+        """
+[[endpoint]]
+endpoint_id = "profiled"
+model = "openai/profiled"
+url = "https://profiled.example/v1"
+key = "PROFILED_KEY"
+sampling_args = { top_k = 0 }
+""".strip()
+    )
+
+    config = build_eval_config(
+        {
+            "env_id": "medqa",
+            "endpoint_id": "profiled",
+            "endpoints_path": str(endpoints_path),
+            "sampling_args": {"extra_body": {"top_k": 5}},
+        }
+    )
+
+    assert config.sampling_args["extra_body"]["top_k"] == 5
+
+
 def test_build_eval_config_endpoint_replica_sampling_profiles_must_match(tmp_path: Path) -> None:
     endpoints_path = tmp_path / "endpoints.toml"
     endpoints_path.write_text(
