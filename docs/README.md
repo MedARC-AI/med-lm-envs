@@ -18,7 +18,7 @@ Environments are installed separately via `prime env install <owner/env>` (from 
 |---------|-------------|
 | `medarc-eval <ENV>` | Run a single benchmark; env-specific flags inferred from `load_environment()` |
 | `medarc-eval bench` | Run upstream TOML eval configs with deterministic MedARC paths |
-| `medarc-eval process` | Convert raw outputs to analysis-ready parquet |
+| `medarc-eval process` | Convert eval outputs to analysis-ready parquet |
 | `medarc-eval winrate` | Compute HELM-style win rates across models |
 
 See [medarc-eval.md](medarc-eval.md) for full documentation.

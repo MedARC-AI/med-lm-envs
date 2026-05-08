@@ -1,6 +1,7 @@
 # Processing Results
 
-Convert raw benchmark outputs into analysis-ready parquet files. This step prepares data for win rate computation and other analyses.
+Convert eval outputs into analysis-ready parquet files. This step prepares data
+for win rate computation and other analyses.
 
 ## Quick Start
 
@@ -8,8 +9,11 @@ Convert raw benchmark outputs into analysis-ready parquet files. This step prepa
 # Process outputs from the current TOML bench runner
 medarc-eval process --runs-dir runs/evals --output-dir runs/processed
 
-# Process legacy manifest outputs (default runs dir)
+# Process outputs from the default runs/evals directory
 medarc-eval process
+
+# Convert old YAML-runner raw outputs first
+uv run python scripts/convert_legacy_raw_runs.py --raw-dir runs/raw --output-dir runs/evals --dry-run
 
 # Preview what would be processed
 medarc-eval process --dry-run
@@ -17,8 +21,8 @@ medarc-eval process --dry-run
 
 ## What Processing Does
 
-1. **Discovers** eval outputs in `runs/evals/` by scanning output directories,
-   and legacy manifest jobs in `runs/raw/`
+1. **Discovers** eval outputs in `runs/evals/` by scanning output directories
+   containing `metadata.json` and `results.jsonl`
 2. **Extracts** results from each eval output directory
 3. **Normalizes** data into a fixed output schema
 4. **Writes** parquet files organized by model and environment
@@ -44,7 +48,7 @@ On-disk model and env path components are slugified, so filenames may not exactl
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--runs-dir PATH` | Directory containing raw run outputs. Use `runs/evals` for new TOML bench runs. | `runs/raw` |
+| `--runs-dir PATH` | Directory containing eval output directories | `runs/evals` |
 | `--output-dir PATH` | Where to write processed files | `runs/processed` |
 | `--max-workers N` | Parallel worker processes | 4 |
 | `--dry-run` | Show what would be processed | - |
@@ -54,25 +58,10 @@ On-disk model and env path components are slugified, so filenames may not exactl
 
 ## Filtering Runs
 
-### By Completion Status
-
 For current TOML bench outputs, processing scans for directories containing
 `metadata.json` and `results.jsonl`. Model and environment identity come from
 upstream metadata when available; variant identity comes from the deterministic
 path segment. Ad hoc upstream outputs fall back to metadata/path inference.
-
-For legacy YAML-runner outputs, `medarc-eval process` reads
-`runs/raw/<run_id>/run_manifest.json` and only selects jobs whose manifest
-status is `completed` by default.
-
-Note: successful legacy jobs are written to `run_manifest.json` with
-`status: completed`.
-
-To override that default, pass one or more explicit status filters:
-
-```bash
-medarc-eval process --status completed --status failed
-```
 
 You can also gate partially complete outputs by missing `results.jsonl` rows:
 
@@ -84,20 +73,17 @@ medarc-eval process --max-results-missing-pct 2.5
 medarc-eval process --max-results-missing-pct 100
 ```
 
-For TOML bench outputs, this gate uses `metadata.json` values for expected rows
-and the observed `results.jsonl` row count:
+This gate uses `metadata.json` values for expected rows and the observed
+`results.jsonl` row count:
 
 - `expected_rows = num_examples * rollouts_per_example`
 - `observed_rows = results.jsonl row count`
 
-For legacy manifest outputs, the same gate uses manifest job fields:
+It is computed per selected output and enforced only on the latest selected run
+for each processed model/environment output. It does not fall back to older runs
+if the latest one is too incomplete.
 
-- `expected_rows = num_examples * rollouts_per_example`
-- `observed_rows = row_count`
-
-It is computed per selected job record and enforced only on the latest selected run for each processed model/environment output. For legacy manifests, it does not use manifest `summary.completed` / `summary.total`, and it does not fall back to older runs if the latest one is too incomplete.
-
-Selected records with missing `results.jsonl` fail processing immediately.
+Directories without `results.jsonl` are not process candidates.
 
 ### Latest Runs Only
 
@@ -145,7 +131,7 @@ CLI flags override config values.
 
 Supported config schema for `medarc-eval process`:
 
-- Top-level `runs_dir`: raw run root. Use `runs/evals` for new TOML bench outputs and `runs/raw` for legacy manifest outputs.
+- Top-level `runs_dir`: eval output root, usually `runs/evals`.
 - Top-level `process:`: process-specific defaults.
 - Optional top-level `winrate:`: embedded post-process winrate step.
 - Optional top-level `hf:`: shared HF settings. For embedded winrate uploads, use `hf.winrate_dir`.
@@ -296,20 +282,39 @@ When both flags are present, processing only rebuilds outputs that match both fi
 Check that:
 1. `--runs-dir` points to the correct location
 2. For TOML bench outputs, each eval directory contains `results.jsonl` and `metadata.json`
-3. For legacy manifest outputs, runs have completed (check `run_manifest.json` `jobs[*].status`)
-4. Use `--status pending` or `--status running` to include non-completed legacy jobs
+3. Each eval output directory contains both `metadata.json` and `results.jsonl`
 
 ### Missing data in output
 
-By default, current TOML bench outputs are selected from valid eval directories, while legacy manifest outputs include only jobs with `completed` status. In addition, `--max-results-missing-pct` fails if a selected latest job record is missing more than 2.5% of its expected `results.jsonl` rows. TOML bench outputs use eval metadata plus the observed JSONL row count; legacy manifest outputs use manifest job fields:
+By default, TOML bench outputs are selected from valid eval directories.
+`--max-results-missing-pct` fails if a selected latest output is missing more
+than 2.5% of its expected `results.jsonl` rows. Processing uses eval metadata
+plus the observed JSONL row count:
 
-- `row_count`
 - `num_examples`
 - `rollouts_per_example`
 
-The gate is per selected record, not per whole run manifest. If the latest selected run for a model/dataset is too incomplete, processing fails fast instead of silently falling back to an older run. Records with unknown expected rows or unknown `row_count` are not gated.
+The gate is per selected output. If the latest selected run for a model/dataset
+is too incomplete, processing fails fast instead of silently falling back to an
+older run. Records with unknown expected rows are not gated.
 
-Use `--max-results-missing-pct 100` to disable the gate, or pass explicit `--status` values to include other statuses.
+Use `--max-results-missing-pct 100` to disable the gate.
+
+### Migrating Old Raw Runs
+
+`medarc-eval process` no longer reads `runs/raw/<run_id>/run_manifest.json`
+directly. Convert old local artifacts into the current eval-output shape first:
+
+```bash
+uv run python scripts/convert_legacy_raw_runs.py \
+  --raw-dir runs/raw \
+  --output-dir runs/evals \
+  --dry-run
+```
+
+The converter defaults to dry-run, never mutates `runs/raw`, and fails on
+existing target paths. Re-run with `--no-dry-run` to write converted
+`metadata.json` and `results.jsonl` directories under `runs/evals`.
 
 ### Integrity-check failures for existing parquet files
 

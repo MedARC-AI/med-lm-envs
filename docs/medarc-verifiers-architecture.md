@@ -9,18 +9,19 @@ framework with:
 
 - A unified CLI (`medarc-eval`) for medical benchmark environments.
 - A TOML bench wrapper for sequential local benchmark runs with deterministic output paths.
-- A processing pipeline that converts raw eval artifacts into analysis-ready Parquet datasets.
+- A processing pipeline that converts eval output artifacts into analysis-ready Parquet datasets.
 - HELM-style win rate computation across models from processed outputs.
 - Shared environment utilities for parsers, rewards, shuffling, and judging.
 
 The current workflow is:
 
 1. **Run** evals with single-run mode or TOML bench -> `runs/evals/<model>/<env>/...`
-2. **Process** raw outputs -> `runs/processed/<model>/<env>.parquet` plus `env_index.json`
+2. **Process** eval outputs -> `runs/processed/<model>/<env>.parquet` plus `env_index.json`
 3. **Winrate** on processed outputs -> `runs/processed/winrate/*.json` and `*.csv`
 
-Historical YAML-runner outputs under `runs/raw/<run_id>/...` remain readable by
-`medarc-eval process`, but the YAML benchmark runner itself has been removed.
+Historical YAML-runner outputs under `runs/raw/<run_id>/...` must be converted
+with `scripts/convert_legacy_raw_runs.py` before `medarc-eval process` can read
+them. The YAML benchmark runner itself has been removed.
 
 ## Import Side Effects
 
@@ -139,10 +140,11 @@ write MedARC identity into upstream `metadata.json`. Variant identity is the
 deterministic path segment, so `variant_id` / `name` values must already be
 path-safe.
 
-`medarc_verifiers/cli/_manifest.py` now only contains the legacy manifest schema
-needed by processing to read historical `runs/raw` outputs.
+Historical raw-run manifest schemas are not part of the runtime package. Use
+`scripts/convert_legacy_raw_runs.py` as a one-off migration helper for old
+`runs/raw` artifacts.
 
-## Raw Outputs
+## Eval Outputs
 
 TOML bench outputs include:
 
@@ -160,10 +162,9 @@ Entry point: `medarc_verifiers/cli/process/pipeline.py`.
 
 Processing:
 
-1. Discovers TOML bench outputs from `runs/evals` by scanning directories, and
-   legacy manifest outputs from `runs/raw`.
-2. Normalizes identity from upstream `metadata.json` and paths; legacy outputs
-   still use manifest fields.
+1. Discovers eval outputs from `runs/evals` by scanning directories containing
+   `metadata.json` and `results.jsonl`.
+2. Normalizes identity from upstream `metadata.json` and deterministic paths.
 3. Loads rows from `results.jsonl`, drops large prompt/completion fields, and
    flattens `token_usage`.
 4. Aggregates rows per model and environment, preserving variant ids.

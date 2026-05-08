@@ -12,12 +12,12 @@
 
 - **IMPORTANT: Read `docs/medarc-verifiers-architecture.md` before writing or modifying any code.**
 - Quick workflow: eval → process → winrate
-  - raw outputs: `runs/raw/<run_id>/...`
+  - eval outputs: `runs/evals/<model>/<env>/<variant>/...`
   - processed parquet: `runs/processed/<model>/<env>.parquet` + `runs/processed/env_index.json`
   - winrate outputs: `runs/winrate/latest.json` and `runs/winrate/latest.csv`
 - `medarc-eval` CLI entrypoint/router: (`medarc_verifiers/cli/main.py`; docs: `docs/medarc-eval.md`)
 - `medarc-orchestrate` CLI entrypoint: (`medarc_verifiers/orchestrate/cli.py`; docs: `docs/medarc-orchestrate.md`)
-- Batch resume/restart state lives in `runs/raw/<run_id>/run_manifest.json`
+- Old YAML-runner `runs/raw` artifacts must be converted with `scripts/convert_legacy_raw_runs.py` before processing.
 - Environment `load_environment()` params become CLI flags (see `medarc-eval <env> --help`).
 - Environment authoring utilities (used by `environments/*`):
   - parsing/prompts: `medarc_verifiers/parsers/`, `medarc_verifiers/prompts.py` (XML preferred; BOXED supported)

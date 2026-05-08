@@ -188,8 +188,10 @@ medarc-eval process --runs-dir runs/evals --output-dir runs/processed
 medarc-eval winrate --processed-dir runs/processed
 ```
 
-Processing still supports legacy `runs/raw/<run_id>/run_manifest.json` outputs
-for migration, but new bench runs should use `runs/evals`.
+Processing reads eval-output directories under `runs/evals`. Legacy
+`runs/raw/<run_id>/run_manifest.json` outputs must be converted with
+`scripts/convert_legacy_raw_runs.py` before processing. New bench runs should
+use `runs/evals`.
 
 ## Migrating from the Removed YAML Runner
 
@@ -205,5 +207,14 @@ Removed YAML-runner concepts no longer exist in `medarc-eval bench`:
 - `--job-id`, `--forced`, `--on-complete`
 - custom YAML job status and manifest planning
 
-Old raw outputs remain processable through the legacy manifest reader, so
-historical runs do not need to be converted before processing.
+Old raw outputs must be converted before processing:
+
+```bash
+uv run python scripts/convert_legacy_raw_runs.py \
+  --raw-dir runs/raw \
+  --output-dir runs/evals \
+  --dry-run
+```
+
+The converter is an operator migration helper. It does not mutate `runs/raw` and
+defaults to dry-run; pass `--no-dry-run` to write converted eval outputs.

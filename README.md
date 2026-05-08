@@ -108,7 +108,7 @@ Once your tooling is set up you can install MedARC-maintained environments direc
 |---------|-------------|
 | [`medarc-eval <ENV>`](docs/medarc-eval-single-run.md) | Run a single benchmark with auto-discovered environment flags |
 | [`medarc-eval bench`](docs/medarc-eval-bench.md) | Run upstream TOML eval configs with deterministic MedARC paths |
-| [`medarc-eval process`](docs/medarc-eval-process.md) | Convert raw outputs to parquet for analysis |
+| [`medarc-eval process`](docs/medarc-eval-process.md) | Convert eval outputs to parquet for analysis |
 | [`medarc-eval winrate`](docs/medarc-eval-winrate.md) | Compute HELM-style win rates across models |
 
 ### Quick Start
@@ -197,7 +197,7 @@ for details.
 After running benchmarks, convert results to parquet and compute model comparisons:
 
 ```bash
-# Process raw outputs to parquet
+# Process eval outputs to parquet
 uv run medarc-eval process --runs-dir runs/evals
 
 # Compute HELM-style win rates
