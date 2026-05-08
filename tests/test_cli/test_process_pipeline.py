@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 import pyarrow.parquet as pq
 
-from medarc_verifiers.cli._manifest import MANIFEST_VERSION
 from medarc_verifiers.cli._schemas import EnvironmentExportConfig
 from medarc_verifiers.cli.hf import HFSyncConfig
 from medarc_verifiers.cli.process import ProcessOptions, run_process
@@ -21,6 +22,11 @@ from medarc_verifiers.cli.process.writer import ALLOWED_COLUMNS
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _set_mtime(path: Path, updated_at: str) -> None:
+    timestamp = datetime.fromisoformat(updated_at.replace("Z", "+00:00")).timestamp()
+    os.utime(path, (timestamp, timestamp))
 
 
 def _manifest_info(
@@ -100,49 +106,15 @@ def _run_record(
 
 
 def _setup_run(tmp_path: Path) -> Path:
-    runs_dir = tmp_path / "runs"
-    run_dir = runs_dir / "run-1"
-    results_dir = run_dir / "demo-job"
-    manifest = {
-        "version": MANIFEST_VERSION,
-        "run_id": "run-1",
-        "name": "demo",
-        "config_source": "configs/demo.yaml",
-        "config_snapshot": {"jobs": []},
-        "config_checksum": "abc123",
-        "created_at": "2024-01-01T00:00:00Z",
-        "updated_at": "2024-01-01T00:00:00Z",
-        "models": {"gpt-mini": {"sampling_args": {}}},
-        "env_templates": {"demo-env-template": {"module": "demo-env-rollout3"}},
-        "summary": {
-            "total": 1,
-            "completed": 1,
-            "pending": 0,
-            "running": 0,
-            "failed": 0,
-            "skipped": 0,
-        },
-        "jobs": [
-            {
-                "job_id": "demo-job",
-                "model_id": "gpt-mini",
-                "env_id": "demo-env-rollout3",
-                "env_template_id": "demo-env-template",
-                "env_variant_id": "demo-env-rollout3",
-                "env_args": {},
-                "results_dir": "demo-job",
-                "status": "completed",
-                "num_examples": 1,
-                "rollouts_per_example": 1,
-                "row_count": 1,
-            }
-        ],
-    }
-    _write_json(run_dir / "run_manifest.json", manifest)
+    runs_dir = tmp_path / "runs" / "evals"
+    results_dir = runs_dir / "demo-env-rollout3--gpt-mini" / "run-1"
     metadata = {
         "env_id": "demo-env-rollout3",
+        "model": "gpt-mini",
         "env_args": {},
         "sampling_args": {},
+        "num_examples": 1,
+        "rollouts_per_example": 1,
         "version_info": {
             "vf_version": "0.1.10",
             "vf_commit": "abc123",
@@ -165,6 +137,7 @@ def _setup_run(tmp_path: Path) -> Path:
     with results_path.open("w", encoding="utf-8") as handle:
         for row in results:
             handle.write(json.dumps(row) + "\n")
+    _set_mtime(results_dir / "metadata.json", "2024-01-01T00:00:00Z")
     return runs_dir
 
 
@@ -184,60 +157,29 @@ def _write_run(
     write_results: bool = True,
     job_id: str = "demo-job",
 ) -> Path:
-    runs_dir = tmp_path / "runs"
-    run_dir = runs_dir / run_id
-    results_dir = run_dir / job_id
-    manifest = {
-        "version": MANIFEST_VERSION,
-        "run_id": run_id,
-        "name": "demo",
-        "config_source": "configs/demo.yaml",
-        "config_snapshot": {"jobs": []},
-        "config_checksum": "abc123",
-        "created_at": "2024-01-01T00:00:00Z",
-        "updated_at": updated_at,
-        "models": {model_id: {"sampling_args": {}}},
-        "env_templates": {"demo-env-template": {"module": env_id}},
-        "summary": {
-            "total": 1,
-            "completed": 1 if status == "completed" else 0,
-            "pending": 0,
-            "running": 0,
-            "failed": 1 if status == "failed" else 0,
-            "skipped": 0,
-        },
-        "jobs": [
-            {
-                "job_id": job_id,
-                "model_id": model_id,
-                "env_id": env_id,
-                "env_template_id": "demo-env-template",
-                "env_variant_id": env_id,
-                "env_args": {},
-                "results_dir": job_id,
-                "status": status,
-                "row_count": row_count,
-                "num_examples": num_examples,
-                "rollouts_per_example": rollouts_per_example,
-            }
-        ],
-    }
-    _write_json(run_dir / "run_manifest.json", manifest)
+    runs_dir = tmp_path / "runs" / "evals"
+    results_dir = runs_dir / f"{env_id}--{model_id}" / run_id
     metadata = {
         "env_id": env_id,
+        "model": model_id,
         "env_args": {},
         "sampling_args": {},
         "num_examples": num_examples,
         "rollouts_per_example": rollouts_per_example,
     }
     _write_json(results_dir / "metadata.json", metadata)
+    _set_mtime(results_dir / "metadata.json", updated_at)
     results_path = results_dir / "results.jsonl"
     if write_results:
         results_path.parent.mkdir(parents=True, exist_ok=True)
         if results_text is None:
-            row = {"example_id": f"ex-{run_id}", "reward": reward}
-            results_text = json.dumps(row) + "\n"
+            result_rows = 1 if row_count is None else max(int(row_count), 0)
+            results_text = "".join(
+                json.dumps({"example_id": f"ex-{run_id}-{index}", "reward": reward}) + "\n"
+                for index in range(result_rows)
+            )
         results_path.write_text(results_text, encoding="utf-8")
+        _set_mtime(results_path, updated_at)
     return runs_dir
 
 
@@ -250,8 +192,8 @@ def _write_deterministic_eval(
     env_args: dict[str, object] | None = None,
     result_row: dict[str, object] | None = None,
 ) -> Path:
-    runs_dir = tmp_path / "runs"
-    results_dir = runs_dir / "evals" / model_id / env_id
+    runs_dir = tmp_path / "runs" / "evals"
+    results_dir = runs_dir / model_id / env_id / (variant_id or "base")
     resolved_env_args = env_args or {}
     metadata = {
         "env_id": env_id,
@@ -260,40 +202,11 @@ def _write_deterministic_eval(
         "sampling_args": {},
         "num_examples": 1,
         "rollouts_per_example": 1,
-        "medarc_config_fingerprint": "abc123",
-        "medarc_config_fingerprint_payload": {
-            "env_id": env_id,
-            "model": model_id,
-            "env_args": resolved_env_args,
-            "sampling_args": {},
-            "num_examples": 1,
-            "rollouts_per_example": 1,
-        },
-        "variant_id": None,
-        "variant_payload": None,
     }
-    if variant_id is not None:
-        results_dir = results_dir / variant_id
-        metadata["variant_id"] = variant_id
-        metadata["variant_payload"] = {"env_args": resolved_env_args or {"shuffle_seed": 1618}}
     _write_json(results_dir / "metadata.json", metadata)
     row = result_row or {"example_id": "ex-1", "reward": 1.0}
     (results_dir / "results.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
-    return runs_dir / "raw"
-
-
-def _remove_model_id(tmp_path: Path, run_id: str) -> None:
-    manifest_path = tmp_path / "runs" / run_id / "run_manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["jobs"][0]["model_id"] = None
-    manifest["models"] = {}
-    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-
-    job_id = manifest["jobs"][0]["job_id"]
-    metadata_path = tmp_path / "runs" / run_id / job_id / "metadata.json"
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    metadata.pop("model", None)
-    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    return runs_dir
 
 
 def test_run_process_respects_env_export_defaults(tmp_path: Path) -> None:
@@ -579,7 +492,7 @@ def test_process_allows_results_missing_pct_within_threshold(tmp_path: Path) -> 
     result = run_process(options)
 
     assert result.records_processed == 1
-    assert result.rows_processed == 1
+    assert result.rows_processed == 98
 
 
 def test_process_rejects_results_missing_pct_above_threshold(tmp_path: Path) -> None:
@@ -635,14 +548,14 @@ def test_process_allows_ungateable_record_when_expected_rows_unknown(tmp_path: P
     assert result.records_processed == 1
 
 
-def test_process_allows_ungateable_record_when_row_count_unknown(tmp_path: Path) -> None:
+def test_process_allows_ungateable_record_when_expected_rows_unknown_even_with_observed_rows(tmp_path: Path) -> None:
     runs_dir = _write_run(
         tmp_path,
         run_id="run-unknown-observed",
         updated_at="2024-01-01T00:00:00Z",
         reward=1.0,
         row_count=None,
-        num_examples=100,
+        num_examples=None,
         rollouts_per_example=1,
     )
     options = ProcessOptions(
@@ -692,7 +605,7 @@ def test_process_latest_record_that_fails_gate_does_not_fall_back(tmp_path: Path
     assert "run-older-ok" not in message
 
 
-def test_process_rejects_missing_results_jsonl_for_selected_latest_record(tmp_path: Path) -> None:
+def test_process_ignores_metadata_only_output_without_results_jsonl(tmp_path: Path) -> None:
     runs_dir = _write_run(
         tmp_path,
         run_id="run-missing-results",
@@ -710,12 +623,10 @@ def test_process_rejects_missing_results_jsonl_for_selected_latest_record(tmp_pa
         max_workers=1,
     )
 
-    with pytest.raises(RuntimeError) as excinfo:
-        run_process(options)
+    result = run_process(options)
 
-    message = str(excinfo.value)
-    assert "missing results.jsonl files" in message
-    assert "run-missing-results" in message
+    assert result.records_processed == 0
+    assert result.rows_processed == 0
 
 
 def test_process_gate_ignores_excluded_record(tmp_path: Path) -> None:
@@ -795,7 +706,7 @@ def test_process_emits_single_warning_for_ungateable_selected_records(
         updated_at="2024-01-01T00:00:00Z",
         reward=1.0,
         row_count=None,
-        num_examples=100,
+        num_examples=None,
         rollouts_per_example=1,
     )
     caplog.set_level("WARNING")
@@ -816,7 +727,7 @@ def test_process_emits_single_warning_for_ungateable_selected_records(
     assert len(warnings) == 1
 
 
-def test_process_uses_actual_results_rows_when_manifest_row_count_is_stale(
+def test_process_uses_discovered_actual_results_rows_for_completeness_gate(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -843,8 +754,7 @@ def test_process_uses_actual_results_rows_when_manifest_row_count_is_stale(
     )
 
     assert result.records_processed == 1
-    assert "Manifest row_count mismatch for process input" in caplog.text
-    assert "manifest row_count=90 actual_rows=100" in caplog.text
+    assert "row_count mismatch" not in caplog.text
 
 
 def test_select_work_items_rollout_gate_error_includes_output_and_manifest_ids(tmp_path: Path) -> None:
@@ -873,7 +783,7 @@ def test_select_work_items_rollout_gate_error_includes_output_and_manifest_ids(t
     message = str(excinfo.value)
     assert "output_env_id=demo-env" in message
     assert "manifest_env_id=demo-env-rollout3" in message
-    assert "job_id=demo-job" in message
+    assert "job_id=run-rollout-bad" in message
 
 
 def test_run_process_excludes_models(tmp_path: Path) -> None:
@@ -1448,78 +1358,6 @@ def test_process_ignores_invalid_superseded_run(tmp_path: Path) -> None:
     assert table.column("reward").to_pylist() == [0.9]
 
 
-def test_process_ignores_superseded_run_missing_model_id(tmp_path: Path) -> None:
-    runs_dir = _write_run(tmp_path, run_id="run-1", updated_at="2024-01-01T00:00:00Z", reward=0.1)
-    _remove_model_id(tmp_path, "run-1")
-    _write_run(tmp_path, run_id="run-2", updated_at="2024-01-02T00:00:00Z", reward=0.9)
-
-    result = run_process(
-        ProcessOptions(runs_dir=runs_dir, output_dir=tmp_path / "processed", dry_run=False, max_workers=1)
-    )
-
-    table = pq.read_table(result.env_summaries[0].output_path)
-    assert table.column("reward").to_pylist() == [0.9]
-
-
-def test_process_latest_missing_model_id_fails_clearly(tmp_path: Path) -> None:
-    runs_dir = _write_run(tmp_path, run_id="run-1", updated_at="2024-01-01T00:00:00Z", reward=0.1)
-    _write_run(tmp_path, run_id="run-2", updated_at="2024-01-02T00:00:00Z", reward=0.9)
-    _remove_model_id(tmp_path, "run-2")
-
-    with pytest.raises(RuntimeError, match=r"Missing model_id for run \(job_run_id=run-2, job_id=demo-job,"):
-        run_process(ProcessOptions(runs_dir=runs_dir, output_dir=tmp_path / "processed", dry_run=False, max_workers=1))
-
-
-def test_process_latest_missing_model_id_not_masked_by_newer_other_job(tmp_path: Path) -> None:
-    runs_dir = _write_run(
-        tmp_path,
-        run_id="run-model-a-old",
-        updated_at="2024-01-01T00:00:00Z",
-        reward=0.1,
-        model_id="model-a",
-        job_id="job-model-a",
-    )
-    _write_run(
-        tmp_path,
-        run_id="run-model-a-bad",
-        updated_at="2024-01-02T00:00:00Z",
-        reward=0.2,
-        model_id="model-a",
-        job_id="job-model-a",
-    )
-    _remove_model_id(tmp_path, "run-model-a-bad")
-    _write_run(
-        tmp_path,
-        run_id="run-model-b-good",
-        updated_at="2024-01-03T00:00:00Z",
-        reward=0.9,
-        model_id="model-b",
-        job_id="job-model-b",
-    )
-
-    with pytest.raises(
-        RuntimeError, match=r"Missing model_id for run \(job_run_id=run-model-a-bad, job_id=job-model-a,"
-    ):
-        run_process(ProcessOptions(runs_dir=runs_dir, output_dir=tmp_path / "processed", dry_run=False, max_workers=1))
-
-
-def test_process_ignores_invalid_incomplete_run_by_default(tmp_path: Path) -> None:
-    runs_dir = _write_run(
-        tmp_path,
-        run_id="run-1",
-        updated_at="2024-01-01T00:00:00Z",
-        reward=0.1,
-        status="running",
-        results_text='{"example_id": ',
-    )
-    _write_run(tmp_path, run_id="run-2", updated_at="2024-01-02T00:00:00Z", reward=0.9, env_id="other-env")
-    output_dir = tmp_path / "processed"
-
-    result = run_process(ProcessOptions(runs_dir=runs_dir, output_dir=output_dir, dry_run=False, max_workers=1))
-
-    assert {summary.env_id for summary in result.env_summaries} == {"other-env"}
-
-
 def test_process_selected_invalid_results_still_fail(tmp_path: Path) -> None:
     runs_dir = _write_run(
         tmp_path,
@@ -1530,15 +1368,6 @@ def test_process_selected_invalid_results_still_fail(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValueError, match="Failed to parse JSONL line 1"):
-        run_process(ProcessOptions(runs_dir=runs_dir, output_dir=tmp_path / "processed", dry_run=False, max_workers=1))
-
-
-def test_process_selected_missing_results_still_fail(tmp_path: Path) -> None:
-    runs_dir = _setup_run(tmp_path)
-    missing_results = runs_dir / "run-1" / "demo-job" / "results.jsonl"
-    missing_results.unlink()
-
-    with pytest.raises(RuntimeError, match="Selected records are missing results.jsonl files:"):
         run_process(ProcessOptions(runs_dir=runs_dir, output_dir=tmp_path / "processed", dry_run=False, max_workers=1))
 
 
@@ -1623,11 +1452,6 @@ def test_run_process_reads_local_index_after_workspace_prep(
 
 def test_run_process_ignores_legacy_run_output_path(tmp_path: Path) -> None:
     runs_dir = _setup_run(tmp_path)
-    run_dir = runs_dir / "run-1"
-    manifest_path = run_dir / "run_manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["updated_at"] = "2024-01-01T00:10:00Z"
-    _write_json(manifest_path, manifest)
 
     output_dir = tmp_path / "processed"
     output_dir.mkdir()
