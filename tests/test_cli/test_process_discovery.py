@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from medarc_verifiers.cli.process.discovery import RunManifestInfo, discover_run_records
+from medarc_verifiers.cli.process.discovery import discover_run_records
 from medarc_verifiers.cli.process.metadata import load_normalized_metadata
 
 
@@ -12,247 +12,7 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _base_manifest(
-    job_payloads: list[dict],
-    *,
-    models: dict | None = None,
-    env_templates: dict | None = None,
-) -> dict:
-    return {
-        "version": 3,
-        "run_id": "job-run-123",
-        "name": "example-run",
-        "config_source": "configs/example.yaml",
-        "config_checksum": "abc123",
-        "created_at": "2024-01-01T00:00:00Z",
-        "updated_at": "2024-01-01T00:05:00Z",
-        "artifacts_root": ".",
-        "models": models or {},
-        "env_templates": env_templates or {},
-        "jobs": job_payloads,
-        "summary": {"completed": 1},
-    }
-
-
-def _manifest_info(*, completed: int, total: int, total_known: bool) -> RunManifestInfo:
-    return RunManifestInfo(
-        job_run_id="job-run-123",
-        run_name="example-run",
-        summary_completed=completed,
-        summary_total=total,
-        summary_total_known=total_known,
-        manifest_path=Path("/tmp/run_manifest.json"),
-        run_dir=Path("/tmp/job-run-123"),
-        created_at="2024-01-01T00:00:00Z",
-        updated_at="2024-01-01T00:05:00Z",
-        config_source="configs/example.yaml",
-        config_checksum="abc123",
-        run_summary_path=Path("/tmp/run_summary.json"),
-    )
-
-
-def test_discover_run_records_basic(tmp_path: Path) -> None:
-    runs_dir = tmp_path / "runs"
-    run_dir = runs_dir / "job-run-123"
-    results_dir = run_dir / "model-env-job"
-
-    manifest_payload = _base_manifest(
-        [
-            {
-                "job_id": "model-env-job",
-                "job_name": "demo-job",
-                "model_id": "gpt-4",
-                "env_id": "demo-env-module",
-                "env_template_id": "demo-env-template",
-                "env_variant_id": "demo-env",
-                "env_args": {"fold": "dev"},
-                "results_relpath": "model-env-job/results.jsonl",
-                "metadata_relpath": "model-env-job/metadata.json",
-                "status": "completed",
-                "started_at": "2024-01-01T00:00:30Z",
-                "ended_at": "2024-01-01T00:01:00Z",
-                "avg_reward": 0.75,
-                "num_examples": 10,
-                "rollouts_per_example": 2,
-                "row_count": 20,
-            }
-        ],
-        models={"gpt-4": {"sampling_args": {"temperature": 0.2}}},
-        env_templates={"demo-env-template": {"module": "demo-env-module"}},
-    )
-    _write_json(run_dir / "run_manifest.json", manifest_payload)
-
-    _write_json(
-        run_dir / "run_summary.json",
-        {
-            "jobs": [
-                {
-                    "job_id": "model-env-job",
-                    "status": "succeeded",
-                    "duration_seconds": 12.5,
-                    "error": None,
-                }
-            ]
-        },
-    )
-
-    _write_json(results_dir / "metadata.json", {"env_id": "demo-env"})
-    (results_dir / "results.jsonl").write_text("{}", encoding="utf-8")
-    _write_json(results_dir / "summary.json", {"env_id": "demo-env"})
-
-    records = discover_run_records(runs_dir)
-    assert len(records) == 1
-    record = records[0]
-    assert record.status == "succeeded"
-    assert record.duration_seconds == 12.5
-    assert record.has_metadata is True
-    assert record.has_results is True
-    assert record.has_summary is True
-    assert record.env_args == {"fold": "dev"}
-    assert record.sampling_args == {"temperature": 0.2}
-    assert record.avg_reward == 0.75
-    assert record.row_count == 20
-    assert record.manifest.job_run_id == "job-run-123"
-
-
-def test_discover_run_records_filters_status(tmp_path: Path) -> None:
-    runs_dir = tmp_path / "runs"
-    run_dir = runs_dir / "job-run-123"
-    results_dir = run_dir / "model-env-job"
-
-    manifest_payload = _base_manifest(
-        [
-            {
-                "job_id": "model-env-job",
-                "model_id": "gpt-4",
-                "env_id": "demo-env-module",
-                "env_template_id": "demo-env-template",
-                "env_variant_id": "demo-env",
-                "env_args": {},
-                "results_relpath": "model-env-job/results.jsonl",
-            }
-        ],
-        models={"gpt-4": {"sampling_args": {}}},
-        env_templates={"demo-env-template": {"module": "demo-env-module"}},
-    )
-    _write_json(run_dir / "run_manifest.json", manifest_payload)
-    _write_json(
-        run_dir / "run_summary.json",
-        {"jobs": [{"job_id": "model-env-job", "status": "failed", "error": "boom"}]},
-    )
-    results_dir.mkdir(parents=True, exist_ok=True)
-    (results_dir / "results.jsonl").write_text("{}", encoding="utf-8")
-
-    filtered = discover_run_records(runs_dir, filter_status=("failed",))
-    assert len(filtered) == 1
-    assert filtered[0].status == "failed"
-
-    filtered_none = discover_run_records(runs_dir, filter_status=("succeeded",))
-    assert filtered_none == []
-
-
-def test_discover_run_records_missing_summary_uses_manifest_status(tmp_path: Path) -> None:
-    runs_dir = tmp_path / "runs"
-    run_dir = runs_dir / "job-run-123"
-    results_dir = run_dir / "model-env-job"
-
-    manifest_payload = _base_manifest(
-        [
-            {
-                "job_id": "model-env-job",
-                "status": "completed",
-                "reason": "cached",
-                "model_id": "gpt-4",
-                "env_id": "demo-env-module",
-                "env_template_id": "demo-env-template",
-                "env_variant_id": "demo-env",
-                "env_args": {},
-                "results_relpath": "model-env-job/results.jsonl",
-            }
-        ],
-        models={"gpt-4": {"sampling_args": {}}},
-        env_templates={"demo-env-template": {"module": "demo-env-module"}},
-    )
-    _write_json(run_dir / "run_manifest.json", manifest_payload)
-
-    results_dir.mkdir(parents=True, exist_ok=True)
-    (results_dir / "results.jsonl").write_text("{}", encoding="utf-8")
-
-    records = discover_run_records(runs_dir)
-    assert len(records) == 1
-    record = records[0]
-    assert record.status == "completed"
-    assert record.reason == "cached"
-    assert record.has_summary is False
-
-
-def test_discover_run_records_respects_artifacts_root(tmp_path: Path, monkeypatch) -> None:
-    runs_dir = tmp_path / "runs_llm_judge" / "raw"
-    run_dir = runs_dir / "job-run-123"
-    artifacts_dir = run_dir / "artifacts"
-    results_dir = artifacts_dir / "model-env-job"
-
-    manifest_payload = _base_manifest(
-        [
-            {
-                "job_id": "model-env-job",
-                "model_id": "gpt-4",
-                "env_id": "demo-env-module",
-                "env_template_id": "demo-env-template",
-                "env_variant_id": "demo-env",
-                "env_args": {},
-                "results_relpath": "model-env-job/results.jsonl",
-                "metadata_relpath": "model-env-job/metadata.json",
-                "status": "completed",
-            }
-        ],
-        models={"gpt-4": {"sampling_args": {"temperature": 0.2}}},
-        env_templates={"demo-env-template": {"module": "demo-env-module"}},
-    )
-    manifest_payload["artifacts_root"] = "artifacts"
-    _write_json(run_dir / "run_manifest.json", manifest_payload)
-
-    results_dir.mkdir(parents=True, exist_ok=True)
-    _write_json(results_dir / "metadata.json", {"env_id": "demo-env"})
-    (results_dir / "results.jsonl").write_text("{}", encoding="utf-8")
-
-    records = discover_run_records(runs_dir)
-    assert len(records) == 1
-    assert records[0].has_results is True
-
-
-def test_discover_run_records_fallbacks_to_job_dir_when_results_relpath_is_broken(tmp_path: Path) -> None:
-    runs_dir = tmp_path / "runs" / "raw"
-    run_dir = runs_dir / "job-run-123"
-    job_dir = run_dir / "model-env-job"
-
-    manifest_payload = _base_manifest(
-        [
-            {
-                "job_id": "model-env-job",
-                "model_id": "gpt-4",
-                "env_id": "demo-env-module",
-                "env_template_id": "demo-env-template",
-                "env_variant_id": "demo-env",
-                "env_args": {},
-                "results_relpath": "wrong-dir/results.jsonl",
-                "status": "completed",
-            }
-        ],
-        models={"gpt-4": {"sampling_args": {}}},
-        env_templates={"demo-env-template": {"module": "demo-env-module"}},
-    )
-    _write_json(run_dir / "run_manifest.json", manifest_payload)
-    _write_json(job_dir / "metadata.json", {"env_id": "demo-env"})
-    (job_dir / "results.jsonl").write_text("{}", encoding="utf-8")
-
-    records = discover_run_records(runs_dir)
-    assert len(records) == 1
-    assert records[0].has_results is True
-    assert records[0].has_metadata is True
-
-
-def _write_eval_output(path: Path, metadata: dict | None = None) -> None:
+def _write_eval_output(path: Path, metadata: dict | None = None, *, rows: list[dict] | None = None) -> None:
     _write_json(
         path / "metadata.json",
         {
@@ -262,104 +22,160 @@ def _write_eval_output(path: Path, metadata: dict | None = None) -> None:
             "sampling_args": {"temperature": 0},
             "num_examples": 1,
             "rollouts_per_example": 1,
+            "avg_reward": 1.0,
             **(metadata or {}),
         },
     )
-    path.mkdir(parents=True, exist_ok=True)
-    (path / "results.jsonl").write_text(json.dumps({"example_id": "ex-1", "reward": 1.0}) + "\n", encoding="utf-8")
+    result_rows = rows if rows is not None else [{"example_id": "ex-1", "reward": 1.0}]
+    with (path / "results.jsonl").open("w", encoding="utf-8") as handle:
+        for row in result_rows:
+            handle.write(json.dumps(row) + "\n")
 
 
-def test_discover_run_records_includes_deterministic_eval_outputs(tmp_path: Path) -> None:
-    raw_dir = tmp_path / "runs" / "raw"
-    eval_dir = tmp_path / "runs" / "evals" / "gpt-5-mini" / "medqa" / "base"
-    _write_eval_output(eval_dir)
+def test_discover_run_records_includes_deterministic_base_layout(tmp_path: Path) -> None:
+    evals_dir = tmp_path / "runs" / "evals"
+    output_dir = evals_dir / "gpt-5-mini" / "medqa" / "base"
+    _write_eval_output(output_dir)
+    _write_json(output_dir / "summary.json", {"env_id": "medqa"})
 
-    records = discover_run_records(raw_dir, filter_status=("completed",))
+    records = discover_run_records(evals_dir, filter_status=("completed",))
 
     assert len(records) == 1
     record = records[0]
+    assert record.status == "completed"
     assert record.model_id == "gpt-5-mini"
     assert record.manifest_env_id == "medqa"
-    assert record.results_dir == eval_dir
-    assert record.row_count == 1
+    assert record.results_dir == output_dir
+    assert record.has_metadata is True
+    assert record.has_results is True
+    assert record.has_summary is True
     assert record.env_args == {"split": "test"}
     assert record.sampling_args == {"temperature": 0}
+    assert record.avg_reward == 1.0
+    assert record.row_count == 1
+    assert record.manifest.job_run_id == "gpt-5-mini::medqa::base"
     normalized = load_normalized_metadata(record)
     assert normalized.variant_id == "base"
 
 
 def test_discover_run_records_includes_deterministic_eval_variants(tmp_path: Path) -> None:
-    eval_dir = tmp_path / "runs" / "evals" / "gpt-5-mini" / "medqa" / "env_args.shuffle_seed-1618"
-    _write_eval_output(
-        eval_dir,
-        {
-            "variant_id": "env_args.shuffle_seed-1618",
-            "variant_payload": {"env_args": {"shuffle_seed": 1618}},
-            "medarc_config_fingerprint": "abc123",
-            "medarc_config_fingerprint_payload": {"env_id": "medqa"},
-        },
-    )
+    evals_dir = tmp_path / "runs" / "evals"
+    variant_id = "env_args.shuffle_seed-1618"
+    output_dir = evals_dir / "gpt-5-mini" / "medqa" / variant_id
+    _write_eval_output(output_dir)
 
-    records = discover_run_records(tmp_path / "runs" / "raw", filter_status=("completed",))
+    records = discover_run_records(evals_dir, filter_status=("completed",))
 
     assert len(records) == 1
     normalized = load_normalized_metadata(records[0])
-    assert normalized.variant_id == "env_args.shuffle_seed-1618"
-    assert normalized.variant_payload == {"env_args": {"shuffle_seed": 1618}}
-    assert normalized.medarc_config_fingerprint == "abc123"
-    assert normalized.medarc_config_fingerprint_payload == {"env_id": "medqa"}
+    assert normalized.variant_id == variant_id
+    assert normalized.variant_payload is None
+    assert normalized.medarc_config_fingerprint is None
+    assert normalized.medarc_config_fingerprint_payload is None
 
 
-def test_discover_run_records_preserves_variant_for_env_slug_with_double_hyphen(tmp_path: Path) -> None:
-    eval_dir = tmp_path / "runs" / "evals" / "gpt-5-mini" / "foo--bar" / "base"
-    _write_eval_output(eval_dir, {"env_id": "foo--bar", "model": "gpt-5-mini"})
+def test_discover_run_records_preserves_path_safe_variant_identity(tmp_path: Path) -> None:
+    evals_dir = tmp_path / "runs" / "evals"
+    variant_id = "name.with-safe_chars-123"
+    output_dir = evals_dir / "gpt-5-mini" / "foo--bar" / variant_id
+    _write_eval_output(output_dir, {"env_id": "foo--bar", "model": "gpt-5-mini"})
 
-    records = discover_run_records(tmp_path / "runs" / "raw", filter_status=("completed",))
+    records = discover_run_records(evals_dir, filter_status=("completed",))
 
     assert len(records) == 1
     record = records[0]
     assert record.model_id == "gpt-5-mini"
     assert record.manifest_env_id == "foo--bar"
     normalized = load_normalized_metadata(record)
-    assert normalized.variant_id == "base"
+    assert normalized.variant_id == variant_id
 
 
 def test_discover_run_records_includes_direct_upstream_uuid_outputs(tmp_path: Path) -> None:
-    upstream_dir = tmp_path / "runs" / "evals" / "medqa--gpt-5-mini" / "016f4b4a-92a4-4a5b-a7c1-853af3318c52"
+    evals_dir = tmp_path / "runs" / "evals"
+    run_id = "016f4b4a-92a4-4a5b-a7c1-853af3318c52"
+    upstream_dir = evals_dir / "medqa--gpt-5-mini" / run_id
     _write_eval_output(upstream_dir)
 
-    records = discover_run_records(tmp_path / "runs" / "raw", filter_status=("completed",))
+    records = discover_run_records(evals_dir, filter_status=("completed",))
 
     assert len(records) == 1
     record = records[0]
     assert record.model_id == "gpt-5-mini"
     assert record.manifest_env_id == "medqa"
-    assert record.manifest.job_run_id == "016f4b4a-92a4-4a5b-a7c1-853af3318c52"
+    assert record.manifest.job_run_id == run_id
+    normalized = load_normalized_metadata(record)
+    assert normalized.variant_id is None
 
 
-def test_discover_run_records_deduplicates_overlapping_eval_roots(tmp_path: Path) -> None:
-    eval_dir = tmp_path / "runs" / "evals" / "gpt-5-mini" / "medqa" / "base"
-    _write_eval_output(eval_dir)
+def test_discover_run_records_skips_missing_metadata(tmp_path: Path) -> None:
+    evals_dir = tmp_path / "runs" / "evals"
+    output_dir = evals_dir / "gpt-5-mini" / "medqa" / "base"
+    output_dir.mkdir(parents=True)
+    (output_dir / "results.jsonl").write_text('{"example_id":"ex-1"}\n', encoding="utf-8")
 
-    records = discover_run_records(tmp_path / "runs", filter_status=("completed",))
+    assert discover_run_records(evals_dir, filter_status=("completed",)) == []
+
+
+def test_discover_run_records_skips_invalid_metadata(tmp_path: Path) -> None:
+    evals_dir = tmp_path / "runs" / "evals"
+    output_dir = evals_dir / "gpt-5-mini" / "medqa" / "base"
+    output_dir.mkdir(parents=True)
+    (output_dir / "metadata.json").write_text("not json", encoding="utf-8")
+    (output_dir / "results.jsonl").write_text('{"example_id":"ex-1"}\n', encoding="utf-8")
+
+    assert discover_run_records(evals_dir, filter_status=("completed",)) == []
+
+
+def test_discover_run_records_skips_metadata_only_directory(tmp_path: Path) -> None:
+    evals_dir = tmp_path / "runs" / "evals"
+    _write_json(
+        evals_dir / "gpt-5-mini" / "medqa" / "base" / "metadata.json",
+        {"env_id": "medqa", "model": "gpt-5-mini"},
+    )
+
+    assert discover_run_records(evals_dir, filter_status=("completed",)) == []
+
+
+def test_discover_run_records_counts_empty_results_candidate(tmp_path: Path) -> None:
+    evals_dir = tmp_path / "runs" / "evals"
+    output_dir = evals_dir / "gpt-5-mini" / "medqa" / "base"
+    _write_json(output_dir / "metadata.json", {"env_id": "medqa", "model": "gpt-5-mini"})
+    (output_dir / "results.jsonl").write_text("", encoding="utf-8")
+
+    records = discover_run_records(evals_dir, filter_status=("completed",))
 
     assert len(records) == 1
-    assert records[0].results_dir == eval_dir
+    assert records[0].row_count == 0
+
+
+def test_discover_run_records_counts_invalid_jsonl_candidate_for_later_row_validation(tmp_path: Path) -> None:
+    evals_dir = tmp_path / "runs" / "evals"
+    output_dir = evals_dir / "gpt-5-mini" / "medqa" / "base"
+    _write_json(output_dir / "metadata.json", {"env_id": "medqa", "model": "gpt-5-mini"})
+    (output_dir / "results.jsonl").write_text("{not json}\n", encoding="utf-8")
+
+    records = discover_run_records(evals_dir, filter_status=("completed",))
+
+    assert len(records) == 1
+    assert records[0].row_count == 1
+
+
+def test_discover_run_records_filters_current_output_status(tmp_path: Path) -> None:
+    evals_dir = tmp_path / "runs" / "evals"
+    _write_eval_output(evals_dir / "gpt-5-mini" / "medqa" / "base")
+
+    assert len(discover_run_records(evals_dir, filter_status=("completed",))) == 1
+    assert discover_run_records(evals_dir, filter_status=("failed",)) == []
 
 
 def test_discover_run_records_parent_baseline_and_child_variant_once(tmp_path: Path) -> None:
-    baseline_dir = tmp_path / "runs" / "evals" / "gpt-5-mini" / "medqa"
+    evals_dir = tmp_path / "runs" / "evals"
+    baseline_dir = evals_dir / "gpt-5-mini" / "medqa"
     variant_dir = baseline_dir / "env_args.shuffle_seed-1618"
     _write_eval_output(baseline_dir)
-    _write_eval_output(
-        variant_dir,
-        {
-            "variant_id": "env_args.shuffle_seed-1618",
-            "variant_payload": {"env_args": {"shuffle_seed": 1618}},
-        },
-    )
+    _write_eval_output(variant_dir)
 
-    records = discover_run_records(tmp_path / "runs" / "raw", filter_status=("completed",))
+    records = discover_run_records(evals_dir, filter_status=("completed",))
 
     assert len(records) == 2
     assert {record.results_dir for record in records} == {baseline_dir, variant_dir}
