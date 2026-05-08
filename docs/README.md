@@ -22,3 +22,7 @@ Environments are installed separately via `prime env install <owner/env>` (from 
 | `medarc-eval winrate` | Compute HELM-style win rates across models |
 
 See [medarc-eval.md](medarc-eval.md) for full documentation.
+
+## Developer workflow
+
+See [getting-started.md](getting-started.md) for local setup, environment authoring, and development workflow notes.
