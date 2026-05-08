@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from medarc_verifiers.cli.utils.endpoint_utils import load_endpoint_sampling_profiles
 from medarc_verifiers.cli.verifiers_adapter import EvalConfigOverrides, build_eval_config, load_toml_eval_configs
 from medarc_verifiers.utils.prime_inference import PRIME_INFERENCE_URL
 
@@ -35,6 +36,31 @@ headers = { "X-Replica" = "b" }
 """.strip()
     )
     return path
+
+
+def test_load_endpoint_sampling_profiles_parses_nested_table(tmp_path: Path) -> None:
+    endpoints_path = tmp_path / "endpoints.toml"
+    endpoints_path.write_text(
+        """
+[[endpoint]]
+endpoint_id = "gpt-oss-20b-low-local"
+model = "openai/gpt-oss-20b"
+url = "http://host.docker.internal:8010/v1"
+key = "VLLM_API_KEY"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 1.0
+top_k = 0
+reasoning_effort = "low"
+""".strip()
+    )
+
+    profiles = load_endpoint_sampling_profiles(endpoints_path)
+
+    assert profiles == {
+        "gpt-oss-20b-low-local": [{"temperature": 1.0, "top_p": 1.0, "top_k": 0, "reasoning_effort": "low"}]
+    }
 
 
 def test_load_toml_eval_configs_expands_ablation(tmp_path: Path) -> None:
@@ -177,6 +203,279 @@ def test_build_eval_config_supports_endpoint_replicas(tmp_path: Path) -> None:
         {"X-Replica": "a"},
         {"X-Replica": "b"},
     ]
+
+
+def test_build_eval_config_uses_endpoint_sampling_defaults(tmp_path: Path) -> None:
+    endpoints_path = tmp_path / "endpoints.toml"
+    endpoints_path.write_text(
+        """
+[[endpoint]]
+endpoint_id = "gpt-oss"
+model = "openai/gpt-oss-20b"
+url = "http://localhost:8010/v1"
+key = "VLLM_API_KEY"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 1.0
+top_k = 0
+reasoning_effort = "low"
+""".strip()
+    )
+
+    config = build_eval_config({"env_id": "medqa", "model": "gpt-oss", "endpoints_path": str(endpoints_path)})
+
+    assert config.model == "openai/gpt-oss-20b"
+    assert config.sampling_args["temperature"] == 1.0
+    assert config.sampling_args["top_p"] == 1.0
+    assert config.sampling_args["reasoning_effort"] == "low"
+    assert config.sampling_args["extra_body"]["top_k"] == 0
+
+
+def test_build_eval_config_sampling_precedence_endpoint_raw_and_cli(tmp_path: Path) -> None:
+    endpoints_path = tmp_path / "endpoints.toml"
+    endpoints_path.write_text(
+        """
+[[endpoint]]
+endpoint_id = "profiled"
+model = "openai/profiled"
+url = "https://profiled.example/v1"
+key = "PROFILED_KEY"
+sampling_args = { temperature = 1.0, top_p = 0.5 }
+""".strip()
+    )
+
+    toml_config = build_eval_config(
+        {
+            "env_id": "medqa",
+            "endpoint_id": "profiled",
+            "endpoints_path": str(endpoints_path),
+            "temperature": 0.2,
+            "sampling_args": {"temperature": 0.7},
+        }
+    )
+    cli_config = build_eval_config(
+        {
+            "env_id": "medqa",
+            "endpoint_id": "profiled",
+            "endpoints_path": str(endpoints_path),
+            "temperature": 0.2,
+            "sampling_args": {"temperature": 0.7},
+        },
+        overrides=EvalConfigOverrides(sampling_args={"temperature": 0.8}),
+    )
+
+    assert toml_config.sampling_args["temperature"] == 0.7
+    assert toml_config.sampling_args["top_p"] == 0.5
+    assert cli_config.sampling_args["temperature"] == 0.8
+
+
+def test_build_eval_config_scalar_temperature_overrides_endpoint_default(tmp_path: Path) -> None:
+    endpoints_path = tmp_path / "endpoints.toml"
+    endpoints_path.write_text(
+        """
+[[endpoint]]
+endpoint_id = "profiled"
+model = "openai/profiled"
+url = "https://profiled.example/v1"
+key = "PROFILED_KEY"
+sampling_args = { temperature = 1.0 }
+""".strip()
+    )
+
+    config = build_eval_config(
+        {
+            "env_id": "medqa",
+            "endpoint_id": "profiled",
+            "endpoints_path": str(endpoints_path),
+            "temperature": 0.2,
+        }
+    )
+
+    assert config.sampling_args["temperature"] == 0.2
+
+
+def test_build_eval_config_deep_merges_sampling_extra_body(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MEDARC_INCLUDE_USAGE", raising=False)
+    endpoints_path = tmp_path / "endpoints.toml"
+    endpoints_path.write_text(
+        f"""
+[[endpoint]]
+endpoint_id = "prime-profiled"
+model = "openai/profiled"
+url = "{PRIME_INFERENCE_URL}"
+key = "PRIME_API_KEY"
+sampling_args = {{ top_k = 0 }}
+""".strip()
+    )
+
+    config = build_eval_config(
+        {
+            "env_id": "medqa",
+            "endpoint_id": "prime-profiled",
+            "endpoints_path": str(endpoints_path),
+            "sampling_args": {"extra_body": {"guided_choice": ["A", "B"]}},
+        }
+    )
+
+    assert config.sampling_args["extra_body"] == {
+        "usage": {"include": True},
+        "guided_choice": ["A", "B"],
+        "top_k": 0,
+    }
+
+
+def test_build_eval_config_direct_unknown_sampling_arg_overrides_extra_body_key(tmp_path: Path) -> None:
+    endpoints_path = tmp_path / "endpoints.toml"
+    endpoints_path.write_text(
+        """
+[[endpoint]]
+endpoint_id = "profiled"
+model = "openai/profiled"
+url = "https://profiled.example/v1"
+key = "PROFILED_KEY"
+sampling_args = { extra_body = { top_k = 1 } }
+""".strip()
+    )
+
+    config = build_eval_config(
+        {
+            "env_id": "medqa",
+            "endpoint_id": "profiled",
+            "endpoints_path": str(endpoints_path),
+        },
+        overrides=EvalConfigOverrides(sampling_args={"top_k": 3}),
+    )
+
+    assert config.sampling_args["extra_body"]["top_k"] == 3
+
+
+def test_build_eval_config_endpoint_replica_sampling_profiles_must_match(tmp_path: Path) -> None:
+    endpoints_path = tmp_path / "endpoints.toml"
+    endpoints_path.write_text(
+        """
+[[endpoint]]
+endpoint_id = "replica-profiled"
+model = "openai/profiled"
+url = "https://replica-a.example/v1"
+key = "REPLICA_A"
+sampling_args = { temperature = 1.0 }
+
+[[endpoint]]
+endpoint_id = "replica-profiled"
+model = "openai/profiled"
+url = "https://replica-b.example/v1"
+key = "REPLICA_B"
+sampling_args = { temperature = 1.0 }
+""".strip()
+    )
+
+    config = build_eval_config(
+        {"env_id": "medqa", "endpoint_id": "replica-profiled", "endpoints_path": str(endpoints_path)}
+    )
+
+    assert config.sampling_args["temperature"] == 1.0
+
+
+@pytest.mark.parametrize(
+    "second_sampling",
+    [
+        "sampling_args = { temperature = 0.5 }",
+        "",
+    ],
+)
+def test_build_eval_config_rejects_conflicting_replica_sampling_profiles(tmp_path: Path, second_sampling: str) -> None:
+    endpoints_path = tmp_path / "endpoints.toml"
+    endpoints_path.write_text(
+        f"""
+[[endpoint]]
+endpoint_id = "replica-profiled"
+model = "openai/profiled"
+url = "https://replica-a.example/v1"
+key = "REPLICA_A"
+sampling_args = {{ temperature = 1.0 }}
+
+[[endpoint]]
+endpoint_id = "replica-profiled"
+model = "openai/profiled"
+url = "https://replica-b.example/v1"
+key = "REPLICA_B"
+{second_sampling}
+""".strip()
+    )
+
+    with pytest.raises(ValueError, match="conflicting sampling_args"):
+        build_eval_config({"env_id": "medqa", "endpoint_id": "replica-profiled", "endpoints_path": str(endpoints_path)})
+
+
+@pytest.mark.parametrize(
+    "sampling_toml",
+    [
+        'sampling_args = "bad"',
+        "[[endpoint.sampling_args]]\ntemperature = 1.0",
+    ],
+)
+def test_load_endpoint_sampling_profiles_rejects_invalid_sampling_args(tmp_path: Path, sampling_toml: str) -> None:
+    endpoints_path = tmp_path / "endpoints.toml"
+    endpoints_path.write_text(
+        f"""
+[[endpoint]]
+endpoint_id = "bad-profile"
+model = "openai/bad"
+url = "https://bad.example/v1"
+key = "BAD_KEY"
+{sampling_toml}
+""".strip()
+    )
+
+    with pytest.raises(ValueError, match="sampling_args must be a table"):
+        load_endpoint_sampling_profiles(endpoints_path)
+
+
+def test_load_endpoint_sampling_profiles_ignores_python_registry(tmp_path: Path) -> None:
+    endpoints_path = tmp_path / "endpoints.py"
+    endpoints_path.write_text(
+        """
+ENDPOINTS = {
+    "profiled": {
+        "model": "openai/profiled",
+        "url": "https://profiled.example/v1",
+        "key": "PROFILED_KEY",
+    }
+}
+""".strip()
+    )
+
+    assert load_endpoint_sampling_profiles(endpoints_path) == {}
+
+
+def test_build_eval_config_already_expanded_ablation_sampling_args_override_endpoint(
+    tmp_path: Path,
+) -> None:
+    endpoints_path = tmp_path / "endpoints.toml"
+    endpoints_path.write_text(
+        """
+[[endpoint]]
+endpoint_id = "profiled"
+model = "openai/profiled"
+url = "https://profiled.example/v1"
+key = "PROFILED_KEY"
+sampling_args = { temperature = 1.0, top_p = 0.9 }
+""".strip()
+    )
+
+    config = build_eval_config(
+        {
+            "env_id": "medqa",
+            "endpoint_id": "profiled",
+            "endpoints_path": str(endpoints_path),
+            "name": "temp-0.3",
+            "sampling_args": {"temperature": 0.3},
+        }
+    )
+
+    assert config.sampling_args["temperature"] == 0.3
+    assert config.sampling_args["top_p"] == 0.9
 
 
 def test_build_eval_config_provider_and_cli_overrides_precede_toml(tmp_path: Path) -> None:

@@ -33,7 +33,7 @@ def sanitize_sampling_args_for_openai(sampling_args: Mapping[str, Any] | None) -
         elif isinstance(existing, Mapping):
             merged = dict(existing)
             for key, value in extras.items():
-                merged.setdefault(key, value)
+                merged[key] = value
             filtered["extra_body"] = merged
         else:
             filtered["extra_body"] = {"_passthrough_extra_body": existing, **extras}

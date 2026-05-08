@@ -25,6 +25,7 @@ from verifiers.types import (
 from verifiers.utils.eval_utils import load_endpoints, load_toml_config, resolve_endpoints_file
 from verifiers.utils.import_utils import load_toml
 
+from medarc_verifiers.cli.utils.endpoint_utils import load_endpoint_sampling_profiles
 from medarc_verifiers.utils.prime_inference import prime_inference_overrides
 from medarc_verifiers.utils.sampling_args import sanitize_sampling_args_for_openai
 
@@ -101,8 +102,8 @@ class EvalConfigOverrides:
 def load_toml_eval_configs(path: str | Path, *, extra_valid_fields: set[str] | None = None) -> list[dict[str, Any]]:
     """Load upstream TOML eval configs, including ``[[ablation]]`` expansion."""
 
-    valid_fields = ADAPTER_TOML_FIELDS | {MEDARC_TOML_METADATA_FIELD} | MEDARC_TOML_IDENTITY_FIELDS | (
-        extra_valid_fields or set()
+    valid_fields = (
+        ADAPTER_TOML_FIELDS | {MEDARC_TOML_METADATA_FIELD} | MEDARC_TOML_IDENTITY_FIELDS | (extra_valid_fields or set())
     )
     return [_strip_medarc_metadata(raw) for raw in load_toml_config(Path(path), extra_valid_fields=valid_fields)]
 
@@ -135,7 +136,15 @@ def build_eval_config(raw: Mapping[str, Any], *, overrides: EvalConfigOverrides 
     endpoints = load_endpoints(endpoints_path)
     model, resolved_endpoint_id, client_config = _build_client_config(merged_raw, endpoints, endpoints_path)
 
-    sampling_args = _build_sampling_args(merged_raw, client_config.api_base_url)
+    endpoint_sampling_profiles = load_endpoint_sampling_profiles(endpoints_path)
+    endpoint_sampling_args = _resolve_endpoint_sampling_args(endpoint_sampling_profiles, resolved_endpoint_id)
+    cli_sampling_args = overrides.sampling_args if overrides is not None else None
+    sampling_args = _build_sampling_args(
+        merged_raw,
+        client_config.api_base_url,
+        endpoint_sampling_args=endpoint_sampling_args,
+        cli_sampling_args=cli_sampling_args,
+    )
 
     extra_env_kwargs = dict(merged_raw.get("extra_env_kwargs", {}))
     if merged_raw.get("timeout") is not None:
@@ -234,9 +243,6 @@ def _apply_overrides(raw: dict[str, Any], overrides: EvalConfigOverrides | None)
 
     if overrides.env_args:
         raw["env_args"] = {**dict(raw.get("env_args", {})), **dict(overrides.env_args)}
-    if overrides.sampling_args:
-        raw["sampling_args"] = {**dict(raw.get("sampling_args", {})), **dict(overrides.sampling_args)}
-
     return raw
 
 
@@ -359,15 +365,49 @@ def _build_client_config(
     return cast(str, model), resolved_endpoint_id, client_config
 
 
-def _build_sampling_args(raw: Mapping[str, Any], api_base_url: str) -> dict[str, Any]:
-    sampling_args = _merge_sampling_args(
-        raw.get("sampling_args"),
+def _resolve_endpoint_sampling_args(
+    endpoint_sampling_profiles: Mapping[str, list[dict[str, Any]]], endpoint_id: str | None
+) -> dict[str, Any]:
+    if endpoint_id is None:
+        return {}
+
+    profiles = endpoint_sampling_profiles.get(endpoint_id, [])
+    if not profiles:
+        return {}
+
+    first = profiles[0]
+    for profile in profiles[1:]:
+        if profile != first:
+            raise ValueError(
+                f"Endpoint alias '{endpoint_id}' has conflicting sampling_args across replica entries. "
+                "Use identical sampling_args for every replica or omit them from every replica."
+            )
+    return dict(first)
+
+
+def _build_sampling_args(
+    raw: Mapping[str, Any],
+    api_base_url: str,
+    *,
+    endpoint_sampling_args: Mapping[str, Any] | None = None,
+    cli_sampling_args: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    _, prime_sampling_overrides = prime_inference_overrides(api_base_url)
+    endpoint_sampling = _validate_sampling_mapping(endpoint_sampling_args, "endpoint sampling_args")
+    include_none_max_tokens = raw.get("include_none_max_tokens", True) and (
+        "max_tokens" in raw or "max_tokens" not in endpoint_sampling
+    )
+    scalar_sampling_args = _merge_sampling_args(
+        None,
         max_tokens=raw.get("max_tokens"),
         temperature=raw.get("temperature"),
-        include_none_max_tokens=raw.get("include_none_max_tokens", True),
+        include_none_max_tokens=include_none_max_tokens,
     )
-    _, prime_sampling_overrides = prime_inference_overrides(api_base_url)
-    return sanitize_sampling_args_for_openai(_deep_merge(prime_sampling_overrides, sampling_args))
+    merged = _deep_merge(prime_sampling_overrides, endpoint_sampling)
+    merged = _deep_merge(merged, scalar_sampling_args)
+    merged = _deep_merge(merged, _validate_sampling_mapping(raw.get("sampling_args"), "sampling_args"))
+    merged = _deep_merge(merged, _validate_sampling_mapping(cli_sampling_args, "CLI sampling_args"))
+    return sanitize_sampling_args_for_openai(merged)
 
 
 def _merge_sampling_args(
@@ -448,6 +488,14 @@ def _deep_merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[st
         else:
             merged[key] = value
     return merged
+
+
+def _validate_sampling_mapping(value: object, label: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{label} must be a dict")
+    return dict(cast(Mapping[str, Any], value))
 
 
 def _validate_header_mapping(value: object) -> dict[str, str]:

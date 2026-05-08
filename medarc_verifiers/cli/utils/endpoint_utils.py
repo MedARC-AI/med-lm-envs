@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import MutableMapping, Sequence
+from typing import Any, MutableMapping, Sequence, cast
 
 from verifiers.types import Endpoints
-from verifiers.utils.eval_utils import load_endpoints
+from verifiers.utils.eval_utils import load_endpoints, resolve_endpoints_file
+from verifiers.utils.import_utils import load_toml
 
 from medarc_verifiers.cli.utils.env_args import EnvParam, gather_env_cli_metadata
 
@@ -41,6 +42,49 @@ def load_endpoint_registry(
         logger.debug("Using cached endpoint registry for '%s'.", normalized)
 
     return store[normalized]
+
+
+def load_endpoint_sampling_profiles(path: str | Path) -> dict[str, list[dict[str, Any]]]:
+    """Load MedARC endpoint-level sampling defaults from a TOML registry."""
+    resolved = resolve_endpoints_file(str(path))
+    if resolved is None or not resolved.exists() or resolved.suffix != ".toml":
+        return {}
+
+    with resolved.open("rb") as handle:
+        raw_toml = load_toml(handle)
+    if not isinstance(raw_toml, dict):
+        raise ValueError(f"Expected top-level TOML table in endpoint registry {resolved}")
+
+    raw_entries = raw_toml.get("endpoint", [])
+    if not isinstance(raw_entries, list):
+        raise ValueError(f"Expected [[endpoint]] array-of-tables in endpoint registry {resolved}")
+
+    profiles: dict[str, list[dict[str, Any]]] = {}
+    for index, raw_entry in enumerate(raw_entries):
+        entry_source = f"{resolved} ([[endpoint]] index {index})"
+        if not isinstance(raw_entry, dict):
+            raise ValueError(f"Each [[endpoint]] entry must be a table in {entry_source}")
+
+        endpoint_id = raw_entry.get("endpoint_id")
+        if not isinstance(endpoint_id, str) or not endpoint_id:
+            if "sampling_args" in raw_entry:
+                raise ValueError(
+                    f"Endpoint profile with sampling_args must include non-empty string endpoint_id in {entry_source}"
+                )
+            continue
+
+        raw_sampling_args = raw_entry.get("sampling_args", {})
+        if isinstance(raw_sampling_args, list):
+            raise ValueError(
+                f"Endpoint '{endpoint_id}' sampling_args must be a table in {entry_source}; "
+                "use [endpoint.sampling_args] or an inline table, not [[endpoint.sampling_args]]."
+            )
+        if not isinstance(raw_sampling_args, dict):
+            raise ValueError(f"Endpoint '{endpoint_id}' sampling_args must be a table in {entry_source}")
+
+        profiles.setdefault(endpoint_id, []).append(dict(cast(dict[str, Any], raw_sampling_args)))
+
+    return profiles
 
 
 def load_env_metadata(
@@ -103,6 +147,7 @@ __all__ = [
     "EndpointRegistryCache",
     "EnvMetadataCache",
     "load_endpoint_registry",
+    "load_endpoint_sampling_profiles",
     "load_env_metadata",
     "resolve_model_endpoint",
 ]

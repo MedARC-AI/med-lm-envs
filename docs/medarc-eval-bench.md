@@ -160,6 +160,49 @@ provider arguments pass through to upstream.
 | `--max-retries N` | Override upstream rollout retries for every eval |
 | `--sleep SEC` | Sleep after each eval |
 
+## Endpoint Sampling Profiles
+
+MedARC extends upstream `verifiers` TOML endpoint registries with optional
+endpoint-level `sampling_args`. Use these for model/provider defaults and
+compatibility knobs, such as vLLM-only parameters. Put benchmark experiment
+settings in the eval TOML or CLI overrides.
+
+```toml
+[[endpoint]]
+endpoint_id = "gpt-oss-20b-low-local"
+model = "openai/gpt-oss-20b"
+url = "http://host.docker.internal:8010/v1"
+key = "VLLM_API_KEY"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 1.0
+top_k = 0
+reasoning_effort = "low"
+
+[[endpoint]]
+endpoint_id = "another-model"
+model = "openai/another-model"
+url = "http://host.docker.internal:8011/v1"
+key = "VLLM_API_KEY"
+```
+
+Inline tables are also supported:
+
+```toml
+sampling_args = { temperature = 1.0, top_p = 1.0, top_k = 0, reasoning_effort = "low" }
+```
+
+Precedence is: Prime Inference defaults, endpoint `sampling_args`, raw scalar
+`temperature` / `max_tokens`, raw TOML `sampling_args`, then CLI
+`--sampling-args` / `--sampling-arg`. Unknown OpenAI parameters such as `top_k`
+are still moved under `extra_body` after the merge.
+
+After `[endpoint.sampling_args]`, TOML keys remain inside that nested table
+until the next table header. Start a new `[[endpoint]]` before defining another
+endpoint.
+
 ## Prime Inference
 
 When `--api-base-url` or a config points at Prime Inference
