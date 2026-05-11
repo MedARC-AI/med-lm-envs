@@ -9,10 +9,16 @@ public builder.
 
 from __future__ import annotations
 
-from medarc_verifiers.cli.verifiers_adapter import EvalConfigOverrides, build_eval_config, load_toml_eval_configs
+from medarc_verifiers.cli.verifiers_adapter import (
+    EvalConfigOverrides,
+    build_eval_config,
+    build_eval_identity_payload,
+    load_toml_eval_configs,
+)
 
 __all__ = [
     "EvalConfigOverrides",
     "build_eval_config",
+    "build_eval_identity_payload",
     "load_toml_eval_configs",
 ]

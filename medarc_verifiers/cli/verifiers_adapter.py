@@ -253,6 +253,32 @@ def build_eval_config(raw: Mapping[str, Any], *, overrides: EvalConfigOverrides 
     return EvalConfig(**eval_config_kwargs)
 
 
+def build_eval_identity_payload(
+    raw: Mapping[str, Any], *, overrides: EvalConfigOverrides | None = None
+) -> dict[str, Any]:
+    """Resolve TOML eval identity without importing the environment package."""
+
+    merged_raw = _apply_overrides(dict(raw), overrides)
+    endpoints_path = str(merged_raw.get("endpoints_path", DEFAULT_ENDPOINTS_PATH))
+    endpoints = load_endpoints(endpoints_path)
+    model, _resolved_endpoint_id, _client_config = _build_client_config(merged_raw, endpoints, endpoints_path)
+
+    payload = {
+        "env_args": dict(merged_raw.get("env_args", {})),
+        "env_id": merged_raw["env_id"],
+        "model": model,
+        "num_examples": merged_raw.get("num_examples", DEFAULT_NUM_EXAMPLES),
+        "rollouts_per_example": merged_raw.get("rollouts_per_example", DEFAULT_ROLLOUTS_PER_EXAMPLE),
+        "max_concurrent": merged_raw.get("max_concurrent", DEFAULT_MAX_CONCURRENT),
+        "sampling_args": dict(merged_raw.get("sampling_args", {})),
+    }
+    if "variant_id" in raw:
+        payload["variant_id"] = raw["variant_id"]
+    if "name" in raw:
+        payload["name"] = raw["name"]
+    return payload
+
+
 def get_env_eval_defaults(env_id: str) -> dict[str, Any]:
     """Read ``[tool.verifiers.eval]`` defaults from an installed env package."""
 
@@ -606,6 +632,7 @@ __all__ = [
     "DEFAULT_ROLLOUTS_PER_EXAMPLE",
     "EvalConfigOverrides",
     "build_eval_config",
+    "build_eval_identity_payload",
     "get_env_eval_defaults",
     "load_toml_eval_configs",
 ]

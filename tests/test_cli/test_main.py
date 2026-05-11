@@ -259,6 +259,89 @@ def test_toml_bench_dry_run_model_override(
     assert "config-model" not in output
 
 
+def test_toml_bench_install_envs_dry_run_does_not_build_configs_or_spawn(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path = tmp_path / "bench.toml"
+    _write_config(
+        config_path,
+        """
+        model = "gpt-5-mini"
+
+        [[eval]]
+        env_id = "missing-env"
+        num_examples = 1
+        rollouts_per_example = 1
+        """,
+    )
+    monkeypatch.setattr(main, "build_eval_config", lambda raw, overrides: pytest.fail("parent built EvalConfig"))
+    monkeypatch.setattr(main.subprocess, "run", lambda *args, **kwargs: pytest.fail("parent spawned child"))
+
+    exit_code = main.main(["bench", "--config", str(config_path), "--install-envs", "--dry-run"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "missing-env" in output
+    assert "does not install packages" in output
+
+
+def test_toml_bench_install_envs_executes_selected_child_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "bench.toml"
+    output_dir = tmp_path / "evals"
+    _write_config(
+        config_path,
+        """
+        model = "gpt-5-mini"
+
+        [[eval]]
+        env_id = "bad-unselected"
+        num_examples = 1
+        rollouts_per_example = 1
+
+        [[eval]]
+        env_id = "selected-env"
+        num_examples = 2
+        rollouts_per_example = 1
+        """,
+    )
+    payloads: list[dict[str, Any]] = []
+
+    def fake_run(cmd, check=False):
+        payload = json.loads(Path(cmd[-1]).read_text(encoding="utf-8"))
+        payloads.append(payload)
+        Path(payload["status_path"]).write_text(json.dumps({"exit_code": 0}), encoding="utf-8")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(main.subprocess, "run", fake_run)
+
+    exit_code = main.main(
+        [
+            "bench",
+            "--config",
+            str(config_path),
+            "--install-envs",
+            "--eval-index",
+            "2",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    assert len(payloads) == 1
+    payload = payloads[0]
+    assert payload["raw_config"]["env_id"] == "selected-env"
+    assert payload["expected_env_id"] == "selected-env"
+    assert payload["expected_model"] == "gpt-5-mini"
+    assert payload["resume_path"] == str(output_dir / "gpt-5-mini" / "selected-env" / "base")
+    assert (output_dir / "gpt-5-mini" / "selected-env" / "base").is_dir()
+
+
 def test_toml_bench_dry_run_uses_toml_output_dir(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

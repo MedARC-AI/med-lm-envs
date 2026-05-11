@@ -16,6 +16,9 @@ medarc-eval bench --config configs/eval/medmarks-smoke.toml --dry-run
 # Run the verified production suite
 medarc-eval bench --config configs/eval/medmarks-verified.toml
 
+# Run selected evals while installing missing local env packages as needed
+medarc-eval bench --config configs/eval/medmarks-verified.toml --install-envs
+
 # Run the verified suite against a local OpenAI-compatible server
 medarc-eval bench \
   --config configs/eval/medmarks-verified.toml \
@@ -60,6 +63,39 @@ Per-environment defaults can also live in an environment package
 `pyproject.toml` under `[tool.verifiers.eval]`. Production suite configs keep
 explicit `num_examples` and `rollouts_per_example` values so they remain stable
 across editable and wheel installs.
+
+## Local Environment Install Lifecycle
+
+By default, TOML bench expects environment packages to already be importable in
+the active Python environment. Pass `--install-envs` when running repository
+local environments from `--env-dir` and you want bench to install missing
+packages only for the selected evals:
+
+```bash
+medarc-eval bench \
+  --config configs/eval/medmarks-verified.toml \
+  --install-envs \
+  --eval-index "$SLURM_ARRAY_TASK_ID"
+```
+
+With `--install-envs`, the parent process loads and expands the TOML config,
+applies `--eval-index` / `--start-at` / `--stop-after`, plans deterministic
+output paths, and spawns one child subprocess per selected eval. Each child
+installs its missing environment package into the shared venv, builds the
+upstream `EvalConfig` after install, runs upstream evaluation with the
+parent-planned `resume_path`, and uninstalls only packages it installed before
+exiting.
+
+This clears Python import state between evals, but it still mutates the shared
+venv while each child is running. It does not uninstall transitive dependencies,
+and concurrent `--install-envs` bench runs against the same venv are
+unsupported. If the parent is interrupted, editable install metadata may be left
+behind and should be cleaned up manually with `uv pip uninstall`.
+
+`--install-envs --dry-run` does not install packages or spawn child processes.
+Dry-run identity is therefore based on TOML and CLI values only; environment
+package `[tool.verifiers.eval]` defaults are resolved only during the real child
+run after install.
 
 ## Ablations and Variants
 
@@ -145,6 +181,7 @@ provider arguments pass through to upstream.
 | `--resume` | Compatibility flag; valid deterministic outputs resume automatically |
 | `--output-dir PATH` | Override the config output directory, default `runs/evals` |
 | `--env-dir PATH` | Directory containing local environments |
+| `--install-envs` | Run selected evals in per-eval subprocesses that install missing local env packages into the shared venv and clean up child-installed packages |
 | `--endpoints-path PATH` | Endpoint registry path, default `configs/endpoints.toml` |
 | `--api-base-url URL` | Override API base URL for every eval |
 | `--api-key-var NAME` | Override API key environment variable |

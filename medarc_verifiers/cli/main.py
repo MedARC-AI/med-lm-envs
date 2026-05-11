@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import shutil
+import subprocess
 import sys
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from textwrap import dedent
+from types import SimpleNamespace
 from typing import Any, Literal, Mapping, Sequence
 
 import yaml
@@ -46,7 +50,12 @@ from medarc_verifiers.cli.utils.shared import (
     normalize_dataset_ids,
     normalize_model_ids,
 )
-from medarc_verifiers.cli.upstream_eval import EvalConfigOverrides, build_eval_config, load_toml_eval_configs
+from medarc_verifiers.cli.upstream_eval import (
+    EvalConfigOverrides,
+    build_eval_config,
+    build_eval_identity_payload,
+    load_toml_eval_configs,
+)
 from medarc_verifiers.utils.pathing import resolve_under
 from medarc_verifiers.cli.winrate import (
     WinrateConfig,
@@ -79,6 +88,11 @@ def build_batch_parser() -> argparse.ArgumentParser:
         type=Path,
         default=DEFAULT_ENV_DIR,
         help="Directory containing environments (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--install-envs",
+        action="store_true",
+        help="Install missing local env packages for selected TOML evals in per-eval subprocesses.",
     )
     parser.add_argument(
         "--endpoints-path",
@@ -1254,16 +1268,10 @@ def _run_toml_bench(args: argparse.Namespace) -> int:
         load_toml_eval_configs(config_path, extra_valid_fields={"name", "variant_id"}),
         args,
     )
-    overrides = EvalConfigOverrides(
-        model=args.model,
-        provider=args.provider,
-        api_base_url=args.api_base_url,
-        api_key_var=args.api_key_var,
-        endpoints_path=args.endpoints_path if getattr(args, "endpoints_path_explicit", False) else None,
-        max_concurrent=args.max_concurrent,
-        env_args=getattr(args, "cli_env_args", None),
-        sampling_args=getattr(args, "cli_sampling_args", None),
-    )
+    if args.install_envs:
+        return _run_toml_bench_with_env_lifecycle(raw_configs, args)
+
+    overrides = _toml_eval_overrides(args)
     eval_configs = [build_eval_config(raw, overrides=overrides) for raw in raw_configs]
     plan_inputs = [_eval_config_identity_payload(config, raw) for config, raw in zip(eval_configs, raw_configs)]
     output_root = _resolve_toml_output_root(eval_configs, args)
@@ -1276,19 +1284,96 @@ def _run_toml_bench(args: argparse.Namespace) -> int:
     return _execute_toml_plan(eval_configs, path_plans, args)
 
 
+def _toml_eval_overrides(args: argparse.Namespace) -> EvalConfigOverrides:
+    overrides = EvalConfigOverrides(
+        model=args.model,
+        provider=args.provider,
+        api_base_url=args.api_base_url,
+        api_key_var=args.api_key_var,
+        endpoints_path=args.endpoints_path if getattr(args, "endpoints_path_explicit", False) else None,
+        max_concurrent=args.max_concurrent,
+        env_args=getattr(args, "cli_env_args", None),
+        sampling_args=getattr(args, "cli_sampling_args", None),
+    )
+    return overrides
+
+
+def _run_toml_bench_with_env_lifecycle(raw_configs: Sequence[dict[str, Any]], args: argparse.Namespace) -> int:
+    selected_raw = _select_toml_raw_configs(raw_configs, args)
+    overrides = _toml_eval_overrides(args)
+    plan_inputs = [build_eval_identity_payload(raw, overrides=overrides) for raw in selected_raw]
+    output_root = _resolve_toml_output_root_from_raw(selected_raw, args)
+    path_plans = plan_eval_paths(plan_inputs, output_root=output_root)
+    display_configs = _display_configs_from_plan_inputs(plan_inputs)
+
+    _print_toml_bench_plan(display_configs, path_plans, dry_run=bool(args.dry_run))
+    if args.dry_run:
+        Console().print(
+            "[yellow]Note:[/yellow] --install-envs dry run does not install packages; "
+            "environment package defaults are not resolved unless present in TOML or CLI overrides."
+        )
+        return 0
+    return _execute_toml_lifecycle_plan(selected_raw, plan_inputs, path_plans, overrides, args)
+
+
 def _prepare_toml_raw_configs(raw_configs: Sequence[dict[str, Any]], args: argparse.Namespace) -> list[dict[str, Any]]:
     prepared: list[dict[str, Any]] = []
     for raw in raw_configs:
         item = dict(raw)
         item.setdefault("save_results", True)
+        item.setdefault("env_dir_path", str(args.env_dir))
         if args.max_concurrent is None and "max_concurrent" not in item:
             item["max_concurrent"] = 1
         if args.timeout is not None:
             item["timeout"] = args.timeout
         if args.rollout_max_retries is not None:
             item["max_retries"] = args.rollout_max_retries
+        if args.verbose:
+            item["verbose"] = True
         prepared.append(item)
     return prepared
+
+
+def _select_toml_raw_configs(raw_configs: Sequence[dict[str, Any]], args: argparse.Namespace) -> list[dict[str, Any]]:
+    indexed = list(raw_configs)
+    if args.eval_index is not None:
+        start = args.eval_index - 1
+        indexed = indexed[start : start + 1]
+    else:
+        if args.start_at is not None:
+            indexed = indexed[args.start_at - 1 :]
+        if args.stop_after is not None:
+            indexed = indexed[: args.stop_after - (args.start_at or 1) + 1]
+    if not indexed:
+        raise ValueError("No TOML evals matched the requested selection.")
+    return list(indexed)
+
+
+def _resolve_toml_output_root_from_raw(raw_configs: Sequence[Mapping[str, Any]], args: argparse.Namespace) -> Path:
+    if args.output_dir:
+        return Path(args.output_dir).expanduser()
+
+    configured_roots = {str(config["output_dir"]) for config in raw_configs if config.get("output_dir")}
+    if len(configured_roots) > 1:
+        raise ValueError(
+            "TOML bench deterministic output supports one output_dir per run; use a single global output_dir."
+        )
+    if configured_roots:
+        return Path(configured_roots.pop()).expanduser()
+    return DEFAULT_EVALS_DIR
+
+
+def _display_configs_from_plan_inputs(plan_inputs: Sequence[Mapping[str, Any]]) -> list[Any]:
+    return [
+        SimpleNamespace(
+            model=str(payload["model"]),
+            env_id=str(payload["env_id"]),
+            num_examples=payload.get("num_examples", "-"),
+            rollouts_per_example=payload.get("rollouts_per_example", "-"),
+            max_concurrent=payload.get("max_concurrent", "-"),
+        )
+        for payload in plan_inputs
+    ]
 
 
 def _resolve_toml_output_root(eval_configs: Sequence[Any], args: argparse.Namespace) -> Path:
@@ -1352,6 +1437,123 @@ def _execute_toml_plan(
 
             time.sleep(float(args.sleep))
     return 1 if failures else 0
+
+
+def _execute_toml_lifecycle_plan(
+    raw_configs: Sequence[Mapping[str, Any]],
+    plan_inputs: Sequence[Mapping[str, Any]],
+    path_plans: Sequence[EvalPathPlan],
+    overrides: EvalConfigOverrides,
+    args: argparse.Namespace,
+) -> int:
+    failures = 0
+    with tempfile.TemporaryDirectory(prefix="medarc-bench-env-") as temp_dir:
+        temp_root = Path(temp_dir)
+        for index, (raw, plan_input, path_plan) in enumerate(zip(raw_configs, plan_inputs, path_plans), start=1):
+            try:
+                _prepare_toml_results_dir(path_plan.results_path, force=bool(args.force))
+                payload_path = temp_root / f"eval-{index}.json"
+                status_path = temp_root / f"eval-{index}-status.json"
+                payload = _bench_child_payload(
+                    raw,
+                    plan_input,
+                    path_plan,
+                    overrides,
+                    args,
+                    status_path=status_path,
+                )
+                payload_path.write_text(json.dumps(payload, sort_keys=True, default=str), encoding="utf-8")
+                logger.info(
+                    "Running TOML eval %d/%d in subprocess: %s on %s",
+                    index,
+                    len(raw_configs),
+                    plan_input["env_id"],
+                    plan_input["model"],
+                )
+                completed = subprocess.run(
+                    [sys.executable, "-m", "medarc_verifiers.cli.bench_child", str(payload_path)],
+                    check=False,
+                )
+                status = _load_child_status(status_path)
+                if completed.returncode != 0 or int(status.get("exit_code", 1)) != 0:
+                    failures += 1
+                    logger.error(
+                        "TOML eval %d failed in subprocess: %s",
+                        index,
+                        status.get("primary_error") or status.get("cleanup_error") or status.get("exit_reason"),
+                    )
+                    if not args.continue_on_error:
+                        return 1
+            except Exception as exc:  # noqa: BLE001
+                failures += 1
+                logger.exception("TOML eval %d failed: %s", index, exc)
+                if not args.continue_on_error:
+                    return 1
+            if args.sleep and index < len(raw_configs):
+                import time
+
+                time.sleep(float(args.sleep))
+    return 1 if failures else 0
+
+
+def _bench_child_payload(
+    raw: Mapping[str, Any],
+    plan_input: Mapping[str, Any],
+    path_plan: EvalPathPlan,
+    overrides: EvalConfigOverrides,
+    args: argparse.Namespace,
+    *,
+    status_path: Path,
+) -> dict[str, Any]:
+    return {
+        "raw_config": _jsonable_mapping(raw),
+        "overrides": _jsonable_mapping(_overrides_payload(overrides)),
+        "env_dir": str(Path(args.env_dir).expanduser()),
+        "resume_path": str(path_plan.results_path),
+        "status_path": str(status_path),
+        "expected_env_id": str(plan_input["env_id"]),
+        "expected_model": str(plan_input["model"]),
+    }
+
+
+def _overrides_payload(overrides: EvalConfigOverrides) -> dict[str, Any]:
+    return {
+        "model": overrides.model,
+        "provider": overrides.provider,
+        "api_base_url": overrides.api_base_url,
+        "api_key_var": overrides.api_key_var,
+        "api_client_type": overrides.api_client_type,
+        "endpoints_path": str(overrides.endpoints_path) if overrides.endpoints_path is not None else None,
+        "max_concurrent": overrides.max_concurrent,
+        "env_args": dict(overrides.env_args or {}),
+        "sampling_args": dict(overrides.sampling_args or {}),
+    }
+
+
+def _jsonable_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, item in value.items():
+        if isinstance(item, Path):
+            result[key] = str(item)
+        elif isinstance(item, Mapping):
+            result[key] = _jsonable_mapping(item)
+        elif isinstance(item, list):
+            result[key] = [str(element) if isinstance(element, Path) else element for element in item]
+        else:
+            result[key] = item
+    return result
+
+
+def _load_child_status(status_path: Path) -> dict[str, Any]:
+    if not status_path.is_file():
+        raise RuntimeError(f"Bench child did not write status file: {status_path}")
+    try:
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Bench child wrote malformed status file {status_path}: {exc}") from exc
+    if not isinstance(status, dict):
+        raise RuntimeError(f"Bench child wrote non-object status file: {status_path}")
+    return status
 
 
 async def _run_one_toml_eval(config: Any) -> Any:
