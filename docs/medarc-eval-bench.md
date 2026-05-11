@@ -11,7 +11,7 @@ accepts `.toml` files only.
 
 ```bash
 # Preview the repository smoke config
-medarc-eval bench --config configs/eval/smoke.toml --dry-run
+medarc-eval bench --config configs/eval/medmarks-smoke.toml --dry-run
 
 # Run the verified production suite
 medarc-eval bench --config configs/eval/medmarks-verified.toml
@@ -28,7 +28,7 @@ Repository suite configs live in `configs/eval/`:
 
 | Config | Purpose |
 |--------|---------|
-| `smoke.toml` | Small smoke test used by CLI tests |
+| `medmarks-smoke.toml` | Small Medmarks-V smoke test used by CLI tests |
 | `medmarks-verified.toml` | Verified benchmark suite |
 | `medmarks-open_ended.toml` | Open-ended benchmark suite |
 
@@ -173,7 +173,7 @@ endpoint_id = "gpt-oss-20b-low-local"
 model = "openai/gpt-oss-20b"
 url = "http://host.docker.internal:8010/v1"
 key = "VLLM_API_KEY"
-api_client_type = "openai_chat_completions"
+api_client_type = "openai_responses"
 
 [endpoint.sampling_args]
 temperature = 1.0

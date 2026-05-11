@@ -1,0 +1,105 @@
+# Small Medmarks-V smoke run.
+# Runs 10 examples from each verified environment without ablations.
+
+save_results = true
+output_dir = "runs/smoke"
+
+[[eval]]
+env_id = "careqa"
+num_examples = 10
+rollouts_per_example = 1
+env_args = { split = "en" }
+
+[[eval]]
+env_id = "head_qa_v2"
+num_examples = 10
+rollouts_per_example = 1
+
+[[eval]]
+env_id = "longhealth"
+num_examples = 10
+rollouts_per_example = 1
+env_args = { task = "task1", doc_shuffle_seed = 2718 }
+
+[[eval]]
+env_id = "m_arc"
+num_examples = 10
+rollouts_per_example = 1
+
+[[eval]]
+env_id = "med_halt"
+num_examples = 10
+rollouts_per_example = 1
+env_args = { question_type = "reasoning_fct" }
+
+[[eval]]
+env_id = "med_mcqa"
+num_examples = 10
+rollouts_per_example = 1
+
+[[eval]]
+env_id = "medbullets"
+num_examples = 10
+rollouts_per_example = 1
+env_args = { num_options = 4 }
+
+[[eval]]
+env_id = "medcalc_bench"
+num_examples = 10
+rollouts_per_example = 1
+env_args = { version = "1.2" }
+
+[[eval]]
+env_id = "medconceptsqa"
+num_examples = 10
+rollouts_per_example = 1
+env_args = { vocab = "icd10cm_sample", difficulty = "easy" }
+
+[[eval]]
+env_id = "medhallu"
+num_examples = 10
+rollouts_per_example = 1
+env_args = { difficulty = "easy" }
+
+[[eval]]
+env_id = "medqa"
+num_examples = 10
+rollouts_per_example = 1
+
+[[eval]]
+env_id = "medxpertqa"
+num_examples = 10
+rollouts_per_example = 1
+env_args = { question_type = "reasoning" }
+
+[[eval]]
+env_id = "metamedqa"
+num_examples = 10
+rollouts_per_example = 1
+
+[[eval]]
+env_id = "mmlu_pro_health"
+num_examples = 10
+rollouts_per_example = 1
+
+[[eval]]
+env_id = "pubhealthbench"
+num_examples = 10
+rollouts_per_example = 1
+env_args = { split = "reviewed" }
+
+[[eval]]
+env_id = "pubmedqa"
+num_examples = 10
+rollouts_per_example = 1
+
+[[eval]]
+env_id = "sctpublic"
+num_examples = 10
+rollouts_per_example = 1
+
+[[eval]]
+env_id = "supergpqa_medicine"
+num_examples = 10
+rollouts_per_example = 1
+env_args = { difficulty = "easy" }

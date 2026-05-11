@@ -121,7 +121,7 @@ results = env.evaluate(model_client, "gpt-4.1-mini", num_examples=5)
 uv run medarc-eval medqa -m gpt-4.1-mini -n 25
 
 # Run batch evaluations from config
-uv run medarc-eval bench --config configs/eval/smoke.toml
+uv run medarc-eval bench --config configs/eval/medmarks-smoke.toml
 
 # Process results and compute win rates
 uv run medarc-eval process --runs-dir runs/evals

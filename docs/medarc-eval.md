@@ -11,7 +11,7 @@
 medarc-eval medqa -m gpt-4.1-mini -n 25
 
 # Run a batch of benchmarks from a config file
-medarc-eval bench --config configs/eval/smoke.toml
+medarc-eval bench --config configs/eval/medmarks-smoke.toml
 
 # Process raw results into analysis-ready parquet files
 medarc-eval process --runs-dir runs/evals

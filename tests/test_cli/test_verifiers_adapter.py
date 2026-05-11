@@ -179,6 +179,37 @@ def test_build_eval_config_resolves_endpoint_alias_and_core_fields(tmp_path: Pat
     }
 
 
+def test_build_eval_config_supports_model_only_endpoint_alias(tmp_path: Path) -> None:
+    endpoints_path = tmp_path / "endpoints.toml"
+    endpoints_path.write_text(
+        """
+[[endpoint]]
+endpoint_id = "portable-alias"
+model = "org/resolved"
+
+[endpoint.sampling_args]
+temperature = 0.4
+top_p = 0.9
+""".strip()
+    )
+
+    config = build_eval_config(
+        {
+            "env_id": "medqa",
+            "model": "portable-alias",
+            "endpoints_path": str(endpoints_path),
+            "api_base_url": "https://deployment.example/v1",
+            "api_key_var": "DEPLOYMENT_KEY",
+        }
+    )
+
+    assert config.model == "org/resolved"
+    assert config.client_config.api_base_url == "https://deployment.example/v1"
+    assert config.client_config.api_key_var == "DEPLOYMENT_KEY"
+    assert config.sampling_args["temperature"] == 0.4
+    assert config.sampling_args["top_p"] == 0.9
+
+
 def test_build_eval_config_supports_endpoint_replicas(tmp_path: Path) -> None:
     endpoints_path = _write_endpoints(tmp_path / "endpoints.toml")
 
@@ -214,6 +245,7 @@ endpoint_id = "gpt-oss"
 model = "openai/gpt-oss-20b"
 url = "http://localhost:8010/v1"
 key = "VLLM_API_KEY"
+api_client_type = "openai_responses"
 
 [endpoint.sampling_args]
 temperature = 1.0
@@ -226,6 +258,7 @@ reasoning_effort = "low"
     config = build_eval_config({"env_id": "medqa", "model": "gpt-oss", "endpoints_path": str(endpoints_path)})
 
     assert config.model == "openai/gpt-oss-20b"
+    assert config.client_config.client_type == "openai_responses"
     assert config.sampling_args["temperature"] == 1.0
     assert config.sampling_args["top_p"] == 1.0
     assert config.sampling_args["reasoning_effort"] == "low"

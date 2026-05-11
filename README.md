@@ -29,7 +29,8 @@ The benchmark suite is implemented as [verifiers](https://github.com/primeintell
 |--------|---------|
 | [`configs/eval/medmarks-verified.toml`](configs/eval/medmarks-verified.toml) | Medmarks-V suite |
 | [`configs/eval/medmarks-open_ended.toml`](configs/eval/medmarks-open_ended.toml) | Medmarks-OE suite |
-| [`configs/eval/smoke.toml`](configs/eval/smoke.toml) | Small sanity-check run |
+| [`configs/eval/medmarks-endpoints.toml`](configs/eval/medmarks-endpoints.toml) | Portable model aliases and sampling defaults for Medmarks runs |
+| [`configs/eval/medmarks-smoke.toml`](configs/eval/medmarks-smoke.toml) | Small Medmarks-V sanity-check run |
 
 ## Quick Start
 
@@ -49,6 +50,43 @@ Run a Medmarks suite config:
 
 ```bash
 uv run medarc-eval bench --config configs/eval/medmarks-verified.toml
+```
+
+Run a Medmarks suite with one of the published model aliases:
+
+```bash
+uv run medarc-eval bench \
+  --config configs/eval/medmarks-verified.toml \
+  --endpoints-path configs/eval/medmarks-endpoints.toml \
+  -m gpt-oss-20b-low \
+  --api-base-url https://api.pinference.ai/api/v1 \
+  --api-key-var PRIME_API_KEY
+```
+
+[`configs/eval/medmarks-endpoints.toml`](configs/eval/medmarks-endpoints.toml) is an alias registry, not a deployment config. It maps names such as `gpt-oss-20b-low` or `medgemma-27b-text` to provider model IDs, client types, and model-specific sampling defaults. It intentionally omits `url`, `key`, and `max_concurrent`; supply those with `--provider` or with `--api-base-url` and `--api-key-var` for your deployment. The gpt-oss aliases use the Verifiers `openai_responses` client type.
+
+Preview the resolved jobs before running:
+
+```bash
+uv run medarc-eval bench \
+  --config configs/eval/medmarks-verified.toml \
+  --endpoints-path configs/eval/medmarks-endpoints.toml \
+  -m gpt-oss-20b-low \
+  --api-base-url https://api.pinference.ai/api/v1 \
+  --api-key-var PRIME_API_KEY \
+  --dry-run
+```
+
+Run the same alias against a local vLLM server exposing an OpenAI-compatible API:
+
+```bash
+VLLM_API_KEY=local-key uv run medarc-eval bench \
+  --config configs/eval/medmarks-verified.toml \
+  --endpoints-path configs/eval/medmarks-endpoints.toml \
+  -m gpt-oss-20b-low \
+  --api-base-url http://127.0.0.1:8000/v1 \
+  --api-key-var VLLM_API_KEY \
+  --dry-run
 ```
 
 Process outputs and compute win rates:

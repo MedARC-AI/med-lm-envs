@@ -22,7 +22,7 @@ from verifiers.types import (
     EndpointClientConfig,
     EvalConfig,
 )
-from verifiers.utils.eval_utils import load_endpoints, load_toml_config, resolve_endpoints_file
+from verifiers.utils.eval_utils import load_toml_config, resolve_endpoints_file
 from verifiers.utils.import_utils import load_toml
 
 from medarc_verifiers.cli.utils.endpoint_utils import load_endpoint_sampling_profiles
@@ -114,6 +114,82 @@ def _strip_medarc_metadata(raw: Mapping[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
+def _load_endpoint_registry(endpoints_path: str) -> dict[str, list[Endpoint]]:
+    """Load endpoint aliases, allowing model-only entries for portable alias registries."""
+    endpoints_file = resolve_endpoints_file(endpoints_path)
+    if endpoints_file is None or not endpoints_file.exists():
+        return {}
+    if endpoints_file.suffix != ".toml":
+        raise ValueError(f"Unsupported endpoints file extension '{endpoints_file.suffix}' at {endpoints_file}")
+
+    with endpoints_file.open("rb") as handle:
+        raw_toml = load_toml(handle)
+    if not isinstance(raw_toml, dict):
+        raise ValueError(f"Expected top-level TOML table in endpoint registry {endpoints_file}")
+
+    raw_entries = raw_toml.get("endpoint", [])
+    if not isinstance(raw_entries, list):
+        raise ValueError(f"Expected [[endpoint]] array-of-tables in endpoint registry {endpoints_file}")
+
+    endpoints: dict[str, list[Endpoint]] = {}
+    for index, raw_entry in enumerate(raw_entries):
+        entry_source = f"{endpoints_file} ([[endpoint]] index {index})"
+        if not isinstance(raw_entry, dict):
+            raise ValueError(f"Each [[endpoint]] entry must be a table in {entry_source}")
+
+        endpoint_id = raw_entry.get("endpoint_id")
+        if not isinstance(endpoint_id, str) or not endpoint_id:
+            raise ValueError(f"Each [[endpoint]] entry must include non-empty string 'endpoint_id' in {entry_source}")
+
+        model = raw_entry.get("model")
+        if not isinstance(model, str) or not model:
+            raise ValueError(f"Endpoint '{endpoint_id}' must include non-empty string 'model' in {entry_source}")
+
+        url = raw_entry.get("url")
+        api_base_url = raw_entry.get("api_base_url")
+        if url is not None and api_base_url is not None and url != api_base_url:
+            raise ValueError(f"Conflicting values for 'url' and 'api_base_url' in {entry_source}")
+        resolved_url = url if url is not None else api_base_url
+        if resolved_url is not None and not isinstance(resolved_url, str):
+            raise ValueError(f"Endpoint '{endpoint_id}' url/api_base_url must be a string in {entry_source}")
+
+        key = raw_entry.get("key")
+        api_key_var = raw_entry.get("api_key_var")
+        if key is not None and api_key_var is not None and key != api_key_var:
+            raise ValueError(f"Conflicting values for 'key' and 'api_key_var' in {entry_source}")
+        resolved_key = key if key is not None else api_key_var
+        if resolved_key is not None and not isinstance(resolved_key, str):
+            raise ValueError(f"Endpoint '{endpoint_id}' key/api_key_var must be a string in {entry_source}")
+
+        short_client_type = raw_entry.get("type")
+        long_client_type = raw_entry.get("api_client_type")
+        if short_client_type is not None and long_client_type is not None and short_client_type != long_client_type:
+            raise ValueError(f"Conflicting values for 'type' and 'api_client_type' in {entry_source}")
+        client_type = short_client_type if short_client_type is not None else long_client_type
+        if client_type is not None and not isinstance(client_type, str):
+            raise ValueError(f"Endpoint '{endpoint_id}' api_client_type/type must be a string in {entry_source}")
+
+        endpoint: Endpoint = {"model": model}
+        if resolved_url is not None:
+            endpoint["url"] = resolved_url
+        if resolved_key is not None:
+            endpoint["key"] = resolved_key
+        if client_type is not None:
+            endpoint["api_client_type"] = cast(ClientType, client_type)
+
+        raw_headers = raw_entry.get("headers")
+        raw_extra_headers = raw_entry.get("extra_headers")
+        if raw_headers is not None and raw_extra_headers is not None:
+            raise ValueError(f"Use only one of 'headers' or 'extra_headers' in {entry_source}, not both")
+        headers = raw_headers if raw_headers is not None else raw_extra_headers
+        if headers is not None:
+            endpoint["extra_headers"] = _validate_header_mapping(headers)
+
+        endpoints.setdefault(endpoint_id, []).append(endpoint)
+
+    return endpoints
+
+
 def build_eval_config(raw: Mapping[str, Any], *, overrides: EvalConfigOverrides | None = None) -> EvalConfig:
     """Build an upstream ``EvalConfig`` from one loaded TOML/CLI eval mapping."""
 
@@ -133,7 +209,7 @@ def build_eval_config(raw: Mapping[str, Any], *, overrides: EvalConfigOverrides 
     )
 
     endpoints_path = str(merged_raw.get("endpoints_path", DEFAULT_ENDPOINTS_PATH))
-    endpoints = load_endpoints(endpoints_path)
+    endpoints = _load_endpoint_registry(endpoints_path)
     model, resolved_endpoint_id, client_config = _build_client_config(merged_raw, endpoints, endpoints_path)
 
     endpoint_sampling_profiles = load_endpoint_sampling_profiles(endpoints_path)
@@ -286,10 +362,11 @@ def _build_client_config(
         endpoint_group = list(endpoints[endpoint_lookup_id])
         resolved_endpoint_id = cast(str, endpoint_lookup_id)
         endpoint = endpoint_group[0]
+        provider_cfg = PROVIDER_CONFIGS[raw_provider or DEFAULT_PROVIDER]
 
-        api_key_var = endpoint["key"]
-        api_base_url = endpoint["url"]
-        client_type = endpoint.get("api_client_type", DEFAULT_CLIENT_TYPE)
+        api_key_var = endpoint.get("key") or raw.get("default_api_key_var", provider_cfg["key"])
+        api_base_url = endpoint.get("url") or raw.get("default_api_base_url", provider_cfg["url"])
+        client_type = endpoint.get("api_client_type", provider_cfg.get("client_type", DEFAULT_CLIENT_TYPE))
 
         endpoint_models = {entry["model"] for entry in endpoint_group}
         if len(endpoint_models) > 1:
@@ -338,7 +415,13 @@ def _build_client_config(
     merged_headers = {**prime_headers, **registry_headers_base, **eval_headers_merged}
 
     endpoint_configs: list[EndpointClientConfig] = []
-    if endpoint_group is not None and not api_base_url_override and raw_provider is None and len(endpoint_group) > 1:
+    if (
+        endpoint_group is not None
+        and not api_base_url_override
+        and raw_provider is None
+        and len(endpoint_group) > 1
+        and all("url" in endpoint and "key" in endpoint for endpoint in endpoint_group)
+    ):
         endpoint_configs = [
             EndpointClientConfig(
                 api_key_var=api_key_var if api_key_override else endpoint["key"],
