@@ -74,6 +74,52 @@ def test_write_env_groups_creates_parquet_and_index(tmp_path: Path) -> None:
     assert rel_path in ds_infos["default"]["data_files"]["train"]
 
 
+def test_write_env_groups_writes_variant_path_and_metadata(tmp_path: Path) -> None:
+    rows = [
+        {
+            "env_id": "demo-env",
+            "base_env_id": "demo-env",
+            "example_id": "ex-1",
+            "job_run_id": "run-1",
+            "model_id": "demo-model",
+            "variant_id": "env_args.shuffle_seed-1618",
+            "variant_payload": json.dumps({"env_args": {"shuffle_seed": 1618}}),
+            "reward": 1.0,
+        }
+    ]
+    group = aggregate_rows_by_env(rows)[0]
+    config = WriterConfig(
+        output_dir=tmp_path,
+        processed_at="2024-01-01T00:00:00Z",
+        processed_with_args={},
+    )
+
+    summaries = write_env_groups([group], config)
+
+    summary = summaries[0]
+    rel_path = summary.output_path.relative_to(tmp_path).as_posix()
+    assert rel_path == "demo-model/demo-env__variants/env_args.shuffle_seed-1618.parquet"
+    assert summary.variant_id == "env_args.shuffle_seed-1618"
+    assert summary.variant_payload == {"env_args": {"shuffle_seed": 1618}}
+
+    table = pq.read_table(summary.output_path)
+    assert table.column("variant_id").to_pylist() == ["env_args.shuffle_seed-1618"]
+    assert [json.loads(value) for value in table.column("variant_payload").to_pylist()] == [
+        {"env_args": {"shuffle_seed": 1618}}
+    ]
+    embedded = json.loads((table.schema.metadata or {})[EXPORTER_METADATA_KEY])
+    assert embedded["variant_id"] == "env_args.shuffle_seed-1618"
+    assert embedded["variant_payload"] == {"env_args": {"shuffle_seed": 1618}}
+
+    payload = json.loads((tmp_path / "env_index.json").read_text(encoding="utf-8"))
+    file_entry = payload["files"][rel_path]
+    assert file_entry["env_id"] == "demo-env"
+    assert file_entry["base_env_id"] == "demo-env"
+    assert file_entry["model_id"] == "demo-model"
+    assert file_entry["variant_id"] == "env_args.shuffle_seed-1618"
+    assert file_entry["variant_payload"] == {"env_args": {"shuffle_seed": 1618}}
+
+
 def test_write_env_groups_dry_run(tmp_path: Path) -> None:
     group = _group_for_env()
     config = WriterConfig(

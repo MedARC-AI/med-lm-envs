@@ -21,7 +21,7 @@ Win rate computation requires processed parquet files with an `env_index.json`:
 
 ```bash
 # If you haven't processed yet:
-medarc-eval process
+medarc-eval process --runs-dir runs/evals
 ```
 
 ## How Win Rates Work
@@ -103,7 +103,7 @@ The JSON output includes:
 
 ```yaml
 # process-config.yaml
-runs_dir: runs/raw
+runs_dir: runs/evals
 
 process:
   dir: processed
@@ -192,7 +192,7 @@ medarc-eval winrate \
 
 ```yaml
 # process-config.yaml
-runs_dir: runs/raw
+runs_dir: runs/evals
 
 process:
   dir: processed

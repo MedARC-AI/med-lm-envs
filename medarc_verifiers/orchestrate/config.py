@@ -5,10 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
-import warnings
+import tomllib
 
 from omegaconf import OmegaConf
 from pydantic import BaseModel, Field, ValidationError
+
+
+_ORCHESTRATE_NON_MODEL_KEYS = {"restart", "vllm-container", "pyxis"}
 
 
 class PlanConfig(BaseModel):
@@ -76,6 +79,8 @@ def load_plan(path: Path) -> PlanConfig:
 
 def load_job_config(path: Path) -> Mapping[str, Any]:
     resolved = path.expanduser().resolve()
+    if resolved.suffix != ".toml":
+        raise ValueError(f"Unsupported job config format: {resolved} (expected .toml)")
     return _load_mapping(resolved)
 
 
@@ -84,7 +89,7 @@ def expand_tasks(plan: PlanConfig) -> list[TaskSpec]:
     for job_path in plan.job_configs:
         resolved_job_path = job_path.expanduser().resolve()
         job_cfg = load_job_config(resolved_job_path)
-        model_key, model_entry = _extract_single_model(job_cfg, source=resolved_job_path)
+        model_key, model_entry = _extract_task_model(job_cfg, source=resolved_job_path)
         orchestrate_cfg = _extract_orchestrate_config(job_cfg, model_key=model_key, source=resolved_job_path)
         model_id = str(model_entry.get("model", "")).strip()
         if not model_id:
@@ -105,10 +110,13 @@ def expand_tasks(plan: PlanConfig) -> list[TaskSpec]:
 def _load_mapping(path: Path) -> Mapping[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Config not found: {path}")
-    if path.suffix not in {".yaml", ".yml", ".json"}:
-        raise ValueError(f"Unsupported config format: {path} (expected .yaml/.yml/.json)")
+    if path.suffix not in {".yaml", ".yml", ".json", ".toml"}:
+        raise ValueError(f"Unsupported config format: {path} (expected .yaml/.yml/.json/.toml)")
     try:
-        data = OmegaConf.to_container(OmegaConf.load(path), resolve=True)
+        if path.suffix == ".toml":
+            data = tomllib.loads(path.read_text(encoding="utf-8"))
+        else:
+            data = OmegaConf.to_container(OmegaConf.load(path), resolve=True)
     except Exception as exc:  # pragma: no cover - OmegaConf error types vary
         raise ConfigFormatError(f"Failed to load config: {path}") from exc
     if not isinstance(data, Mapping):
@@ -116,42 +124,40 @@ def _load_mapping(path: Path) -> Mapping[str, Any]:
     return data
 
 
-def _extract_single_model(payload: Mapping[str, Any], *, source: Path) -> tuple[str, Mapping[str, Any]]:
-    models = payload.get("models")
-    if not isinstance(models, Mapping):
-        raise ValueError(f"Job config {source} must define a models mapping.")
-    keys = list(models.keys())
-    if len(keys) != 1:
-        raise ValueError(f"Job config {source} must define exactly one model; found {len(keys)}.")
-    model_key = str(keys[0])
-    model_entry = models.get(model_key)
-    if not isinstance(model_entry, Mapping):
-        raise ValueError(f"Job config {source} models.{model_key} must be a mapping.")
-    return model_key, model_entry
+def _extract_task_model(payload: Mapping[str, Any], *, source: Path) -> tuple[str, Mapping[str, Any]]:
+    model_id = str(payload.get("model", "")).strip()
+    if not model_id:
+        raise ValueError(f"Job config {source} must define a top-level model.")
+    orchestrate, table_name = _extract_orchestrate_root(payload, source=source)
+    model_keys = [str(key) for key, value in orchestrate.items() if key not in _ORCHESTRATE_NON_MODEL_KEYS]
+    if len(model_keys) != 1:
+        raise ValueError(
+            f"Job config {source} must define exactly one {table_name} model settings table; found {len(model_keys)}."
+        )
+    return model_keys[0], {"model": model_id}
 
 
 def _extract_orchestrate_config(payload: Mapping[str, Any], *, model_key: str, source: Path) -> Mapping[str, Any]:
-    orchestrate = payload.get("orchestrate")
-    if not isinstance(orchestrate, Mapping):
-        raise ValueError(f"Job config {source} must define a top-level orchestrate mapping.")
-    has_container = "vllm-container" in orchestrate
-    has_docker = "vllm-docker" in orchestrate
-    if has_container and has_docker:
-        raise ValueError(f"Job config {source} defines both orchestrate.vllm-container and orchestrate.vllm-docker.")
-    if not has_container and not has_docker:
-        raise ValueError(f"Job config {source} must define orchestrate.vllm-container settings.")
+    orchestrate, table_name = _extract_orchestrate_root(payload, source=source)
+    if "vllm-container" not in orchestrate:
+        raise ValueError(f"Job config {source} must define {table_name}.vllm-container settings.")
     if model_key not in orchestrate:
-        raise ValueError(f"Job config {source} must define orchestrate.{model_key} settings.")
-    normalized = dict(orchestrate)
-    if has_docker:
-        warnings.warn(
-            (f"Job config {source} uses deprecated orchestrate.vllm-docker; rename it to orchestrate.vllm-container."),
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        normalized["vllm-container"] = orchestrate["vllm-docker"]
-        del normalized["vllm-docker"]
-    return normalized
+        raise ValueError(f"Job config {source} must define {table_name}.{model_key} settings.")
+    return orchestrate
+
+
+def _extract_orchestrate_root(payload: Mapping[str, Any], *, source: Path) -> tuple[Mapping[str, Any], str]:
+    medarc = payload.get("medarc")
+    if medarc is not None:
+        if not isinstance(medarc, Mapping):
+            raise ValueError(f"Job config {source} medarc must be a mapping.")
+        medarc_orchestrate = medarc.get("orchestrate")
+        if medarc_orchestrate is not None:
+            if not isinstance(medarc_orchestrate, Mapping):
+                raise ValueError(f"Job config {source} medarc.orchestrate must be a mapping.")
+            return medarc_orchestrate, "medarc.orchestrate"
+
+    raise ValueError(f"Job config {source} must define a [medarc.orchestrate] mapping.")
 
 
 __all__ = ["ConfigFormatError", "PlanConfig", "TaskSpec", "expand_tasks", "load_job_config", "load_plan"]

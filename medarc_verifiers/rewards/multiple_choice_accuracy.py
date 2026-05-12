@@ -768,10 +768,11 @@ def multiple_choice_accuracy(
     answer_text: str,
     prefix: Optional[str] = None,
     accept_answer_text: bool = True,
+    strict: bool = False,
     strip_tex: bool = True,
     return_details: bool = False,
 ) -> bool | MCQAccuracyResult:
-    """Grade an MCQ answer using short-mode scans and tail-authoritative long-mode scans."""
+    """Grade an MCQ answer using exact matching or permissive MCQ extraction heuristics."""
 
     if not llm_answer:
         return _result(False, "none", None, None, return_details)
@@ -833,6 +834,9 @@ def multiple_choice_accuracy(
             answer_letter,
             return_details,
         )
+
+    if strict:
+        return _result(False, "none", None, None, return_details)
 
     is_long = len(structural_text) > LONG_RESPONSE_THRESHOLD_CHARS
     terminal_region = structural_text[-TERMINAL_WINDOW_CHARS:] if is_long else structural_text

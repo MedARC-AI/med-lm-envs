@@ -5,36 +5,7 @@ import pytest
 from medarc_verifiers.cli._schemas import (
     EnvironmentConfigSchema,
     EnvironmentExportConfig,
-    ModelConfigSchema,
 )
-
-
-def test_model_params_merge_matches_explicit_definition() -> None:
-    explicit = ModelConfigSchema(
-        id="demo",
-        model="gpt-mini",
-        env_args={"split": "dev"},
-        env_overrides={"medqa": {"temperature": 0.2}},
-    )
-    legacy = ModelConfigSchema(
-        id="demo",
-        params={
-            "model": "gpt-mini",
-            "env_args": {"split": "dev"},
-            "env_overrides": {"medqa": {"temperature": 0.2}},
-        },
-    )
-
-    assert legacy.model_dump() == explicit.model_dump()
-
-
-def test_environment_matrix_exclude_with_unknown_key_raises() -> None:
-    with pytest.raises(ValueError, match="matrix_exclude entry references unknown keys"):
-        EnvironmentConfigSchema(
-            id="medqa",
-            matrix={"num_examples": [5]},
-            matrix_exclude=[{"unknown_key": 1}],
-        )
 
 
 def test_environment_export_config_validates_columns() -> None:

@@ -43,10 +43,12 @@ def _inventory_from_v2(payload: Mapping[str, Any], base_dir: Path) -> EnvIndexIn
         env_id = entry.get("env_id") or entry.get("base_env_id")
         if not env_id:
             continue
+        variant_id = entry.get("variant_id")
+        dataset_id = f"{env_id}::{variant_id}" if variant_id else str(env_id)
         resolved = _resolve_path(base_dir, str(path_str))
         if not resolved:
             continue
-        env_paths.setdefault(str(env_id), []).append(resolved)
+        env_paths.setdefault(dataset_id, []).append(resolved)
     return EnvIndexInventory(env_paths=env_paths, version=2)
 
 

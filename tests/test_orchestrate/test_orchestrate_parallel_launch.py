@@ -103,6 +103,7 @@ def _task(tmp_path: Path, task_id: str) -> TaskSpec:
         model_key="foo",
         model_id=f"Foo/{task_id}",
         orchestrate={
+            "restart": "runs/raw/old-run",
             "vllm-container": {"image": "fake"},
             "foo": {"gpus": 2, "tensor_parallel_size": 2, "serve": {}},
         },
@@ -129,6 +130,7 @@ async def test_parallel_launch_runs_concurrently(
         max_parallel=2,
     )
     adapter = FakeRuntimeAdapter()
+    bench_commands: list[list[str]] = []
     runner = OrchestratorRunner(
         plan,
         tasks,
@@ -164,6 +166,8 @@ async def test_parallel_launch_runs_concurrently(
         return Result()
 
     async def fake_start_benchmark(*args, **kwargs):
+        bench_commands.append(list(args[0]))
+
         class Proc:
             pass
 
@@ -190,3 +194,7 @@ async def test_parallel_launch_runs_concurrently(
 
     assert readiness_overlapped
     assert [call["server_port"] for call in adapter.launch_calls] == [8000, 8001]
+    assert all("--api-base-url" in command for command in bench_commands)
+    assert all("--provider" in command and "local" in command for command in bench_commands)
+    assert all("--on-complete" not in command for command in bench_commands)
+    assert all("--restart" not in command for command in bench_commands)

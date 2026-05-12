@@ -39,7 +39,7 @@ Create a plan YAML listing the job configs you want to orchestrate:
 ```yaml
 name: local-vllm
 job_configs:
-  - configs/job-gpt-oss-20b.yaml
+  - configs/eval/local-qwen.toml
 env_file: .env
 gpu_range: "0-3"
 port_range: "8000-8999"
@@ -49,41 +49,42 @@ resume: false
 rerun_failed: false
 ```
 
-Each job config must define exactly one model under `models:` and include a top-level
-`orchestrate:` block with per-model serve settings.
+Each job config should be an upstream `medarc-eval bench` TOML config with a top-level
+`model` and a namespaced `[medarc.orchestrate]` table.
 
 The `env_file` is a dotenv file that is loaded for every Docker launch. If unset and a repo-level `.env` exists,
 it is used automatically. You can also override it via `--env-file`.
 
-Optional: set `orchestrate.restart` to reuse completed jobs from a previous `medarc-eval` run (it is forwarded as
-`medarc-eval bench --restart ...`).
-
 Shared container config:
 
-```yaml
-orchestrate:
-  qwen-30b-a3b:
-    gpus: 2
-    tensor_parallel_size: 2
-    serve:
-      max_model_len: 40960
-  vllm-container:
-    image: vllm/vllm-openai:latest
-    container_port: 8000
-    volumes:
-      - /data/huggingface:/root/.cache/huggingface
-    ipc_mode: host
-  pyxis:
-    srun_extra_args: []
+```toml
+model = "Qwen/Qwen3-30B-A3B"
+
+[[eval]]
+env_id = "medqa"
+
+[medarc.orchestrate.qwen-30b-a3b]
+gpus = 2
+tensor_parallel_size = 2
+
+[medarc.orchestrate.qwen-30b-a3b.serve]
+max_model_len = 40960
+
+[medarc.orchestrate.vllm-container]
+image = "vllm/vllm-openai:latest"
+container_port = 8000
+volumes = ["/data/huggingface:/root/.cache/huggingface"]
+ipc_mode = "host"
+
+[medarc.orchestrate.pyxis]
+srun_extra_args = []
 ```
 
 Config notes:
 
-- `orchestrate.vllm-container` is the preferred key.
-- `orchestrate.vllm-docker` is still accepted as a deprecated alias.
-- Do not set both keys in the same job config.
+- `medarc.orchestrate.vllm-container` is required.
 - `ipc_mode` is Docker-only and is ignored in `--runtime pyxis`.
-- `orchestrate.pyxis` is Pyxis-only and is ignored in `--runtime docker`.
+- `medarc.orchestrate.pyxis` is Pyxis-only and is ignored in `--runtime docker`.
 - In Pyxis mode, Slurm allocates GPUs per `srun` step. The orchestrator only reserves localhost ports.
 
 ### CLI usage
@@ -126,9 +127,17 @@ runtime: pyxis
 Artifacts are written under `outputs/orchestrator/<run_id>/`:
 
 - `summary.json` aggregates task states.
-- per-task folders contain `run_manifest.json`, `serve/` logs, `bench/` outputs, and `result.json`.
+- per-task folders contain orchestrator task state, `serve/` logs, `bench/` outputs, and `result.json`.
 
 ### Runtime behavior
+
+For each task, the orchestrator launches vLLM, waits for readiness, then runs:
+
+```bash
+medarc-eval bench --config <job.toml> --api-base-url <allocated-local-url> --provider local
+```
+
+The bench command exits naturally on completion; the orchestrator passes TOML bench flags only.
 
 Docker mode:
 

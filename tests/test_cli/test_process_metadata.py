@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
-
-import pytest
 
 from medarc_verifiers.cli.process.discovery import RunManifestInfo, RunRecord
 from medarc_verifiers.cli.process.metadata import load_normalized_metadata
@@ -76,7 +73,7 @@ def _make_record(
     return record
 
 
-def test_load_normalized_metadata_prefers_manifest_fields(tmp_path: Path) -> None:
+def test_load_normalized_metadata_prefers_metadata_fields(tmp_path: Path) -> None:
     record = _make_record(
         tmp_path,
         env_args={"difficulty": "hard"},
@@ -102,9 +99,9 @@ def test_load_normalized_metadata_prefers_manifest_fields(tmp_path: Path) -> Non
     assert normalized.manifest_env_id == "demo-env-rollout3"
     assert normalized.base_env_id == "demo-env"
     assert normalized.rollout_index == 3
-    assert normalized.env_args == {"difficulty": "hard", "split": "dev"}
-    assert normalized.sampling_args == {"temperature": 0.1, "top_p": 0.95}
-    assert normalized.num_examples == 10
+    assert normalized.env_args == {"difficulty": "easy", "split": "dev"}
+    assert normalized.sampling_args == {"temperature": 0.9, "top_p": 0.95}
+    assert normalized.num_examples == 20
     assert normalized.rollouts_per_example == 2
     assert normalized.model_id == "gpt-4o"
     assert normalized.metadata_model == "gpt-4o-mini"
@@ -220,13 +217,13 @@ def test_load_normalized_metadata_validation_failure_sanitizes_raw_metadata(tmp_
     }
 
 
-def test_load_normalized_metadata_keeps_zero_num_examples_from_manifest(tmp_path: Path) -> None:
+def test_load_normalized_metadata_keeps_zero_num_examples_from_metadata(tmp_path: Path) -> None:
     record = _make_record(tmp_path, manifest_env_id="demo-env", num_examples=0, rollouts_per_example=1)
     _write_json(
         record.metadata_path,
         {
             "env_id": "demo-env",
-            "num_examples": 20,
+            "num_examples": 0,
             "rollouts_per_example": 3,
         },
     )
@@ -234,33 +231,33 @@ def test_load_normalized_metadata_keeps_zero_num_examples_from_manifest(tmp_path
     normalized = load_normalized_metadata(record)
 
     assert normalized.num_examples == 0
-    assert normalized.rollouts_per_example == 1
+    assert normalized.rollouts_per_example == 3
 
 
-def test_load_normalized_metadata_keeps_zero_rollouts_from_manifest(tmp_path: Path) -> None:
+def test_load_normalized_metadata_keeps_zero_rollouts_from_metadata(tmp_path: Path) -> None:
     record = _make_record(tmp_path, manifest_env_id="demo-env", num_examples=10, rollouts_per_example=0)
     _write_json(
         record.metadata_path,
         {
             "env_id": "demo-env",
             "num_examples": 20,
-            "rollouts_per_example": 3,
+            "rollouts_per_example": 0,
         },
     )
 
     normalized = load_normalized_metadata(record)
 
-    assert normalized.num_examples == 10
+    assert normalized.num_examples == 20
     assert normalized.rollouts_per_example == 0
 
 
-def test_load_normalized_metadata_keeps_all_examples_sentinel_from_manifest(tmp_path: Path) -> None:
+def test_load_normalized_metadata_keeps_all_examples_sentinel_from_metadata(tmp_path: Path) -> None:
     record = _make_record(tmp_path, manifest_env_id="demo-env", num_examples=-1, rollouts_per_example=1)
     _write_json(
         record.metadata_path,
         {
             "env_id": "demo-env",
-            "num_examples": 20,
+            "num_examples": -1,
             "rollouts_per_example": 3,
         },
     )
@@ -268,47 +265,4 @@ def test_load_normalized_metadata_keeps_all_examples_sentinel_from_manifest(tmp_
     normalized = load_normalized_metadata(record)
 
     assert normalized.num_examples == -1
-    assert normalized.rollouts_per_example == 1
-
-
-def test_load_normalized_metadata_warns_on_avg_reward_and_num_examples_mismatch(
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    record = _make_record(tmp_path, manifest_env_id="demo-env", avg_reward=0.8, num_examples=10)
-    _write_json(
-        record.metadata_path,
-        {
-            "env_id": "demo-env",
-            "avg_reward": 0.7,
-            "num_examples": 12,
-        },
-    )
-
-    with caplog.at_level(logging.WARNING):
-        normalized = load_normalized_metadata(record)
-
-    assert normalized.num_examples == 10
-    assert "Manifest/metadata result mismatch for process input" in caplog.text
-    assert "avg_reward manifest=0.8 metadata=0.7" in caplog.text
-    assert "num_examples manifest=10 metadata=12" in caplog.text
-
-
-def test_load_normalized_metadata_does_not_warn_when_result_fields_match(
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    record = _make_record(tmp_path, manifest_env_id="demo-env", avg_reward=0.8, num_examples=10)
-    _write_json(
-        record.metadata_path,
-        {
-            "env_id": "demo-env",
-            "avg_reward": 0.8,
-            "num_examples": 10,
-        },
-    )
-
-    with caplog.at_level(logging.WARNING):
-        load_normalized_metadata(record)
-
-    assert "Manifest/metadata result mismatch for process input" not in caplog.text
+    assert normalized.rollouts_per_example == 3

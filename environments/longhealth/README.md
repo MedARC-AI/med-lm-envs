@@ -63,7 +63,7 @@ medarc-eval longhealth -m "openai/gpt-5-mini" -n 10 -s --task all --doc-shuffle-
 | Metric | Meaning |
 | ------ | ------- |
 | `reward` | Exact match accuracy (1.0 if correct letter, 0.0 otherwise) |
-| `info.task` | Which sub-task: `task1`, `task2_negation`, or `task2_identification` |
+| `info.longhealth_task` | Which sub-task: `task1`, `task2_negation`, or `task2_identification` |
 | `info.has_answer_docs` | Whether answer-containing documents were included |
 | `info.num_docs` | Number of documents in the context |
 

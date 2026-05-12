@@ -162,6 +162,34 @@ def test_answer_text_in_sentence():
     )
 
 
+@pytest.mark.parametrize(
+    ("response", "answer_letter", "answer_text"),
+    [
+        (" c ", "C", "Correct option"),
+        ("(2)", "2", "Second option"),
+        ("  Chemotherapy and radiation.  ", "C", "chemotherapy and radiation"),
+        ("B. Video-capsule endoscopy", "B", "Video-capsule endoscopy"),
+        ("**(3)** Third option", "3", "Third option"),
+    ],
+)
+def test_strict_accepts_only_exact_option_text_or_both(response: str, answer_letter: str, answer_text: str):
+    assert multiple_choice_accuracy(response, answer_letter=answer_letter, answer_text=answer_text, strict=True)
+
+
+@pytest.mark.parametrize(
+    ("response", "answer_letter", "answer_text"),
+    [
+        ("Final answer: C", "C", "Correct option"),
+        ("I think it's C", "C", "Correct option"),
+        ("Based on the symptoms, acute myocardial infarction is most likely.", "B", "acute myocardial infarction"),
+        ("The answer is all of the above.", "D", "All of the above"),
+    ],
+)
+def test_strict_rejects_permissive_heuristic_matches(response: str, answer_letter: str, answer_text: str):
+    assert multiple_choice_accuracy(response, answer_letter=answer_letter, answer_text=answer_text)
+    assert not multiple_choice_accuracy(response, answer_letter=answer_letter, answer_text=answer_text, strict=True)
+
+
 @pytest.mark.parametrize("response", ["All of the above", "The answer is all of the above."])
 def test_answer_text_all_of_the_above_is_not_rejected(response: str):
     assert multiple_choice_accuracy(response, answer_letter="D", answer_text="All of the above")

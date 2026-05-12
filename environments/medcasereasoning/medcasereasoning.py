@@ -59,8 +59,7 @@ def load_environment(
         lambda x: {
             "question": QUESTION_TEMPLATE.format(question=x["case_prompt"]),
             "answer": x["final_diagnosis"],
-            "task": "medcasereasoning",
-            "info": {"case_prompt": x["case_prompt"]},
+            "info": {"case_prompt": x["case_prompt"], "medcasereasoning_task": "medcasereasoning"},
         }
     )
 
@@ -68,8 +67,7 @@ def load_environment(
         lambda x: {
             "question": QUESTION_TEMPLATE.format(question=x["case_prompt"]),
             "answer": x["final_diagnosis"],
-            "task": "medcasereasoning",
-            "info": {"case_prompt": x["case_prompt"]},
+            "info": {"case_prompt": x["case_prompt"], "medcasereasoning_task": "medcasereasoning"},
         }
     )
 
