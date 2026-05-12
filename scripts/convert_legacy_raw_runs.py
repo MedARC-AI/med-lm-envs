@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -185,7 +184,7 @@ def convert_legacy_raw_runs(
             continue
         try:
             _write_conversion(plan)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             entries.append(_entry_for_plan(plan, status="failed", reason=f"write failed: {exc}"))
             continue
         entries.append(_entry_for_plan(plan, status="converted", reason="converted"))
@@ -265,12 +264,18 @@ def _resolve_variant(job: Mapping[str, Any], env_id: str) -> str | dict[str, str
     if raw is None or raw == env_id:
         return BASE_VARIANT_ID
 
+    split_variant = _resolve_split_variant(job, env_id, raw)
+    if split_variant is not None:
+        return split_variant
+
     prefix_colon = f"{env_id}::"
     prefix_slash = f"{env_id}/"
     if raw.startswith(prefix_colon):
         variant_id = raw[len(prefix_colon) :]
     elif raw.startswith(prefix_slash):
         variant_id = raw[len(prefix_slash) :]
+    elif raw.startswith(f"{env_id}-") or raw.startswith(f"{env_id}_"):
+        variant_id = raw[len(env_id) + 1 :]
     else:
         return {"reason": f"ambiguous env_variant_id {raw!r} for env_id {env_id!r}"}
 
@@ -283,6 +288,22 @@ def _resolve_variant(job: Mapping[str, Any], env_id: str) -> str | dict[str, str
     if slug_component(variant_id, max_length=MAX_VARIANT_LENGTH) != variant_id:
         return {"reason": f"path-unsafe variant {variant_id!r}"}
     return variant_id
+
+
+def _resolve_split_variant(job: Mapping[str, Any], env_id: str, raw: str) -> str | None:
+    env_args = job.get("env_args")
+    split = _string_or_none(env_args.get("split")) if isinstance(env_args, Mapping) else None
+    if split != "en":
+        return None
+
+    for delimiter in ("_", "-"):
+        split_prefix = f"{env_id}{delimiter}{split}"
+        if raw == split_prefix:
+            return BASE_VARIANT_ID
+        rollout_prefix = f"{split_prefix}-"
+        if raw.startswith(rollout_prefix):
+            return raw[len(rollout_prefix) :]
+    return None
 
 
 def _resolve_results_path(
@@ -337,21 +358,221 @@ def _collision_entries(
 
 def _write_conversion(plan: _PlannedConversion) -> None:
     plan.target_dir.mkdir(parents=True, exist_ok=False)
-    shutil.copy2(plan.source_results, plan.target_dir / RESULTS_FILENAME)
-    metadata = _converted_metadata(plan)
+    row_stats = _write_converted_results(plan)
+    metadata = _converted_metadata(plan, row_stats=row_stats)
     (plan.target_dir / METADATA_FILENAME).write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 
 
-def _converted_metadata(plan: _PlannedConversion) -> dict[str, Any]:
+def _write_converted_results(plan: _PlannedConversion) -> dict[str, Any]:
+    stats = _RowStats()
+    with (
+        plan.source_results.open("r", encoding="utf-8") as source,
+        (plan.target_dir / RESULTS_FILENAME).open("w", encoding="utf-8") as target,
+    ):
+        for line_number, line in enumerate(source, start=1):
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except ValueError as exc:
+                raise ValueError(f"invalid JSON in {plan.source_results} line {line_number}: {exc}") from exc
+            if not isinstance(payload, Mapping):
+                raise ValueError(f"expected JSON object in {plan.source_results} line {line_number}")
+            converted = _converted_result_row(payload)
+            stats.add(converted)
+            target.write(json.dumps(converted, sort_keys=True) + "\n")
+    return stats.to_metadata()
+
+
+def _converted_result_row(payload: Mapping[str, Any]) -> dict[str, Any]:
+    converted = dict(payload)
+    converted["timing"] = _converted_timing(payload)
+    converted.pop("generation_ms", None)
+    converted.pop("scoring_ms", None)
+    converted.pop("total_ms", None)
+
+    converted["is_completed"] = bool(payload.get("is_completed", payload.get("error") is None))
+    converted["is_truncated"] = bool(payload.get("is_truncated", False))
+    converted["stop_condition"] = payload.get("stop_condition", "max_turns_reached")
+    converted["metrics"] = _converted_metrics(payload)
+    converted["tool_defs"] = payload.get("tool_defs", [])
+
+    usage = _converted_token_usage(payload.get("token_usage"))
+    if usage is not None:
+        converted["token_usage"] = usage
+    else:
+        converted.pop("token_usage", None)
+
+    return converted
+
+
+def _converted_timing(payload: Mapping[str, Any]) -> dict[str, Any]:
+    timing = payload.get("timing")
+    if isinstance(timing, Mapping):
+        return dict(timing)
+
+    generation = _milliseconds_to_seconds(payload.get("generation_ms"))
+    scoring = _milliseconds_to_seconds(payload.get("scoring_ms"))
+    total = _milliseconds_to_seconds(payload.get("total_ms"))
+    return {
+        "setup": {"duration": 0.0, "spans": []},
+        "generation": {"duration": generation, "start": 0.0, "end": generation},
+        "scoring": {"duration": scoring, "start": generation, "end": generation + scoring},
+        "model": {"duration": generation, "spans": [{"duration": generation, "start": 0.0, "end": generation}]},
+        "env": {"duration": 0.0, "spans": []},
+        "total": total,
+        "overhead": max(0.0, total - generation - scoring),
+    }
+
+
+def _converted_metrics(payload: Mapping[str, Any]) -> dict[str, float]:
+    metrics = payload.get("metrics")
+    if isinstance(metrics, Mapping):
+        return {str(key): float(value) for key, value in metrics.items() if _float_or_none(value) is not None}
+
+    converted: dict[str, float] = {}
+    for key in ("accuracy", "num_turns"):
+        value = _float_or_none(payload.get(key))
+        if value is not None:
+            converted[key] = value
+    return converted
+
+
+def _converted_token_usage(value: Any) -> dict[str, float] | None:
+    if not isinstance(value, Mapping):
+        return None
+    if "input_tokens" in value or "output_tokens" in value:
+        input_tokens = _float_or_none(value.get("input_tokens")) or 0.0
+        output_tokens = _float_or_none(value.get("output_tokens")) or 0.0
+        usage = {"input_tokens": input_tokens, "output_tokens": output_tokens}
+        final_input = _float_or_none(value.get("final_input_tokens"))
+        final_output = _float_or_none(value.get("final_output_tokens"))
+        if final_input is not None and final_output is not None:
+            usage["final_input_tokens"] = final_input
+            usage["final_output_tokens"] = final_output
+        return usage
+
+    model_usage = value.get("model")
+    if not isinstance(model_usage, Mapping):
+        return None
+    input_tokens = _float_or_none(model_usage.get("prompt")) or 0.0
+    output_tokens = _float_or_none(model_usage.get("completion")) or 0.0
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "final_input_tokens": input_tokens,
+        "final_output_tokens": output_tokens,
+    }
+
+
+@dataclass(slots=True)
+class _RowStats:
+    count: int = 0
+    reward_total: float = 0.0
+    reward_count: int = 0
+    error_count: int = 0
+    metric_totals: dict[str, float] | None = None
+    metric_counts: dict[str, int] | None = None
+    input_tokens_total: float = 0.0
+    output_tokens_total: float = 0.0
+    usage_count: int = 0
+    final_input_tokens_total: float = 0.0
+    final_output_tokens_total: float = 0.0
+    final_usage_count: int = 0
+
+    def add(self, row: Mapping[str, Any]) -> None:
+        self.count += 1
+        reward = _float_or_none(row.get("reward"))
+        if reward is not None:
+            self.reward_total += reward
+            self.reward_count += 1
+        if row.get("error") is not None:
+            self.error_count += 1
+
+        metrics = row.get("metrics")
+        if isinstance(metrics, Mapping):
+            if self.metric_totals is None:
+                self.metric_totals = {}
+                self.metric_counts = {}
+            assert self.metric_counts is not None
+            for key, value in metrics.items():
+                numeric = _float_or_none(value)
+                if numeric is None:
+                    continue
+                metric_key = str(key)
+                self.metric_totals[metric_key] = self.metric_totals.get(metric_key, 0.0) + numeric
+                self.metric_counts[metric_key] = self.metric_counts.get(metric_key, 0) + 1
+
+        usage = row.get("token_usage")
+        if isinstance(usage, Mapping):
+            input_tokens = _float_or_none(usage.get("input_tokens"))
+            output_tokens = _float_or_none(usage.get("output_tokens"))
+            if input_tokens is not None or output_tokens is not None:
+                self.input_tokens_total += input_tokens or 0.0
+                self.output_tokens_total += output_tokens or 0.0
+                self.usage_count += 1
+            final_input = _float_or_none(usage.get("final_input_tokens"))
+            final_output = _float_or_none(usage.get("final_output_tokens"))
+            if final_input is not None and final_output is not None:
+                self.final_input_tokens_total += final_input
+                self.final_output_tokens_total += final_output
+                self.final_usage_count += 1
+
+    def to_metadata(self) -> dict[str, Any]:
+        avg_metrics: dict[str, float] = {}
+        if self.metric_totals and self.metric_counts:
+            avg_metrics = {
+                key: total / self.metric_counts[key]
+                for key, total in sorted(self.metric_totals.items())
+                if self.metric_counts.get(key)
+            }
+
+        usage: dict[str, float] | None = None
+        if self.usage_count:
+            usage = {
+                "input_tokens": self.input_tokens_total / self.usage_count,
+                "output_tokens": self.output_tokens_total / self.usage_count,
+            }
+            if self.final_usage_count:
+                usage["final_input_tokens"] = self.final_input_tokens_total / self.final_usage_count
+                usage["final_output_tokens"] = self.final_output_tokens_total / self.final_usage_count
+
+        return {
+            "row_count": self.count,
+            "avg_reward": self.reward_total / self.reward_count if self.reward_count else 0.0,
+            "avg_error": self.error_count / self.count if self.count else 0.0,
+            "avg_metrics": avg_metrics,
+            "usage": usage,
+        }
+
+
+def _converted_metadata(plan: _PlannedConversion, *, row_stats: Mapping[str, Any]) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
     if plan.source_metadata_payload:
         source = plan.source_metadata_payload
-        for key in ("env_args", "sampling_args", "num_examples", "rollouts_per_example", "avg_reward"):
+        for key in (
+            "env_args",
+            "sampling_args",
+            "num_examples",
+            "rollouts_per_example",
+            "avg_reward",
+            "avg_metrics",
+            "avg_error",
+            "base_url",
+            "state_columns",
+            "tools",
+            "usage",
+            "version_info",
+        ):
             if key in source:
                 metadata[key] = source[key]
+        if "time" in source:
+            metadata["time"] = source["time"]
+        elif "time_ms" in source:
+            metadata["time"] = _milliseconds_to_seconds(source["time_ms"])
 
     model_table = plan.manifest.get("models")
     model_config = model_table.get(plan.model_id) if isinstance(model_table, Mapping) else None
@@ -371,9 +592,44 @@ def _converted_metadata(plan: _PlannedConversion) -> dict[str, Any]:
 
     metadata.setdefault("env_args", {})
     metadata.setdefault("sampling_args", {})
+    metadata.setdefault("base_url", "")
+    metadata.setdefault("time", plan.job.get("duration_seconds", 0.0))
+    metadata["avg_reward"] = row_stats.get("avg_reward", metadata.get("avg_reward", 0.0))
+    metadata["avg_metrics"] = row_stats.get("avg_metrics") or metadata.get("avg_metrics") or _job_metrics(plan.job)
+    metadata["avg_error"] = row_stats.get("avg_error", metadata.get("avg_error", 0.0))
+    metadata.setdefault("pass_at_k", {})
+    metadata.setdefault("pass_all_k", {})
+    metadata.setdefault("pass_threshold", 0.5)
+    metadata["usage"] = row_stats.get("usage", metadata.get("usage"))
+    metadata.setdefault("version_info", {})
+    metadata.setdefault("state_columns", [])
+    metadata.setdefault("tools", None)
     metadata["env_id"] = plan.env_id
     metadata["model"] = plan.model_id
+    metadata["num_examples"] = int(metadata.get("num_examples") or row_stats.get("row_count") or 0)
+    metadata["rollouts_per_example"] = int(metadata.get("rollouts_per_example") or 1)
     return metadata
+
+
+def _job_metrics(job: Mapping[str, Any]) -> dict[str, float]:
+    metrics = job.get("metrics")
+    if not isinstance(metrics, Mapping):
+        return {}
+    return {str(key): float(value) for key, value in metrics.items() if _float_or_none(value) is not None}
+
+
+def _milliseconds_to_seconds(value: Any) -> float:
+    numeric = _float_or_none(value)
+    return 0.0 if numeric is None else numeric / 1000.0
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _entry_for_plan(plan: _PlannedConversion, *, status: str, reason: str) -> ConversionEntry:

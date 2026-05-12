@@ -96,16 +96,33 @@ def test_converts_valid_manifest_job_to_processable_eval_output(tmp_path: Path) 
 
     assert report.converted == 1
     target = output_dir / "gpt-mini" / "demo-env" / "base"
-    assert (target / "results.jsonl").read_text(encoding="utf-8")
+    row = json.loads((target / "results.jsonl").read_text(encoding="utf-8"))
+    assert row["is_completed"] is True
+    assert row["is_truncated"] is False
+    assert row["metrics"] == {}
+    assert row["stop_condition"] == "max_turns_reached"
+    assert row["timing"]["total"] == 0.0
+    assert row["tool_defs"] == []
     metadata = json.loads((target / "metadata.json").read_text(encoding="utf-8"))
     assert metadata == {
-        "avg_reward": 0.5,
+        "avg_error": 0.0,
+        "avg_metrics": {},
+        "avg_reward": 1.0,
+        "base_url": "",
         "env_args": {"fold": "metadata"},
         "env_id": "demo/env",
         "model": "gpt/mini",
         "num_examples": 2,
+        "pass_all_k": {},
+        "pass_at_k": {},
+        "pass_threshold": 0.5,
         "rollouts_per_example": 1,
         "sampling_args": {"temperature": 0.2},
+        "state_columns": [],
+        "time": 0.0,
+        "tools": None,
+        "usage": None,
+        "version_info": {},
     }
     assert not (target / "bench_index.json").exists()
     assert not (target / ".medarc_eval_metadata.json").exists()
@@ -194,7 +211,9 @@ def test_path_unsafe_or_ambiguous_variants_are_skipped(tmp_path: Path) -> None:
         jobs=[
             _job(job_id="ambiguous", env_variant_id="other-env::seed-1", results_relpath="ambiguous/results.jsonl"),
             _job(job_id="unsafe", env_variant_id="demo/env::bad value", results_relpath="unsafe/results.jsonl"),
-            _job(job_id="base-conflict", env_variant_id="demo/env::base", results_relpath="base-conflict/results.jsonl"),
+            _job(
+                job_id="base-conflict", env_variant_id="demo/env::base", results_relpath="base-conflict/results.jsonl"
+            ),
         ],
     )
     for job_id in ("ambiguous", "unsafe", "base-conflict"):
@@ -232,3 +251,43 @@ def test_parses_relative_variant_and_cli_report_path(tmp_path: Path) -> None:
     assert (output_dir / "gpt-mini" / "demo-env" / "shuffle_seed-1618" / "metadata.json").exists()
     payload = json.loads(report_path.read_text(encoding="utf-8"))
     assert payload["summary"]["converted"] == 1
+
+
+def test_parses_legacy_delimited_env_variant_ids(tmp_path: Path) -> None:
+    raw_dir = tmp_path / "runs" / "raw"
+    output_dir = tmp_path / "runs" / "evals"
+    run_dir = _write_manifest(
+        raw_dir,
+        jobs=[
+            _job(
+                job_id="longhealth-task1",
+                env_id="longhealth",
+                env_variant_id="longhealth-task1",
+                results_relpath="longhealth-task1/results.jsonl",
+            ),
+            _job(
+                job_id="careqa-en",
+                env_id="careqa",
+                env_variant_id="careqa_en",
+                env_args={"split": "en"},
+                results_relpath="careqa-en/results.jsonl",
+            ),
+            _job(
+                job_id="pubhealthbench-reviewed",
+                env_id="pubhealthbench",
+                env_variant_id="pubhealthbench_reviewed",
+                env_args={"split": "reviewed"},
+                results_relpath="pubhealthbench-reviewed/results.jsonl",
+            ),
+        ],
+    )
+    _write_artifacts(run_dir, job_id="longhealth-task1")
+    _write_artifacts(run_dir, job_id="careqa-en")
+    _write_artifacts(run_dir, job_id="pubhealthbench-reviewed")
+
+    report = convert_legacy_raw_runs(raw_dir=raw_dir, output_dir=output_dir, dry_run=False)
+
+    assert report.converted == 3
+    assert (output_dir / "gpt-mini" / "longhealth" / "task1" / "metadata.json").exists()
+    assert (output_dir / "gpt-mini" / "careqa" / "base" / "metadata.json").exists()
+    assert (output_dir / "gpt-mini" / "pubhealthbench" / "reviewed" / "metadata.json").exists()
