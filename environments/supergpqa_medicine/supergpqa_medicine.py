@@ -202,6 +202,7 @@ def _to_vf_format(
 
         # question and answer have been moved to top-level, so remove them here
         info = dict(row)
+        info.pop("task", None)
 
         # update shuffled answer choices in the info dict
         if shuffle_answers:

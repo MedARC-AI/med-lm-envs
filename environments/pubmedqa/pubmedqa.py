@@ -74,6 +74,7 @@ def map_row_to_mcq_prompt(
     # required fields: question (for the prompt), and answer (for the scoring)
     info = {
         "answer_text": options.get(correct_answer_letter, final_decision),
+        "pubmedqa_task": "pubmedqa",
     }
     if shuffle_answers:
         info["options"] = options
@@ -81,7 +82,6 @@ def map_row_to_mcq_prompt(
     return {
         "question": complete_prompt,
         "answer": correct_answer_letter,
-        "task": "pubmedqa",
         "info": info,
     }
 

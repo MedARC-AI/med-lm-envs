@@ -79,6 +79,8 @@ def load_environment(
         answer_text = options.get(answer_letter)
 
         info = dict(example)
+        info.pop("task", None)
+        info["medxpertqa_question_type"] = question_type.value
         if shuffle_answers:
             info["options"] = options
             info["label"] = answer_letter
@@ -88,7 +90,6 @@ def load_environment(
             "question": _format_question_with_options(example.get("question", ""), options),
             "answer": answer_letter if answer_letter else "",
             "info": info,
-            "task": question_type.value,
         }
 
     # Disable the Datasets cache when shuffling answers
