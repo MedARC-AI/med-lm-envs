@@ -45,9 +45,7 @@ def resolve_env_package(env_id: str, env_dir: str | Path) -> EnvPackageRef:
             "Install it manually or pass --env-dir."
         )
     if not pyproject_path.is_file():
-        raise FileNotFoundError(
-            f"Environment {env_id!r} local package at {env_root} is missing pyproject.toml."
-        )
+        raise FileNotFoundError(f"Environment {env_id!r} local package at {env_root} is missing pyproject.toml.")
 
     with pyproject_path.open("rb") as handle:
         pyproject_data: dict[str, Any] = load_toml(handle)

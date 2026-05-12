@@ -276,9 +276,10 @@ def test_run_process_preserves_deterministic_eval_variants(tmp_path: Path) -> No
     ]
     index_payload = json.loads((output_dir / "env_index.json").read_text(encoding="utf-8"))
     assert sorted(index_payload["files"]) == rel_paths
-    assert {
-        entry["variant_id"] for entry in index_payload["files"].values()
-    } == {"env_args.shuffle_seed-1618", "env_args.shuffle_seed-9331"}
+    assert {entry["variant_id"] for entry in index_payload["files"].values()} == {
+        "env_args.shuffle_seed-1618",
+        "env_args.shuffle_seed-9331",
+    }
 
 
 def test_run_process_excludes_specific_deterministic_eval_variant(tmp_path: Path) -> None:

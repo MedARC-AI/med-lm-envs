@@ -136,10 +136,7 @@ def _sanitize_anthropic_messages(sampling_args: Mapping[str, Any]) -> dict[str, 
 def _validate_anthropic_effort(value: Any) -> str:
     effort_values = _get_anthropic_effort_values()
     if not isinstance(value, str) or value not in effort_values:
-        raise ValueError(
-            "anthropic_messages reasoning effort must be one of: "
-            f"{', '.join(sorted(effort_values))}"
-        )
+        raise ValueError(f"anthropic_messages reasoning effort must be one of: {', '.join(sorted(effort_values))}")
     return value
 
 

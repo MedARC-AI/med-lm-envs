@@ -224,6 +224,7 @@ def _infer_eval_output_layout(
         "variant_id": variant_id or "",
     }
 
+
 def _read_metadata_payload(path: Path) -> Mapping[str, Any] | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))

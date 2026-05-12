@@ -60,13 +60,9 @@ def _run_payload(payload: dict[str, Any]) -> dict[str, Any]:
         config = build_eval_config(payload["raw_config"], overrides=_overrides_from_payload(payload["overrides"]))
         planned_resume_path = Path(payload["resume_path"])
         if config.env_id != payload["expected_env_id"]:
-            raise ValueError(
-                f"Child resolved env_id {config.env_id!r}, expected {payload['expected_env_id']!r}."
-            )
+            raise ValueError(f"Child resolved env_id {config.env_id!r}, expected {payload['expected_env_id']!r}.")
         if config.model != payload["expected_model"]:
-            raise ValueError(
-                f"Child resolved model {config.model!r}, expected {payload['expected_model']!r}."
-            )
+            raise ValueError(f"Child resolved model {config.model!r}, expected {payload['expected_model']!r}.")
         config = config.model_copy(update={"resume_path": planned_resume_path, "save_results": True})
         asyncio.run(run_evaluation(config))
         status["eval_ok"] = True

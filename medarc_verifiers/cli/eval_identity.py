@@ -98,8 +98,7 @@ def _ensure_unique_identities(plans: Sequence[EvalPathPlan]) -> None:
     duplicates = sorted(identity for identity, count in Counter(identities).items() if count > 1)
     if duplicates:
         rendered = ", ".join(
-            f"model={model!r}, env_id={env_id!r}, variant_id={variant_id!r}"
-            for model, env_id, variant_id in duplicates
+            f"model={model!r}, env_id={env_id!r}, variant_id={variant_id!r}" for model, env_id, variant_id in duplicates
         )
         raise ValueError(f"Duplicate TOML eval identity; add a distinct variant_id/name: {rendered}")
 
@@ -161,9 +160,7 @@ def _variant_id(config: Mapping[str, Any], *, index: int) -> str:
     variant = _normalize_variant(raw_variant, config=config, field="variant_id", index=index)
     name = _normalize_variant(raw_name, config=config, field="name", index=index)
     if variant and name and variant != name:
-        raise ValueError(
-            f"TOML eval {index} has conflicting variant_id/name values: {variant!r} != {name!r}."
-        )
+        raise ValueError(f"TOML eval {index} has conflicting variant_id/name values: {variant!r} != {name!r}.")
     return variant or name or BASE_VARIANT_ID
 
 
@@ -175,7 +172,7 @@ def _normalize_variant(value: Any, *, config: Mapping[str, Any], field: str, ind
         raise ValueError(f"TOML eval {index} {field} must not be empty.")
     if slug_component(text, max_length=_MAX_VARIANT_ID_LENGTH) != text:
         raise ValueError(
-            f'TOML eval {index} {field} {text!r} is not path-safe. '
+            f"TOML eval {index} {field} {text!r} is not path-safe. "
             'Use only letters, numbers, ".", "_", and "-", for example "shuffle_seed-1618".'
         )
     return text

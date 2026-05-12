@@ -52,7 +52,9 @@ def test_current_medarc_install_spec_rejects_invalid_editable_checkout(
 def test_install_medarc_non_editable_uses_pinned_version(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     commands: list[list[str]] = []
 
-    monkeypatch.setattr(isolated_env, "current_medarc_install_spec", lambda: isolated_env.MedarcInstallSpec(False, "9.8.7"))
+    monkeypatch.setattr(
+        isolated_env, "current_medarc_install_spec", lambda: isolated_env.MedarcInstallSpec(False, "9.8.7")
+    )
     monkeypatch.setattr(isolated_env, "_run_uv", lambda command, action: commands.append(command))
 
     isolated_env.install_medarc_into_venv(tmp_path / "python")
@@ -64,7 +66,9 @@ def test_install_medarc_non_editable_resolution_failure_is_actionable(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(isolated_env, "current_medarc_install_spec", lambda: isolated_env.MedarcInstallSpec(False, "9.8.7"))
+    monkeypatch.setattr(
+        isolated_env, "current_medarc_install_spec", lambda: isolated_env.MedarcInstallSpec(False, "9.8.7")
+    )
 
     def fail(command: list[str], action: str) -> None:
         raise isolated_env.IsolatedEnvError("resolver failed")

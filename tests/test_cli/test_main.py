@@ -356,7 +356,9 @@ def test_toml_bench_no_auto_install_plans_selected_raw_before_building_config(
     async def fake_run(config, **_kwargs):
         calls.append(Path(config.resume_path))
         Path(config.resume_path, "results.jsonl").write_text(json.dumps({"example_id": "0"}) + "\n")
-        Path(config.resume_path, "metadata.json").write_text(json.dumps({"env_id": config.env_id, "model": config.model}))
+        Path(config.resume_path, "metadata.json").write_text(
+            json.dumps({"env_id": config.env_id, "model": config.model})
+        )
         return {"outputs": [], "metadata": {}}
 
     monkeypatch.setattr(main, "build_eval_config", fake_build)
@@ -426,7 +428,9 @@ def test_toml_bench_mixed_missing_env_routes_only_missing_to_isolated_child(
     async def fake_run(config, **_kwargs):
         parent_runs.append(config.env_id)
         Path(config.resume_path, "results.jsonl").write_text(json.dumps({"example_id": "0"}) + "\n")
-        Path(config.resume_path, "metadata.json").write_text(json.dumps({"env_id": config.env_id, "model": config.model}))
+        Path(config.resume_path, "metadata.json").write_text(
+            json.dumps({"env_id": config.env_id, "model": config.model})
+        )
 
     class FakeVenv:
         def __enter__(self) -> Path:
@@ -1504,7 +1508,9 @@ def test_load_env_export_map_adds_module_variant_keys(tmp_path: Path) -> None:
 
     env_map = main._load_env_export_map(env_root)
 
-    variant_key = "medcalc_bench::env_args.add_calculator_tool-true__env_args.add_python_tool-true__env_args.version-verified"
+    variant_key = (
+        "medcalc_bench::env_args.add_calculator_tool-true__env_args.add_python_tool-true__env_args.version-verified"
+    )
     assert "medcalc_bench_tools" in env_map
     assert variant_key in env_map
     assert env_map[variant_key].answer_column == "ground_truth"
@@ -1843,9 +1849,7 @@ def test_process_cli_requires_winrate_config_path(tmp_path: Path) -> None:
         )
 
 
-def test_process_cli_records_default_max_results_missing_pct(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_process_cli_records_default_max_results_missing_pct(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     captured: dict[str, Any] = {}
 
     def fake_run_process(options, env_export_map):

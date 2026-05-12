@@ -48,7 +48,12 @@ def test_child_installs_builds_runs_and_cleans_up(monkeypatch: pytest.MonkeyPatc
 
     assert status["exit_code"] == 0
     assert status["installed_by_child"] is True
-    assert calls == ["install", "build", f"run:{tmp_path / 'runs' / 'evals' / 'parent-model' / 'medqa' / 'base'}", "cleanup"]
+    assert calls == [
+        "install",
+        "build",
+        f"run:{tmp_path / 'runs' / 'evals' / 'parent-model' / 'medqa' / 'base'}",
+        "cleanup",
+    ]
 
 
 def test_child_cleanup_env_package_false_skips_uninstall(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -1290,7 +1290,9 @@ def _run_toml_bench(args: argparse.Namespace) -> int:
         return 0
     if missing_envs and not args.auto_install:
         raise RuntimeError(_missing_envs_error(missing_envs))
-    return _execute_selected_toml_plan(selected_raw, plan_inputs, path_plans, overrides, args, missing_envs=missing_envs)
+    return _execute_selected_toml_plan(
+        selected_raw, plan_inputs, path_plans, overrides, args, missing_envs=missing_envs
+    )
 
 
 def _toml_eval_overrides(args: argparse.Namespace) -> EvalConfigOverrides:
@@ -1568,7 +1570,9 @@ def _jsonable_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _load_child_status(status_path: Path, *, completed: subprocess.CompletedProcess[str] | None = None) -> dict[str, Any]:
+def _load_child_status(
+    status_path: Path, *, completed: subprocess.CompletedProcess[str] | None = None
+) -> dict[str, Any]:
     if not status_path.is_file():
         tail = _completed_process_tail(completed) if completed is not None else ""
         detail = f"\n{tail}" if tail else ""
