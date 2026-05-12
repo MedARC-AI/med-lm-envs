@@ -261,7 +261,33 @@ reasoning_effort = "low"
     assert config.client_config.client_type == "openai_responses"
     assert config.sampling_args["temperature"] == 1.0
     assert config.sampling_args["top_p"] == 1.0
+    assert "reasoning_effort" not in config.sampling_args
+    assert config.sampling_args["reasoning"] == {"effort": "low"}
+    assert config.sampling_args["extra_body"]["top_k"] == 0
+
+
+def test_build_eval_config_chat_client_keeps_reasoning_effort(tmp_path: Path) -> None:
+    endpoints_path = tmp_path / "endpoints.toml"
+    endpoints_path.write_text(
+        """
+[[endpoint]]
+endpoint_id = "gpt-oss-chat"
+model = "openai/gpt-oss-20b"
+url = "http://localhost:8010/v1"
+key = "VLLM_API_KEY"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+top_k = 0
+reasoning_effort = "low"
+""".strip()
+    )
+
+    config = build_eval_config({"env_id": "medqa", "model": "gpt-oss-chat", "endpoints_path": str(endpoints_path)})
+
+    assert config.client_config.client_type == "openai_chat_completions"
     assert config.sampling_args["reasoning_effort"] == "low"
+    assert "reasoning" not in config.sampling_args
     assert config.sampling_args["extra_body"]["top_k"] == 0
 
 
@@ -301,6 +327,52 @@ sampling_args = { temperature = 1.0, top_p = 0.5 }
     assert toml_config.sampling_args["temperature"] == 0.7
     assert toml_config.sampling_args["top_p"] == 0.5
     assert cli_config.sampling_args["temperature"] == 0.8
+
+
+def test_build_eval_config_responses_cli_reasoning_overrides_endpoint_reasoning_effort(tmp_path: Path) -> None:
+    endpoints_path = tmp_path / "endpoints.toml"
+    endpoints_path.write_text(
+        """
+[[endpoint]]
+endpoint_id = "profiled"
+model = "openai/profiled"
+url = "https://profiled.example/v1"
+key = "PROFILED_KEY"
+api_client_type = "openai_responses"
+sampling_args = { reasoning_effort = "low" }
+""".strip()
+    )
+
+    config = build_eval_config(
+        {"env_id": "medqa", "endpoint_id": "profiled", "endpoints_path": str(endpoints_path)},
+        overrides=EvalConfigOverrides(sampling_args={"reasoning": {"effort": "high"}}),
+    )
+
+    assert config.sampling_args["reasoning"] == {"effort": "high"}
+    assert "reasoning_effort" not in config.sampling_args
+
+
+def test_build_eval_config_responses_cli_reasoning_effort_overrides_endpoint_reasoning(tmp_path: Path) -> None:
+    endpoints_path = tmp_path / "endpoints.toml"
+    endpoints_path.write_text(
+        """
+[[endpoint]]
+endpoint_id = "profiled"
+model = "openai/profiled"
+url = "https://profiled.example/v1"
+key = "PROFILED_KEY"
+api_client_type = "openai_responses"
+sampling_args = { reasoning = { effort = "low" } }
+""".strip()
+    )
+
+    config = build_eval_config(
+        {"env_id": "medqa", "endpoint_id": "profiled", "endpoints_path": str(endpoints_path)},
+        overrides=EvalConfigOverrides(sampling_args={"reasoning_effort": "high"}),
+    )
+
+    assert config.sampling_args["reasoning"] == {"effort": "high"}
+    assert "reasoning_effort" not in config.sampling_args
 
 
 def test_build_eval_config_scalar_temperature_overrides_endpoint_default(tmp_path: Path) -> None:
@@ -381,6 +453,31 @@ sampling_args = { extra_body = { top_k = 1 } }
     )
 
     assert config.sampling_args["extra_body"]["top_k"] == 3
+
+
+def test_build_eval_config_direct_unknown_sampling_arg_overrides_extra_body_key_for_any_extra(tmp_path: Path) -> None:
+    endpoints_path = tmp_path / "endpoints.toml"
+    endpoints_path.write_text(
+        """
+[[endpoint]]
+endpoint_id = "profiled"
+model = "openai/profiled"
+url = "https://profiled.example/v1"
+key = "PROFILED_KEY"
+sampling_args = { extra_body = { repetition_penalty = 1.1 } }
+""".strip()
+    )
+
+    config = build_eval_config(
+        {
+            "env_id": "medqa",
+            "endpoint_id": "profiled",
+            "endpoints_path": str(endpoints_path),
+        },
+        overrides=EvalConfigOverrides(sampling_args={"repetition_penalty": 1.2}),
+    )
+
+    assert config.sampling_args["extra_body"]["repetition_penalty"] == 1.2
 
 
 def test_build_eval_config_extra_body_key_overrides_lower_precedence_direct_unknown_arg(tmp_path: Path) -> None:

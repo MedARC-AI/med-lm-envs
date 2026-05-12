@@ -102,9 +102,15 @@ defaults. They do not affect deterministic path planning or dry-run display,
 because bench plans from TOML and CLI values before importing env packages.
 
 `sampling_args` follow the same TOML -> eval -> ablation -> CLI override model,
-then are sanitized for OpenAI-compatible clients:
+then are sanitized once for the resolved Verifiers client type:
 
 - Unknown parameters move under `extra_body` for compatible servers such as vLLM.
+- OpenAI Chat Completions keeps `reasoning_effort` as a top-level request field.
+- OpenAI Responses maps `reasoning_effort` to `reasoning = {"effort": ...}`.
+- Anthropic Messages uses adaptive thinking only:
+  `thinking = {"type": "adaptive"}` plus
+  `output_config = {"effort": ...}`. Manual `budget_tokens` thinking configs
+  are rejected before execution.
 - Sanitizer: `medarc_verifiers/utils/sampling_args.py`
 - Import boundary: `medarc_verifiers/cli/upstream_eval.py`
 - Temporary merge/adaptation adapter behind that boundary:

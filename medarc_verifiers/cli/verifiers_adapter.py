@@ -27,7 +27,7 @@ from verifiers.utils.import_utils import load_toml
 
 from medarc_verifiers.cli.utils.endpoint_utils import load_endpoint_sampling_profiles
 from medarc_verifiers.utils.prime_inference import prime_inference_overrides
-from medarc_verifiers.utils.sampling_args import sanitize_sampling_args_for_openai
+from medarc_verifiers.utils.sampling_args import sanitize_sampling_args
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +218,7 @@ def build_eval_config(raw: Mapping[str, Any], *, overrides: EvalConfigOverrides 
     sampling_args = _build_sampling_args(
         merged_raw,
         client_config.api_base_url,
+        client_type=client_config.client_type,
         endpoint_sampling_args=endpoint_sampling_args,
         cli_sampling_args=cli_sampling_args,
     )
@@ -260,7 +261,7 @@ def build_eval_identity_payload(
 
     merged_raw = _apply_overrides(dict(raw), overrides)
     endpoints_path = str(merged_raw.get("endpoints_path", DEFAULT_ENDPOINTS_PATH))
-    endpoints = load_endpoints(endpoints_path)
+    endpoints = _load_endpoint_registry(endpoints_path)
     model, _resolved_endpoint_id, _client_config = _build_client_config(merged_raw, endpoints, endpoints_path)
 
     payload = {
@@ -498,6 +499,7 @@ def _build_sampling_args(
     raw: Mapping[str, Any],
     api_base_url: str,
     *,
+    client_type: str,
     endpoint_sampling_args: Mapping[str, Any] | None = None,
     cli_sampling_args: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -512,16 +514,12 @@ def _build_sampling_args(
         temperature=raw.get("temperature"),
         include_none_max_tokens=include_none_max_tokens,
     )
-    merged = sanitize_sampling_args_for_openai(prime_sampling_overrides)
-    merged = _deep_merge(merged, sanitize_sampling_args_for_openai(endpoint_sampling))
-    merged = _deep_merge(merged, sanitize_sampling_args_for_openai(scalar_sampling_args))
-    merged = _deep_merge(
-        merged, sanitize_sampling_args_for_openai(_validate_sampling_mapping(raw.get("sampling_args"), "sampling_args"))
-    )
-    merged = _deep_merge(
-        merged, sanitize_sampling_args_for_openai(_validate_sampling_mapping(cli_sampling_args, "CLI sampling_args"))
-    )
-    return merged
+    merged = _merge_sampling_layer({}, prime_sampling_overrides)
+    merged = _merge_sampling_layer(merged, endpoint_sampling)
+    merged = _merge_sampling_layer(merged, scalar_sampling_args)
+    merged = _merge_sampling_layer(merged, _validate_sampling_mapping(raw.get("sampling_args"), "sampling_args"))
+    merged = _merge_sampling_layer(merged, _validate_sampling_mapping(cli_sampling_args, "CLI sampling_args"))
+    return sanitize_sampling_args(merged, client_type=client_type)
 
 
 def _merge_sampling_args(
@@ -602,6 +600,21 @@ def _deep_merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[st
         else:
             merged[key] = value
     return merged
+
+
+def _merge_sampling_layer(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    if "reasoning" in override:
+        merged.pop("reasoning_effort", None)
+    if "reasoning_effort" in override:
+        merged.pop("reasoning", None)
+    direct_override_keys = set(override) - {"extra_body"}
+    if direct_override_keys and isinstance(merged.get("extra_body"), Mapping):
+        extra_body = dict(cast(Mapping[str, Any], merged["extra_body"]))
+        for key in direct_override_keys:
+            extra_body.pop(key, None)
+        merged["extra_body"] = extra_body
+    return _deep_merge(merged, override)
 
 
 def _validate_sampling_mapping(value: object, label: str) -> dict[str, Any]:
