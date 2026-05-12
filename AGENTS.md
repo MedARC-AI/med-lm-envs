@@ -32,7 +32,7 @@
 - `uv pip install -e .`: Install `medarc-verifiers` in editable mode.
 - `vf-install <env>`: Install an environment from `environments/<env>/` in editable mode.
 - `uv run medarc-eval <ENV> -m <MODEL> -n 5`: Run a small evaluation.
-- `uv run medarc-eval bench --config configs/eval/medmarks-smoke.toml`: Run a batch evaluation from a TOML config.
+- `uv run medarc-eval bench --config configs/medmarks-smoke.toml`: Run a batch evaluation from a TOML config.
 - `uv run pytest tests/`: Run the full test suite.
 - `uv run ruff check medarc_verifiers/ && uv run ruff format medarc_verifiers/`: Lint/format.
 

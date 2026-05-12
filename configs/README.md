@@ -6,8 +6,8 @@ and `[[ablation]]` sweeps intentionally keep the upstream environment id stable;
 `env_args` and `sampling_args`.
 
 ```bash
-medarc-eval bench --config configs/eval/medmarks-smoke.toml --dry-run
-medarc-eval bench --config configs/eval/medmarks-verified.toml
+medarc-eval bench --config configs/medmarks-smoke.toml --dry-run
+medarc-eval bench --config configs/medmarks-verified.toml
 medarc-eval process --runs-dir runs/evals --output-dir runs/processed
 ```
 
@@ -16,8 +16,8 @@ and its sampling defaults:
 
 ```bash
 medarc-eval bench \
-  --config configs/eval/medmarks-verified.toml \
-  --endpoints-path configs/eval/medmarks-endpoints.toml \
+  --config configs/medmarks-verified.toml \
+  --endpoints-path configs/medmarks-endpoints.toml \
   -m gpt-oss-20b-low \
   --api-base-url https://api.pinference.ai/api/v1 \
   --api-key-var PRIME_API_KEY \
@@ -35,8 +35,8 @@ alias registry and override only the deployment settings:
 
 ```bash
 VLLM_API_KEY=local-key medarc-eval bench \
-  --config configs/eval/medmarks-verified.toml \
-  --endpoints-path configs/eval/medmarks-endpoints.toml \
+  --config configs/medmarks-verified.toml \
+  --endpoints-path configs/medmarks-endpoints.toml \
   -m gpt-oss-20b-low \
   --api-base-url http://127.0.0.1:8000/v1 \
   --api-key-var VLLM_API_KEY \

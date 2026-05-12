@@ -121,7 +121,7 @@ results = env.evaluate(model_client, "gpt-4.1-mini", num_examples=5)
 uv run medarc-eval medqa -m gpt-4.1-mini -n 25
 
 # Run batch evaluations from config
-uv run medarc-eval bench --config configs/eval/medmarks-smoke.toml
+uv run medarc-eval bench --config configs/medmarks-smoke.toml
 
 # Process results and compute win rates
 uv run medarc-eval process --runs-dir runs/evals
@@ -164,10 +164,10 @@ env_args = { shuffle_answers = true, shuffle_seed = 1618 }
 
 ```bash
 # Run the batch
-uv run medarc-eval bench --config configs/eval/medmarks-verified.toml
+uv run medarc-eval bench --config configs/medmarks-verified.toml
 
 # Preview without executing
-uv run medarc-eval bench --config configs/eval/medmarks-verified.toml --dry-run
+uv run medarc-eval bench --config configs/medmarks-verified.toml --dry-run
 ```
 
 Bench mode resumes matching deterministic result directories and supports `[[ablation]]` sweeps for parameter grids. The removed YAML job/manifest runner is documented only in the migration notes in the [bench mode docs](medarc-eval-bench.md).

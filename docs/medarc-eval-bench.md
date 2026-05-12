@@ -11,23 +11,23 @@ accepts `.toml` files only.
 
 ```bash
 # Preview the repository smoke config
-medarc-eval bench --config configs/eval/medmarks-smoke.toml --dry-run
+medarc-eval bench --config configs/medmarks-smoke.toml --dry-run
 
 # Run the verified production suite
-medarc-eval bench --config configs/eval/medmarks-verified.toml
+medarc-eval bench --config configs/medmarks-verified.toml
 
 # Require all selected env packages to already be installed
-medarc-eval bench --config configs/eval/medmarks-verified.toml --no-auto-install
+medarc-eval bench --config configs/medmarks-verified.toml --no-auto-install
 
 # Run the verified suite against a local OpenAI-compatible server
 medarc-eval bench \
-  --config configs/eval/medmarks-verified.toml \
+  --config configs/medmarks-verified.toml \
   --api-base-url http://127.0.0.1:8000/v1 \
   --provider local \
   --model openai/my-local-model
 ```
 
-Repository suite configs live in `configs/eval/`:
+Repository suite configs live in `configs/`:
 
 | Config | Purpose |
 |--------|---------|
@@ -80,7 +80,7 @@ removes the temporary venv.
 
 ```bash
 medarc-eval bench \
-  --config configs/eval/medmarks-verified.toml \
+  --config configs/medmarks-verified.toml \
   --eval-index "$SLURM_ARRAY_TASK_ID"
 ```
 
@@ -103,7 +103,7 @@ For faster strict local iteration, preinstall environments and opt out:
 ```bash
 vf-install medqa
 vf-install pubmedqa
-medarc-eval bench --config configs/eval/medmarks-verified.toml --no-auto-install
+medarc-eval bench --config configs/medmarks-verified.toml --no-auto-install
 ```
 
 `--dry-run` does not create venvs, install packages, or spawn child processes.
@@ -175,7 +175,7 @@ Existing valid outputs resume automatically. This makes Slurm retries
 idempotent for a fixed `--eval-index`:
 
 ```bash
-medarc-eval bench --config configs/eval/medmarks-verified.toml --eval-index "$SLURM_ARRAY_TASK_ID"
+medarc-eval bench --config configs/medmarks-verified.toml --eval-index "$SLURM_ARRAY_TASK_ID"
 ```
 
 If the deterministic target already contains both `metadata.json` and
@@ -185,7 +185,7 @@ partial, bench fails unless `--force` is set:
 
 ```bash
 # Archive existing deterministic outputs and rerun
-medarc-eval bench --config configs/eval/medmarks-verified.toml --force
+medarc-eval bench --config configs/medmarks-verified.toml --force
 ```
 
 `--resume` is still accepted for compatibility, but deterministic bench outputs
@@ -277,7 +277,7 @@ export PRIME_API_KEY=...
 export PRIME_TEAM_ID=...
 
 medarc-eval bench \
-  --config configs/eval/medmarks-verified.toml \
+  --config configs/medmarks-verified.toml \
   --api-base-url https://api.pinference.ai/api/v1
 ```
 

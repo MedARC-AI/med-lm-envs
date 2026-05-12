@@ -153,7 +153,7 @@ def test_toml_bench_dry_run_expands_evals_and_ablations(
 
 
 def test_repository_smoke_toml_config_dry_runs(capsys: pytest.CaptureFixture[str]) -> None:
-    exit_code = main.main(["bench", "--config", "configs/eval/medmarks-smoke.toml", "--dry-run"])
+    exit_code = main.main(["bench", "--config", "configs/medmarks-smoke.toml", "--dry-run"])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -207,7 +207,7 @@ def test_bench_rejects_non_toml_config(tmp_path: Path, capsys: pytest.CaptureFix
 
 def test_bench_rejects_removed_yaml_runner_flags(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as excinfo:
-        main.main(["bench", "--config", "configs/eval/medmarks-smoke.toml", "--restart"])
+        main.main(["bench", "--config", "configs/medmarks-smoke.toml", "--restart"])
 
     assert excinfo.value.code == 2
     err = capsys.readouterr().err
@@ -215,7 +215,7 @@ def test_bench_rejects_removed_yaml_runner_flags(capsys: pytest.CaptureFixture[s
 
 
 def test_repository_verified_toml_config_dry_run_shows_ablation_variants(capsys: pytest.CaptureFixture[str]) -> None:
-    exit_code = main.main(["bench", "--config", "configs/eval/medmarks-verified.toml", "--dry-run", "--eval-index", "45"])
+    exit_code = main.main(["bench", "--config", "configs/medmarks-verified.toml", "--dry-run", "--eval-index", "45"])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -225,7 +225,7 @@ def test_repository_verified_toml_config_dry_run_shows_ablation_variants(capsys:
 
 
 def test_repository_open_ended_toml_config_loads_expected_judge_args() -> None:
-    configs = main.load_toml_eval_configs("configs/eval/medmarks-open_ended.toml")
+    configs = main.load_toml_eval_configs("configs/medmarks-open_ended.toml")
     healthbench = next(config for config in configs if config["env_id"] == "healthbench")
     medrbench = [config for config in configs if config["env_id"] == "medrbench"]
 
