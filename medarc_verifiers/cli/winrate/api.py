@@ -315,12 +315,14 @@ def compute_winrates(
     seen_model_case_map: dict[str, str] = {}
 
     dataset_iter: Iterable[tuple[str, Path | str]] = datasets
-    try:
-        from rich.progress import track
+    console = _get_console()
+    if console is not None and getattr(console, "is_terminal", False):
+        try:
+            from rich.progress import track
 
-        dataset_iter = track(datasets, description="Computing win rates", transient=True)
-    except Exception:
-        dataset_iter = datasets
+            dataset_iter = track(datasets, description="Computing win rates", transient=True, console=console)
+        except Exception:
+            dataset_iter = datasets
 
     for dataset_name, parquet_path in dataset_iter:
         stats, models_present, missingness = _process_dataset(

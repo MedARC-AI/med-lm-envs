@@ -38,6 +38,10 @@ def _patch_single_run_metadata_only(monkeypatch: pytest.MonkeyPatch, metadata: l
     )
 
 
+def _patch_toml_bench_envs_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(main, "_missing_selected_env_refs", lambda plan_inputs, args: {})
+
+
 def _make_env_param(
     name: str,
     *,
@@ -629,6 +633,7 @@ def test_toml_bench_executes_sequentially_to_deterministic_path(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    _patch_toml_bench_envs_installed(monkeypatch)
     config_path = tmp_path / "bench.toml"
     output_dir = tmp_path / "evals"
     _write_config(
@@ -670,6 +675,7 @@ def test_toml_bench_executes_sequentially_to_deterministic_path(
 
 
 def test_toml_bench_defaults_max_concurrent_to_one(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _patch_toml_bench_envs_installed(monkeypatch)
     config_path = tmp_path / "bench.toml"
     _write_config(
         config_path,
@@ -711,6 +717,7 @@ def test_toml_bench_defaults_max_concurrent_to_one(monkeypatch: pytest.MonkeyPat
 
 
 def test_toml_bench_defaults_to_runs_evals(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _patch_toml_bench_envs_installed(monkeypatch)
     monkeypatch.chdir(tmp_path)
     config_path = tmp_path / "bench.toml"
     _write_config(
@@ -738,6 +745,7 @@ def test_toml_bench_defaults_to_runs_evals(monkeypatch: pytest.MonkeyPatch, tmp_
 
 
 def test_toml_bench_auto_resumes_existing_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _patch_toml_bench_envs_installed(monkeypatch)
     config_path = tmp_path / "bench.toml"
     output_dir = tmp_path / "evals"
     _write_config(
@@ -770,6 +778,7 @@ def test_toml_bench_resume_refuses_malformed_existing_output(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    _patch_toml_bench_envs_installed(monkeypatch)
     config_path = tmp_path / "bench.toml"
     output_dir = tmp_path / "evals"
     _write_config(
@@ -798,6 +807,7 @@ def test_toml_bench_resume_refuses_malformed_existing_output(
 
 
 def test_toml_bench_reuses_empty_existing_output_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _patch_toml_bench_envs_installed(monkeypatch)
     config_path = tmp_path / "bench.toml"
     output_dir = tmp_path / "evals"
     _write_config(
@@ -829,6 +839,7 @@ def test_toml_bench_reuses_empty_existing_output_dir(monkeypatch: pytest.MonkeyP
 
 
 def test_toml_bench_force_archives_existing_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _patch_toml_bench_envs_installed(monkeypatch)
     config_path = tmp_path / "bench.toml"
     output_dir = tmp_path / "evals"
     _write_config(
@@ -860,6 +871,7 @@ def test_toml_bench_force_archives_existing_output(monkeypatch: pytest.MonkeyPat
 
 
 def test_toml_bench_resume_preserves_existing_metadata(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _patch_toml_bench_envs_installed(monkeypatch)
     config_path = tmp_path / "bench.toml"
     output_dir = tmp_path / "evals"
     _write_config(
@@ -906,6 +918,7 @@ def test_toml_bench_does_not_patch_upstream_metadata_saves(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    _patch_toml_bench_envs_installed(monkeypatch)
     import verifiers.envs.environment as environment_module
 
     config_path = tmp_path / "bench.toml"
