@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -81,35 +82,36 @@ def _download_txt_files(cache_path: Path) -> list[Path]:
     txt_dir = cache_path / "txt_files"
     txt_dir.mkdir(parents=True, exist_ok=True)
 
-    existing_files = list(txt_dir.glob("*.txt"))
-    if len(existing_files) > 0:
-        return existing_files
-
     files_json = download_file(API_URL, cache_path / "files.json")
     files_data = json.loads(files_json.read_text(encoding="utf-8"))
+    expected_names = sorted(file_info["name"] for file_info in files_data if file_info["name"].endswith(".txt"))
 
-    downloaded_files = []
-    for file_info in files_data:
-        if file_info["name"].endswith(".txt"):
-            encoded_name = quote(file_info["name"])
-            file_url = f"{BASE_URL}/{encoded_name}"
-            dest_path = txt_dir / file_info["name"]
+    txt_files = []
+    for name in expected_names:
+        encoded_name = quote(name)
+        file_url = f"{BASE_URL}/{encoded_name}"
+        dest_path = txt_dir / name
 
+        if not dest_path.exists():
             download_file(file_url, dest_path)
-            downloaded_files.append(dest_path)
+        txt_files.append(dest_path)
 
-    return downloaded_files
+    return txt_files
 
 
 def _load_dataset(cache_dir: Path | str | None = None) -> Dataset:
     cache_path = _resolve_cache_dir(cache_dir)
     cache_path.mkdir(parents=True, exist_ok=True)
 
-    dataset_cache = cache_path / "dataset"
-    if dataset_cache.exists():
-        return Dataset.load_from_disk(str(dataset_cache))
-
     txt_files = _download_txt_files(cache_path)
+    dataset_cache = cache_path / "dataset"
+    metadata_path = dataset_cache / "medarc_cache_metadata.json"
+    if dataset_cache.exists():
+        if metadata_path.exists():
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if metadata.get("source_files") == len(txt_files):
+                return Dataset.load_from_disk(str(dataset_cache))
+        shutil.rmtree(dataset_cache)
 
     examples = []
 
@@ -152,6 +154,10 @@ def _load_dataset(cache_dir: Path | str | None = None) -> Dataset:
     dataset = Dataset.from_list(examples)
 
     dataset.save_to_disk(str(dataset_cache))
+    metadata_path.write_text(
+        json.dumps({"source_files": len(txt_files), "examples": len(dataset)}, indent=2),
+        encoding="utf-8",
+    )
 
     return dataset
 

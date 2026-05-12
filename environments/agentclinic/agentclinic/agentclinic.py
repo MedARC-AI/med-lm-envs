@@ -423,12 +423,12 @@ def load_environment(
             "reference_response": scenario.diagnosis_information(),
             "case_id": i,
             "dataset_type": dataset_type,
+            "agentclinic_task": f"agentclinic-{dataset_type}",
         }
         records.append(
             {
                 "question": question,
                 "answer": scenario.diagnosis_information(),
-                "task": f"agentclinic-{dataset_type}",
                 "info": info,
             }
         )

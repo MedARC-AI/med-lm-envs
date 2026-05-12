@@ -47,8 +47,7 @@ def load_environment(
         lambda x: {
             "question": x["title"] + "\n" + x["body"] if x["title"] else x["body"],
             "answer": x["response"],
-            "task": "medredqa",
-            "info": {"judge_response": "Pending.."},
+            "info": {"judge_response": "Pending..", "medredqa_task": "medredqa"},
         }
     )
 
@@ -56,8 +55,7 @@ def load_environment(
         lambda x: {
             "question": x["title"] + "\n" + x["body"] if x["title"] else x["body"],
             "answer": x["response"],
-            "task": "medredqa",
-            "info": {"judge_response": "Pending.."},
+            "info": {"judge_response": "Pending..", "medredqa_task": "medredqa"},
         }
     )
 

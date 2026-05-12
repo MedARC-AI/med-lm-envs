@@ -45,7 +45,6 @@ class ProcessOptions:
     replace_envs: Sequence[str] = field(default_factory=tuple)
     processed_at: str | None = None
     processed_with_args: Mapping[str, Any] = field(default_factory=dict)
-    status_filter: Sequence[str] = field(default_factory=lambda: PROCESS_DEFAULT_STATUS_FILTER)
     dry_run: bool = False
     clean: bool = False
     assume_yes: bool = False
@@ -60,7 +59,6 @@ class ProcessOptions:
         self.max_workers = max(1, int(self.max_workers))
         if not self.processed_at:
             self.processed_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-        self.status_filter = tuple(str(status) for status in self.status_filter)
         self.exclude_datasets = tuple(str(value) for value in self.exclude_datasets if str(value).strip())
         self.exclude_models = tuple(str(value) for value in self.exclude_models if str(value).strip())
         self.replace_models = tuple(str(value) for value in self.replace_models if str(value).strip())
@@ -150,10 +148,7 @@ def run_process(
                 baseline_result = preparation.baseline_result
 
         index_files = {} if options.clean else env_index.read_env_index_files(options.output_dir)
-        discovered = discovery.discover_run_records(
-            options.runs_dir,
-            filter_status=options.status_filter or None,
-        )
+        discovered = discovery.discover_run_records(options.runs_dir)
         selection = select_work_items(
             discovered,
             options=options,
@@ -338,13 +333,22 @@ def select_work_items(
 
 def _resolve_env_export(
     manifest_env_id: str | None,
+    variant_id: str | None,
     env_export_map: Mapping[str, EnvironmentExportConfig],
 ) -> EnvironmentExportConfig:
     if not manifest_env_id:
         return EnvironmentExportConfig()
+    if variant_id:
+        variant_key = f"{manifest_env_id}::{variant_id}"
+        if variant_key in env_export_map:
+            return env_export_map[variant_key]
     if manifest_env_id in env_export_map:
         return env_export_map[manifest_env_id]
     base_env_id, _ = rollout.derive_base_env_id(manifest_env_id)
+    if base_env_id and variant_id:
+        variant_base_key = f"{base_env_id}::{variant_id}"
+        if variant_base_key in env_export_map:
+            return env_export_map[variant_base_key]
     if base_env_id and base_env_id in env_export_map:
         return env_export_map[base_env_id]
     return EnvironmentExportConfig()
@@ -358,9 +362,14 @@ def _plan_selection_record(
     record: discovery.RunRecord,
     env_export_map: Mapping[str, EnvironmentExportConfig],
 ) -> SelectionRecord:
-    env_export = _resolve_env_export(record.manifest_env_id, env_export_map)
+    env_export = _resolve_env_export(record.manifest_env_id, None, env_export_map)
     combine_rollouts = bool(env_export.combine_rollouts)
     identity = metadata.resolve_run_identity(record, combine_rollouts=combine_rollouts)
+    variant_export = _resolve_env_export(record.manifest_env_id, identity.variant_id, env_export_map)
+    if variant_export != env_export:
+        env_export = variant_export
+        combine_rollouts = bool(env_export.combine_rollouts)
+        identity = metadata.resolve_run_identity(record, combine_rollouts=combine_rollouts)
     return SelectionRecord(
         record=record,
         identity=identity,
@@ -372,9 +381,9 @@ def _plan_selection_record(
 
 
 def _raise_for_latest_invalid_selection(records: Sequence[SelectionRecord]) -> None:
-    latest_by_target: dict[tuple[str, str], SelectionRecord] = {}
+    latest_by_target: dict[tuple[str, str, str], SelectionRecord] = {}
     for planned in records:
-        selection_key = (planned.identity.output_env_id, planned.record.job_id)
+        selection_key = (planned.identity.output_env_id, planned.identity.variant_id or "", planned.record.job_id)
         current = latest_by_target.get(selection_key)
         if current is None or _run_sort_key(
             _source_updated_at(planned.record),
@@ -397,14 +406,14 @@ def _raise_for_latest_invalid_selection(records: Sequence[SelectionRecord]) -> N
 
 
 def _select_latest_work_items(records: Sequence[SelectionRecord]) -> list[SelectionWorkItem]:
-    grouped: dict[tuple[str, str], dict[str, list[SelectionRecord]]] = {}
+    grouped: dict[tuple[str, str, str], dict[str, list[SelectionRecord]]] = {}
     run_timestamps: dict[str, str] = {}
 
     for planned in records:
         identity = planned.identity
         if not identity.model_id:
             continue
-        group_key = (identity.model_id, identity.output_env_id)
+        group_key = (identity.model_id, identity.output_env_id, identity.variant_id or "")
         grouped.setdefault(group_key, {}).setdefault(identity.job_run_id, []).append(planned)
         run_timestamps.setdefault(identity.job_run_id, _source_updated_at(planned.record))
 
@@ -454,7 +463,11 @@ def _apply_exclusions(
     filtered: list[PlannedWorkItem] = []
     skipped = 0
     for item in work_items:
-        if exclude_dataset_set and _env_is_excluded(item.identity.output_env_id, exclude_dataset_set):
+        if exclude_dataset_set and _env_is_excluded(
+            item.identity.output_env_id,
+            exclude_dataset_set,
+            variant_id=item.identity.variant_id,
+        ):
             skipped += 1
             continue
         if exclude_model_set and model_is_excluded(item.identity.model_id, exclude_model_set):
@@ -513,6 +526,7 @@ def _apply_additive_delta(
             options.output_dir,
             model_id=item.identity.model_id,
             env_id=item.identity.output_env_id,
+            variant_id=item.identity.variant_id,
         )
         if not output_path.exists():
             filtered.append(item)
@@ -867,10 +881,15 @@ def _source_updated_at(record: discovery.RunRecord) -> str:
     return record.manifest.updated_at or record.manifest.created_at or ""
 
 
-def _env_is_excluded(env_id: str, exclude_set: set[str]) -> bool:
+def _env_is_excluded(env_id: str, exclude_set: set[str], *, variant_id: str | None = None) -> bool:
     env_identifier = str(env_id or "").strip()
     base_env_id, _ = rollout.derive_base_env_id(env_identifier)
-    return dataset_is_excluded(env_identifier, exclude_set, base_dataset_id=base_env_id)
+    dataset_id = f"{env_identifier}::{variant_id}" if variant_id else env_identifier
+    if dataset_is_excluded(dataset_id, exclude_set, base_dataset_id=base_env_id):
+        return True
+    if variant_id:
+        return dataset_is_excluded(env_identifier, exclude_set, base_dataset_id=base_env_id)
+    return False
 
 
 def _strip_env_group_rows(group: AggregatedEnvRows) -> AggregatedEnvRows:
@@ -878,6 +897,8 @@ def _strip_env_group_rows(group: AggregatedEnvRows) -> AggregatedEnvRows:
         env_id=group.env_id,
         base_env_id=group.base_env_id,
         model_id=group.model_id,
+        variant_id=group.variant_id,
+        variant_payload=group.variant_payload,
         rows=[],
         column_names=group.column_names,
         job_run_ids=group.job_run_ids,

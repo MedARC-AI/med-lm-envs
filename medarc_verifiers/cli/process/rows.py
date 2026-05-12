@@ -41,6 +41,7 @@ def load_rows(
     decoded_rows, example_counts = _decode_results_jsonl(results_path)
     multi_rollout = _detect_multi_rollout_shape(example_counts)
     version_info_json = _encode_metadata_json_column(metadata.raw_metadata.get("version_info"))
+    variant_payload_json = _encode_metadata_json_column(metadata.variant_payload)
 
     rows: list[dict[str, Any]] = []
     seen_per_example: dict[Any, int] = {}
@@ -67,6 +68,7 @@ def load_rows(
             line_number=line_number,
             rollout_index=rollout_index,
             version_info_json=version_info_json,
+            variant_payload_json=variant_payload_json,
         )
         rows.append(enriched)
 
@@ -243,6 +245,7 @@ def _attach_row_metadata(
     line_number: int,
     rollout_index: int,
     version_info_json: str | None,
+    variant_payload_json: str | None,
 ) -> MutableMapping[str, Any]:
     record = metadata.record
     identity = metadata.identity
@@ -258,6 +261,8 @@ def _attach_row_metadata(
             "run_id": record.job_id,
             "model_id": identity.model_id,
             "version_info": version_info_json,
+            "variant_id": metadata.variant_id,
+            "variant_payload": variant_payload_json,
             "status": record.status,
             "error": error_value,
             "started_at": record.started_at,

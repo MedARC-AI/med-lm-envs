@@ -1,0 +1,4 @@
+# Default upstream verifiers endpoint registry.
+#
+# Add [[endpoint]] entries here to resolve endpoint_id aliases. An empty registry
+# is valid; provider/model defaults are used when no alias matches.

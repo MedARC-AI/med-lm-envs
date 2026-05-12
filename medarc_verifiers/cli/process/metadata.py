@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping
@@ -15,6 +14,11 @@ from medarc_verifiers.cli.process.discovery import RunRecord
 from medarc_verifiers.cli.process.rollout import derive_base_env_id, extract_rollout_index
 
 logger = logging.getLogger(__name__)
+
+MEDARC_CONFIG_FINGERPRINT_KEY = "medarc_config_fingerprint"
+MEDARC_CONFIG_FINGERPRINT_PAYLOAD_KEY = "medarc_config_fingerprint_payload"
+MEDARC_VARIANT_ID_KEY = "variant_id"
+MEDARC_VARIANT_PAYLOAD_KEY = "variant_payload"
 
 
 class _MetadataPayload(BaseModel):
@@ -28,11 +32,15 @@ class _MetadataPayload(BaseModel):
     num_examples: int | None = None
     rollouts_per_example: int | None = None
     sampling_args: dict[str, Any] = Field(default_factory=dict)
+    medarc_config_fingerprint: str | None = None
+    medarc_config_fingerprint_payload: dict[str, Any] | None = None
+    variant_id: str | None = None
+    variant_payload: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
 class NormalizedMetadata:
-    """Normalized view of metadata.json merged with manifest discovery data."""
+    """Normalized view of metadata.json plus output-path discovery data."""
 
     identity: "RunIdentity"
     record: RunRecord
@@ -48,6 +56,10 @@ class NormalizedMetadata:
     sampling_args: Mapping[str, Any]
     num_examples: int | None
     rollouts_per_example: int | None
+    variant_id: str | None
+    variant_payload: Mapping[str, Any] | None
+    medarc_config_fingerprint: str | None
+    medarc_config_fingerprint_payload: Mapping[str, Any] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +72,7 @@ class RunIdentity:
     rollout_index: int | None
     job_run_id: str
     output_env_id: str
+    variant_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +85,7 @@ class ResolvedRunIdentity:
     rollout_index: int | None
     job_run_id: str
     output_env_id: str
+    variant_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +101,10 @@ class _ResolvedMetadataContext:
     sampling_args: Mapping[str, Any]
     num_examples: int | None
     rollouts_per_example: int | None
+    variant_id: str | None
+    variant_payload: Mapping[str, Any] | None
+    medarc_config_fingerprint: str | None
+    medarc_config_fingerprint_payload: Mapping[str, Any] | None
 
 
 def resolve_run_identity(
@@ -106,6 +124,7 @@ def resolve_run_identity(
         rollout_index=resolved_rollout_index,
         job_run_id=record.manifest.job_run_id,
         output_env_id=context.base_env_id or context.manifest_env_id or record.job_id,
+        variant_id=context.variant_id,
     )
 
 
@@ -114,7 +133,7 @@ def load_normalized_metadata(
     *,
     combine_rollouts: bool = True,
 ) -> NormalizedMetadata:
-    """Merge manifest fields with metadata.json (when present)."""
+    """Load and normalize metadata.json with output-path identity."""
     context = _resolve_metadata_context(record, combine_rollouts=combine_rollouts)
     if not context.model_id:
         raise RuntimeError(format_missing_model_id_error(record))
@@ -128,6 +147,7 @@ def load_normalized_metadata(
         rollout_index=resolved_rollout_index,
         job_run_id=record.manifest.job_run_id,
         output_env_id=context.base_env_id or context.manifest_env_id or record.job_id,
+        variant_id=context.variant_id,
     )
 
     return NormalizedMetadata(
@@ -145,6 +165,10 @@ def load_normalized_metadata(
         sampling_args=context.sampling_args,
         num_examples=context.num_examples,
         rollouts_per_example=context.rollouts_per_example,
+        variant_id=context.variant_id,
+        variant_payload=context.variant_payload,
+        medarc_config_fingerprint=context.medarc_config_fingerprint,
+        medarc_config_fingerprint_payload=context.medarc_config_fingerprint_payload,
     )
 
 
@@ -154,16 +178,15 @@ def _resolve_metadata_context(
     combine_rollouts: bool,
 ) -> _ResolvedMetadataContext:
     metadata_payload, raw_metadata = _load_metadata(record)
-    _warn_manifest_metadata_result_mismatch(record, metadata_payload)
     metadata_env_id = metadata_payload.env_id if metadata_payload else None
     metadata_model = metadata_payload.model if metadata_payload else None
     env_args = _merge_mappings(
-        primary=record.env_args,
-        fallback=metadata_payload.env_args if metadata_payload else None,
+        primary=metadata_payload.env_args if metadata_payload else None,
+        fallback=record.env_args,
     )
     sampling_args = _merge_mappings(
-        primary=record.sampling_args,
-        fallback=metadata_payload.sampling_args if metadata_payload else None,
+        primary=metadata_payload.sampling_args if metadata_payload else None,
+        fallback=record.sampling_args,
     )
     manifest_env_id = (
         _extract_env_config_id(record.env_config) or record.manifest_env_id or metadata_env_id or record.job_id
@@ -176,6 +199,8 @@ def _resolve_metadata_context(
         alt_index = extract_rollout_index(record.results_dir_name)
         if alt_index:
             rollout_index = alt_index
+    record_variant_id = _string_or_none(record.env_config.get("variant_id") if record.env_config else None)
+    record_variant_payload = _mapping_or_none(record.env_config.get("variant_payload") if record.env_config else None)
     return _ResolvedMetadataContext(
         raw_metadata=raw_metadata,
         manifest_env_id=manifest_env_id,
@@ -186,13 +211,37 @@ def _resolve_metadata_context(
         metadata_model=metadata_model,
         env_args=env_args,
         sampling_args=sampling_args,
-        num_examples=_prefer_manifest_value(
-            record.num_examples,
-            metadata_payload.num_examples if metadata_payload else None,
+        num_examples=(
+            metadata_payload.num_examples
+            if metadata_payload and metadata_payload.num_examples is not None
+            else record.num_examples
         ),
-        rollouts_per_example=_prefer_manifest_value(
-            record.rollouts_per_example,
-            metadata_payload.rollouts_per_example if metadata_payload else None,
+        rollouts_per_example=(
+            metadata_payload.rollouts_per_example
+            if metadata_payload and metadata_payload.rollouts_per_example is not None
+            else record.rollouts_per_example
+        ),
+        variant_id=record_variant_id or _string_or_none(metadata_payload.variant_id if metadata_payload else None),
+        variant_payload=_mapping_or_none(
+            _raw_metadata_value(
+                raw_metadata,
+                MEDARC_VARIANT_PAYLOAD_KEY,
+                (metadata_payload.variant_payload if metadata_payload else None) or record_variant_payload,
+            )
+        ),
+        medarc_config_fingerprint=_string_or_none(
+            _raw_metadata_value(
+                raw_metadata,
+                MEDARC_CONFIG_FINGERPRINT_KEY,
+                metadata_payload.medarc_config_fingerprint if metadata_payload else None,
+            )
+        ),
+        medarc_config_fingerprint_payload=_mapping_or_none(
+            _raw_metadata_value(
+                raw_metadata,
+                MEDARC_CONFIG_FINGERPRINT_PAYLOAD_KEY,
+                metadata_payload.medarc_config_fingerprint_payload if metadata_payload else None,
+            )
         ),
     )
 
@@ -201,7 +250,7 @@ def format_missing_model_id_error(record: RunRecord) -> str:
     return (
         "Missing model_id for run "
         f"(job_run_id={record.manifest.job_run_id}, job_id={record.job_id}, "
-        f"results_dir={record.results_dir}, manifest={record.manifest.manifest_path})"
+        f"results_dir={record.results_dir}, metadata={record.metadata_path})"
     )
 
 
@@ -255,43 +304,23 @@ def _merge_mappings(
     return result
 
 
-def _prefer_manifest_value(primary: int | None, fallback: int | None) -> int | None:
-    if primary is not None:
-        return primary
+def _raw_metadata_value(raw_metadata: Mapping[str, Any], key: str, fallback: Any) -> Any:
+    if key in raw_metadata:
+        return raw_metadata.get(key)
     return fallback
 
 
-def _warn_manifest_metadata_result_mismatch(record: RunRecord, metadata_payload: _MetadataPayload | None) -> None:
-    if metadata_payload is None:
-        return
-
-    mismatches: list[str] = []
-    if _has_float_mismatch(record.avg_reward, metadata_payload.avg_reward):
-        mismatches.append(f"avg_reward manifest={record.avg_reward!r} metadata={metadata_payload.avg_reward!r}")
-    if _has_int_mismatch(record.num_examples, metadata_payload.num_examples):
-        mismatches.append(f"num_examples manifest={record.num_examples!r} metadata={metadata_payload.num_examples!r}")
-    if not mismatches:
-        return
-
-    logger.warning(
-        "Manifest/metadata result mismatch for process input (job_run_id=%s, job_id=%s, metadata=%s): %s",
-        record.manifest.job_run_id,
-        record.job_id,
-        record.metadata_path,
-        "; ".join(mismatches),
-    )
+def _mapping_or_none(value: Any) -> Mapping[str, Any] | None:
+    if isinstance(value, Mapping):
+        return dict(value)
+    return None
 
 
-def _has_float_mismatch(left: float | None, right: float | None) -> bool:
-    if left is None or right is None:
-        return False
-    return not math.isclose(left, right, rel_tol=1e-9, abs_tol=1e-9)
-
-
-def _has_int_mismatch(left: int | None, right: int | None) -> bool:
-    if left is None or right is None:
-        return False
-    return left != right
+def _string_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _extract_env_config_id(env_config: Mapping[str, Any] | None) -> str | None:

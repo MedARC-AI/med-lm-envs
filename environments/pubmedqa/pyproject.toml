@@ -8,7 +8,7 @@ authors = [
     { name = "Robert Scholz", email = "robert.scholz@maxplanckschools.de" },
 ]
 dependencies = [
-    "verifiers>=0.1.3.post0",
+    "verifiers>=0.1.12,<0.2",
     "datasets>= 4.0.0",
     "medarc-verifiers>=0.1.0",
 ]
@@ -25,3 +25,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build]
 include = ["pubmedqa.py", "data/"]
+
+[tool.verifiers.eval]
+num_examples = -1
+rollouts_per_example = 1

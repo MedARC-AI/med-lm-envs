@@ -56,6 +56,7 @@ def _load_split_dataset(subsets: Sequence[str], split: str, cache_path: Path) ->
             response = str(row.get("tgt", ""))
 
             info = dict(row)
+            info.pop("task", None)
             info["conversation"] = prompt
             info["reference_response"] = response
             info["subset"] = subset

@@ -276,7 +276,7 @@ def _prepare_task1_data(
             info = {
                 "patient_id": patient_id,
                 "question_no": question.get("No"),
-                "task": "task1",
+                "longhealth_task": "task1",
                 "correct_answer_text": correct_answer,
                 "num_docs": len(selected_docs),
                 "has_answer_docs": len(answer_docs) > 0,
@@ -401,7 +401,7 @@ def _prepare_task2_data(
             info_neg = {
                 "patient_id": patient_id,
                 "question_no": question.get("No"),
-                "task": "task2_negation",
+                "longhealth_task": "task2_negation",
                 "correct_answer_text": "Question cannot be answered with provided documents",
                 "num_docs": len(selected_docs_neg),
                 "has_answer_docs": False,
@@ -444,7 +444,7 @@ def _prepare_task2_data(
             info_ident = {
                 "patient_id": patient_id,
                 "question_no": question.get("No"),
-                "task": "task2_identification",
+                "longhealth_task": "task2_identification",
                 "correct_answer_text": correct_answer,
                 "num_docs": len(selected_docs_ident),
                 "has_answer_docs": True,

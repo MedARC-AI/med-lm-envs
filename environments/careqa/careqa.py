@@ -230,10 +230,10 @@ def _load_open_ended_environment(
     def _map(ex):
         info = {}
         info["question"] = ex["question"].strip()
+        info["careqa_task"] = "careqa_open"
         return {
             "question": ex["question"].strip(),
             "answer": ex.get("answer_explanation", ex.get("answer", "")),
-            "task": "careqa_open",
             "info": info,
         }
 

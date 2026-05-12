@@ -8,7 +8,7 @@ authors = [
     { name = "Aymane Ouraq", email = "ouraqaymane@gmail.com" },
 ]
 dependencies = [
-    "verifiers>=0.1.2.post0", # same major/minor line as your working env
+    "verifiers>=0.1.12,<0.2",
     "datasets>=4.0.0",
     "medarc-verifiers>=0.1.0",
 ]
