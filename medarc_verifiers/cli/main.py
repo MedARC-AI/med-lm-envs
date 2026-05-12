@@ -1610,6 +1610,8 @@ def _prepare_toml_results_dir(
     metadata_path = results_path / "metadata.json"
     results_file = results_path / "results.jsonl"
     if results_path.exists():
+        if results_path.is_dir() and not any(results_path.iterdir()):
+            return
         has_metadata = metadata_path.is_file()
         has_results = results_file.is_file()
         if not (has_metadata and has_results):
