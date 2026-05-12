@@ -259,7 +259,7 @@ def test_toml_bench_dry_run_model_override(
     assert "config-model" not in output
 
 
-def test_toml_bench_install_envs_dry_run_does_not_build_configs_or_spawn(
+def test_toml_bench_auto_install_defaults_true_and_dry_run_does_not_build_configs_or_spawn(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -276,18 +276,47 @@ def test_toml_bench_install_envs_dry_run_does_not_build_configs_or_spawn(
         rollouts_per_example = 1
         """,
     )
+    env_dir = tmp_path / "envs"
+    env_pkg = env_dir / "missing_env"
+    env_pkg.mkdir(parents=True)
+    (env_pkg / "pyproject.toml").write_text('[project]\nname = "missing-env"\n')
     monkeypatch.setattr(main, "build_eval_config", lambda raw, overrides: pytest.fail("parent built EvalConfig"))
     monkeypatch.setattr(main.subprocess, "run", lambda *args, **kwargs: pytest.fail("parent spawned child"))
 
-    exit_code = main.main(["bench", "--config", str(config_path), "--install-envs", "--dry-run"])
+    parser = main.build_batch_parser()
+    parsed = parser.parse_args(["--config", str(config_path)])
+    assert parsed.auto_install is True
+    parsed_explicit = parser.parse_args(["--config", str(config_path), "--auto-install"])
+    assert parsed_explicit.auto_install is True
+    parsed_disabled = parser.parse_args(["--config", str(config_path), "--no-auto-install"])
+    assert parsed_disabled.auto_install is False
 
-    output = capsys.readouterr().out
+    exit_code = main.main(["bench", "--config", str(config_path), "--env-dir", str(env_dir), "--dry-run"])
+
+    captured = capsys.readouterr()
+    output = captured.out
     assert exit_code == 0
     assert "missing-env" in output
-    assert "does not install packages" in output
+    assert "would auto-install" in captured.err
 
 
-def test_toml_bench_install_envs_executes_selected_child_payload(
+def test_toml_bench_rejects_old_install_envs_flag(tmp_path: Path) -> None:
+    config_path = tmp_path / "bench.toml"
+    _write_config(
+        config_path,
+        """
+        model = "gpt-5-mini"
+
+        [[eval]]
+        env_id = "medqa"
+        """,
+    )
+
+    with pytest.raises(SystemExit):
+        main.build_batch_parser().parse_args(["--config", str(config_path), "--install-envs"])
+
+
+def test_toml_bench_no_auto_install_plans_selected_raw_before_building_config(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -309,22 +338,37 @@ def test_toml_bench_install_envs_executes_selected_child_payload(
         rollouts_per_example = 1
         """,
     )
-    payloads: list[dict[str, Any]] = []
+    built_envs: list[str] = []
+    calls: list[Path] = []
 
-    def fake_run(cmd, check=False):
-        payload = json.loads(Path(cmd[-1]).read_text(encoding="utf-8"))
-        payloads.append(payload)
-        Path(payload["status_path"]).write_text(json.dumps({"exit_code": 0}), encoding="utf-8")
-        return SimpleNamespace(returncode=0)
+    def fake_build(raw: dict[str, Any], *, overrides: Any) -> SimpleNamespace:
+        built_envs.append(raw["env_id"])
+        return SimpleNamespace(
+            env_id=raw["env_id"],
+            model=raw.get("model", "gpt-5-mini"),
+            model_copy=lambda update: SimpleNamespace(
+                env_id=raw["env_id"],
+                model=raw.get("model", "gpt-5-mini"),
+                **update,
+            ),
+        )
 
-    monkeypatch.setattr(main.subprocess, "run", fake_run)
+    async def fake_run(config, **_kwargs):
+        calls.append(Path(config.resume_path))
+        Path(config.resume_path, "results.jsonl").write_text(json.dumps({"example_id": "0"}) + "\n")
+        Path(config.resume_path, "metadata.json").write_text(json.dumps({"env_id": config.env_id, "model": config.model}))
+        return {"outputs": [], "metadata": {}}
+
+    monkeypatch.setattr(main, "build_eval_config", fake_build)
+    monkeypatch.setattr(main, "run_evaluation", fake_run)
+    monkeypatch.setattr(main, "_module_importable", lambda module_name: module_name == "selected_env")
 
     exit_code = main.main(
         [
             "bench",
             "--config",
             str(config_path),
-            "--install-envs",
+            "--no-auto-install",
             "--eval-index",
             "2",
             "--output-dir",
@@ -333,13 +377,226 @@ def test_toml_bench_install_envs_executes_selected_child_payload(
     )
 
     assert exit_code == 0
-    assert len(payloads) == 1
-    payload = payloads[0]
-    assert payload["raw_config"]["env_id"] == "selected-env"
-    assert payload["expected_env_id"] == "selected-env"
-    assert payload["expected_model"] == "gpt-5-mini"
-    assert payload["resume_path"] == str(output_dir / "gpt-5-mini" / "selected-env" / "base")
+    assert built_envs == ["selected-env"]
+    assert calls == [output_dir / "gpt-5-mini" / "selected-env" / "base"]
     assert (output_dir / "gpt-5-mini" / "selected-env" / "base").is_dir()
+
+
+def test_toml_bench_mixed_missing_env_routes_only_missing_to_isolated_child(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "bench.toml"
+    output_dir = tmp_path / "evals"
+    env_dir = tmp_path / "envs"
+    missing_pkg = env_dir / "missing_env"
+    missing_pkg.mkdir(parents=True)
+    (missing_pkg / "pyproject.toml").write_text('[project]\nname = "missing-env"\n', encoding="utf-8")
+    _write_config(
+        config_path,
+        """
+        model = "gpt-5-mini"
+
+        [[eval]]
+        env_id = "installed-env"
+        num_examples = 1
+        rollouts_per_example = 1
+
+        [[eval]]
+        env_id = "missing-env"
+        num_examples = 1
+        rollouts_per_example = 1
+        """,
+    )
+    parent_runs: list[str] = []
+    child_commands: list[list[str]] = []
+    installed_paths: list[Path] = []
+
+    def fake_build(raw: dict[str, Any], *, overrides: Any) -> SimpleNamespace:
+        return SimpleNamespace(
+            env_id=raw["env_id"],
+            model=raw.get("model", "gpt-5-mini"),
+            model_copy=lambda update: SimpleNamespace(
+                env_id=raw["env_id"],
+                model=raw.get("model", "gpt-5-mini"),
+                **update,
+            ),
+        )
+
+    async def fake_run(config, **_kwargs):
+        parent_runs.append(config.env_id)
+        Path(config.resume_path, "results.jsonl").write_text(json.dumps({"example_id": "0"}) + "\n")
+        Path(config.resume_path, "metadata.json").write_text(json.dumps({"env_id": config.env_id, "model": config.model}))
+
+    class FakeVenv:
+        def __enter__(self) -> Path:
+            return tmp_path / "fake-venv" / "bin" / "python"
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    def fake_subprocess_run(cmd, check=False, capture_output=False, text=False):
+        child_commands.append([str(part) for part in cmd])
+        payload = json.loads(Path(cmd[-1]).read_text(encoding="utf-8"))
+        assert payload["cleanup_env_package"] is False
+        assert payload["env_preinstalled"] is True
+        Path(payload["status_path"]).write_text(json.dumps({"exit_code": 0}), encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(main, "_module_importable", lambda module_name: module_name == "installed_env")
+    monkeypatch.setattr(main, "build_eval_config", fake_build)
+    monkeypatch.setattr(main, "run_evaluation", fake_run)
+    monkeypatch.setattr(main, "temporary_bench_venv", lambda: FakeVenv())
+    monkeypatch.setattr(main, "install_env_package", lambda python, env_path: installed_paths.append(Path(env_path)))
+    monkeypatch.setattr(main.subprocess, "run", fake_subprocess_run)
+
+    exit_code = main.main(
+        [
+            "bench",
+            "--config",
+            str(config_path),
+            "--env-dir",
+            str(env_dir),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    assert parent_runs == ["installed-env"]
+    assert installed_paths == [missing_pkg]
+    assert len(child_commands) == 1
+    assert child_commands[0][0] == str(tmp_path / "fake-venv" / "bin" / "python")
+
+
+def test_toml_bench_no_auto_install_missing_env_does_not_force_archive_or_execute(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "bench.toml"
+    output_dir = tmp_path / "evals"
+    env_dir = tmp_path / "envs"
+    env_pkg = env_dir / "missing_env"
+    env_pkg.mkdir(parents=True)
+    (env_pkg / "pyproject.toml").write_text('[project]\nname = "missing-env"\n', encoding="utf-8")
+    results_path = output_dir / "gpt-5-mini" / "missing-env" / "base"
+    _write_resume_artifacts(results_path, env_id="missing-env", model="gpt-5-mini")
+    _write_config(
+        config_path,
+        """
+        model = "gpt-5-mini"
+
+        [[eval]]
+        env_id = "missing-env"
+        num_examples = 1
+        rollouts_per_example = 1
+        """,
+    )
+
+    monkeypatch.setattr(main, "_module_importable", lambda module_name: False)
+    monkeypatch.setattr(main, "build_eval_config", lambda raw, overrides: pytest.fail("built EvalConfig"))
+    monkeypatch.setattr(main.subprocess, "run", lambda *args, **kwargs: pytest.fail("spawned child"))
+
+    exit_code = main.main(
+        [
+            "bench",
+            "--config",
+            str(config_path),
+            "--env-dir",
+            str(env_dir),
+            "--output-dir",
+            str(output_dir),
+            "--no-auto-install",
+            "--force",
+        ]
+    )
+
+    assert exit_code == 1
+    assert (results_path / "metadata.json").is_file()
+    assert not list(results_path.parent.glob("base__old_*"))
+
+
+def test_toml_bench_isolated_setup_failure_does_not_force_archive(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "bench.toml"
+    output_dir = tmp_path / "evals"
+    env_dir = tmp_path / "envs"
+    env_pkg = env_dir / "missing_env"
+    env_pkg.mkdir(parents=True)
+    (env_pkg / "pyproject.toml").write_text('[project]\nname = "missing-env"\n', encoding="utf-8")
+    results_path = output_dir / "gpt-5-mini" / "missing-env" / "base"
+    _write_resume_artifacts(results_path, env_id="missing-env", model="gpt-5-mini")
+    _write_config(
+        config_path,
+        """
+        model = "gpt-5-mini"
+
+        [[eval]]
+        env_id = "missing-env"
+        num_examples = 1
+        rollouts_per_example = 1
+        """,
+    )
+
+    class FakeVenv:
+        def __enter__(self) -> Path:
+            return tmp_path / "fake-python"
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    def fail_install(python: Path, env_path: Path) -> None:
+        raise RuntimeError("env install failed")
+
+    monkeypatch.setattr(main, "_module_importable", lambda module_name: False)
+    monkeypatch.setattr(main, "temporary_bench_venv", lambda: FakeVenv())
+    monkeypatch.setattr(main, "install_env_package", fail_install)
+    monkeypatch.setattr(main.subprocess, "run", lambda *args, **kwargs: pytest.fail("spawned child"))
+
+    exit_code = main.main(
+        [
+            "bench",
+            "--config",
+            str(config_path),
+            "--env-dir",
+            str(env_dir),
+            "--output-dir",
+            str(output_dir),
+            "--force",
+        ]
+    )
+
+    assert exit_code == 1
+    assert (results_path / "metadata.json").is_file()
+    assert not list(results_path.parent.glob("base__old_*"))
+
+
+def test_toml_bench_dry_run_display_ignores_env_package_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path = tmp_path / "bench.toml"
+    _write_config(
+        config_path,
+        """
+        model = "gpt-5-mini"
+
+        [[eval]]
+        env_id = "medqa"
+        """,
+    )
+    monkeypatch.setattr(main, "build_eval_config", lambda raw, overrides: pytest.fail("parent built EvalConfig"))
+
+    exit_code = main.main(["bench", "--config", str(config_path), "--dry-run"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "medqa" in output
+    assert "runs/evals/gpt-5-mini/medqa/base" in output
+    assert "1000" not in output
 
 
 def test_toml_bench_dry_run_uses_toml_output_dir(

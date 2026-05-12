@@ -51,6 +51,61 @@ def test_child_installs_builds_runs_and_cleans_up(monkeypatch: pytest.MonkeyPatc
     assert calls == ["install", "build", f"run:{tmp_path / 'runs' / 'evals' / 'parent-model' / 'medqa' / 'base'}", "cleanup"]
 
 
+def test_child_cleanup_env_package_false_skips_uninstall(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls: list[str] = []
+    config = SimpleNamespace(
+        env_id="medqa",
+        model="parent-model",
+        model_copy=lambda update: SimpleNamespace(env_id="medqa", model="parent-model", **update),
+    )
+
+    monkeypatch.setattr(bench_child, "resolve_env_package", lambda env_id, env_dir: object())
+    monkeypatch.setattr(bench_child, "ensure_installed", lambda ref: calls.append("install") or _state(True))
+    monkeypatch.setattr(bench_child, "build_eval_config", lambda raw, overrides: calls.append("build") or config)
+    monkeypatch.setattr(bench_child, "uninstall_if_child_installed", lambda state: calls.append("cleanup"))
+
+    async def fake_run_evaluation(run_config):
+        calls.append(f"run:{run_config.resume_path}")
+
+    monkeypatch.setattr(bench_child, "run_evaluation", fake_run_evaluation)
+
+    payload = _payload(tmp_path)
+    payload["cleanup_env_package"] = False
+    status = bench_child._run_payload(payload)
+
+    assert status["exit_code"] == 0
+    assert status["installed_by_child"] is True
+    assert calls == ["install", "build", f"run:{tmp_path / 'runs' / 'evals' / 'parent-model' / 'medqa' / 'base'}"]
+
+
+def test_child_env_preinstalled_skips_install_and_cleanup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls: list[str] = []
+    config = SimpleNamespace(
+        env_id="medqa",
+        model="parent-model",
+        model_copy=lambda update: SimpleNamespace(env_id="medqa", model="parent-model", **update),
+    )
+
+    monkeypatch.setattr(bench_child, "resolve_env_package", lambda env_id, env_dir: calls.append("resolve"))
+    monkeypatch.setattr(bench_child, "ensure_installed", lambda ref: calls.append("install") or _state(True))
+    monkeypatch.setattr(bench_child, "build_eval_config", lambda raw, overrides: calls.append("build") or config)
+    monkeypatch.setattr(bench_child, "uninstall_if_child_installed", lambda state: calls.append("cleanup"))
+
+    async def fake_run_evaluation(run_config):
+        calls.append(f"run:{run_config.resume_path}")
+
+    monkeypatch.setattr(bench_child, "run_evaluation", fake_run_evaluation)
+
+    payload = _payload(tmp_path)
+    payload["env_preinstalled"] = True
+    payload["cleanup_env_package"] = False
+    status = bench_child._run_payload(payload)
+
+    assert status["exit_code"] == 0
+    assert status["installed_by_child"] is False
+    assert calls == ["build", f"run:{tmp_path / 'runs' / 'evals' / 'parent-model' / 'medqa' / 'base'}"]
+
+
 def test_child_install_failure_does_not_build_or_cleanup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     calls: list[str] = []
 

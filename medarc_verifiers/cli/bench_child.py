@@ -50,9 +50,12 @@ def _run_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
     try:
-        ref = resolve_env_package(payload["raw_config"]["env_id"], payload["env_dir"])
-        installed_state = ensure_installed(ref)
-        status["installed_by_child"] = installed_state.installed_by_child
+        if payload.get("env_preinstalled", False):
+            status["installed_by_child"] = False
+        else:
+            ref = resolve_env_package(payload["raw_config"]["env_id"], payload["env_dir"])
+            installed_state = ensure_installed(ref)
+            status["installed_by_child"] = installed_state.installed_by_child
 
         config = build_eval_config(payload["raw_config"], overrides=_overrides_from_payload(payload["overrides"]))
         planned_resume_path = Path(payload["resume_path"])
@@ -75,7 +78,7 @@ def _run_payload(payload: dict[str, Any]) -> dict[str, Any]:
         status["exit_reason"] = "eval_failed"
     finally:
         try:
-            if installed_state is not None:
+            if installed_state is not None and payload.get("cleanup_env_package", True):
                 uninstall_if_child_installed(installed_state)
         except Exception as exc:  # noqa: BLE001
             cleanup_failed = True
