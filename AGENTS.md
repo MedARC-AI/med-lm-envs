@@ -4,7 +4,7 @@
 
 - `medarc_verifiers/`: Core Python package (CLI entrypoints, parsers, rewards, orchestration utilities).
 - `environments/<env>/`: Individual Verifiers environments (each is a small Python package with `<env>.py` and its own `pyproject.toml`).
-- `configs/`: YAML configs for `medarc-eval bench` (job matrices, env configs, judge configs).
+- `configs/`: TOML configs for `medarc-eval bench`, endpoint registries, and environment/judge configs.
 - `docs/`: Usage docs for `medarc-eval` and related workflows.
 - `tests/`: `pytest` suite.
 
@@ -14,7 +14,7 @@
 - Quick workflow: eval → process → winrate
   - eval outputs: `runs/evals/<model>/<env>/<variant>/...`
   - processed parquet: `runs/processed/<model>/<env>.parquet` + `runs/processed/env_index.json`
-  - winrate outputs: `runs/winrate/latest.json` and `runs/winrate/latest.csv`
+  - winrate outputs: `runs/processed/winrate/latest.json` and `runs/processed/winrate/latest.csv`
 - `medarc-eval` CLI entrypoint/router: (`medarc_verifiers/cli/main.py`; docs: `docs/medarc-eval.md`)
 - `medarc-orchestrate` CLI entrypoint: (`medarc_verifiers/orchestrate/cli.py`; docs: `docs/medarc-orchestrate.md`)
 - Old YAML-runner `runs/raw` artifacts must be converted with `scripts/convert_legacy_raw_runs.py` before processing.
@@ -32,7 +32,7 @@
 - `uv pip install -e .`: Install `medarc-verifiers` in editable mode.
 - `vf-install <env>`: Install an environment from `environments/<env>/` in editable mode.
 - `uv run medarc-eval <ENV> -m <MODEL> -n 5`: Run a small evaluation.
-- `uv run medarc-eval bench --config configs/job.yaml`: Run a batch evaluation from a YAML config.
+- `uv run medarc-eval bench --config configs/eval/medmarks-smoke.toml`: Run a batch evaluation from a TOML config.
 - `uv run pytest tests/`: Run the full test suite.
 - `uv run ruff check medarc_verifiers/ && uv run ruff format medarc_verifiers/`: Lint/format.
 

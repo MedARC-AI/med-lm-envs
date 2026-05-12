@@ -102,7 +102,7 @@ Evaluation outputs are written under `runs/evals/`, processed parquet files unde
 
 | Page | Description |
 |------|-------------|
-| [`docs/getting-started.md`](docs/getting-started.md) | Developer setup, environment authoring, and local workflow |
+| [`docs/developer-guide.md`](docs/developer-guide.md) | Developer setup, environment authoring, and local workflow |
 | [`docs/medarc-eval.md`](docs/medarc-eval.md) | Full `medarc-eval` CLI documentation |
 | [`docs/medarc-eval-bench.md`](docs/medarc-eval-bench.md) | TOML benchmark suite execution |
 | [`docs/medarc-eval-process.md`](docs/medarc-eval-process.md) | Processing eval outputs into parquet |

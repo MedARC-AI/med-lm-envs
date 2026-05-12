@@ -72,6 +72,12 @@ are not already importable in the active Python environment. Auto-install only
 applies to missing local packages resolved from `--env-dir`; selected envs that
 are already importable keep the normal in-process execution path.
 
+`--env-dir` defaults to `environments/`. When auto-install is needed, bench
+creates a system temporary directory with a `medarc-bench-venv-` prefix, creates
+a venv inside it with `uv venv`, installs the selected local env package
+editable into that venv, runs one eval through the private bench child, and then
+removes the temporary venv.
+
 ```bash
 medarc-eval bench \
   --config configs/eval/medmarks-verified.toml \
@@ -196,7 +202,7 @@ provider arguments pass through to upstream.
 | `--force` | Archive existing deterministic output and rerun |
 | `--resume` | Compatibility flag; valid deterministic outputs resume automatically |
 | `--output-dir PATH` | Override the config output directory, default `runs/evals` |
-| `--env-dir PATH` | Directory containing local environments |
+| `--env-dir PATH` | Directory containing local environments, default `environments` |
 | `--auto-install` / `--no-auto-install` | Auto-install missing local env packages in isolated temp venvs (default) or require selected envs to be preinstalled |
 | `--endpoints-path PATH` | Endpoint registry path, default `configs/endpoints.toml` |
 | `--api-base-url URL` | Override API base URL for every eval |

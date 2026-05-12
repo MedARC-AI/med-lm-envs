@@ -49,8 +49,10 @@ It supports:
     deterministic output directories from selected raw configs, then runs evals
     sequentially through upstream execution.
   - Missing selected local environment packages are auto-installed by default
-    in isolated temporary venvs. Importable envs stay on the in-process path.
-    `--no-auto-install` requires selected envs to already be importable.
+    from `--env-dir` (default `environments`) in isolated system temporary
+    venvs with a `medarc-bench-venv-` prefix. Importable envs stay on the
+    in-process path. `--no-auto-install` requires selected envs to already be
+    importable.
   - Main implementation: `medarc_verifiers/cli/main.py`
   - Isolated auto-install helper: `medarc_verifiers/cli/isolated_env.py`
   - Isolated child runner: `medarc_verifiers/cli/bench_child.py`

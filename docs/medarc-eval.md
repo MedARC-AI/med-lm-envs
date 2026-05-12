@@ -13,7 +13,7 @@ medarc-eval medqa -m gpt-4.1-mini -n 25
 # Run a batch of benchmarks from a config file
 medarc-eval bench --config configs/eval/medmarks-smoke.toml
 
-# Process raw results into analysis-ready parquet files
+# Process eval outputs into analysis-ready parquet files
 medarc-eval process --runs-dir runs/evals
 
 # Compute win rates across models
@@ -36,7 +36,7 @@ medarc-eval winrate
 |---------|---------|
 | `medarc-eval <ENV>` | Run a single benchmark interactively |
 | `medarc-eval bench` | Run multiple benchmarks from a config file |
-| `medarc-eval process` | Convert raw results to parquet for analysis |
+| `medarc-eval process` | Convert eval outputs to parquet for analysis |
 | `medarc-eval winrate` | Compute model comparisons from processed data |
 
 ## Command Structure
@@ -117,12 +117,14 @@ runs/
 │           └── <variant>/
 │               ├── results.jsonl
 │               └── metadata.json
-├── processed/                    # Analysis-ready parquet files (from process)
-│   ├── env_index.json            # Dataset inventory
-│   └── <model>/<env>.parquet
-└── winrate/                      # Model comparison outputs (from winrate)
-    ├── latest.json
-    └── latest.csv
+└── processed/                    # Analysis-ready parquet files (from process)
+    ├── env_index.json            # Dataset inventory
+    ├── <model>/<env>.parquet
+    └── winrate/                  # Model comparison outputs (from winrate)
+        ├── winrates-<timestamp>.json
+        ├── winrates-<timestamp>.csv
+        ├── latest.json
+        └── latest.csv
 ```
 
 ## Getting Help

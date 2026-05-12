@@ -55,6 +55,10 @@ On-disk model and env path components are slugified, so filenames may not exactl
 | `--yes` | Skip confirmation prompts | - |
 | `--exclude-dataset NAME` | Skip processing specific datasets/env ids (repeatable) | - |
 | `--exclude-model MODEL` | Skip processing specific model ids (repeatable) | - |
+| `--replace-env NAME` | Rebuild existing processed outputs for specific env ids (repeatable) | - |
+| `--replace-model MODEL` | Rebuild existing processed outputs for specific model ids (repeatable) | - |
+| `--max-results-missing-pct N` | Fail latest selected outputs missing more than this percentage of expected rows | 2.5 |
+| `--winrate PATH` | Run winrate after processing with the provided config file | - |
 
 ## Filtering Runs
 
@@ -135,6 +139,7 @@ Supported config schema for `medarc-eval process`:
 - Top-level `process:`: process-specific defaults.
 - Optional top-level `winrate:`: embedded post-process winrate step.
 - Optional top-level `hf:`: shared HF settings. For embedded winrate uploads, use `hf.winrate_dir`.
+- Removed process config keys are rejected: use `max_results_missing_pct` instead of `max_run_missing_pct`; status filtering is no longer supported for current eval outputs.
 
 Path shortcuts:
 

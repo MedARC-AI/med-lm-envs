@@ -25,4 +25,4 @@ See [medarc-eval.md](medarc-eval.md) for full documentation.
 
 ## Developer workflow
 
-See [getting-started.md](getting-started.md) for local setup, environment authoring, and development workflow notes.
+See [developer-guide.md](developer-guide.md) for local setup, environment authoring, and development workflow notes.
