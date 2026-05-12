@@ -46,9 +46,14 @@ It supports:
   - Implemented in `medarc_verifiers/cli/_single_run.py`.
 - **TOML bench mode**: `medarc-eval bench --config <config.toml>`
   - Loads upstream `verifiers` TOML eval configs, expands ablations, plans
-    deterministic output directories, then runs evals sequentially through
-    upstream execution.
+    deterministic output directories from selected raw configs, then runs evals
+    sequentially through upstream execution.
+  - Missing selected local environment packages are auto-installed by default
+    in isolated temporary venvs. Importable envs stay on the in-process path.
+    `--no-auto-install` requires selected envs to already be importable.
   - Main implementation: `medarc_verifiers/cli/main.py`
+  - Isolated auto-install helper: `medarc_verifiers/cli/isolated_env.py`
+  - Isolated child runner: `medarc_verifiers/cli/bench_child.py`
   - Upstream eval boundary: `medarc_verifiers/cli/upstream_eval.py`
   - Deterministic identity/path helpers: `medarc_verifiers/cli/eval_identity.py`
 - **Processing**: `medarc-eval process ...`
@@ -79,9 +84,10 @@ Override parsing lives in `medarc_verifiers/cli/utils/overrides.py`.
 
 Bench configs use upstream `verifiers` TOML shape: top-level defaults plus one
 or more `[[eval]]` entries. Upstream `[[ablation]]` tables expand into repeated
-eval configs. MedARC adds deterministic paths around the resolved upstream eval
-configs. Duplicate `(model, env)` outputs must use explicit `variant_id` or
-`name` identity; the reserved default variant id is `base`.
+eval configs. MedARC adds deterministic paths around selected raw eval configs
+before importing env packages. Duplicate `(model, env)` outputs must use
+explicit `variant_id` or `name` identity; the reserved default variant id is
+`base`.
 
 `env_args` precedence is low to high:
 
@@ -90,6 +96,10 @@ configs. Duplicate `(model, env)` outputs must use explicit `variant_id` or
 3. Per-`[[eval]]` values
 4. Expanded `[[ablation]]` values
 5. CLI overrides (`--env-args` / `--env-arg`)
+
+Environment package `[tool.verifiers.eval]` defaults are execution-time
+defaults. They do not affect deterministic path planning or dry-run display,
+because bench plans from TOML and CLI values before importing env packages.
 
 `sampling_args` follow the same TOML -> eval -> ablation -> CLI override model,
 then are sanitized for OpenAI-compatible clients:
@@ -134,6 +144,13 @@ defaults to `runs/evals`. Existing valid outputs resume automatically: bench
 passes the deterministic target as upstream `EvalConfig.resume_path` and trusts
 upstream resume validation. Partial or malformed existing targets fail unless
 `--force` archives the existing target and reruns.
+
+For missing local envs, auto-install creates a temporary venv, mirrors the
+current `medarc-verifiers` install into that venv, installs the target env
+package, and only then prepares or archives the deterministic output directory.
+Editable MedARC installs mirror the same checkout from package metadata.
+Non-editable installs use `medarc-verifiers==<current-version>` and require
+that distribution to be resolvable.
 
 `medarc-eval bench` does not monkey-patch upstream metadata saving and does not
 write MedARC identity into upstream `metadata.json`. Variant identity is the

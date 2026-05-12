@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -115,3 +117,20 @@ def test_run_uv_reports_failing_command(monkeypatch: pytest.MonkeyPatch) -> None
 
     with pytest.raises(isolated_env.IsolatedEnvError, match="error"):
         isolated_env._run_uv(["uv", "venv"], "create venv")
+
+
+@pytest.mark.skipif(
+    os.environ.get("MEDARC_RUN_ISOLATED_ENV_SMOKE") != "1",
+    reason="set MEDARC_RUN_ISOLATED_ENV_SMOKE=1 to run the real uv isolated-env smoke",
+)
+def test_temporary_bench_venv_real_helper_imports_bench_child() -> None:
+    with isolated_env.temporary_bench_venv() as python:
+        completed = subprocess.run(
+            [str(python), "-m", "medarc_verifiers.cli.bench_child", "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    assert completed.returncode == 0
+    assert "Run one TOML bench eval child payload" in completed.stdout
