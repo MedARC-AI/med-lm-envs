@@ -43,17 +43,34 @@ def test_compatibility_wrapper_uses_chat_shape() -> None:
     assert result["extra_body"] == {"top_k": 1}
 
 
+def test_openai_chat_drops_framework_owned_request_keys() -> None:
+    result = sanitize_sampling_args(
+        {"model": "override", "messages": [], "tools": [], "extra_headers": {"x": "y"}, "top_k": 1},
+        client_type="openai_chat_completions",
+    )
+
+    assert "model" not in result
+    assert "messages" not in result
+    assert "tools" not in result
+    assert "extra_headers" not in result
+    assert result["extra_body"] == {"top_k": 1}
+
+
 def test_openai_responses_converts_reasoning_effort() -> None:
     result = sanitize_sampling_args(
-        {"reasoning_effort": "low", "top_k": 20, "max_tokens": 128, "stop": ["END"]},
+        {"reasoning_effort": "low", "top_k": 20, "max_tokens": 128},
         client_type="openai_responses",
     )
 
     assert "reasoning_effort" not in result
     assert result["reasoning"] == {"effort": "low"}
-    assert result["max_tokens"] == 128
-    assert result["stop"] == ["END"]
+    assert result["max_output_tokens"] == 128
     assert result["extra_body"] == {"top_k": 20}
+
+
+def test_openai_responses_rejects_stop_sequences() -> None:
+    with pytest.raises(ValueError, match="does not support stop sequences"):
+        sanitize_sampling_args({"stop": ["END"]}, client_type="openai_responses")
 
 
 def test_openai_responses_preserves_explicit_reasoning_effort() -> None:
@@ -65,6 +82,20 @@ def test_openai_responses_preserves_explicit_reasoning_effort() -> None:
     assert result["reasoning"] == {"effort": "high", "summary": "auto"}
 
 
+def test_openai_responses_drops_framework_owned_request_keys() -> None:
+    result = sanitize_sampling_args(
+        {"model": "override", "input": "x", "prompt": "y", "tools": [], "extra_headers": {"x": "y"}, "top_k": 1},
+        client_type="openai_responses",
+    )
+
+    assert "model" not in result
+    assert "input" not in result
+    assert "prompt" not in result
+    assert "tools" not in result
+    assert "extra_headers" not in result
+    assert result["extra_body"] == {"top_k": 1}
+
+
 def test_openai_completions_removes_reasoning_and_moves_extras() -> None:
     result = sanitize_sampling_args(
         {"prompt": "x", "reasoning_effort": "low", "reasoning": {"effort": "low"}, "top_k": 20},
@@ -73,6 +104,7 @@ def test_openai_completions_removes_reasoning_and_moves_extras() -> None:
 
     assert "reasoning_effort" not in result
     assert "reasoning" not in result
+    assert "prompt" not in result
     assert result["extra_body"] == {"top_k": 20}
 
 
@@ -106,6 +138,28 @@ def test_anthropic_maps_reasoning_effort_to_adaptive_output_config() -> None:
     assert "effort" not in result
 
 
+def test_anthropic_drops_framework_owned_request_keys() -> None:
+    result = sanitize_sampling_args(
+        {
+            "model": "override",
+            "messages": [],
+            "system": "override",
+            "tools": [],
+            "extra_headers": {"x": "y"},
+            "reasoning_effort": "low",
+        },
+        client_type="anthropic_messages",
+    )
+
+    assert "model" not in result
+    assert "messages" not in result
+    assert "system" not in result
+    assert "tools" not in result
+    assert "extra_headers" not in result
+    assert result["thinking"] == {"type": "adaptive"}
+    assert result["output_config"] == {"effort": "low"}
+
+
 def test_anthropic_does_not_put_effort_inside_thinking() -> None:
     result = sanitize_sampling_args(
         {"thinking": {"type": "adaptive", "effort": "low"}, "reasoning_effort": "medium"},
@@ -133,9 +187,12 @@ def test_anthropic_validates_effort_values() -> None:
         sanitize_sampling_args({"reasoning_effort": "extreme"}, client_type="anthropic_messages")
 
 
-def test_anthropic_rejects_xhigh_without_model_context() -> None:
-    with pytest.raises(ValueError, match="reasoning effort"):
-        sanitize_sampling_args({"reasoning_effort": "xhigh"}, client_type="anthropic_messages")
+@pytest.mark.parametrize("effort", ["xhigh", "max"])
+def test_anthropic_accepts_sdk_documented_effort_values(effort: str) -> None:
+    result = sanitize_sampling_args({"reasoning_effort": effort}, client_type="anthropic_messages")
+
+    assert result["thinking"] == {"type": "adaptive"}
+    assert result["output_config"] == {"effort": effort}
 
 
 @pytest.mark.asyncio

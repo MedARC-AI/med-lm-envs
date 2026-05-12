@@ -3,57 +3,10 @@ from __future__ import annotations
 import inspect
 from collections.abc import Mapping
 from functools import lru_cache
-from typing import Any
+from typing import Any, Literal, get_args, get_origin
 
 _OPENAI_REASONING_KEYS = {"reasoning", "reasoning_effort", "thinking", "output_config"}
-_ANTHROPIC_EFFORT_VALUES = {"low", "medium", "high"}
-_OPENAI_CHAT_FALLBACK_TOP_LEVEL_KEYS = {
-    "temperature",
-    "top_p",
-    "max_tokens",
-    "max_completion_tokens",
-    "n",
-    "stop",
-    "presence_penalty",
-    "frequency_penalty",
-    "logit_bias",
-    "seed",
-    "response_format",
-    "tool_choice",
-    "tools",
-    "stream",
-    "extra_body",
-    "reasoning_effort",
-}
-_OPENAI_RESPONSES_FALLBACK_TOP_LEVEL_KEYS = {
-    "temperature",
-    "top_p",
-    "max_tokens",
-    "max_completion_tokens",
-    "max_output_tokens",
-    "n",
-    "stop",
-    "stream",
-    "extra_body",
-    "reasoning",
-    "tools",
-    "tool_choice",
-}
-_OPENAI_CHAT_VERIFIERS_WRAPPER_KEYS = {"max_tokens"}
-_OPENAI_RESPONSES_VERIFIERS_WRAPPER_KEYS = {"max_tokens", "max_completion_tokens", "n", "stop", "modalities"}
-_OPENAI_COMPLETIONS_FALLBACK_TOP_LEVEL_KEYS = {
-    "temperature",
-    "top_p",
-    "max_tokens",
-    "n",
-    "stop",
-    "presence_penalty",
-    "frequency_penalty",
-    "logit_bias",
-    "seed",
-    "stream",
-    "extra_body",
-}
+_FRAMEWORK_REQUEST_KEYS = {"model", "messages", "input", "prompt", "tools", "system", "extra_headers"}
 
 
 def sanitize_sampling_args(
@@ -85,11 +38,14 @@ def sanitize_sampling_args_for_openai(sampling_args: Mapping[str, Any] | None) -
 
 def _sanitize_openai_chat(sampling_args: Mapping[str, Any]) -> dict[str, Any]:
     cleaned = _drop_none(sampling_args, preserve_none_keys={"max_tokens"})
+    _drop_framework_request_keys(cleaned)
     return _move_compatible_extras_to_extra_body(cleaned, allowed_top_level_keys=_get_openai_chat_allowed_param_names())
 
 
 def _sanitize_openai_responses(sampling_args: Mapping[str, Any]) -> dict[str, Any]:
     cleaned = _drop_none(sampling_args, preserve_none_keys={"max_tokens"})
+    _normalize_openai_responses_sampling_args(cleaned)
+    _drop_framework_request_keys(cleaned)
     reasoning_effort = cleaned.pop("reasoning_effort", None)
     if reasoning_effort is not None:
         existing_reasoning = cleaned.get("reasoning")
@@ -106,8 +62,27 @@ def _sanitize_openai_responses(sampling_args: Mapping[str, Any]) -> dict[str, An
     )
 
 
+def _normalize_openai_responses_sampling_args(sampling_args: dict[str, Any]) -> None:
+    n = sampling_args.pop("n", None)
+    if n not in (None, 1):
+        raise ValueError("Responses API client only supports n=1")
+
+    max_tokens = sampling_args.pop("max_tokens", None)
+    max_completion_tokens = sampling_args.pop("max_completion_tokens", None)
+    if "max_output_tokens" not in sampling_args:
+        output_tokens = max_tokens if max_tokens is not None else max_completion_tokens
+        if output_tokens is not None:
+            sampling_args["max_output_tokens"] = output_tokens
+
+    if sampling_args.get("stop") is not None:
+        raise ValueError("Responses API client does not support stop sequences")
+    sampling_args.pop("stop", None)
+    sampling_args.pop("modalities", None)
+
+
 def _sanitize_openai_completions(sampling_args: Mapping[str, Any]) -> dict[str, Any]:
     cleaned = _drop_none(sampling_args, preserve_none_keys={"max_tokens"})
+    _drop_framework_request_keys(cleaned)
     for key in _OPENAI_REASONING_KEYS:
         cleaned.pop(key, None)
     return _move_compatible_extras_to_extra_body(
@@ -117,6 +92,7 @@ def _sanitize_openai_completions(sampling_args: Mapping[str, Any]) -> dict[str, 
 
 def _sanitize_anthropic_messages(sampling_args: Mapping[str, Any]) -> dict[str, Any]:
     cleaned = _drop_none(sampling_args)
+    _drop_framework_request_keys(cleaned)
     reasoning_effort = cleaned.pop("reasoning_effort", None)
     cleaned.pop("reasoning", None)
     cleaned.pop("effort", None)
@@ -153,16 +129,23 @@ def _sanitize_anthropic_messages(sampling_args: Mapping[str, Any]) -> dict[str, 
             output_config_dict["effort"] = _validate_anthropic_effort(output_config_dict["effort"])
         cleaned["output_config"] = output_config_dict
 
-    return cleaned
+    allowed_keys = _get_anthropic_allowed_param_names()
+    return {key: value for key, value in cleaned.items() if key in allowed_keys}
 
 
 def _validate_anthropic_effort(value: Any) -> str:
-    if not isinstance(value, str) or value not in _ANTHROPIC_EFFORT_VALUES:
+    effort_values = _get_anthropic_effort_values()
+    if not isinstance(value, str) or value not in effort_values:
         raise ValueError(
             "anthropic_messages reasoning effort must be one of: "
-            f"{', '.join(sorted(_ANTHROPIC_EFFORT_VALUES))}"
+            f"{', '.join(sorted(effort_values))}"
         )
     return value
+
+
+def _drop_framework_request_keys(sampling_args: dict[str, Any]) -> None:
+    for key in _FRAMEWORK_REQUEST_KEYS:
+        sampling_args.pop(key, None)
 
 
 def _move_compatible_extras_to_extra_body(
@@ -192,50 +175,56 @@ def _move_compatible_extras_to_extra_body(
 
 
 @lru_cache(maxsize=1)
-def _get_openai_chat_allowed_param_names() -> set[str]:
-    try:
-        from openai.resources.chat.completions import AsyncCompletions as ChatAsyncCompletions  # type: ignore
-    except Exception:
-        return set(_OPENAI_CHAT_FALLBACK_TOP_LEVEL_KEYS)
+def _get_anthropic_effort_values() -> set[str]:
+    from anthropic.types import OutputConfigParam
+    from typing import get_type_hints
 
-    allowed = _param_names(ChatAsyncCompletions.create) or set(_OPENAI_CHAT_FALLBACK_TOP_LEVEL_KEYS)
-    allowed.add("extra_body")
-    allowed.add("reasoning_effort")
-    allowed.update(_OPENAI_CHAT_VERIFIERS_WRAPPER_KEYS)
-    return allowed
+    effort_type = get_type_hints(OutputConfigParam)["effort"]
+    return _literal_string_values(effort_type)
+
+
+def _literal_string_values(type_hint: Any) -> set[str]:
+    values: set[str] = set()
+    origin = get_origin(type_hint)
+    if origin is None:
+        return values
+    if origin is Literal:
+        return {value for value in get_args(type_hint) if isinstance(value, str)}
+    for arg in get_args(type_hint):
+        values.update(_literal_string_values(arg))
+    return values
+
+
+@lru_cache(maxsize=1)
+def _get_openai_chat_allowed_param_names() -> set[str]:
+    from openai.resources.chat.completions import AsyncCompletions as ChatAsyncCompletions  # type: ignore
+
+    return _param_names(ChatAsyncCompletions.create)
 
 
 @lru_cache(maxsize=1)
 def _get_openai_responses_allowed_param_names() -> set[str]:
-    try:
-        from openai.resources.responses import AsyncResponses  # type: ignore
-    except Exception:
-        return set(_OPENAI_RESPONSES_FALLBACK_TOP_LEVEL_KEYS)
+    from openai.resources.responses import AsyncResponses  # type: ignore
 
-    allowed = _param_names(AsyncResponses.create) or set(_OPENAI_RESPONSES_FALLBACK_TOP_LEVEL_KEYS)
-    allowed.add("extra_body")
-    allowed.add("reasoning")
-    allowed.update(_OPENAI_RESPONSES_VERIFIERS_WRAPPER_KEYS)
-    return allowed
+    return _param_names(AsyncResponses.create)
 
 
 @lru_cache(maxsize=1)
 def _get_openai_completions_allowed_param_names() -> set[str]:
-    try:
-        from openai.resources.completions import AsyncCompletions as TextAsyncCompletions  # type: ignore
-    except Exception:
-        return set(_OPENAI_COMPLETIONS_FALLBACK_TOP_LEVEL_KEYS)
+    from openai.resources.completions import AsyncCompletions as TextAsyncCompletions  # type: ignore
 
-    allowed = _param_names(TextAsyncCompletions.create) or set(_OPENAI_COMPLETIONS_FALLBACK_TOP_LEVEL_KEYS)
-    allowed.add("extra_body")
-    return allowed
+    return _param_names(TextAsyncCompletions.create)
+
+
+@lru_cache(maxsize=1)
+def _get_anthropic_allowed_param_names() -> set[str]:
+    from anthropic.resources.messages import AsyncMessages
+
+    return _param_names(AsyncMessages.create)
 
 
 def _param_names(callable_obj: Any) -> set[str]:
-    try:
-        sig = inspect.signature(callable_obj)
-    except Exception:
-        return set()
+    sig = inspect.signature(callable_obj)
     names: set[str] = set()
     for name, param in sig.parameters.items():
         if name == "self":
