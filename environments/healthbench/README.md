@@ -10,10 +10,14 @@
   - `all`: [neuralleap/healthbench-regular](https://huggingface.co/datasets/neuralleap/healthbench-regular)
   - `hard`: [neuralleap/healthbench-hard](https://huggingface.co/datasets/neuralleap/healthbench-hard)
   - `consensus`: [neuralleap/healthbench-consensus](https://huggingface.co/datasets/neuralleap/healthbench-consensus)
+  - `professional`: [openai/healthbench-professional](https://huggingface.co/datasets/openai/healthbench-professional)
 - **Split sizes**:
   - `all`: 5000
-  - `hard`: 1000,
+  - `hard`: 1000
   - `consensus`: 3670
+  - `professional`: 525
+
+The `professional` variant uses a different upstream schema (`conversation`/`rubric_items`/`id` instead of `prompt`/`rubrics`/`prompt_id`, and no per-rubric `tags`). It is normalized to the canonical schema at load time, so rubric-level axis/consensus slicing is unavailable for this variant; example-level tags (`use_case`, `type`, `difficulty`, `specialty`) are surfaced in `info` for analytics.
 
 ## Task
 - **Type**: Single-Turn
@@ -40,13 +44,17 @@ Document any supported environment arguments and their meaning. Example:
 
 | Arg | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
-| `difficulty` | str | `"all"` | One of 'all', 'hard', or 'consensus'; corresponds to healthbench dataset variant |
+| `difficulty` | str | `"all"` | One of `"all"`, `"hard"`, `"consensus"`, or `"professional"`; corresponds to healthbench dataset variant. |
 | `make_dataset` | bool | `False` | Add rubric-specific model performance metric to results |
 | `judge_model` | str \| list[str] | `"gpt-4o-mini"` | Judge model(s) for evaluation |
 | `judge_base_url` | str \| list[str] \| None | `None` | Base URL(s) for judge API |
 | `judge_api_key` | str \| list[str] \| None | `None` | API key(s) for judge API |
 | `judge_timeout` | int \| None | `300` | Timeout in seconds for judge calls |
 | `max_parallel_judges` | int \| None | `None` | Max concurrent criteria evaluations per rollout (defaults to `3`) |
+| `max_judge_retries` | int | `3` | Max times to re-call a judge when it errors or returns malformed/missing `criteria_met` JSON. After exhausting retries, the criterion is recorded as `criteria_met=False`. Set to `0` to disable retries. |
+| `length_adjustment_center` | float \| None | `None` | Response-length pivot (in characters) at which no penalty is applied. When this and `length_adjustment_penalty_per_500_chars` are both `None`, OpenAI-published defaults for the chosen `difficulty` are applied automatically (all/hard/consensus/professional → `center=2000`). Pass an explicit value to override; if you pass one knob you must pass both. |
+| `length_adjustment_penalty_per_500_chars` | float \| None | `None` | Penalty applied per 500 characters of response length away from `length_adjustment_center`. When both length-adjustment knobs are `None`, OpenAI-published defaults are applied (on the env's 0-1 scale: all `0.0299`, hard `0.0392`, consensus `0.0020`, professional `0.0147`; [source](https://deploymentsafety.openai.com/gpt-5-5/healthbench)). Reported as the `length_adjusted_score` metric alongside `reward_healthbench`. Computed (in order) as `raw_score → apply length penalty → clip to [0, 1]`: `clip(raw_score - penalty_per_500_chars * ((len(response) - center) / 500), 0, 1)`. To disable length-adjustment entirely, pass `length_adjustment_penalty_per_500_chars=0.0` (with any non-negative center): the metric becomes a no-op equal to `reward_healthbench`. |
+| `use_length_adjusted_as_reward` | bool | `False` | When `True`, the `length_adjusted_score` becomes the headline reward and `reward_healthbench` is reported as a metric only. Requires the two `length_adjustment_*` knobs above to be set. Useful for RL training where the optimizer needs the length penalty baked into the single scalar reward. Default `False` matches official simple-evals reporting (raw HealthBench score is the headline; length-adjusted is a companion metric). |
 
 > [!NOTE]
 > Total concurrent judge requests will scale roughly as `max_concurrent * max_parallel_judges * len(judge_model)`.
@@ -180,3 +188,13 @@ This allows you to see exactly which criteria the model passed or failed, along 
 - Arrays in `info` (criteria, points_list, axes, consensus_criteria) are all aligned by index - the first element of each corresponds to the first rubric criterion
 - Point values can be negative for undesirable behaviors (e.g., -2 points for "Gives dangerous medical advice")
 - The total score is normalized to 0-1 regardless of the actual point scale used
+
+### Disparencies with openai/simple-evals
+
+Three real numerical differences remain between this env and the official `openai/simple-evals` HealthBench eval, given the same data and a single judge:
+
+- **Per-rollout vs aggregate clip.** This env clips `reward_healthbench` to `[0, 1]` per rollout. Official only clips the aggregate mean across rollouts (`np.clip(np.mean(values), 0, 1)`). The verifiers framework exposes no aggregate-time hook (`GenerateOutputsBuilder.RewardMetric.compute()` is a plain `sum/count` and isn't pluggable), so we clip per-rollout to keep the per-rollout reward in `[0, 1]`. Direction: when a rollout's net would be negative (a negative-points criterion fires without being offset), this env reports `0.0` while official would keep the negative value, biasing the aggregate mean upward. In practice the divergence only shows up on rollouts that earn net negative points, which is rare. To recover the official final score from this env's output, apply `max(0, min(1, mean(rewards)))` at report time.
+
+- **Bounded judge-retry fallback.** When a judge returns malformed JSON or errors out, this env retries via `rerun_judge` up to `max_judge_retries` times (default `3`), then records `criteria_met=False`. Official retries indefinitely (`while True`) until a valid boolean comes back. Direction: usually a slight downward bias when a judge consistently emits unparseable output on a given criterion. Mitigate by raising `max_judge_retries` or switching to a more reliable grader.
+
+- **Multi-judge averaging when `K > 1`.** With a single judge, the per-criterion contribution to the reward equals official's behavior. With multiple judges (`judge_model` as a list), this env averages `points_possible * 1{criteria_met_k}` across judges per criterion, producing an ensemble score. Official has no multi-judge concept; the resulting headline is not directly comparable to official numbers. With `K=1` this is a no-op; the multi-judge path is opt-in via the `judge_model` arg.

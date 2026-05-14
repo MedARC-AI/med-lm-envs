@@ -12,10 +12,26 @@ from verifiers.envs.singleturn_env import SingleTurnEnv
 from medarc_verifiers.types import Messages
 from verifiers.types import Info, State
 
+# Per-variant dataset id and split. The neuralleap mirrors publish hard/consensus
+# under `train` and regular under `test`; openai/healthbench-professional only
+# has `test`.
 HEALTHBENCH_DATASET_MAPPING = {
-    "all": "neuralleap/healthbench-regular",
-    "consensus": "neuralleap/healthbench-consensus",
-    "hard": "neuralleap/healthbench-hard",
+    "all": {"id": "neuralleap/healthbench-regular", "split": "test"},
+    "hard": {"id": "neuralleap/healthbench-hard", "split": "train"},
+    "consensus": {"id": "neuralleap/healthbench-consensus", "split": "train"},
+    "professional": {"id": "openai/healthbench-professional", "split": "test"},
+}
+
+# OpenAI-published length-adjustment defaults per HealthBench variant.
+# Source: https://deploymentsafety.openai.com/gpt-5-5/healthbench
+# OpenAI reports HealthBench on a 0-100 scale; this env uses 0-1 internally, so
+# the published "points per 500 chars" values are divided by 100. Center is the
+# response length (chars) at which no penalty is applied.
+HEALTHBENCH_DEFAULT_LENGTH_ADJUSTMENT = {
+    "all": {"center": 2000.0, "penalty_per_500_chars": 0.0299},
+    "hard": {"center": 2000.0, "penalty_per_500_chars": 0.0392},
+    "consensus": {"center": 2000.0, "penalty_per_500_chars": 0.0020},
+    "professional": {"center": 2000.0, "penalty_per_500_chars": 0.0147},
 }
 
 # See pgs 33-36 (Appendix I) of the HealthBench paper for a complete listing
@@ -89,14 +105,48 @@ def load_environment(
     make_dataset: bool = False,
     judge_timeout: int | None = 300,
     max_parallel_judges: int | None = None,
+    max_judge_retries: int = 3,
+    length_adjustment_center: float | None = None,
+    length_adjustment_penalty_per_500_chars: float | None = None,
+    use_length_adjusted_as_reward: bool = False,
     **kwargs,
 ) -> SingleTurnEnv:
+    # When the user passes neither length-adjustment knob, fall back to the
+    # OpenAI-published defaults for this difficulty (if known). Passing one
+    # without the other is still an error (handled by the validation below).
+    if length_adjustment_center is None and length_adjustment_penalty_per_500_chars is None:
+        defaults = HEALTHBENCH_DEFAULT_LENGTH_ADJUSTMENT.get(difficulty)
+        if defaults is not None:
+            length_adjustment_center = defaults["center"]
+            length_adjustment_penalty_per_500_chars = defaults["penalty_per_500_chars"]
+
+    length_adjustment_enabled = (
+        length_adjustment_center is not None or length_adjustment_penalty_per_500_chars is not None
+    )
+    if length_adjustment_enabled:
+        if length_adjustment_center is None or length_adjustment_penalty_per_500_chars is None:
+            raise ValueError(
+                "length_adjustment_center and length_adjustment_penalty_per_500_chars must be set together"
+            )
+        if length_adjustment_center < 0:
+            raise ValueError("length_adjustment_center must be non-negative")
+        if length_adjustment_penalty_per_500_chars < 0:
+            raise ValueError("length_adjustment_penalty_per_500_chars must be non-negative")
+    if use_length_adjusted_as_reward and not length_adjustment_enabled:
+        raise ValueError(
+            "use_length_adjusted_as_reward=True requires length_adjustment_center "
+            "and length_adjustment_penalty_per_500_chars to be set"
+        )
+
     try:
-        dataset = load_dataset(
-            HEALTHBENCH_DATASET_MAPPING[difficulty], split="test" if difficulty == "all" else "train"
-        ).map(lambda example: {"info": _process_healthbench_dataset(example)})
+        entry = HEALTHBENCH_DATASET_MAPPING[difficulty]
     except KeyError:
         raise ValueError(f"Invalid difficulty: {difficulty}")
+    dataset = (
+        load_dataset(entry["id"], split=entry["split"])
+        .map(_normalize_to_canonical_schema)
+        .map(lambda example: {"info": _process_healthbench_dataset(example)})
+    )
 
     multi_judge = MultiJudge.from_env_args(
         judge_model=judge_model,
@@ -150,6 +200,7 @@ def load_environment(
                 rubric=rubric,
                 semaphore=semaphore,
                 state=state,
+                max_retries=max_judge_retries,
             )
             for idx, (criterion, points_possible) in enumerate(zip(criteria, points_list))
         ]
@@ -184,7 +235,16 @@ def load_environment(
 
             state["performance_by_rubric"].append(judgments_sorted)
 
-        aggregated = float(max(0.0, min(1.0, current_reward / total_reward)))
+        raw_fraction = current_reward / total_reward
+        # Cache the pre-clip raw score and response length so the optional
+        # length-adjusted metric can compute (in order):
+        #   raw_fraction -> apply length penalty -> clip to [0, 1]
+        # Applying length adjustment to the raw fraction (not the clipped value)
+        # matches openai/simple-evals' formula; the final clip restores this
+        # env's per-rollout [0, 1] invariant.
+        state["_hb_raw_score"] = raw_fraction
+        state["_hb_completion_len"] = len(raw_completion)
+        aggregated = float(max(0.0, min(1.0, raw_fraction)))
         judge_feedback = []
         for judge_id, data in per_judge_data.items():
             scores = data["scores"]
@@ -207,7 +267,30 @@ def load_environment(
 
         return aggregated
 
-    rubric.add_reward_func(reward_healthbench, weight=1.0)
+    if length_adjustment_enabled:
+        # Captured by closure; both are guaranteed non-None by validation above.
+        center = float(length_adjustment_center)  # type: ignore[arg-type]
+        penalty = float(length_adjustment_penalty_per_500_chars)  # type: ignore[arg-type]
+
+        async def length_adjusted_score(state: State) -> float:
+            raw = state.get("_hb_raw_score")
+            n = state.get("_hb_completion_len")
+            if raw is None or n is None:
+                return 0.0
+            adjusted = float(raw) - penalty * ((float(n) - center) / 500.0)
+            return max(0.0, min(1.0, adjusted))
+
+        # reward_healthbench must run first so the metric can read the cached
+        # raw score from state. Use weights to pick which one drives `reward`.
+        if use_length_adjusted_as_reward:
+            rubric.add_metric(reward_healthbench, weight=0.0)
+            rubric.add_reward_func(length_adjusted_score, weight=1.0)
+        else:
+            rubric.add_reward_func(reward_healthbench, weight=1.0)
+            rubric.add_metric(length_adjusted_score, weight=0.0)
+    else:
+        rubric.add_reward_func(reward_healthbench, weight=1.0)
+
     return SingleTurnEnv(eval_dataset=dataset, system_prompt="", rubric=rubric)
 
 
@@ -219,6 +302,7 @@ async def _judge_single_criterion(
     rubric: MultiJudgeRubric,
     semaphore: asyncio.Semaphore,
     state: dict,
+    max_retries: int = 3,
 ) -> dict[str, str | int | bool]:
     # Use the shared semaphore to bound concurrency across criteria for this rollout
     async with semaphore:
@@ -233,21 +317,26 @@ async def _judge_single_criterion(
 
         judges = []
         for result in judge_results:
-            entry_error = result.error
-            try:
-                dict_resp = _parse_json(str(result.raw))
-            except AttributeError:
+            dict_resp: dict = {}
+            # Retry on judge-call failure OR malformed/missing boolean `criteria_met`,
+            # mirroring openai/simple-evals' "retry until valid JSON" loop but bounded.
+            for attempt in range(max_retries + 1):
+                raw_text = result.raw if isinstance(result.raw, str) else ""
+                if result.error is None and raw_text:
+                    dict_resp = _parse_json(raw_text)
+                    if isinstance(dict_resp, dict) and isinstance(dict_resp.get("criteria_met"), bool):
+                        break
+                if attempt == max_retries:
+                    break
                 result = await rubric.rerun_judge(result, [{"role": "user", "content": full_prompt}], "", "", state)
-                dict_resp = _parse_json(str(result.raw))
-                entry_error = result.error
-            except Exception:
-                dict_resp = {}
-            criteria_met = bool(dict_resp.get("criteria_met", False)) if isinstance(dict_resp, dict) else False
+
+            parsed_met = dict_resp.get("criteria_met") if isinstance(dict_resp, dict) else None
+            criteria_met = parsed_met if isinstance(parsed_met, bool) else False
             judges.append(
                 {
                     "model": result.model,
                     "raw": result.raw,
-                    "error": entry_error,
+                    "error": result.error,
                     "criteria_met": criteria_met,
                     "judge_explanation": dict_resp.get("explanation", None) if isinstance(dict_resp, dict) else None,
                 }
@@ -310,6 +399,12 @@ def _process_healthbench_dataset(example: dict) -> dict:
         ]
         points_list: [<list of ints>]
     }
+
+    HealthBench Professional rows are normalized to the canonical shape by an
+    upstream `_normalize_to_canonical_schema` map; this function assumes the
+    canonical fields (prompt, prompt_id, rubrics, example_tags) are present.
+    Professional rubric_items carry no per-criterion tags, so axes and
+    consensus_criteria end up as `None` for that variant.
     """
 
     def _gen_hash(criterion_text: str) -> str:
@@ -318,7 +413,7 @@ def _process_healthbench_dataset(example: dict) -> dict:
         return hash_object.hexdigest()
 
     prompt_id = example["prompt_id"]
-    theme = [e for e in example["example_tags"] if e.startswith("theme")][0].split(":")[1]
+    theme = [e for e in example["example_tags"] if e.startswith("theme:")][0].split(":", 1)[1]
     rubrics = example["rubrics"]
     info_data = defaultdict(list)
     for rubric in rubrics:
@@ -334,7 +429,7 @@ def _process_healthbench_dataset(example: dict) -> dict:
             except ValueError:
                 continue
 
-        info_data["axes"].append(tags["axis"])
+        info_data["axes"].append(tags.get("axis"))
 
         cluster_tag = tags.get("cluster")
         if cluster_tag:
@@ -348,6 +443,43 @@ def _process_healthbench_dataset(example: dict) -> dict:
     final_info["prompt_id"] = prompt_id
     final_info["theme"] = theme
     return final_info
+
+
+def _normalize_to_canonical_schema(example: dict) -> dict:
+    """
+    Project the openai/healthbench-professional schema onto the canonical
+    HealthBench schema (prompt / prompt_id / rubrics / example_tags) used by
+    the regular / hard / consensus mirrors. Canonical rows are passed through.
+
+    Professional source schema:
+        id, conversation.messages, rubric_items[{criterion_text, points}],
+        use_case, type, difficulty, specialty, physician_response, canary_string
+    """
+    if "prompt" in example and "rubrics" in example:
+        return example
+
+    conversation = example.get("conversation") or {}
+    messages = conversation.get("messages") if isinstance(conversation, dict) else None
+
+    canonical_rubrics = [
+        {"criterion": item["criterion_text"], "points": item["points"], "tags": []}
+        for item in (example.get("rubric_items") or [])
+    ]
+
+    # Synthesize example_tags so downstream `_process_healthbench_dataset` can
+    # still extract a theme and any future analytics get useful slicing tags.
+    example_tags = ["theme:professional"]
+    for key in ("use_case", "type", "difficulty", "specialty"):
+        value = example.get(key)
+        if value:
+            example_tags.append(f"{key}:{value}")
+
+    return {
+        "prompt_id": example["id"],
+        "prompt": messages or [],
+        "rubrics": canonical_rubrics,
+        "example_tags": example_tags,
+    }
 
 
 # Function code directly copied from openai/simple-evals/healthbench_eval.py
