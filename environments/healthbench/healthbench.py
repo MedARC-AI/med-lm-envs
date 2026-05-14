@@ -89,6 +89,7 @@ def load_environment(
     make_dataset: bool = False,
     judge_timeout: int | None = 300,
     max_parallel_judges: int | None = None,
+    max_judge_retries: int = 3,
     **kwargs,
 ) -> SingleTurnEnv:
     try:
@@ -150,6 +151,7 @@ def load_environment(
                 rubric=rubric,
                 semaphore=semaphore,
                 state=state,
+                max_retries=max_judge_retries,
             )
             for idx, (criterion, points_possible) in enumerate(zip(criteria, points_list))
         ]
@@ -219,6 +221,7 @@ async def _judge_single_criterion(
     rubric: MultiJudgeRubric,
     semaphore: asyncio.Semaphore,
     state: dict,
+    max_retries: int = 3,
 ) -> dict[str, str | int | bool]:
     # Use the shared semaphore to bound concurrency across criteria for this rollout
     async with semaphore:
@@ -233,21 +236,26 @@ async def _judge_single_criterion(
 
         judges = []
         for result in judge_results:
-            entry_error = result.error
-            try:
-                dict_resp = _parse_json(str(result.raw))
-            except AttributeError:
+            dict_resp: dict = {}
+            # Retry on judge-call failure OR malformed/missing boolean `criteria_met`,
+            # mirroring openai/simple-evals' "retry until valid JSON" loop but bounded.
+            for attempt in range(max_retries + 1):
+                raw_text = result.raw if isinstance(result.raw, str) else ""
+                if result.error is None and raw_text:
+                    dict_resp = _parse_json(raw_text)
+                    if isinstance(dict_resp, dict) and isinstance(dict_resp.get("criteria_met"), bool):
+                        break
+                if attempt == max_retries:
+                    break
                 result = await rubric.rerun_judge(result, [{"role": "user", "content": full_prompt}], "", "", state)
-                dict_resp = _parse_json(str(result.raw))
-                entry_error = result.error
-            except Exception:
-                dict_resp = {}
-            criteria_met = bool(dict_resp.get("criteria_met", False)) if isinstance(dict_resp, dict) else False
+
+            parsed_met = dict_resp.get("criteria_met") if isinstance(dict_resp, dict) else None
+            criteria_met = parsed_met if isinstance(parsed_met, bool) else False
             judges.append(
                 {
                     "model": result.model,
                     "raw": result.raw,
-                    "error": entry_error,
+                    "error": result.error,
                     "criteria_met": criteria_met,
                     "judge_explanation": dict_resp.get("explanation", None) if isinstance(dict_resp, dict) else None,
                 }

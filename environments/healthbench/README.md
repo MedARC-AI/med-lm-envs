@@ -47,6 +47,7 @@ Document any supported environment arguments and their meaning. Example:
 | `judge_api_key` | str \| list[str] \| None | `None` | API key(s) for judge API |
 | `judge_timeout` | int \| None | `300` | Timeout in seconds for judge calls |
 | `max_parallel_judges` | int \| None | `None` | Max concurrent criteria evaluations per rollout (defaults to `3`) |
+| `max_judge_retries` | int | `3` | Max times to re-call a judge when it errors or returns malformed/missing `criteria_met` JSON. After exhausting retries, the criterion is recorded as `criteria_met=False`. Set to `0` to disable retries. |
 
 > [!NOTE]
 > Total concurrent judge requests will scale roughly as `max_concurrent * max_parallel_judges * len(judge_model)`.
