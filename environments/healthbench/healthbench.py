@@ -12,10 +12,14 @@ from verifiers.envs.singleturn_env import SingleTurnEnv
 from medarc_verifiers.types import Messages
 from verifiers.types import Info, State
 
+# Per-variant dataset id and split. The neuralleap mirrors publish hard/consensus
+# under `train` and regular under `test`; openai/healthbench-professional only
+# has `test`.
 HEALTHBENCH_DATASET_MAPPING = {
-    "all": "neuralleap/healthbench-regular",
-    "consensus": "neuralleap/healthbench-consensus",
-    "hard": "neuralleap/healthbench-hard",
+    "all": {"id": "neuralleap/healthbench-regular", "split": "test"},
+    "hard": {"id": "neuralleap/healthbench-hard", "split": "train"},
+    "consensus": {"id": "neuralleap/healthbench-consensus", "split": "train"},
+    "professional": {"id": "openai/healthbench-professional", "split": "test"},
 }
 
 # OpenAI-published length-adjustment defaults per HealthBench variant.
@@ -27,6 +31,7 @@ HEALTHBENCH_DEFAULT_LENGTH_ADJUSTMENT = {
     "all": {"center": 2000.0, "penalty_per_500_chars": 0.0299},
     "hard": {"center": 2000.0, "penalty_per_500_chars": 0.0392},
     "consensus": {"center": 2000.0, "penalty_per_500_chars": 0.0020},
+    "professional": {"center": 2000.0, "penalty_per_500_chars": 0.0147},
 }
 
 # See pgs 33-36 (Appendix I) of the HealthBench paper for a complete listing
@@ -134,11 +139,14 @@ def load_environment(
         )
 
     try:
-        dataset = load_dataset(
-            HEALTHBENCH_DATASET_MAPPING[difficulty], split="test" if difficulty == "all" else "train"
-        ).map(lambda example: {"info": _process_healthbench_dataset(example)})
+        entry = HEALTHBENCH_DATASET_MAPPING[difficulty]
     except KeyError:
         raise ValueError(f"Invalid difficulty: {difficulty}")
+    dataset = (
+        load_dataset(entry["id"], split=entry["split"])
+        .map(_normalize_to_canonical_schema)
+        .map(lambda example: {"info": _process_healthbench_dataset(example)})
+    )
 
     multi_judge = MultiJudge.from_env_args(
         judge_model=judge_model,
@@ -391,6 +399,12 @@ def _process_healthbench_dataset(example: dict) -> dict:
         ]
         points_list: [<list of ints>]
     }
+
+    HealthBench Professional rows are normalized to the canonical shape by an
+    upstream `_normalize_to_canonical_schema` map; this function assumes the
+    canonical fields (prompt, prompt_id, rubrics, example_tags) are present.
+    Professional rubric_items carry no per-criterion tags, so axes and
+    consensus_criteria end up as `None` for that variant.
     """
 
     def _gen_hash(criterion_text: str) -> str:
@@ -399,7 +413,7 @@ def _process_healthbench_dataset(example: dict) -> dict:
         return hash_object.hexdigest()
 
     prompt_id = example["prompt_id"]
-    theme = [e for e in example["example_tags"] if e.startswith("theme")][0].split(":")[1]
+    theme = [e for e in example["example_tags"] if e.startswith("theme:")][0].split(":", 1)[1]
     rubrics = example["rubrics"]
     info_data = defaultdict(list)
     for rubric in rubrics:
@@ -415,7 +429,7 @@ def _process_healthbench_dataset(example: dict) -> dict:
             except ValueError:
                 continue
 
-        info_data["axes"].append(tags["axis"])
+        info_data["axes"].append(tags.get("axis"))
 
         cluster_tag = tags.get("cluster")
         if cluster_tag:
@@ -429,6 +443,43 @@ def _process_healthbench_dataset(example: dict) -> dict:
     final_info["prompt_id"] = prompt_id
     final_info["theme"] = theme
     return final_info
+
+
+def _normalize_to_canonical_schema(example: dict) -> dict:
+    """
+    Project the openai/healthbench-professional schema onto the canonical
+    HealthBench schema (prompt / prompt_id / rubrics / example_tags) used by
+    the regular / hard / consensus mirrors. Canonical rows are passed through.
+
+    Professional source schema:
+        id, conversation.messages, rubric_items[{criterion_text, points}],
+        use_case, type, difficulty, specialty, physician_response, canary_string
+    """
+    if "prompt" in example and "rubrics" in example:
+        return example
+
+    conversation = example.get("conversation") or {}
+    messages = conversation.get("messages") if isinstance(conversation, dict) else None
+
+    canonical_rubrics = [
+        {"criterion": item["criterion_text"], "points": item["points"], "tags": []}
+        for item in (example.get("rubric_items") or [])
+    ]
+
+    # Synthesize example_tags so downstream `_process_healthbench_dataset` can
+    # still extract a theme and any future analytics get useful slicing tags.
+    example_tags = ["theme:professional"]
+    for key in ("use_case", "type", "difficulty", "specialty"):
+        value = example.get(key)
+        if value:
+            example_tags.append(f"{key}:{value}")
+
+    return {
+        "prompt_id": example["id"],
+        "prompt": messages or [],
+        "rubrics": canonical_rubrics,
+        "example_tags": example_tags,
+    }
 
 
 # Function code directly copied from openai/simple-evals/healthbench_eval.py
