@@ -23,7 +23,7 @@ HEALTHBENCH_DATASET_MAPPING = {
 }
 
 # OpenAI-published length-adjustment defaults per HealthBench variant.
-# Source: https://deploymentsafety.openai.com/gpt-5-5/avoiding-accidental-data-destructive-actions
+# Source: https://deploymentsafety.openai.com/gpt-5-5/healthbench
 # OpenAI reports HealthBench on a 0-100 scale; this env uses 0-1 internally, so
 # the published "points per 500 chars" values are divided by 100. Center is the
 # response length (chars) at which no penalty is applied.
