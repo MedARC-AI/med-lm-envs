@@ -18,6 +18,17 @@ HEALTHBENCH_DATASET_MAPPING = {
     "hard": "neuralleap/healthbench-hard",
 }
 
+# OpenAI-published length-adjustment defaults per HealthBench variant.
+# Source: https://deploymentsafety.openai.com/gpt-5-5/avoiding-accidental-data-destructive-actions
+# OpenAI reports HealthBench on a 0-100 scale; this env uses 0-1 internally, so
+# the published "points per 500 chars" values are divided by 100. Center is the
+# response length (chars) at which no penalty is applied.
+HEALTHBENCH_DEFAULT_LENGTH_ADJUSTMENT = {
+    "all": {"center": 2000.0, "penalty_per_500_chars": 0.0299},
+    "hard": {"center": 2000.0, "penalty_per_500_chars": 0.0392},
+    "consensus": {"center": 2000.0, "penalty_per_500_chars": 0.0020},
+}
+
 # See pgs 33-36 (Appendix I) of the HealthBench paper for a complete listing
 # of all consensus criteria organized by themes and outlined with separate
 # consensus categories
@@ -90,8 +101,38 @@ def load_environment(
     judge_timeout: int | None = 300,
     max_parallel_judges: int | None = None,
     max_judge_retries: int = 3,
+    length_adjustment_center: float | None = None,
+    length_adjustment_penalty_per_500_chars: float | None = None,
+    use_length_adjusted_as_reward: bool = False,
     **kwargs,
 ) -> SingleTurnEnv:
+    # When the user passes neither length-adjustment knob, fall back to the
+    # OpenAI-published defaults for this difficulty (if known). Passing one
+    # without the other is still an error (handled by the validation below).
+    if length_adjustment_center is None and length_adjustment_penalty_per_500_chars is None:
+        defaults = HEALTHBENCH_DEFAULT_LENGTH_ADJUSTMENT.get(difficulty)
+        if defaults is not None:
+            length_adjustment_center = defaults["center"]
+            length_adjustment_penalty_per_500_chars = defaults["penalty_per_500_chars"]
+
+    length_adjustment_enabled = (
+        length_adjustment_center is not None or length_adjustment_penalty_per_500_chars is not None
+    )
+    if length_adjustment_enabled:
+        if length_adjustment_center is None or length_adjustment_penalty_per_500_chars is None:
+            raise ValueError(
+                "length_adjustment_center and length_adjustment_penalty_per_500_chars must be set together"
+            )
+        if length_adjustment_center < 0:
+            raise ValueError("length_adjustment_center must be non-negative")
+        if length_adjustment_penalty_per_500_chars < 0:
+            raise ValueError("length_adjustment_penalty_per_500_chars must be non-negative")
+    if use_length_adjusted_as_reward and not length_adjustment_enabled:
+        raise ValueError(
+            "use_length_adjusted_as_reward=True requires length_adjustment_center "
+            "and length_adjustment_penalty_per_500_chars to be set"
+        )
+
     try:
         dataset = load_dataset(
             HEALTHBENCH_DATASET_MAPPING[difficulty], split="test" if difficulty == "all" else "train"
@@ -186,7 +227,16 @@ def load_environment(
 
             state["performance_by_rubric"].append(judgments_sorted)
 
-        aggregated = float(max(0.0, min(1.0, current_reward / total_reward)))
+        raw_fraction = current_reward / total_reward
+        # Cache the pre-clip raw score and response length so the optional
+        # length-adjusted metric can compute (in order):
+        #   raw_fraction -> apply length penalty -> clip to [0, 1]
+        # Applying length adjustment to the raw fraction (not the clipped value)
+        # matches openai/simple-evals' formula; the final clip restores this
+        # env's per-rollout [0, 1] invariant.
+        state["_hb_raw_score"] = raw_fraction
+        state["_hb_completion_len"] = len(raw_completion)
+        aggregated = float(max(0.0, min(1.0, raw_fraction)))
         judge_feedback = []
         for judge_id, data in per_judge_data.items():
             scores = data["scores"]
@@ -209,7 +259,30 @@ def load_environment(
 
         return aggregated
 
-    rubric.add_reward_func(reward_healthbench, weight=1.0)
+    if length_adjustment_enabled:
+        # Captured by closure; both are guaranteed non-None by validation above.
+        center = float(length_adjustment_center)  # type: ignore[arg-type]
+        penalty = float(length_adjustment_penalty_per_500_chars)  # type: ignore[arg-type]
+
+        async def length_adjusted_score(state: State) -> float:
+            raw = state.get("_hb_raw_score")
+            n = state.get("_hb_completion_len")
+            if raw is None or n is None:
+                return 0.0
+            adjusted = float(raw) - penalty * ((float(n) - center) / 500.0)
+            return max(0.0, min(1.0, adjusted))
+
+        # reward_healthbench must run first so the metric can read the cached
+        # raw score from state. Use weights to pick which one drives `reward`.
+        if use_length_adjusted_as_reward:
+            rubric.add_metric(reward_healthbench, weight=0.0)
+            rubric.add_reward_func(length_adjusted_score, weight=1.0)
+        else:
+            rubric.add_reward_func(reward_healthbench, weight=1.0)
+            rubric.add_metric(length_adjusted_score, weight=0.0)
+    else:
+        rubric.add_reward_func(reward_healthbench, weight=1.0)
+
     return SingleTurnEnv(eval_dataset=dataset, system_prompt="", rubric=rubric)
 
 
