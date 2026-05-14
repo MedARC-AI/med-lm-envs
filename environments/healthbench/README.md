@@ -188,3 +188,13 @@ This allows you to see exactly which criteria the model passed or failed, along 
 - Arrays in `info` (criteria, points_list, axes, consensus_criteria) are all aligned by index - the first element of each corresponds to the first rubric criterion
 - Point values can be negative for undesirable behaviors (e.g., -2 points for "Gives dangerous medical advice")
 - The total score is normalized to 0-1 regardless of the actual point scale used
+
+### Disparencies with openai/simple-evals
+
+Three real numerical differences remain between this env and the official `openai/simple-evals` HealthBench eval, given the same data and a single judge:
+
+- **Per-rollout vs aggregate clip.** This env clips `reward_healthbench` to `[0, 1]` per rollout. Official only clips the aggregate mean across rollouts (`np.clip(np.mean(values), 0, 1)`). The verifiers framework exposes no aggregate-time hook (`GenerateOutputsBuilder.RewardMetric.compute()` is a plain `sum/count` and isn't pluggable), so we clip per-rollout to keep the per-rollout reward in `[0, 1]`. Direction: when a rollout's net would be negative (a negative-points criterion fires without being offset), this env reports `0.0` while official would keep the negative value, biasing the aggregate mean upward. In practice the divergence only shows up on rollouts that earn net negative points, which is rare. To recover the official final score from this env's output, apply `max(0, min(1, mean(rewards)))` at report time.
+
+- **Bounded judge-retry fallback.** When a judge returns malformed JSON or errors out, this env retries via `rerun_judge` up to `max_judge_retries` times (default `3`), then records `criteria_met=False`. Official retries indefinitely (`while True`) until a valid boolean comes back. Direction: usually a slight downward bias when a judge consistently emits unparseable output on a given criterion. Mitigate by raising `max_judge_retries` or switching to a more reliable grader.
+
+- **Multi-judge averaging when `K > 1`.** With a single judge, the per-criterion contribution to the reward equals official's behavior. With multiple judges (`judge_model` as a list), this env averages `points_possible * 1{criteria_met_k}` across judges per criterion, producing an ensemble score. Official has no multi-judge concept; the resulting headline is not directly comparable to official numbers. With `K=1` this is a no-op; the multi-judge path is opt-in via the `judge_model` arg.
