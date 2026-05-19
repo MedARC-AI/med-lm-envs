@@ -26,6 +26,7 @@ def test_normalize_volumes_rejects_bad_mount_string():
     with pytest.raises(DockerLaunchError):
         normalize_volumes(["/host/only"])
 
+
 def test_container_log_streamer_stop_does_not_hang(tmp_path):
     class BlockingStream:
         def __init__(self):
@@ -106,7 +107,9 @@ def test_docker_runtime_adapter_returns_local_base_url(monkeypatch) -> None:
 
 def test_create_and_start_container_recovers_from_owned_name_conflict(monkeypatch) -> None:
     class FakeContainer:
-        def __init__(self, *, status: str = "created", labels: dict[str, str] | None = None, container_id: str = "abc123") -> None:
+        def __init__(
+            self, *, status: str = "created", labels: dict[str, str] | None = None, container_id: str = "abc123"
+        ) -> None:
             self.status = status
             self.labels = labels or {"orchestrator.managed": "true", "orchestrator.task_id": "task-1"}
             self.id = container_id

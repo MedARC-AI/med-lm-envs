@@ -41,7 +41,9 @@ def configured_tensor_parallel_size(task: TaskSpec) -> int:
     return tensor_parallel
 
 
-def resolve_topology(task: TaskSpec, *, allocated_gpus: int, allow_explicit_data_parallel: bool = True) -> ResolvedTopology:
+def resolve_topology(
+    task: TaskSpec, *, allocated_gpus: int, allow_explicit_data_parallel: bool = True
+) -> ResolvedTopology:
     model_cfg = _task_model_cfg(task)
     return _resolve_topology(
         task_id=task.task_id,

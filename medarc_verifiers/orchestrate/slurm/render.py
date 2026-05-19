@@ -41,7 +41,11 @@ def render_bundle(
             allocated_gpus=task.allocated_gpus,
             server_port=_default_server_port(run_id, task.submission_order),
             require_contiguous_gpus=node_gpus > 1,
-            slurm_job_id=(existing_entries.get(task.task.task_id).slurm_job_id if existing_entries.get(task.task.task_id) else None),
+            slurm_job_id=(
+                existing_entries.get(task.task.task_id).slurm_job_id
+                if existing_entries.get(task.task.task_id)
+                else None
+            ),
             constraints={"scheduler": "slurm", "node_gpus": node_gpus},
         )
         for task in planned_tasks

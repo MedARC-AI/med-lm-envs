@@ -112,7 +112,9 @@ def test_ensure_run_bundle_rejects_orphaned_task_bundle_artifacts(tmp_path: Path
     plan_path = tmp_path / "plan.yaml"
     _write_job_config(job_cfg)
     _write_orchestrate_config(orchestrate_cfg)
-    plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\norchestrate_config: {orchestrate_cfg.name}\n", encoding="utf-8")
+    plan_path.write_text(
+        f"job_configs:\n  - {job_cfg.name}\norchestrate_config: {orchestrate_cfg.name}\n", encoding="utf-8"
+    )
     tasks = expand_tasks(load_plan(plan_path))
     orphan_root = tmp_path / "outputs" / "tasks" / "orphan-task"
     orphan_root.mkdir(parents=True)

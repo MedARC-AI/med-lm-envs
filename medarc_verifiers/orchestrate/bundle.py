@@ -456,11 +456,11 @@ def load_task_spec(path: Path) -> ResolvedTaskSpec:
     try:
         spec_version = int(raw_version)
     except (TypeError, ValueError) as exc:
-        raise UnsupportedTaskSpecVersionError(f"Unsupported task spec_version={raw_version!r}; expected {SPEC_VERSION}.") from exc
-    if spec_version != SPEC_VERSION:
         raise UnsupportedTaskSpecVersionError(
-            f"Unsupported task spec_version={spec_version}; expected {SPEC_VERSION}."
-        )
+            f"Unsupported task spec_version={raw_version!r}; expected {SPEC_VERSION}."
+        ) from exc
+    if spec_version != SPEC_VERSION:
+        raise UnsupportedTaskSpecVersionError(f"Unsupported task spec_version={spec_version}; expected {SPEC_VERSION}.")
     spec = ResolvedTaskSpec.from_dict(payload)
     bundled_eval_path = Path(spec.bundled_eval_config_path)
     if not bundled_eval_path.exists():
@@ -841,7 +841,10 @@ def _rewrite_top_level_path_line(line: str, *, key: str, base_dir: Path) -> str 
     import json as _json
     import re as _re
 
-    match = _re.match(rf"^(?P<prefix>\s*{_re.escape(key)}\s*=\s*)(?P<quote>['\"])(?P<value>.*?)(?P=quote)(?P<suffix>\s*(?:#.*)?\n?)$", line)
+    match = _re.match(
+        rf"^(?P<prefix>\s*{_re.escape(key)}\s*=\s*)(?P<quote>['\"])(?P<value>.*?)(?P=quote)(?P<suffix>\s*(?:#.*)?\n?)$",
+        line,
+    )
     if match is None:
         return None
     value = match.group("value").strip()
@@ -1005,14 +1008,18 @@ def _sidecar_readiness(value: object, *, task_id: str, sidecar_name: str) -> Sid
     enabled = bool(value.get("enabled", True))
     url = value.get("url")
     if enabled and (not isinstance(url, str) or not url.strip()):
-        raise ValueError(f"Task {task_id} sidecar {sidecar_name} readiness.url is required unless readiness.enabled=false.")
+        raise ValueError(
+            f"Task {task_id} sidecar {sidecar_name} readiness.url is required unless readiness.enabled=false."
+        )
     timeout_s = int(value.get("timeout_s", 240) or 240)
     interval_s = int(value.get("interval_s", 2) or 2)
     if timeout_s <= 0:
         raise ValueError(f"Task {task_id} sidecar {sidecar_name} readiness.timeout_s must be positive.")
     if interval_s <= 0:
         raise ValueError(f"Task {task_id} sidecar {sidecar_name} readiness.interval_s must be positive.")
-    return SidecarReadinessSpec(enabled=enabled, url=str(url) if url is not None else None, timeout_s=timeout_s, interval_s=interval_s)
+    return SidecarReadinessSpec(
+        enabled=enabled, url=str(url) if url is not None else None, timeout_s=timeout_s, interval_s=interval_s
+    )
 
 
 def _validate_sidecar_srun_args(args: list[str], *, task_id: str, sidecar_name: str) -> None:

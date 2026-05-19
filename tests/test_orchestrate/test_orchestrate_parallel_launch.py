@@ -446,8 +446,11 @@ async def test_parallel_launch_does_not_duplicate_hashed_slurm_task_slug_in_benc
 
     await runner._run_async()
 
-    manifest = json.loads((task_root_for_id(options.output_root, task.task_id) / "runtime" / "task_manifest.json").read_text())
+    manifest = json.loads(
+        (task_root_for_id(options.output_root, task.task_id) / "runtime" / "task_manifest.json").read_text()
+    )
     assert manifest["bench_run_id"] is None
+
 
 @pytest.mark.asyncio
 async def test_parallel_launch_disables_async_scheduling_when_dp_is_active(
@@ -519,7 +522,9 @@ async def test_parallel_launch_disables_async_scheduling_when_dp_is_active(
     assert any("async_scheduling_disabled=true" in message for message in log_messages)
     assert any("reason=data_parallel_size_gt_1" in message for message in log_messages)
 
-    request_payload = json.loads((options.output_root / "tasks" / "task-1" / "serve" / "container_create_request.json").read_text())
+    request_payload = json.loads(
+        (options.output_root / "tasks" / "task-1" / "serve" / "container_create_request.json").read_text()
+    )
     assert "--async-scheduling" not in request_payload["command"]
 
 
@@ -529,7 +534,9 @@ async def test_parallel_launch_adjusts_gpu_memory_utilization_for_dp(
     monkeypatch,
 ) -> None:
     plan = PlanConfig(job_configs=[tmp_path / "job.toml"])
-    tasks = [_task(tmp_path, "task-1", gpus=8, tensor_parallel_size=2, data_parallel_size=4, gpu_memory_utilization=0.9)]
+    tasks = [
+        _task(tmp_path, "task-1", gpus=8, tensor_parallel_size=2, data_parallel_size=4, gpu_memory_utilization=0.9)
+    ]
     options = OrchestratorOptions(
         run_id="run-1",
         output_root=tmp_path / "outputs",
@@ -594,7 +601,9 @@ async def test_parallel_launch_adjusts_gpu_memory_utilization_for_dp(
     assert launch["container_args"][idx + 1] == "0.87"
     assert any("gpu_memory_utilization_adjusted=true" in message for message in log_messages)
 
-    request_payload = json.loads((options.output_root / "tasks" / "task-1" / "serve" / "container_create_request.json").read_text())
+    request_payload = json.loads(
+        (options.output_root / "tasks" / "task-1" / "serve" / "container_create_request.json").read_text()
+    )
     idx = request_payload["command"].index("--gpu-memory-utilization")
     assert request_payload["command"][idx + 1] == "0.87"
 
@@ -670,7 +679,9 @@ async def test_parallel_launch_keeps_gpu_memory_utilization_unchanged_without_dp
     monkeypatch,
 ) -> None:
     plan = PlanConfig(job_configs=[tmp_path / "job.toml"])
-    tasks = [_task(tmp_path, "task-1", gpus=1, tensor_parallel_size=1, data_parallel_size=1, gpu_memory_utilization=0.9)]
+    tasks = [
+        _task(tmp_path, "task-1", gpus=1, tensor_parallel_size=1, data_parallel_size=1, gpu_memory_utilization=0.9)
+    ]
     options = OrchestratorOptions(
         run_id="run-1",
         output_root=tmp_path / "outputs",
@@ -787,6 +798,7 @@ async def test_parallel_launch_keeps_async_scheduling_when_dp_is_one(
 
     launch = adapter.launch_calls[0]
     assert "--async-scheduling" in launch["container_args"]
+
 
 @pytest.mark.asyncio
 async def test_runner_uses_task_local_bench_output_without_restart_flags(tmp_path: Path, monkeypatch) -> None:

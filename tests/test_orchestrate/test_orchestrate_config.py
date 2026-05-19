@@ -57,7 +57,7 @@ def test_plan_job_configs_and_registries_resolve_relative_to_plan_file(tmp_path:
     orchestrate_cfg = _write_orchestrate_config(configs_dir / "orchestrate.toml")
     eval_images_cfg = configs_dir / "eval_images.toml"
     eval_images_cfg.write_text(
-        '''
+        """
 schema_version = 1
 
 [[eval_image]]
@@ -69,7 +69,7 @@ command = ["bash", "-lc", "serve-fhir"]
 
 [eval_image.readiness]
 url = "http://127.0.0.1:8080/health"
-'''.lstrip(),
+""".lstrip(),
         encoding="utf-8",
     )
     plan_path = tmp_path / "plan.yaml"
@@ -141,23 +141,23 @@ def test_make_plan_resolves_paths_relative_to_base_dir(tmp_path: Path) -> None:
 def test_expand_tasks_matches_model_alias_from_endpoint_registry(tmp_path: Path) -> None:
     job_cfg = tmp_path / "job.toml"
     job_cfg.write_text(
-        '''
+        """
 endpoint_id = "foo-endpoint"
 
 [[eval]]
 env_id = "medqa"
-'''.lstrip(),
+""".lstrip(),
         encoding="utf-8",
     )
     endpoints = tmp_path / "endpoints.toml"
     endpoints.write_text(
-        '''
+        """
 [[endpoint]]
 endpoint_id = "foo-endpoint"
 model = "Foo/Bar"
 url = "http://localhost:8000/v1"
 key = "OPENAI_API_KEY"
-'''.lstrip(),
+""".lstrip(),
         encoding="utf-8",
     )
     orchestrate_cfg = _write_orchestrate_config(tmp_path / "orchestrate.toml", model="Foo/Bar")
@@ -176,7 +176,7 @@ key = "OPENAI_API_KEY"
 def test_expand_tasks_rejects_model_ablations(tmp_path: Path) -> None:
     job_cfg = tmp_path / "job.toml"
     job_cfg.write_text(
-        '''
+        """
 model = "Foo/Bar"
 
 [[eval]]
@@ -187,12 +187,14 @@ env_id = "medqa"
 
 [ablation.sweep]
 model = ["Foo/Bar", "Other/Model"]
-'''.lstrip(),
+""".lstrip(),
         encoding="utf-8",
     )
     orchestrate_cfg = _write_orchestrate_config(tmp_path / "orchestrate.toml")
     plan_path = tmp_path / "plan.yaml"
-    plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\norchestrate_config: {orchestrate_cfg.name}\n", encoding="utf-8")
+    plan_path.write_text(
+        f"job_configs:\n  - {job_cfg.name}\norchestrate_config: {orchestrate_cfg.name}\n", encoding="utf-8"
+    )
 
     with pytest.raises(ValueError, match="ablates model"):
         expand_tasks(load_plan(plan_path))
@@ -202,7 +204,7 @@ def test_orchestrate_registry_rejects_unknown_nested_fields(tmp_path: Path) -> N
     job_cfg = _write_eval_config(tmp_path / "job.toml")
     orchestrate_cfg = tmp_path / "orchestrate.toml"
     orchestrate_cfg.write_text(
-        '''
+        """
 schema_version = 1
 
 [[model]]
@@ -217,11 +219,13 @@ unknown = "bad"
 
 [model.container]
 image = "fake"
-'''.lstrip(),
+""".lstrip(),
         encoding="utf-8",
     )
     plan_path = tmp_path / "plan.yaml"
-    plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\norchestrate_config: {orchestrate_cfg.name}\n", encoding="utf-8")
+    plan_path.write_text(
+        f"job_configs:\n  - {job_cfg.name}\norchestrate_config: {orchestrate_cfg.name}\n", encoding="utf-8"
+    )
 
     with pytest.raises(ValueError, match="Unknown fields"):
         expand_tasks(load_plan(plan_path))
@@ -251,7 +255,9 @@ key = "OPENAI_API_KEY"
     )
     orchestrate_cfg = _write_orchestrate_config(tmp_path / "orchestrate.toml")
     plan_path = tmp_path / "plan.yaml"
-    plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\norchestrate_config: {orchestrate_cfg.name}\n", encoding="utf-8")
+    plan_path.write_text(
+        f"job_configs:\n  - {job_cfg.name}\norchestrate_config: {orchestrate_cfg.name}\n", encoding="utf-8"
+    )
 
     task = expand_tasks(load_plan(plan_path))[0]
 
@@ -277,7 +283,9 @@ image = "fake"
         encoding="utf-8",
     )
     plan_path = tmp_path / "plan.yaml"
-    plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\norchestrate_config: {orchestrate_cfg.name}\n", encoding="utf-8")
+    plan_path.write_text(
+        f"job_configs:\n  - {job_cfg.name}\norchestrate_config: {orchestrate_cfg.name}\n", encoding="utf-8"
+    )
 
     with pytest.raises(ValueError, match="tensor_parallel_size"):
         expand_tasks(load_plan(plan_path))

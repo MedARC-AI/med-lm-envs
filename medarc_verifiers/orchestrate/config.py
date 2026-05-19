@@ -152,7 +152,9 @@ def expand_tasks(plan: PlanConfig) -> list[TaskSpec]:
         raw_eval_configs = load_toml_eval_configs(resolved_job_path)
         if not raw_eval_configs:
             raise ValueError(f"Job config {resolved_job_path} did not produce any evals.")
-        raw_eval_configs = [_absolutize_eval_config_paths(raw, base_dir=resolved_job_path.parent) for raw in raw_eval_configs]
+        raw_eval_configs = [
+            _absolutize_eval_config_paths(raw, base_dir=resolved_job_path.parent) for raw in raw_eval_configs
+        ]
         _reject_model_ablation(raw_eval_configs, source=resolved_job_path)
         overrides = EvalConfigOverrides(endpoints_path=endpoints_path) if endpoints_path is not None else None
         identity_payloads = [build_eval_identity_payload(raw, overrides=overrides) for raw in raw_eval_configs]
@@ -170,7 +172,11 @@ def expand_tasks(plan: PlanConfig) -> list[TaskSpec]:
         eval_ids = _resolved_eval_ids(identity_payloads)
         env_ids = sorted({str(payload["env_id"]) for payload in identity_payloads})
         for payload in identity_payloads:
-            identity = (model_id, str(payload["env_id"]), str(payload.get("variant_id") or payload.get("name") or "base"))
+            identity = (
+                model_id,
+                str(payload["env_id"]),
+                str(payload.get("variant_id") or payload.get("name") or "base"),
+            )
             if identity in seen_identities:
                 raise ValueError(
                     "Duplicate orchestrated eval identity across tasks: "
@@ -209,7 +215,11 @@ def expand_tasks(plan: PlanConfig) -> list[TaskSpec]:
                 eval_ids=eval_ids,
                 env_ids=env_ids,
                 endpoints_path=endpoints_path,
-                matched_model={**dict(matched_model), "matched_by": matched_by, "effective_model_id": effective_model_id},
+                matched_model={
+                    **dict(matched_model),
+                    "matched_by": matched_by,
+                    "effective_model_id": effective_model_id,
+                },
                 orchestrate_registry=orchestrate_snapshot,
                 eval_images_registry=eval_images_snapshot,
             )
@@ -277,7 +287,9 @@ def _validate_orchestrate_registry(payload: Mapping[str, Any], *, source: Path) 
     for entry in entries:
         if not isinstance(entry, Mapping):
             raise ValueError(f"Each [[model]] entry in {source} must be a table.")
-        _reject_unknown_keys(entry, {"id", "aliases", "vllm", "container", "pyxis", "slurm"}, label=f"{source} [[model]]")
+        _reject_unknown_keys(
+            entry, {"id", "aliases", "vllm", "container", "pyxis", "slurm"}, label=f"{source} [[model]]"
+        )
         model_id = entry.get("id")
         if not isinstance(model_id, str) or not model_id.strip():
             raise ValueError(f"Each [[model]] entry in {source} must include non-empty id.")
@@ -305,8 +317,16 @@ def _validate_orchestrate_registry(payload: Mapping[str, Any], *, source: Path) 
                 raise ValueError(f"Model {model_id} in {source} must set [model.vllm].{required_key}.")
         if not str(container.get("image", "")).strip():
             raise ValueError(f"Model {model_id} in {source} must set [model.container].image.")
-        _reject_unknown_keys(vllm, {"gpus", "tensor_parallel_size", "data_parallel_size", "require_contiguous_gpus", "memory_min_gb", "serve"}, label=f"{source} {model_id}.vllm")
-        _reject_unknown_keys(container, {"image", "container_port", "volumes", "ipc_mode", "env_file"}, label=f"{source} {model_id}.container")
+        _reject_unknown_keys(
+            vllm,
+            {"gpus", "tensor_parallel_size", "data_parallel_size", "require_contiguous_gpus", "memory_min_gb", "serve"},
+            label=f"{source} {model_id}.vllm",
+        )
+        _reject_unknown_keys(
+            container,
+            {"image", "container_port", "volumes", "ipc_mode", "env_file"},
+            label=f"{source} {model_id}.container",
+        )
         if "serve" in vllm:
             _reject_unknown_keys(
                 _required_mapping(vllm.get("serve"), f"model {model_id} vllm.serve"),
@@ -338,11 +358,25 @@ def _validate_orchestrate_registry(payload: Mapping[str, Any], *, source: Path) 
                 label=f"{source} {model_id}.vllm.serve",
             )
         if "pyxis" in entry:
-            _reject_unknown_keys(_required_mapping(entry.get("pyxis"), f"model {model_id} pyxis"), {"srun_extra_args"}, label=f"{source} {model_id}.pyxis")
+            _reject_unknown_keys(
+                _required_mapping(entry.get("pyxis"), f"model {model_id} pyxis"),
+                {"srun_extra_args"},
+                label=f"{source} {model_id}.pyxis",
+            )
         if "slurm" in entry:
             _reject_unknown_keys(
                 _required_mapping(entry.get("slurm"), f"model {model_id} slurm"),
-                {"job_name", "cpus_per_gpu", "time", "partition", "account", "qos", "mail_type", "mail_user", "slurm_resume"},
+                {
+                    "job_name",
+                    "cpus_per_gpu",
+                    "time",
+                    "partition",
+                    "account",
+                    "qos",
+                    "mail_type",
+                    "mail_user",
+                    "slurm_resume",
+                },
                 label=f"{source} {model_id}.slurm",
             )
 
@@ -375,11 +409,20 @@ def _validate_eval_images_registry(payload: Mapping[str, Any], *, source: Path) 
         if image_id in ids:
             raise ValueError(f"Duplicate eval_image id in {source}: {image_id}")
         ids.add(image_id)
-        selectors = list(entry.get("evals", []) or []) + list(entry.get("envs", []) or []) + list(entry.get("env_ids", []) or [])
+        selectors = (
+            list(entry.get("evals", []) or [])
+            + list(entry.get("envs", []) or [])
+            + list(entry.get("env_ids", []) or [])
+        )
         if not selectors:
-            raise ValueError(f"Eval image {image_id} in {source} must define at least one selector: evals, envs, or env_ids.")
+            raise ValueError(
+                f"Eval image {image_id} in {source} must define at least one selector: evals, envs, or env_ids."
+            )
         for field_name in ("evals", "envs", "env_ids", "command", "srun_args"):
-            if field_name in entry and (not isinstance(entry.get(field_name), list) or any(not isinstance(item, str) for item in entry.get(field_name, []))):
+            if field_name in entry and (
+                not isinstance(entry.get(field_name), list)
+                or any(not isinstance(item, str) for item in entry.get(field_name, []))
+            ):
                 raise ValueError(f"Eval image {image_id} field {field_name} in {source} must be a list of strings.")
         runtime = entry.get("runtime")
         if runtime != "pyxis":

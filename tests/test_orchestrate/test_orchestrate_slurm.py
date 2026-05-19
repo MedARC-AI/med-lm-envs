@@ -59,26 +59,32 @@ rollouts_per_example = 1
     }
 
 
-def _write_sidecar_job_config(path: Path, *, name: str = "medagentbench-fhir", image: str = "/tmp/image with space.sqsh") -> None:
+def _write_sidecar_job_config(
+    path: Path, *, name: str = "medagentbench-fhir", image: str = "/tmp/image with space.sqsh"
+) -> None:
     _write_job_config(path, model_id="Foo/Bar", gpus=1)
     toml_path = path.with_suffix(".toml").resolve()
-    _SIDECAR_META[toml_path] = [{
-        "id": name,
-        "env": path.with_suffix(".toml").stem,
-        "runtime": "pyxis",
-        "image": image,
-        "srun_args": ["--mem=16G", "--container-env=JAVA_TOOL_OPTIONS"],
-        "env_vars": {"JAVA_TOOL_OPTIONS": "-XX:+UseSerialGC -Xms256m -Xmx1024m"},
-        "command": ["/usr/bin/java", "--class-path", "/app/main war"],
-        "readiness": {
-            "url": "http://127.0.0.1:8080/fhir/metadata?x=a b",
-            "timeout_s": 12,
-            "interval_s": 3,
-        },
-    }]
+    _SIDECAR_META[toml_path] = [
+        {
+            "id": name,
+            "env": path.with_suffix(".toml").stem,
+            "runtime": "pyxis",
+            "image": image,
+            "srun_args": ["--mem=16G", "--container-env=JAVA_TOOL_OPTIONS"],
+            "env_vars": {"JAVA_TOOL_OPTIONS": "-XX:+UseSerialGC -Xms256m -Xmx1024m"},
+            "command": ["/usr/bin/java", "--class-path", "/app/main war"],
+            "readiness": {
+                "url": "http://127.0.0.1:8080/fhir/metadata?x=a b",
+                "timeout_s": 12,
+                "interval_s": 3,
+            },
+        }
+    ]
 
 
-def _task(tmp_path: Path, name: str, *, gpus: int, tp: int | None = None, slurm: dict[str, object] | None = None) -> TaskSpec:
+def _task(
+    tmp_path: Path, name: str, *, gpus: int, tp: int | None = None, slurm: dict[str, object] | None = None
+) -> TaskSpec:
     job_cfg = tmp_path / f"{name}.toml"
     _write_job_config(job_cfg, model_id="foo", gpus=gpus, tensor_parallel_size=tp, slurm=slurm)
     return TaskSpec(
@@ -102,7 +108,13 @@ def _write_plan(tmp_path: Path, job_configs: list[Path]) -> Path:
     eval_images_path = tmp_path / "eval_images.toml"
     config_lines = "\n".join(f"  - {path}" for path in toml_paths)
     plan_lines = ["job_configs:", config_lines, f"orchestrate_config: {orchestrate_path}"]
-    sidecar_entries = [(entry, path) for path in toml_paths for entry in (_SIDECAR_META.get(path, []) if isinstance(_SIDECAR_META.get(path, []), list) else [_SIDECAR_META[path]])]
+    sidecar_entries = [
+        (entry, path)
+        for path in toml_paths
+        for entry in (
+            _SIDECAR_META.get(path, []) if isinstance(_SIDECAR_META.get(path, []), list) else [_SIDECAR_META[path]]
+        )
+    ]
     if sidecar_entries:
         plan_lines.append(f"eval_images_config: {eval_images_path}")
     plan_path.write_text("\n".join(plan_lines) + "\n", encoding="utf-8")
@@ -115,23 +127,36 @@ def _write_plan(tmp_path: Path, job_configs: list[Path]) -> Path:
         if model_id in seen:
             continue
         seen.add(model_id)
-        model_lines.extend([
-            "[[model]]",
-            f'id = "{model_id}"',
-            "",
-            "[model.vllm]",
-            f'gpus = {meta["gpus"]}',
-            f'tensor_parallel_size = {meta["tensor_parallel_size"]}',
-        ])
+        model_lines.extend(
+            [
+                "[[model]]",
+                f'id = "{model_id}"',
+                "",
+                "[model.vllm]",
+                f"gpus = {meta['gpus']}",
+                f"tensor_parallel_size = {meta['tensor_parallel_size']}",
+            ]
+        )
         if meta.get("data_parallel_size") is not None:
-            model_lines.append(f'data_parallel_size = {meta["data_parallel_size"]}')
+            model_lines.append(f"data_parallel_size = {meta['data_parallel_size']}")
         model_lines.extend(["", "[model.vllm.serve]"])
         for key, value in dict(meta.get("serve") or {}).items():
             rendered = "true" if value is True else ("false" if value is False else str(value))
             if isinstance(value, str):
                 rendered = f'"{value}"'
             model_lines.append(f"{key} = {rendered}")
-        model_lines.extend(["", "[model.container]", 'image = "fake"', "", "[model.pyxis]", "srun_extra_args = []", "", "[model.slurm]"])
+        model_lines.extend(
+            [
+                "",
+                "[model.container]",
+                'image = "fake"',
+                "",
+                "[model.pyxis]",
+                "srun_extra_args = []",
+                "",
+                "[model.slurm]",
+            ]
+        )
         for key, value in dict(meta.get("slurm") or {}).items():
             rendered = "true" if value is True else ("false" if value is False else f'"{value}"')
             model_lines.append(f"{key} = {rendered}")
@@ -141,17 +166,19 @@ def _write_plan(tmp_path: Path, job_configs: list[Path]) -> Path:
     if sidecar_entries:
         lines = ["schema_version = 1", ""]
         for entry, _path in sidecar_entries:
-            lines.extend([
-                "[[eval_image]]",
-                f'id = "{entry["id"]}"',
-                f'envs = ["{entry["env"]}"]',
-                'runtime = "pyxis"',
-                f'image = "{entry["image"]}"',
-                "srun_args = [" + ", ".join(f'"{arg}"' for arg in entry["srun_args"]) + "]",
-                "command = [" + ", ".join(f'"{arg}"' for arg in entry["command"]) + "]",
-                "",
-                "[eval_image.env]",
-            ])
+            lines.extend(
+                [
+                    "[[eval_image]]",
+                    f'id = "{entry["id"]}"',
+                    f'envs = ["{entry["env"]}"]',
+                    'runtime = "pyxis"',
+                    f'image = "{entry["image"]}"',
+                    "srun_args = [" + ", ".join(f'"{arg}"' for arg in entry["srun_args"]) + "]",
+                    "command = [" + ", ".join(f'"{arg}"' for arg in entry["command"]) + "]",
+                    "",
+                    "[eval_image.env]",
+                ]
+            )
             for key, value in entry["env_vars"].items():
                 lines.append(f'{key} = "{value}"')
             lines.extend(["", "[eval_image.readiness]"])
@@ -228,7 +255,9 @@ def test_build_submission_plan_round_robins_two_chains(tmp_path: Path) -> None:
         cli_overrides=SlurmCliOverrides(),
     )
 
-    assert [(task.task.task_id, task.chain_index, task.predecessor_task_id, task.base_dependency) for task in planned] == [
+    assert [
+        (task.task.task_id, task.chain_index, task.predecessor_task_id, task.base_dependency) for task in planned
+    ] == [
         ("a:foo", 0, None, "afterok:555"),
         ("b:foo", 1, None, "afterok:555"),
         ("c:foo", 0, "a:foo", None),
@@ -252,7 +281,9 @@ def test_build_submission_plan_run_simultaneously_uses_no_generated_dependencies
         cli_overrides=SlurmCliOverrides(),
     )
 
-    assert [(task.task.task_id, task.chain_index, task.predecessor_task_id, task.base_dependency) for task in planned] == [
+    assert [
+        (task.task.task_id, task.chain_index, task.predecessor_task_id, task.base_dependency) for task in planned
+    ] == [
         ("a:foo", 0, None, "afterok:555"),
         ("b:foo", 1, None, "afterok:555"),
     ]
@@ -368,7 +399,9 @@ def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
     assert task_spec.gpus == 2
     assert task_spec.tensor_parallel_size == 2
     assert task_spec.data_parallel_size is None
-    orchestrate_snapshot = tomllib.loads((Path(task_spec.output_paths.root) / "orchestrate-snapshot.toml").read_text(encoding="utf-8"))
+    orchestrate_snapshot = tomllib.loads(
+        (Path(task_spec.output_paths.root) / "orchestrate-snapshot.toml").read_text(encoding="utf-8")
+    )
     assert orchestrate_snapshot["schema_version"] == 1
     assert orchestrate_snapshot["registry_path"] == str(tmp_path / "orchestrate.toml")
     assert orchestrate_snapshot["registry_checksum"]
@@ -410,7 +443,9 @@ def test_bundle_parses_sidecars(tmp_path: Path) -> None:
     assert sidecar.readiness.timeout_s == 12
     assert sidecar.readiness.interval_s == 3
     assert "--overlap" in spec.pyxis_srun_extra_args
-    eval_images_snapshot = tomllib.loads((Path(spec.output_paths.root) / "eval_images-snapshot.toml").read_text(encoding="utf-8"))
+    eval_images_snapshot = tomllib.loads(
+        (Path(spec.output_paths.root) / "eval_images-snapshot.toml").read_text(encoding="utf-8")
+    )
     assert eval_images_snapshot["schema_version"] == 1
     assert eval_images_snapshot["registry_path"] == str(tmp_path / "eval_images.toml")
     assert eval_images_snapshot["registry_checksum"]
@@ -546,7 +581,14 @@ def test_sidecar_validation_rejects_shell_suffix_collision(tmp_path: Path) -> No
     _write_sidecar_job_config(job_cfg, name="fhir-v2")
     first = dict(_SIDECAR_META[job_cfg.with_suffix(".toml").resolve()][0])
     second = dict(first)
-    second.update({"id": "fhir.v2", "image": "/tmp/other.sqsh", "command": ["/bin/sh", "-lc", "sleep 60"], "readiness": {"enabled": False}})
+    second.update(
+        {
+            "id": "fhir.v2",
+            "image": "/tmp/other.sqsh",
+            "command": ["/bin/sh", "-lc", "sleep 60"],
+            "readiness": {"enabled": False},
+        }
+    )
     _SIDECAR_META[job_cfg.with_suffix(".toml").resolve()].append(second)
     tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
 
@@ -559,7 +601,14 @@ def test_slurm_render_uses_single_cleanup_trap_for_multiple_sidecars(tmp_path: P
     _write_sidecar_job_config(job_cfg)
     first = dict(_SIDECAR_META[job_cfg.with_suffix(".toml").resolve()][0])
     audit = dict(first)
-    audit.update({"id": "audit", "image": "/tmp/audit.sqsh", "command": ["/bin/sh", "-lc", "sleep 60"], "readiness": {"enabled": False}})
+    audit.update(
+        {
+            "id": "audit",
+            "image": "/tmp/audit.sqsh",
+            "command": ["/bin/sh", "-lc", "sleep 60"],
+            "readiness": {"enabled": False},
+        }
+    )
     _SIDECAR_META[job_cfg.with_suffix(".toml").resolve()].append(audit)
     tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
     planned = build_submission_plan(
@@ -795,7 +844,9 @@ def test_render_bundle_refreshes_stale_task_bundle_when_source_changes(tmp_path:
 
     assert "orchestrate" not in first_payload
 
-    job_cfg.with_suffix(".toml").write_text(job_cfg.with_suffix(".toml").read_text(encoding="utf-8") + "\nvariant_id = \"changed\"\n", encoding="utf-8")
+    job_cfg.with_suffix(".toml").write_text(
+        job_cfg.with_suffix(".toml").read_text(encoding="utf-8") + '\nvariant_id = "changed"\n', encoding="utf-8"
+    )
 
     second_manifest = render_bundle(
         planned_tasks=planned,
@@ -899,7 +950,9 @@ def test_rendered_task_local_config_is_loadable_by_orchestrator(tmp_path: Path) 
 
     patched_path = Path(manifest.entries[0].effective_job_config_path)
     patched_plan = tmp_path / "patched-plan.yaml"
-    patched_plan.write_text(f"job_configs:\n  - {patched_path}\norchestrate_config: {tmp_path / 'orchestrate.toml'}\n", encoding="utf-8")
+    patched_plan.write_text(
+        f"job_configs:\n  - {patched_path}\norchestrate_config: {tmp_path / 'orchestrate.toml'}\n", encoding="utf-8"
+    )
     patched_tasks = expand_tasks(load_plan(patched_plan))
 
     assert len(patched_tasks) == 1
@@ -925,8 +978,8 @@ def test_slurm_dry_run_writes_manifest_and_prints_commands(tmp_path: Path, capsy
             "--output-dir",
             str(tmp_path / "bundle"),
             "--orchestrate-config",
-                str(tmp_path / "orchestrate.toml"),
-                "--dry-run",
+            str(tmp_path / "orchestrate.toml"),
+            "--dry-run",
         ]
     )
 
@@ -962,8 +1015,8 @@ def test_slurm_rerender_loads_pre_phase3_submission_manifest(tmp_path: Path, cap
             "--output-dir",
             str(output_root),
             "--orchestrate-config",
-                str(tmp_path / "orchestrate.toml"),
-                "--dry-run",
+            str(tmp_path / "orchestrate.toml"),
+            "--dry-run",
         ]
     )
     assert rc == 0
@@ -1000,8 +1053,8 @@ def test_slurm_rerender_loads_pre_phase3_submission_manifest(tmp_path: Path, cap
             "--output-dir",
             str(output_root),
             "--orchestrate-config",
-                str(tmp_path / "orchestrate.toml"),
-                "--dry-run",
+            str(tmp_path / "orchestrate.toml"),
+            "--dry-run",
         ]
     )
 
@@ -1031,7 +1084,9 @@ def test_slurm_cli_default_run_id_uses_shared_generator(tmp_path: Path, monkeypa
     def fake_render_bundle(**kwargs):
         captured["run_id"] = kwargs["run_id"]
         captured["bundle_root"] = kwargs["bundle_root"]
-        return SlurmBundleManifest(run_id=kwargs["run_id"], bundle_root=str(kwargs["bundle_root"]), node_gpus=8, entries=[])
+        return SlurmBundleManifest(
+            run_id=kwargs["run_id"], bundle_root=str(kwargs["bundle_root"]), node_gpus=8, entries=[]
+        )
 
     monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.cli.generate_run_id", lambda name: "shared-run-id")
     monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.cli.render_bundle", fake_render_bundle)

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import os
 import signal
 from dataclasses import dataclass
@@ -51,6 +50,7 @@ _COMMAND_TEMPLATE_BARE = (
     "medarc-eval bench --config {job_config_path} --api-base-url {base_url} "
     "--provider local --output-dir {output_dir} {endpoints_arg}"
 )
+
 
 def _shorten(text: str, *, max_len: int = 220) -> str:
     if len(text) <= max_len:
@@ -156,7 +156,9 @@ class OrchestratorRunner:
             bundle.paths.allocation_path,
             ExecutionAllocation(
                 task_id=task.task_id,
-                allocated_gpus=_allocated_gpu_count(allocation, task, default_allocated_gpus=self._options.allocated_gpu_count),
+                allocated_gpus=_allocated_gpu_count(
+                    allocation, task, default_allocated_gpus=self._options.allocated_gpu_count
+                ),
                 gpu_ids=list(allocation.gpu_ids),
                 server_port=allocation.server_port,
                 require_contiguous_gpus=bool(
@@ -208,7 +210,9 @@ class OrchestratorRunner:
             bundle.spec,
             ExecutionAllocation(
                 task_id=task.task_id,
-                allocated_gpus=_allocated_gpu_count(allocation, task, default_allocated_gpus=self._options.allocated_gpu_count),
+                allocated_gpus=_allocated_gpu_count(
+                    allocation, task, default_allocated_gpus=self._options.allocated_gpu_count
+                ),
                 gpu_ids=list(allocation.gpu_ids),
                 server_port=allocation.server_port,
                 require_contiguous_gpus=bool(

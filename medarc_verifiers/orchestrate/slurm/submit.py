@@ -38,7 +38,9 @@ def submit_bundle(path: Path, manifest: SlurmBundleManifest, *, test_only: bool 
         command = _sbatch_command(entry.script_path, dependency=dependency, account=entry.account, test_only=test_only)
         completed = subprocess.run(command, check=False, capture_output=True, text=True)
         if completed.returncode != 0:
-            raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or f"sbatch failed for {entry.task_id}")
+            raise RuntimeError(
+                completed.stderr.strip() or completed.stdout.strip() or f"sbatch failed for {entry.task_id}"
+            )
         if test_only:
             entry.state = "dry-run"
         else:

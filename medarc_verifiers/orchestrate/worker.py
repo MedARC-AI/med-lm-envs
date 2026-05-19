@@ -136,9 +136,13 @@ class TaskWorker:
             manifest.started_at = _utcnow()
         write_execution_allocation(paths.allocation_path, self._allocation)
         state_handler = state_handler or (
-            self._callbacks.set_state if self._callbacks is not None and self._callbacks.set_state is not None else _default_state_handler(paths=paths)
+            self._callbacks.set_state
+            if self._callbacks is not None and self._callbacks.set_state is not None
+            else _default_state_handler(paths=paths)
         )
-        log = log or (self._callbacks.log if self._callbacks is not None and self._callbacks.log is not None else (lambda _: None))
+        log = log or (
+            self._callbacks.log if self._callbacks is not None and self._callbacks.log is not None else (lambda _: None)
+        )
 
         await self._run_once(manifest=manifest, paths=paths, state_handler=state_handler, log=log)
         return manifest
@@ -370,7 +374,9 @@ def main(argv: list[str] | None = None) -> int:
         asyncio.run(worker.run(manifest=manifest))
     except Exception as exc:  # noqa: BLE001
         manifest.error = str(exc)
-        manifest.failure_reason = "serve_launch_failed" if isinstance(exc, RuntimeLaunchError) else "unexpected_exception"
+        manifest.failure_reason = (
+            "serve_launch_failed" if isinstance(exc, RuntimeLaunchError) else "unexpected_exception"
+        )
         state_handler(manifest, paths, JobState.failed)
         write_task_result(
             paths,
@@ -470,7 +476,9 @@ def _normalize_allocation(allocation: ExecutionAllocation, *, task_spec: Resolve
     )
 
 
-def _effective_serve_args(serve_args: dict[str, object] | Mapping[str, object], *, topology: ResolvedTopology) -> dict[str, object]:
+def _effective_serve_args(
+    serve_args: dict[str, object] | Mapping[str, object], *, topology: ResolvedTopology
+) -> dict[str, object]:
     effective = dict(serve_args)
     if topology.data_parallel_size > 1 and effective.get("async_scheduling") is True:
         effective["async_scheduling"] = False

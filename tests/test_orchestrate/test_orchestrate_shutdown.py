@@ -157,13 +157,7 @@ async def test_runner_shutdown_state_machine(tmp_path: Path) -> None:
     job_config_path = tmp_path / "job-1.toml"
     plan = PlanConfig(job_configs=[job_config_path])
     job_config_path.write_text(
-        (
-            'model = "Foo/Bar"\n'
-            "\n"
-            "[[eval]]\n"
-            'env_id = "env-a"\n'
-            "num_examples = 1\n"
-        ),
+        ('model = "Foo/Bar"\n\n[[eval]]\nenv_id = "env-a"\nnum_examples = 1\n'),
         encoding="utf-8",
     )
     tasks = [

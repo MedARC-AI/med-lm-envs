@@ -138,17 +138,25 @@ def merge_slurm_options(task: TaskSpec, *, cli_overrides: SlurmCliOverrides) -> 
     job_name = _slug_job_name(str(job_cfg.get("job_name") or task_slug))
     return SlurmTaskOptions(
         job_name=job_name,
-        cpus_per_gpu=cli_overrides.cpus_per_gpu if cli_overrides.cpus_per_gpu is not None else _optional_int(job_cfg.get("cpus_per_gpu")),
+        cpus_per_gpu=cli_overrides.cpus_per_gpu
+        if cli_overrides.cpus_per_gpu is not None
+        else _optional_int(job_cfg.get("cpus_per_gpu")),
         time=cli_overrides.time if cli_overrides.time is not None else _optional_str(job_cfg.get("time")),
-        partition=cli_overrides.partition if cli_overrides.partition is not None else _optional_str(job_cfg.get("partition")),
+        partition=cli_overrides.partition
+        if cli_overrides.partition is not None
+        else _optional_str(job_cfg.get("partition")),
         account=(
             cli_overrides.account
             if cli_overrides.account is not None
             else (_optional_str(job_cfg.get("account")) or DEFAULT_SLURM_ACCOUNT)
         ),
         qos=cli_overrides.qos if cli_overrides.qos is not None else _optional_str(job_cfg.get("qos")),
-        mail_type=cli_overrides.mail_type if cli_overrides.mail_type is not None else _optional_str(job_cfg.get("mail_type")),
-        mail_user=cli_overrides.mail_user if cli_overrides.mail_user is not None else _optional_str(job_cfg.get("mail_user")),
+        mail_type=cli_overrides.mail_type
+        if cli_overrides.mail_type is not None
+        else _optional_str(job_cfg.get("mail_type")),
+        mail_user=cli_overrides.mail_user
+        if cli_overrides.mail_user is not None
+        else _optional_str(job_cfg.get("mail_user")),
         slurm_resume=cli_overrides.slurm_resume
         if cli_overrides.slurm_resume is not None
         else bool(job_cfg.get("slurm_resume", False)),

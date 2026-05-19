@@ -26,7 +26,9 @@ from medarc_verifiers.utils.run_naming import generate_run_id
 
 
 def build_record_failure_parser(*, prog: str = "medarc-orchestrate record-failure") -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog=prog, description="Record a bundled orchestrator task failure before worker start.")
+    parser = argparse.ArgumentParser(
+        prog=prog, description="Record a bundled orchestrator task failure before worker start."
+    )
     parser.add_argument("--task-spec", type=Path, required=True, help="Path to bundled task.yaml.")
     parser.add_argument("--allocation", type=Path, required=True, help="Path to execution allocation JSON.")
     parser.add_argument("--reason", required=True, help="Machine-readable failure reason.")
@@ -97,7 +99,9 @@ def _add_local_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--orchestrate-config", type=Path, help="Path to model-serving orchestrate.toml registry.")
     parser.add_argument("--eval-images-config", type=Path, help="Path to eval auxiliary image registry TOML.")
-    parser.add_argument("--endpoints-path", type=Path, help="Path to endpoints.toml used for model alias resolution and bench.")
+    parser.add_argument(
+        "--endpoints-path", type=Path, help="Path to endpoints.toml used for model alias resolution and bench."
+    )
     parser.set_defaults(command="local", handler=_run_local)
 
 
@@ -179,7 +183,11 @@ def _validate_schedule(
                     f"Task {task.task_id} ({task.job_config_path}) requires gpus={gpus_required}, "
                     f"but only {len(allowed_indices)} available in range {allowed_desc}."
                 )
-            if gpus_required > 1 and require_contiguous and not _has_contiguous_run(allowed_indices, length=gpus_required):
+            if (
+                gpus_required > 1
+                and require_contiguous
+                and not _has_contiguous_run(allowed_indices, length=gpus_required)
+            ):
                 raise ValueError(
                     f"Task {task.task_id} ({task.job_config_path}) requires {gpus_required} contiguous GPUs, "
                     f"but allowed indices {allowed_desc} have no contiguous run."
@@ -271,7 +279,9 @@ def _run_local(args: argparse.Namespace) -> int:
         summary = load_summary(summary_path)
         tasks = filter_tasks_for_resume(tasks, summary, rerun_failed=rerun_failed)
     if tasks:
-        _validate_schedule(tasks, runtime=runtime, gpu_indices=gpu_indices, port_range=port_range, max_parallel=max_parallel)
+        _validate_schedule(
+            tasks, runtime=runtime, gpu_indices=gpu_indices, port_range=port_range, max_parallel=max_parallel
+        )
     if args.dry_run:
         for task in tasks:
             print(f"{task.task_id}\t{task.model_id}\t{task.job_config_path}")
@@ -291,9 +301,7 @@ def _run_local(args: argparse.Namespace) -> int:
     else:
         resource_manager = PortOnlyResourceManager(port_range=port_range)
     uv_run = not args.no_uv_run and plan.uv_run
-    runner = OrchestratorRunner(
-        plan, tasks, resource_manager, options=options, runtime=runtime, uv_run=uv_run
-    )
+    runner = OrchestratorRunner(plan, tasks, resource_manager, options=options, runtime=runtime, uv_run=uv_run)
     runner.run()
     return 0
 
@@ -316,7 +324,12 @@ __all__ = ["build_local_parser", "build_parser", "build_record_failure_parser", 
 
 
 def _run_record_failure(args: argparse.Namespace) -> int:
-    from medarc_verifiers.orchestrate.bundle import RuntimeState, load_execution_allocation, load_task_spec, write_runtime_state
+    from medarc_verifiers.orchestrate.bundle import (
+        RuntimeState,
+        load_execution_allocation,
+        load_task_spec,
+        write_runtime_state,
+    )
     from medarc_verifiers.orchestrate.state import (
         JobState,
         TaskManifest,
@@ -348,7 +361,9 @@ def _run_record_failure(args: argparse.Namespace) -> int:
     )
     manifest.completed_at = manifest.updated_at
     write_task_manifest(paths, manifest)
-    write_task_result(paths, {"state": JobState.failed, "failure_reason": manifest.failure_reason, "error": manifest.error})
+    write_task_result(
+        paths, {"state": JobState.failed, "failure_reason": manifest.failure_reason, "error": manifest.error}
+    )
     write_runtime_state(
         paths.state_path,
         RuntimeState(

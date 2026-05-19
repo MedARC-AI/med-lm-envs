@@ -27,10 +27,14 @@ def _add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--name", default=None, help="Optional bundle name when using --job-config directly.")
     parser.add_argument("--run-id", help="Submission bundle run identifier.")
     parser.add_argument("--output-dir", type=Path, help="Override the Slurm bundle output directory.")
-    parser.add_argument("--env-file", type=Path, default=None, help="Dotenv file passed through to inner orchestrator runs.")
+    parser.add_argument(
+        "--env-file", type=Path, default=None, help="Dotenv file passed through to inner orchestrator runs."
+    )
     parser.add_argument("--orchestrate-config", type=Path, help="Path to model-serving orchestrate.toml registry.")
     parser.add_argument("--eval-images-config", type=Path, help="Path to eval auxiliary image registry TOML.")
-    parser.add_argument("--endpoints-path", type=Path, help="Path to endpoints.toml used for model alias resolution and bench.")
+    parser.add_argument(
+        "--endpoints-path", type=Path, help="Path to endpoints.toml used for model alias resolution and bench."
+    )
     parser.add_argument("--readiness-timeout-s", type=int, default=None, help="Inner readiness timeout in seconds.")
     parser.add_argument(
         "--prune-logs-on-success",
@@ -58,7 +62,9 @@ def _add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--mail-type", default=None)
     parser.add_argument("--mail-user", default=None)
     parser.add_argument("--test-only", action="store_true", help="Run sbatch --test-only instead of submitting jobs.")
-    parser.add_argument("--dry-run", action="store_true", help="Write scripts and print sbatch commands without submitting.")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Write scripts and print sbatch commands without submitting."
+    )
     parser.add_argument(
         "--slurm-resume",
         action="store_true",

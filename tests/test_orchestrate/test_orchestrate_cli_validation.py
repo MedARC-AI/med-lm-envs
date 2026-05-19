@@ -113,12 +113,16 @@ def test_cli_validation_pyxis_skips_gpu_discovery(monkeypatch, tmp_path: Path) -
         raise AssertionError("discover_gpus should not be called for pyxis validation")
 
     monkeypatch.setattr("medarc_verifiers.orchestrate.cli.discover_gpus", boom)
-    _validate_schedule([_task(tmp_path, gpus=8)], runtime="pyxis", gpu_indices=None, port_range=(8000, 8003), max_parallel=1)
+    _validate_schedule(
+        [_task(tmp_path, gpus=8)], runtime="pyxis", gpu_indices=None, port_range=(8000, 8003), max_parallel=1
+    )
 
 
 def test_cli_validation_pyxis_requires_single_task_allocation_use(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="max_parallel must be 1"):
-        _validate_schedule([_task(tmp_path, gpus=8)], runtime="pyxis", gpu_indices=None, port_range=(8000, 8003), max_parallel=2)
+        _validate_schedule(
+            [_task(tmp_path, gpus=8)], runtime="pyxis", gpu_indices=None, port_range=(8000, 8003), max_parallel=2
+        )
 
 
 def test_root_parser_accepts_local_subcommand() -> None:
@@ -160,7 +164,10 @@ def test_cli_runtime_precedence_cli_over_plan(monkeypatch, tmp_path: Path) -> No
 def test_cli_direct_job_configs_launch_without_plan(monkeypatch, tmp_path: Path) -> None:
     _write_eval_config(tmp_path, "job-a.toml")
     _write_eval_config(tmp_path, "job-b.toml")
-    (tmp_path / "job-b.toml").write_text((tmp_path / "job-b.toml").read_text(encoding="utf-8").replace('env_id = "medqa"', 'env_id = "pubmedqa"'), encoding="utf-8")
+    (tmp_path / "job-b.toml").write_text(
+        (tmp_path / "job-b.toml").read_text(encoding="utf-8").replace('env_id = "medqa"', 'env_id = "pubmedqa"'),
+        encoding="utf-8",
+    )
     orchestrate_cfg = _write_orchestrate_config(tmp_path)
     captured: dict[str, object] = {}
 
@@ -172,14 +179,21 @@ def test_cli_direct_job_configs_launch_without_plan(monkeypatch, tmp_path: Path)
     monkeypatch.setattr(OrchestratorRunner, "run", fake_run)
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2,3")
 
-    rc = main([
-        "local",
-        "--job-config", str(tmp_path / "job-a.toml"),
-        "--job-config", str(tmp_path / "job-b.toml"),
-        "--orchestrate-config", str(orchestrate_cfg),
-        "--runtime", "pyxis",
-        "--name", "bundle",
-    ])
+    rc = main(
+        [
+            "local",
+            "--job-config",
+            str(tmp_path / "job-a.toml"),
+            "--job-config",
+            str(tmp_path / "job-b.toml"),
+            "--orchestrate-config",
+            str(orchestrate_cfg),
+            "--runtime",
+            "pyxis",
+            "--name",
+            "bundle",
+        ]
+    )
 
     assert rc == 0
     assert captured["runtime"] == "pyxis"
@@ -200,7 +214,9 @@ def test_cli_default_run_id_uses_shared_generator(monkeypatch, tmp_path: Path) -
     monkeypatch.setattr(OrchestratorRunner, "run", fake_run)
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2,3")
 
-    rc = main(["local", "--job-config", str(job_cfg), "--orchestrate-config", str(orchestrate_cfg), "--runtime", "pyxis"])
+    rc = main(
+        ["local", "--job-config", str(job_cfg), "--orchestrate-config", str(orchestrate_cfg), "--runtime", "pyxis"]
+    )
 
     assert rc == 0
     assert captured["run_id"] == "shared-run-id"
@@ -218,7 +234,9 @@ def test_cli_local_pyxis_derives_allocated_gpu_count_from_visible_devices(monkey
     monkeypatch.setattr(OrchestratorRunner, "run", fake_run)
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,2,4,6")
 
-    rc = main(["local", "--job-config", str(job_cfg), "--orchestrate-config", str(orchestrate_cfg), "--runtime", "pyxis"])
+    rc = main(
+        ["local", "--job-config", str(job_cfg), "--orchestrate-config", str(orchestrate_cfg), "--runtime", "pyxis"]
+    )
 
     assert rc == 0
     assert captured["allocated_gpu_count"] == 4
@@ -227,10 +245,28 @@ def test_cli_local_pyxis_derives_allocated_gpu_count_from_visible_devices(monkey
 def test_cli_local_pyxis_dry_run_does_not_require_allocation_env(monkeypatch, tmp_path: Path, capsys) -> None:
     job_cfg = _write_eval_config(tmp_path)
     orchestrate_cfg = _write_orchestrate_config(tmp_path)
-    for key in ("MEDARC_ALLOCATED_GPU_COUNT", "SLURM_STEP_GPUS", "SLURM_JOB_GPUS", "CUDA_VISIBLE_DEVICES", "NVIDIA_VISIBLE_DEVICES", "SLURM_GPUS_ON_NODE"):
+    for key in (
+        "MEDARC_ALLOCATED_GPU_COUNT",
+        "SLURM_STEP_GPUS",
+        "SLURM_JOB_GPUS",
+        "CUDA_VISIBLE_DEVICES",
+        "NVIDIA_VISIBLE_DEVICES",
+        "SLURM_GPUS_ON_NODE",
+    ):
         monkeypatch.delenv(key, raising=False)
 
-    rc = main(["local", "--job-config", str(job_cfg), "--orchestrate-config", str(orchestrate_cfg), "--runtime", "pyxis", "--dry-run"])
+    rc = main(
+        [
+            "local",
+            "--job-config",
+            str(job_cfg),
+            "--orchestrate-config",
+            str(orchestrate_cfg),
+            "--runtime",
+            "pyxis",
+            "--dry-run",
+        ]
+    )
 
     assert rc == 0
     assert capsys.readouterr().out.strip() == f"job:Foo-Bar\tFoo/Bar\t{job_cfg.resolve()}"
@@ -260,7 +296,9 @@ def test_cli_local_podman_uses_gpu_resource_manager(monkeypatch, tmp_path: Path)
     monkeypatch.setattr("medarc_verifiers.orchestrate.cli.PortOnlyResourceManager", FakePortOnlyResourceManager)
     monkeypatch.setattr(OrchestratorRunner, "run", fake_run)
 
-    rc = main(["local", "--job-config", str(job_cfg), "--orchestrate-config", str(orchestrate_cfg), "--runtime", "podman"])
+    rc = main(
+        ["local", "--job-config", str(job_cfg), "--orchestrate-config", str(orchestrate_cfg), "--runtime", "podman"]
+    )
 
     assert rc == 0
     assert captured["runtime"] == "podman"
@@ -281,7 +319,11 @@ def test_cli_defaults_to_podman_when_sdk_is_missing(monkeypatch, tmp_path: Path,
     monkeypatch.setattr("medarc_verifiers.orchestrate.cli.importlib.util.find_spec", lambda name: None)
     monkeypatch.setattr(
         "medarc_verifiers.orchestrate.cli.shutil.which",
-        lambda name: ("/usr/bin/docker" if name == "docker" and docker_binary else ("/usr/bin/podman" if name == "podman" else None)),
+        lambda name: (
+            "/usr/bin/docker"
+            if name == "docker" and docker_binary
+            else ("/usr/bin/podman" if name == "podman" else None)
+        ),
     )
     monkeypatch.setattr("medarc_verifiers.orchestrate.cli.discover_gpus", lambda: [_gpu(0)])
     monkeypatch.setattr(OrchestratorRunner, "run", fake_run)
@@ -303,7 +345,9 @@ def test_runner_builds_podman_adapter_by_runtime(tmp_path: Path) -> None:
         PlanConfig(job_configs=[job_cfg]),
         [task],
         PortOnlyResourceManager(port_range=(9000, 9010)),
-        options=OrchestratorOptions(run_id="run-1", output_root=tmp_path / "outputs", readiness_timeout_s=1, max_parallel=1),
+        options=OrchestratorOptions(
+            run_id="run-1", output_root=tmp_path / "outputs", readiness_timeout_s=1, max_parallel=1
+        ),
         runtime="podman",
         use_dashboard=False,
     )
@@ -316,10 +360,29 @@ def test_cli_kill_orphans_uses_podman_cleanup_for_explicit_podman_runtime(monkey
     job_cfg = _write_eval_config(tmp_path)
     orchestrate_cfg = _write_orchestrate_config(tmp_path)
     calls: list[tuple[str, str | None]] = []
-    monkeypatch.setattr("medarc_verifiers.orchestrate.cli.cleanup_podman_orphans", lambda run_id=None: calls.append(("podman", run_id)) or ["podman-task"])
-    monkeypatch.setattr("medarc_verifiers.orchestrate.cli.cleanup_docker_orphans", lambda run_id=None: calls.append(("docker", run_id)) or ["docker-task"])
+    monkeypatch.setattr(
+        "medarc_verifiers.orchestrate.cli.cleanup_podman_orphans",
+        lambda run_id=None: calls.append(("podman", run_id)) or ["podman-task"],
+    )
+    monkeypatch.setattr(
+        "medarc_verifiers.orchestrate.cli.cleanup_docker_orphans",
+        lambda run_id=None: calls.append(("docker", run_id)) or ["docker-task"],
+    )
 
-    rc = main(["local", "--job-config", str(job_cfg), "--orchestrate-config", str(orchestrate_cfg), "--runtime", "podman", "--kill-orphans", "--run-id", "run-1"])
+    rc = main(
+        [
+            "local",
+            "--job-config",
+            str(job_cfg),
+            "--orchestrate-config",
+            str(orchestrate_cfg),
+            "--runtime",
+            "podman",
+            "--kill-orphans",
+            "--run-id",
+            "run-1",
+        ]
+    )
 
     assert rc == 0
     assert calls == [("podman", "run-1")]
@@ -331,9 +394,17 @@ def test_cli_kill_orphans_uses_podman_cleanup_for_autodetected_runtime(monkeypat
     orchestrate_cfg = _write_orchestrate_config(tmp_path)
     calls: list[tuple[str, str | None]] = []
     monkeypatch.setattr("medarc_verifiers.orchestrate.cli.importlib.util.find_spec", lambda name: None)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.cli.shutil.which", lambda name: None if name == "docker" else "/usr/bin/podman")
-    monkeypatch.setattr("medarc_verifiers.orchestrate.cli.cleanup_podman_orphans", lambda run_id=None: calls.append(("podman", run_id)) or ["podman-task"])
-    monkeypatch.setattr("medarc_verifiers.orchestrate.cli.cleanup_docker_orphans", lambda run_id=None: calls.append(("docker", run_id)) or ["docker-task"])
+    monkeypatch.setattr(
+        "medarc_verifiers.orchestrate.cli.shutil.which", lambda name: None if name == "docker" else "/usr/bin/podman"
+    )
+    monkeypatch.setattr(
+        "medarc_verifiers.orchestrate.cli.cleanup_podman_orphans",
+        lambda run_id=None: calls.append(("podman", run_id)) or ["podman-task"],
+    )
+    monkeypatch.setattr(
+        "medarc_verifiers.orchestrate.cli.cleanup_docker_orphans",
+        lambda run_id=None: calls.append(("docker", run_id)) or ["docker-task"],
+    )
 
     rc = main(["local", "--job-config", str(job_cfg), "--orchestrate-config", str(orchestrate_cfg), "--kill-orphans"])
 
