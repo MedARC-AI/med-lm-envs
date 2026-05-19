@@ -339,6 +339,15 @@ def test_build_submission_plan_rejects_node_allocation_incompatible_with_tp(tmp_
 def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
     job_cfg = tmp_path / "job.yaml"
     _write_job_config(job_cfg, gpus=2, tensor_parallel_size=2, slurm={"partition": "gpu", "slurm_resume": True})
+    toml_cfg = job_cfg.with_suffix(".toml")
+    toml_cfg.write_text(
+        toml_cfg.read_text(encoding="utf-8").replace(
+            "[[eval]]",
+            'endpoints_path = "endpoints.toml"\nenv_dir_path = "envs"\n\n[[eval]]',
+            1,
+        ),
+        encoding="utf-8",
+    )
     tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
     planned = build_submission_plan(
         tasks,
@@ -394,6 +403,8 @@ def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
 
     bundled_payload = load_job_config(Path(entry.effective_job_config_path))
     assert bundled_payload["model"].startswith("Foo/")
+    assert bundled_payload["endpoints_path"] == str((tmp_path / "endpoints.toml").resolve())
+    assert bundled_payload["env_dir_path"] == str((tmp_path / "envs").resolve())
     assert "orchestrate" not in bundled_payload
     task_spec = load_task_spec(Path(entry.task_spec_path))
     assert task_spec.gpus == 2

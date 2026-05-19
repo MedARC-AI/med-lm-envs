@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import tomllib
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -481,7 +482,6 @@ def ensure_run_bundle(
     output_root: Path,
     mode: str,
     runtime: str,
-    eval_config_overrides: Mapping[str, Mapping[str, Any]] | None = None,
     allocation_defaults: Mapping[str, ExecutionAllocation] | None = None,
     existing_manifest: RunBundleManifest | None = None,
 ) -> BundlePlan:
@@ -504,7 +504,6 @@ def ensure_run_bundle(
             output_root=output_root,
             mode=mode,
             runtime=runtime,
-            eval_config_override=dict(eval_config_overrides.get(task.task_id) or {}) if eval_config_overrides else {},
             allocation_default=allocation_defaults.get(task.task_id) if allocation_defaults else None,
             existing_entry=existing_entries.get(task.task_id),
         )
@@ -572,7 +571,6 @@ def _ensure_task_bundle(
     output_root: Path,
     mode: str,
     runtime: str,
-    eval_config_override: Mapping[str, Any],
     allocation_default: ExecutionAllocation | None,
     existing_entry: RunBundleEntry | None,
 ) -> PlannedTaskBundle:
@@ -586,7 +584,6 @@ def _ensure_task_bundle(
         paths=paths,
         mode=mode,
         runtime=runtime,
-        eval_config_override=eval_config_override,
     )
 
     if paths.task_spec_path.exists() and paths.eval_config_path.exists():
@@ -639,35 +636,13 @@ def _resolve_restart_source(
     return None, "none"
 
 
-def _create_task_spec(
-    *,
-    task: TaskSpec,
-    paths: TaskBundlePaths,
-    mode: str,
-    runtime: str,
-    eval_config_override: Mapping[str, Any],
-) -> ResolvedTaskSpec:
-    payload, spec = _build_task_spec(
-        task=task,
-        paths=paths,
-        mode=mode,
-        runtime=runtime,
-        eval_config_override=eval_config_override,
-    )
-    _write_task_bundle(paths=paths, eval_payload=payload, spec=spec)
-    return spec
-
-
 def _build_task_spec(
     *,
     task: TaskSpec,
     paths: TaskBundlePaths,
     mode: str,
     runtime: str,
-    eval_config_override: Mapping[str, Any],
 ) -> tuple[bytes, ResolvedTaskSpec]:
-    if eval_config_override:
-        raise ValueError("Task-local eval config overrides are not supported for TOML bench bundles.")
     source_bytes = task.job_config_path.read_bytes()
     source_checksum = _sha256_file(task.job_config_path)
     bundled_bytes = _rewrite_eval_toml_paths(source_bytes, base_dir=task.job_config_path.parent)
@@ -753,74 +728,18 @@ def _sidecar_from_dict(payload: Mapping[str, Any]) -> SidecarSpec:
     )
 
 
-def _parse_sidecars(
-    orchestrate: object,
-    *,
-    task_id: str,
-    mode: str,
-    runtime: str,
-) -> list[SidecarSpec]:
-    if not isinstance(orchestrate, Mapping):
-        return []
-    raw_sidecars = orchestrate.get("sidecars")
-    if raw_sidecars is None:
-        return []
-    if mode != "slurm":
-        raise ValueError(f"Task {task_id} configures sidecars, but sidecars are only supported in slurm mode.")
-    if not isinstance(raw_sidecars, Mapping):
-        raise ValueError(f"Task {task_id} orchestrate.sidecars must be a mapping.")
-    specs: list[SidecarSpec] = []
-    suffixes: dict[str, str] = {}
-    for raw_name, raw_cfg in raw_sidecars.items():
-        name = str(raw_name)
-        if _SIDECAR_NAME_RE.fullmatch(name) is None:
-            raise ValueError(f"Task {task_id} sidecar name {name!r} must match [A-Za-z0-9_.-]+.")
-        suffix = _sidecar_shell_suffix(name)
-        previous = suffixes.get(suffix)
-        if previous is not None:
-            raise ValueError(
-                f"Task {task_id} sidecar names {previous!r} and {name!r} produce the same shell variable suffix."
-            )
-        suffixes[suffix] = name
-        if not isinstance(raw_cfg, Mapping):
-            raise ValueError(f"Task {task_id} sidecar {name} must be a mapping.")
-        cfg = dict(raw_cfg)
-        sidecar_runtime = str(cfg.get("runtime", "")).strip().lower()
-        if sidecar_runtime != "pyxis":
-            raise ValueError(f"Task {task_id} sidecar {name} runtime must be 'pyxis' in v1.")
-        if runtime != "pyxis":
-            raise ValueError(f"Task {task_id} sidecar {name} requires orchestrate runtime 'pyxis'.")
-        image = _required_string(cfg.get("image"), f"Task {task_id} sidecar {name} image")
-        command = _required_string_list(cfg.get("command"), f"Task {task_id} sidecar {name} command")
-        srun_args = _optional_string_list(cfg.get("srun_args", []), f"Task {task_id} sidecar {name} srun_args")
-        _validate_sidecar_srun_args(srun_args, task_id=task_id, sidecar_name=name)
-        env = _sidecar_env(cfg.get("env", {}), task_id=task_id, sidecar_name=name)
-        readiness = _sidecar_readiness(cfg.get("readiness", {}), task_id=task_id, sidecar_name=name)
-        specs.append(
-            SidecarSpec(
-                name=name,
-                runtime=sidecar_runtime,
-                image=image,
-                srun_args=srun_args,
-                env=env,
-                command=command,
-                readiness=readiness,
-            )
-        )
-    return specs
-
-
 def _rewrite_eval_toml_paths(source_bytes: bytes, *, base_dir: Path) -> bytes:
     text = source_bytes.decode("utf-8")
+    required_rewrites = _relative_root_path_keys(source_bytes)
     lines = text.splitlines(keepends=True)
     changed = False
     rewritten: list[str] = []
-    in_array_table = False
+    in_root = True
     for line in lines:
         stripped = line.strip()
-        if stripped.startswith("[[") and stripped.endswith("]]"):
-            in_array_table = True
-        if not in_array_table:
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_root = False
+        if in_root:
             updated = _rewrite_top_level_path_line(line, key="endpoints_path", base_dir=base_dir)
             if updated is not None:
                 rewritten.append(updated)
@@ -832,9 +751,36 @@ def _rewrite_eval_toml_paths(source_bytes: bytes, *, base_dir: Path) -> bytes:
                 changed = True
                 continue
         rewritten.append(line)
-    if not changed:
-        return source_bytes
-    return "".join(rewritten).encode("utf-8")
+    rewritten_bytes = "".join(rewritten).encode("utf-8") if changed else source_bytes
+    _validate_root_paths_rewritten(rewritten_bytes, required_rewrites=required_rewrites)
+    return rewritten_bytes
+
+
+def _relative_root_path_keys(source_bytes: bytes) -> set[str]:
+    try:
+        payload = tomllib.loads(source_bytes.decode("utf-8"))
+    except tomllib.TOMLDecodeError:
+        return set()
+    keys: set[str] = set()
+    for key in ("endpoints_path", "env_dir_path"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip() and not Path(value).expanduser().is_absolute():
+            keys.add(key)
+    return keys
+
+
+def _validate_root_paths_rewritten(source_bytes: bytes, *, required_rewrites: set[str]) -> None:
+    if not required_rewrites:
+        return
+    payload = tomllib.loads(source_bytes.decode("utf-8"))
+    missed = [
+        key
+        for key in sorted(required_rewrites)
+        if isinstance(payload.get(key), str) and not Path(str(payload[key])).expanduser().is_absolute()
+    ]
+    if missed:
+        rendered = ", ".join(missed)
+        raise ValueError(f"Failed to absolutize top-level eval TOML path field(s): {rendered}.")
 
 
 def _rewrite_top_level_path_line(line: str, *, key: str, base_dir: Path) -> str | None:
