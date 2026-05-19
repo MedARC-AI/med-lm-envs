@@ -860,6 +860,15 @@ async def test_runner_uses_task_local_bench_output_without_restart_flags(tmp_pat
     monkeypatch.setattr("medarc_verifiers.orchestrate.run._register_signal_handlers", lambda loop, handler: None)
     monkeypatch.setattr("medarc_verifiers.orchestrate.worker.asyncio.to_thread", fake_to_thread)
 
+    partial_output = options.output_root / "tasks" / "task-1" / "bench" / "model" / "env" / "base"
+    partial_output.mkdir(parents=True)
+    (partial_output / "metadata.json").write_text("{}", encoding="utf-8")
+    temp_only_output = options.output_root / "tasks" / "task-1" / "bench" / "model" / "env" / "temp-only"
+    temp_only_output.mkdir(parents=True)
+    (temp_only_output / "partial.tmp").write_text("partial", encoding="utf-8")
+    bad_metadata_output = options.output_root / "tasks" / "task-1" / "bench" / "model" / "env" / "bad-metadata"
+    (bad_metadata_output / "metadata.json").mkdir(parents=True)
+
     await runner._run_async()
 
     command = captured["command"]
@@ -872,6 +881,12 @@ async def test_runner_uses_task_local_bench_output_without_restart_flags(tmp_pat
     assert "--restart" not in command
     assert "--run-id" not in command
     assert "--on-complete" not in command
+    assert not partial_output.exists()
+    assert not temp_only_output.exists()
+    assert not bad_metadata_output.exists()
+    assert list(partial_output.parent.glob("base__malformed_*"))
+    assert list(temp_only_output.parent.glob("temp-only__malformed_*"))
+    assert list(bad_metadata_output.parent.glob("bad-metadata__malformed_*"))
 
     bundled_payload = (options.output_root / "tasks" / "task-1" / "eval-config.toml").read_text(encoding="utf-8")
     assert "restart" not in bundled_payload

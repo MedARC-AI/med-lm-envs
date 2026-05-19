@@ -200,6 +200,87 @@ model = ["Foo/Bar", "Other/Model"]
         expand_tasks(load_plan(plan_path))
 
 
+def test_expand_tasks_uses_expanded_variant_templates_for_identities_and_eval_images(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.toml"
+    job_cfg.write_text(
+        """
+model = "Foo/Bar"
+
+[[eval]]
+env_id = "medqa"
+variant_id = "seed-{env_args.shuffle_seed}"
+
+[eval.env_args]
+shuffle_seed = 1
+
+[[eval]]
+env_id = "medqa"
+variant_id = "seed-{env_args.shuffle_seed}"
+
+[eval.env_args]
+shuffle_seed = 2
+""".lstrip(),
+        encoding="utf-8",
+    )
+    orchestrate_cfg = _write_orchestrate_config(tmp_path / "orchestrate.toml")
+    eval_images_cfg = tmp_path / "eval_images.toml"
+    eval_images_cfg.write_text(
+        """
+schema_version = 1
+
+[[eval_image]]
+id = "seed-two"
+evals = ["medqa:seed-2"]
+runtime = "pyxis"
+image = "/tmp/seed-two.sqsh"
+command = ["bash", "-lc", "serve"]
+""".lstrip(),
+        encoding="utf-8",
+    )
+    plan_path = tmp_path / "plan.yaml"
+    plan_path.write_text(
+        f"job_configs:\n  - {job_cfg.name}\norchestrate_config: {orchestrate_cfg.name}\neval_images_config: {eval_images_cfg.name}\n",
+        encoding="utf-8",
+    )
+
+    task = expand_tasks(load_plan(plan_path))[0]
+
+    assert task.eval_ids == ["medqa:seed-1", "medqa:seed-2"]
+    assert [image["id"] for image in task.eval_images] == ["seed-two"]
+
+
+def test_expand_tasks_rejects_duplicate_expanded_variant_identities(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.toml"
+    job_cfg.write_text(
+        """
+model = "Foo/Bar"
+
+[[eval]]
+env_id = "medqa"
+variant_id = "seed-{env_args.shuffle_seed}"
+
+[eval.env_args]
+shuffle_seed = 1
+
+[[eval]]
+env_id = "medqa"
+variant_id = "seed-{env_args.shuffle_seed}"
+
+[eval.env_args]
+shuffle_seed = 1
+""".lstrip(),
+        encoding="utf-8",
+    )
+    orchestrate_cfg = _write_orchestrate_config(tmp_path / "orchestrate.toml")
+    plan_path = tmp_path / "plan.yaml"
+    plan_path.write_text(
+        f"job_configs:\n  - {job_cfg.name}\norchestrate_config: {orchestrate_cfg.name}\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="Duplicate TOML eval identity"):
+        expand_tasks(load_plan(plan_path))
+
+
 def test_orchestrate_registry_rejects_unknown_nested_fields(tmp_path: Path) -> None:
     job_cfg = _write_eval_config(tmp_path / "job.toml")
     orchestrate_cfg = tmp_path / "orchestrate.toml"

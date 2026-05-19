@@ -12,7 +12,7 @@ from typing import Any, Mapping
 from omegaconf import OmegaConf
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from medarc_verifiers.cli.eval_identity import slug_component
+from medarc_verifiers.cli.eval_identity import BASE_VARIANT_ID, plan_eval_paths, slug_component
 from medarc_verifiers.cli.upstream_eval import EvalConfigOverrides, build_eval_identity_payload, load_toml_eval_configs
 
 
@@ -158,7 +158,8 @@ def expand_tasks(plan: PlanConfig) -> list[TaskSpec]:
         _reject_model_ablation(raw_eval_configs, source=resolved_job_path)
         overrides = EvalConfigOverrides(endpoints_path=endpoints_path) if endpoints_path is not None else None
         identity_payloads = [build_eval_identity_payload(raw, overrides=overrides) for raw in raw_eval_configs]
-        model_ids = {str(payload["model"]) for payload in identity_payloads}
+        path_plans = plan_eval_paths(identity_payloads, output_root=".")
+        model_ids = {plan.identity.model_id for plan in path_plans}
         if len(model_ids) != 1:
             raise ValueError(
                 f"Job config {resolved_job_path} resolves to multiple effective models {sorted(model_ids)}; "
@@ -169,13 +170,13 @@ def expand_tasks(plan: PlanConfig) -> list[TaskSpec]:
         model_id = str(matched_model["id"])
         model_key = slug_component(model_id)
         task_id = f"{resolved_job_path.stem}:{model_key}"
-        eval_ids = _resolved_eval_ids(identity_payloads)
-        env_ids = sorted({str(payload["env_id"]) for payload in identity_payloads})
-        for payload in identity_payloads:
+        eval_ids = _resolved_eval_ids(path_plans)
+        env_ids = sorted({plan.identity.env_id for plan in path_plans})
+        for plan_item in path_plans:
             identity = (
                 model_id,
-                str(payload["env_id"]),
-                str(payload.get("variant_id") or payload.get("name") or "base"),
+                plan_item.identity.env_id,
+                plan_item.identity.variant_id,
             )
             if identity in seen_identities:
                 raise ValueError(
@@ -471,12 +472,12 @@ def _reject_model_ablation(raw_eval_configs: list[Mapping[str, Any]], *, source:
         raise ValueError(f"Job config {source} mixes model and endpoint_id across evals, which is not supported.")
 
 
-def _resolved_eval_ids(identity_payloads: list[Mapping[str, Any]]) -> list[str]:
+def _resolved_eval_ids(path_plans: list[Any]) -> list[str]:
     values: list[str] = []
-    for payload in identity_payloads:
-        env_id = str(payload["env_id"])
-        variant = payload.get("variant_id") or payload.get("name")
-        values.append(f"{env_id}:{variant}" if variant else env_id)
+    for plan_item in path_plans:
+        env_id = plan_item.identity.env_id
+        variant = plan_item.identity.variant_id
+        values.append(env_id if variant == BASE_VARIANT_ID else f"{env_id}:{variant}")
     return sorted(set(values))
 
 

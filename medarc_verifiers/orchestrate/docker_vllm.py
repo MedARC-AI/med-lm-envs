@@ -217,7 +217,7 @@ class ContainerLogStreamer:
     def _run(self) -> None:
         try:
             self._stream = self._container.logs(stream=True, follow=True)
-            with open(self._sink_path, "w", encoding="utf-8") as handle:
+            with open(self._sink_path, "a", encoding="utf-8") as handle:
                 for chunk in self._stream:
                     if self._stop_event.is_set():
                         break

@@ -290,7 +290,7 @@ def _render_sidecar_srun(sidecar: SidecarSpec, *, log_var: str) -> str:
         *sidecar.command,
     ]
     tokens = [*env_assignments, *(shlex.quote(arg) for arg in command)]
-    return f'{" ".join(tokens)} >"${log_var}" 2>&1 &'
+    return f'{" ".join(tokens)} >>"${log_var}" 2>&1 &'
 
 
 def _render_sidecar_readiness(sidecar: SidecarSpec, *, log_var: str, pid_var: str) -> list[str]:

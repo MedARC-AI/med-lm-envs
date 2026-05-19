@@ -41,7 +41,7 @@ class ProcessLogStreamer:
         stream = self._process.stdout
         if stream is None:
             return
-        with open(self._sink_path, "wb") as handle:
+        with open(self._sink_path, "ab") as handle:
             while not self._stop_event.is_set():
                 chunk = stream.readline()
                 if not chunk:

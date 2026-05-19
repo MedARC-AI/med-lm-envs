@@ -8,6 +8,8 @@ import importlib
 import json
 import os
 import shlex
+import shutil
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
@@ -277,6 +279,10 @@ class TaskWorker:
                 "job_config_path": _command_template_value(self._spec.bundled_eval_config_path),
                 "endpoints_arg": endpoints_arg,
             }
+            quarantined_outputs = _quarantine_malformed_bench_outputs(paths.bench_dir)
+            for old_path, archived_path in quarantined_outputs:
+                log(f"JOB bench-quarantine task={self._spec.task_id} old={old_path} archived={archived_path}")
+
             command = render_command(self._command_template, command_context)
             manifest.bench_run_id = None
             manifest.bench_command = shlex.join(command)
@@ -637,6 +643,44 @@ def _parse_time(value: str | None):
         return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+def _quarantine_malformed_bench_outputs(bench_dir: Path) -> list[tuple[Path, Path]]:
+    if not bench_dir.exists():
+        return []
+    candidates: list[Path] = []
+    for candidate in bench_dir.rglob("*"):
+        if not candidate.is_dir():
+            continue
+        try:
+            relative_parts = candidate.relative_to(bench_dir).parts
+        except ValueError:
+            continue
+        if len(relative_parts) < 3 or any("__malformed_" in part for part in relative_parts):
+            continue
+        if not any(candidate.iterdir()):
+            continue
+        candidates.append(candidate)
+
+    quarantined: list[tuple[Path, Path]] = []
+    for candidate in sorted(candidates, key=lambda item: len(item.parts)):
+        if not candidate.is_dir():
+            continue
+        has_metadata = (candidate / "metadata.json").is_file()
+        has_results = (candidate / "results.jsonl").is_file()
+        if has_metadata and has_results:
+            continue
+        archived = _archive_malformed_bench_output(candidate)
+        quarantined.append((candidate, archived))
+    return quarantined
+
+
+def _archive_malformed_bench_output(path: Path) -> Path:
+    candidate = path.with_name(f"{path.name}__malformed_{uuid.uuid4().hex[:8]}")
+    while candidate.exists():
+        candidate = path.with_name(f"{path.name}__malformed_{uuid.uuid4().hex[:8]}")
+    shutil.move(str(path), str(candidate))
+    return candidate
 
 
 def _require_server_port(allocation: ExecutionAllocation) -> int:
