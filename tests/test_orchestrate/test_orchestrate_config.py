@@ -1,29 +1,75 @@
-import warnings
 from pathlib import Path
 
 import pytest
 
-from medarc_verifiers.orchestrate.config import expand_tasks, load_plan, make_plan
+from medarc_verifiers.orchestrate.config import expand_tasks, load_job_config, load_plan, make_plan
 
 
-def test_plan_job_configs_resolve_relative_to_plan_file(tmp_path: Path):
+def _write_eval_config(path: Path, *, model: str = "Foo/Bar", env_id: str = "medqa") -> Path:
+    path.write_text(
+        f'''
+model = "{model}"
+
+[[eval]]
+env_id = "{env_id}"
+num_examples = 1
+rollouts_per_example = 1
+'''.lstrip(),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _write_orchestrate_config(path: Path, *, model: str = "Foo/Bar", gpus: int = 1) -> Path:
+    path.write_text(
+        f'''
+schema_version = 1
+
+[[model]]
+id = "{model}"
+aliases = ["foo"]
+
+[model.vllm]
+gpus = {gpus}
+tensor_parallel_size = {gpus}
+
+[model.vllm.serve]
+dtype = "bfloat16"
+
+[model.container]
+image = "vllm/vllm-openai:latest"
+container_port = 8000
+
+[model.slurm]
+partition = "gpu"
+time = "04:00:00"
+slurm_resume = true
+'''.lstrip(),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_plan_job_configs_and_registries_resolve_relative_to_plan_file(tmp_path: Path):
     configs_dir = tmp_path / "configs"
     configs_dir.mkdir()
-    job_cfg = configs_dir / "job-foo.yaml"
-    job_cfg.write_text(
-        """
-models:
-  foo:
-    model: Foo/Bar
-orchestrate:
-  restart: runs/raw/example-run
-  vllm-container:
-    image: vllm/vllm-openai:latest
-  foo:
-    gpus: 1
-    serve:
-      dtype: bfloat16
-""".lstrip(),
+    job_cfg = _write_eval_config(configs_dir / "job-foo.toml")
+    orchestrate_cfg = _write_orchestrate_config(configs_dir / "orchestrate.toml")
+    eval_images_cfg = configs_dir / "eval_images.toml"
+    eval_images_cfg.write_text(
+        '''
+schema_version = 1
+
+[[eval_image]]
+id = "fhir"
+envs = ["medqa"]
+runtime = "pyxis"
+image = "/tmp/fhir.sqsh"
+command = ["bash", "-lc", "serve-fhir"]
+
+[eval_image.readiness]
+url = "http://127.0.0.1:8080/health"
+'''.lstrip(),
         encoding="utf-8",
     )
     plan_path = tmp_path / "plan.yaml"
@@ -31,7 +77,9 @@ orchestrate:
         """
 name: test
 job_configs:
-  - configs/job-foo.yaml
+  - configs/job-foo.toml
+orchestrate_config: configs/orchestrate.toml
+eval_images_config: configs/eval_images.toml
 gpu_range: "0-3"
 port_range: "8100-8199"
 run_id: "hello"
@@ -47,122 +95,215 @@ kill_orphans: false
 
     plan = load_plan(plan_path)
     assert plan.job_configs == [job_cfg.resolve()]
-    assert plan.gpu_range == "0-3"
-    assert plan.port_range == "8100-8199"
-    assert plan.run_id == "hello"
+    assert plan.orchestrate_config == orchestrate_cfg.resolve()
+    assert plan.eval_images_config == eval_images_cfg.resolve()
     assert plan.output_dir == (tmp_path / "outputs" / "orchestrator" / "test-run").resolve()
-    assert plan.max_parallel == 2
-    assert plan.readiness_timeout_s == 123
     assert plan.resume is True
-    assert plan.rerun_failed is True
-    assert plan.kill_orphans is False
 
-    tasks = expand_tasks(plan)
-    assert tasks[0].job_config_path == job_cfg.resolve()
-    assert tasks[0].orchestrate.get("restart") == "runs/raw/example-run"
-    assert "vllm-container" in tasks[0].orchestrate
-
-
-def test_expand_tasks_accepts_deprecated_vllm_docker_with_warning(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
-    job_cfg.write_text(
-        """
-models:
-  foo:
-    model: Foo/Bar
-orchestrate:
-  vllm-docker:
-    image: vllm/vllm-openai:latest
-  foo:
-    gpus: 1
-    serve: {}
-""".lstrip(),
-        encoding="utf-8",
-    )
-    plan_path = tmp_path / "plan.yaml"
-    plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\n", encoding="utf-8")
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        tasks = expand_tasks(load_plan(plan_path))
-
-    assert tasks[0].orchestrate["vllm-container"]["image"] == "vllm/vllm-openai:latest"
-    assert "vllm-docker" not in tasks[0].orchestrate
-    assert any("deprecated orchestrate.vllm-docker" in str(item.message) for item in caught)
+    task = expand_tasks(plan)[0]
+    assert task.job_config_path == job_cfg.resolve()
+    assert task.model_id == "Foo/Bar"
+    assert task.model_key == "Foo-Bar"
+    assert task.orchestrate["container"]["image"] == "vllm/vllm-openai:latest"
+    assert task.orchestrate["vllm"]["serve"] == {"dtype": "bfloat16"}
+    assert task.slurm["partition"] == "gpu"
+    assert task.eval_images[0]["id"] == "fhir"
+    assert task.orchestrate_registry.path == str(orchestrate_cfg.resolve())
+    assert task.eval_images_registry.path == str(eval_images_cfg.resolve())
 
 
-def test_expand_tasks_rejects_ambiguous_container_keys(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
-    job_cfg.write_text(
-        """
-models:
-  foo:
-    model: Foo/Bar
-orchestrate:
-  vllm-container:
-    image: new
-  vllm-docker:
-    image: old
-  foo:
-    gpus: 1
-    serve: {}
-""".lstrip(),
-        encoding="utf-8",
-    )
-    plan_path = tmp_path / "plan.yaml"
-    plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\n", encoding="utf-8")
+def test_load_job_config_rejects_yaml_public_configs(tmp_path: Path) -> None:
+    path = tmp_path / "job.yaml"
+    path.write_text("model: Foo/Bar\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="defines both orchestrate.vllm-container and orchestrate.vllm-docker"):
-        expand_tasks(load_plan(plan_path))
+    with pytest.raises(ValueError, match="expected .toml"):
+        load_job_config(path)
 
 
-def test_make_plan_resolves_job_configs_relative_to_base_dir(tmp_path: Path) -> None:
+def test_make_plan_resolves_paths_relative_to_base_dir(tmp_path: Path) -> None:
     configs_dir = tmp_path / "configs"
     configs_dir.mkdir()
-    job_cfg = configs_dir / "job-foo.yaml"
-    job_cfg.write_text(
-        """
-models:
-  foo:
-    model: Foo/Bar
-orchestrate:
-  vllm-container:
-    image: fake
-  foo:
-    gpus: 1
-    serve: {}
-""".lstrip(),
-        encoding="utf-8",
-    )
+    job_cfg = _write_eval_config(configs_dir / "job-foo.toml")
+    orchestrate_cfg = _write_orchestrate_config(configs_dir / "orchestrate.toml")
 
-    plan = make_plan(job_configs=[Path("configs/job-foo.yaml")], base_dir=tmp_path, name="bundle")
+    plan = make_plan(
+        job_configs=[Path("configs/job-foo.toml")],
+        base_dir=tmp_path,
+        name="bundle",
+        orchestrate_config=Path("configs/orchestrate.toml"),
+    )
 
     assert plan.name == "bundle"
     assert plan.job_configs == [job_cfg.resolve()]
+    assert plan.orchestrate_config == orchestrate_cfg.resolve()
 
 
-def test_expand_tasks_extracts_optional_slurm_block(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
+def test_expand_tasks_matches_model_alias_from_endpoint_registry(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.toml"
+    job_cfg.write_text(
+        '''
+endpoint_id = "foo-endpoint"
+
+[[eval]]
+env_id = "medqa"
+'''.lstrip(),
+        encoding="utf-8",
+    )
+    endpoints = tmp_path / "endpoints.toml"
+    endpoints.write_text(
+        '''
+[[endpoint]]
+endpoint_id = "foo-endpoint"
+model = "Foo/Bar"
+url = "http://localhost:8000/v1"
+key = "OPENAI_API_KEY"
+'''.lstrip(),
+        encoding="utf-8",
+    )
+    orchestrate_cfg = _write_orchestrate_config(tmp_path / "orchestrate.toml", model="Foo/Bar")
+    plan_path = tmp_path / "plan.yaml"
+    plan_path.write_text(
+        f"job_configs:\n  - {job_cfg.name}\norchestrate_config: {orchestrate_cfg.name}\nendpoints_path: {endpoints.name}\n",
+        encoding="utf-8",
+    )
+
+    task = expand_tasks(load_plan(plan_path))[0]
+
+    assert task.model_id == "Foo/Bar"
+    assert task.endpoints_path == endpoints.resolve()
+
+
+def test_expand_tasks_rejects_model_ablations(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.toml"
+    job_cfg.write_text(
+        '''
+model = "Foo/Bar"
+
+[[eval]]
+env_id = "medqa"
+
+[[ablation]]
+env_id = "medqa"
+
+[ablation.sweep]
+model = ["Foo/Bar", "Other/Model"]
+'''.lstrip(),
+        encoding="utf-8",
+    )
+    orchestrate_cfg = _write_orchestrate_config(tmp_path / "orchestrate.toml")
+    plan_path = tmp_path / "plan.yaml"
+    plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\norchestrate_config: {orchestrate_cfg.name}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="ablates model"):
+        expand_tasks(load_plan(plan_path))
+
+
+def test_orchestrate_registry_rejects_unknown_nested_fields(tmp_path: Path) -> None:
+    job_cfg = _write_eval_config(tmp_path / "job.toml")
+    orchestrate_cfg = tmp_path / "orchestrate.toml"
+    orchestrate_cfg.write_text(
+        '''
+schema_version = 1
+
+[[model]]
+id = "Foo/Bar"
+
+[model.vllm]
+gpus = 1
+tensor_parallel_size = 1
+
+[model.vllm.serve]
+unknown = "bad"
+
+[model.container]
+image = "fake"
+'''.lstrip(),
+        encoding="utf-8",
+    )
+    plan_path = tmp_path / "plan.yaml"
+    plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\norchestrate_config: {orchestrate_cfg.name}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Unknown fields"):
+        expand_tasks(load_plan(plan_path))
+
+
+def test_job_local_relative_endpoints_path_matches_bundled_resolution(tmp_path: Path) -> None:
+    job_cfg = tmp_path / "job.toml"
     job_cfg.write_text(
         """
-models:
-  foo:
-    model: Foo/Bar
-orchestrate:
-  vllm-container:
-    image: fake
-  foo:
-    gpus: 2
-    serve: {}
-slurm:
-  partition: gpu
-  time: 04:00:00
+endpoint_id = "foo-endpoint"
+endpoints_path = "endpoints.toml"
+
+[[eval]]
+env_id = "medqa"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "endpoints.toml").write_text(
+        """
+[[endpoint]]
+endpoint_id = "foo-endpoint"
+model = "Foo/Bar"
+url = "http://localhost:8000/v1"
+key = "OPENAI_API_KEY"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    orchestrate_cfg = _write_orchestrate_config(tmp_path / "orchestrate.toml")
+    plan_path = tmp_path / "plan.yaml"
+    plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\norchestrate_config: {orchestrate_cfg.name}\n", encoding="utf-8")
+
+    task = expand_tasks(load_plan(plan_path))[0]
+
+    assert task.model_id == "Foo/Bar"
+
+
+def test_orchestrate_registry_requires_gpu_sizing_fields(tmp_path: Path) -> None:
+    job_cfg = _write_eval_config(tmp_path / "job.toml")
+    orchestrate_cfg = tmp_path / "orchestrate.toml"
+    orchestrate_cfg.write_text(
+        """
+schema_version = 1
+
+[[model]]
+id = "Foo/Bar"
+
+[model.vllm]
+gpus = 1
+
+[model.container]
+image = "fake"
 """.lstrip(),
         encoding="utf-8",
     )
     plan_path = tmp_path / "plan.yaml"
-    plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\n", encoding="utf-8")
+    plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\norchestrate_config: {orchestrate_cfg.name}\n", encoding="utf-8")
 
-    tasks = expand_tasks(load_plan(plan_path))
+    with pytest.raises(ValueError, match="tensor_parallel_size"):
+        expand_tasks(load_plan(plan_path))
 
-    assert tasks[0].slurm == {"partition": "gpu", "time": "04:00:00"}
+
+def test_eval_image_registry_requires_runtime_fields_and_selectors(tmp_path: Path) -> None:
+    job_cfg = _write_eval_config(tmp_path / "job.toml")
+    orchestrate_cfg = _write_orchestrate_config(tmp_path / "orchestrate.toml")
+    eval_images_cfg = tmp_path / "eval_images.toml"
+    eval_images_cfg.write_text(
+        """
+schema_version = 1
+
+[[eval_image]]
+id = "bad"
+runtime = "pyxis"
+image = "/tmp/image.sqsh"
+command = ["bash"]
+""".lstrip(),
+        encoding="utf-8",
+    )
+    plan_path = tmp_path / "plan.yaml"
+    plan_path.write_text(
+        f"job_configs:\n  - {job_cfg.name}\norchestrate_config: {orchestrate_cfg.name}\neval_images_config: {eval_images_cfg.name}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="at least one selector"):
+        expand_tasks(load_plan(plan_path))

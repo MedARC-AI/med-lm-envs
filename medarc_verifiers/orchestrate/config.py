@@ -152,6 +152,7 @@ def expand_tasks(plan: PlanConfig) -> list[TaskSpec]:
         raw_eval_configs = load_toml_eval_configs(resolved_job_path)
         if not raw_eval_configs:
             raise ValueError(f"Job config {resolved_job_path} did not produce any evals.")
+        raw_eval_configs = [_absolutize_eval_config_paths(raw, base_dir=resolved_job_path.parent) for raw in raw_eval_configs]
         _reject_model_ablation(raw_eval_configs, source=resolved_job_path)
         overrides = EvalConfigOverrides(endpoints_path=endpoints_path) if endpoints_path is not None else None
         identity_payloads = [build_eval_identity_payload(raw, overrides=overrides) for raw in raw_eval_configs]
@@ -299,6 +300,9 @@ def _validate_orchestrate_registry(payload: Mapping[str, Any], *, source: Path) 
         slugs[slug] = model_id
         vllm = _required_mapping(entry.get("vllm"), f"model {model_id} vllm")
         container = _required_mapping(entry.get("container"), f"model {model_id} container")
+        for required_key in ("gpus", "tensor_parallel_size"):
+            if required_key not in vllm:
+                raise ValueError(f"Model {model_id} in {source} must set [model.vllm].{required_key}.")
         if not str(container.get("image", "")).strip():
             raise ValueError(f"Model {model_id} in {source} must set [model.container].image.")
         _reject_unknown_keys(vllm, {"gpus", "tensor_parallel_size", "data_parallel_size", "require_contiguous_gpus", "memory_min_gb", "serve"}, label=f"{source} {model_id}.vllm")
@@ -371,6 +375,19 @@ def _validate_eval_images_registry(payload: Mapping[str, Any], *, source: Path) 
         if image_id in ids:
             raise ValueError(f"Duplicate eval_image id in {source}: {image_id}")
         ids.add(image_id)
+        selectors = list(entry.get("evals", []) or []) + list(entry.get("envs", []) or []) + list(entry.get("env_ids", []) or [])
+        if not selectors:
+            raise ValueError(f"Eval image {image_id} in {source} must define at least one selector: evals, envs, or env_ids.")
+        for field_name in ("evals", "envs", "env_ids", "command", "srun_args"):
+            if field_name in entry and (not isinstance(entry.get(field_name), list) or any(not isinstance(item, str) for item in entry.get(field_name, []))):
+                raise ValueError(f"Eval image {image_id} field {field_name} in {source} must be a list of strings.")
+        runtime = entry.get("runtime")
+        if runtime != "pyxis":
+            raise ValueError(f"Eval image {image_id} in {source} must set runtime = 'pyxis'.")
+        if not isinstance(entry.get("image"), str) or not str(entry.get("image")).strip():
+            raise ValueError(f"Eval image {image_id} in {source} must set non-empty image.")
+        if not entry.get("command"):
+            raise ValueError(f"Eval image {image_id} in {source} must set non-empty command.")
 
 
 def _match_model_entry(payload: Mapping[str, Any], model_id: str, *, source: Path) -> tuple[Mapping[str, Any], str]:
@@ -386,6 +403,18 @@ def _match_model_entry(payload: Mapping[str, Any], model_id: str, *, source: Pat
     if len(matches) > 1:
         raise ValueError(f"Multiple [[model]] entries in {source} match effective model {model_id!r}.")
     return matches[0]
+
+
+def _absolutize_eval_config_paths(raw: Mapping[str, Any], *, base_dir: Path) -> dict[str, Any]:
+    normalized = dict(raw)
+    for key in ("endpoints_path", "env_dir_path"):
+        value = normalized.get(key)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            normalized[key] = str((base_dir / path).resolve())
+    return normalized
 
 
 def _reject_model_ablation(raw_eval_configs: list[Mapping[str, Any]], *, source: Path) -> None:
