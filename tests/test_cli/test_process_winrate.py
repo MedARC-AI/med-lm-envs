@@ -360,6 +360,48 @@ def test_partial_datasets_include_uses_consistent_canonical_labels(tmp_path: Pat
     assert payload["models"]["Model_A"]["vs"]["Model_B"]["n_datasets"] == 2
 
 
+def test_compute_dataset_missingness_counts_null_rewards() -> None:
+    df_avg = pl.DataFrame(
+        {
+            "example_id": ["q1", "q2", "q3", "q1", "q2", "q3"],
+            "model_id": ["model_a", "model_a", "model_a", "model_b", "model_b", "model_b"],
+            "reward_mean": [1.0, 0.5, 0.0, 0.8, None, 0.2],
+        }
+    )
+
+    rows = winrate_api._compute_dataset_missingness("dataset", df_avg, ["model_a", "model_b"])
+    by_model = {row.model: row for row in rows}
+
+    assert by_model["model_a"].expected_n == 3
+    assert by_model["model_a"].present_nonnull_n == 3
+    assert by_model["model_a"].missing_count == 0
+    assert by_model["model_a"].missing_pct == pytest.approx(0.0)
+    assert by_model["model_b"].expected_n == 3
+    assert by_model["model_b"].present_nonnull_n == 2
+    assert by_model["model_b"].missing_count == 1
+    assert by_model["model_b"].missing_pct == pytest.approx(100 / 3)
+
+
+def test_compute_dataset_missingness_marks_absent_included_model_fully_missing() -> None:
+    df_avg = pl.DataFrame(
+        {
+            "example_id": ["q1", "q2"],
+            "model_id": ["model_a", "model_a"],
+            "reward_mean": [1.0, 0.5],
+        }
+    )
+
+    rows = winrate_api._compute_dataset_missingness("dataset", df_avg, ["model_a", "model_b"])
+    by_model = {row.model: row for row in rows}
+
+    assert by_model["model_a"].missing_count == 0
+    assert by_model["model_a"].missing_pct == pytest.approx(0.0)
+    assert by_model["model_b"].expected_n == 2
+    assert by_model["model_b"].present_nonnull_n == 0
+    assert by_model["model_b"].missing_count == 2
+    assert by_model["model_b"].missing_pct == pytest.approx(100.0)
+
+
 def test_filter_models_is_case_insensitive() -> None:
     filtered = winrate_api._filter_models(
         ["Model_A", "Model_B", "Model_C"],
@@ -552,4 +594,83 @@ def test_run_winrate_validates_known_models_from_env_index(tmp_path: Path) -> No
             output_path=None,
             output_name=None,
             config=cfg,
+        )
+
+
+def test_run_winrate_discovers_variants_as_distinct_datasets(tmp_path: Path) -> None:
+    processed_dir = tmp_path / "processed"
+    output_dir = tmp_path / "out"
+    files: dict[str, dict[str, object]] = {}
+    rewards = {
+        ("model-a", "seed-1"): 1.0,
+        ("model-b", "seed-1"): 0.0,
+        ("model-a", "seed-2"): 0.0,
+        ("model-b", "seed-2"): 1.0,
+    }
+    for (model_id, variant_id), reward in rewards.items():
+        path = processed_dir / model_id / "demo-env__variants" / f"{variant_id}.parquet"
+        _write_dataset(
+            path,
+            [
+                {
+                    "example_id": "q1",
+                    "model_id": model_id,
+                    "reward": reward,
+                }
+            ],
+        )
+        rel_path = path.relative_to(processed_dir).as_posix()
+        files[rel_path] = {
+            "env_id": "demo-env",
+            "base_env_id": "demo-env",
+            "model_id": model_id,
+            "variant_id": variant_id,
+            "variant_payload": {"env_args": {"shuffle_seed": int(variant_id.removeprefix("seed-"))}},
+            "row_count": 1,
+        }
+
+    env_index = {
+        "version": 2,
+        "processed_at": "2024-01-01T00:00:00Z",
+        "schema_version": 1,
+        "processed_with_args": {},
+        "runs": {},
+        "files": files,
+    }
+    (processed_dir / "env_index.json").write_text(json.dumps(env_index), encoding="utf-8")
+
+    result = winrate.run_winrate(
+        processed_dir=processed_dir,
+        output_dir=output_dir,
+        output_path=None,
+        output_name=None,
+        config=winrate.WinrateConfig(dataset_coverage="per-model"),
+        processed_at="2024-01-01T00:00:00Z",
+    )
+    payload = winrate.to_json(result.result)
+
+    assert [dataset for dataset, _ in result.datasets] == ["demo-env::seed-1", "demo-env::seed-2"]
+    assert set(payload["datasets"]) == {"demo-env::seed-1", "demo-env::seed-2"}
+    assert "demo-env" not in payload["datasets"]
+    assert payload["models"]["model-a"]["avg_reward_per_dataset"] == {
+        "demo-env::seed-1": 1.0,
+        "demo-env::seed-2": 0.0,
+    }
+    assert payload["models"]["model-b"]["avg_reward_per_dataset"] == {
+        "demo-env::seed-1": 0.0,
+        "demo-env::seed-2": 1.0,
+    }
+    assert payload["models"]["model-a"]["mean_winrate"]["n_datasets"] == 2
+
+    excluded_variant = winrate.compute_winrates(
+        result.datasets,
+        winrate.WinrateConfig(exclude_datasets=("demo-env::seed-1",), dataset_coverage="per-model"),
+    )
+    excluded_payload = winrate.to_json(excluded_variant)
+    assert set(excluded_payload["datasets"]) == {"demo-env::seed-2"}
+
+    with pytest.raises(ValueError, match="No datasets remain after applying dataset exclusions"):
+        winrate.compute_winrates(
+            result.datasets,
+            winrate.WinrateConfig(exclude_datasets=("demo-env",), dataset_coverage="per-model"),
         )

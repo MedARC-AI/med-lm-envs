@@ -1,13 +1,13 @@
 [project]
 name = "medarc-verifiers"
-version = "0.1.0"
+version = "0.2.0"
 description = "A collection of MedARC utilities and tools for Prime Intellect's verifiers package"
 readme = "docs/README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
 dependencies = [
     "prime>=0.3.35",
-    "verifiers>=0.1.10,<0.1.12",
+    "verifiers>=0.1.14,<0.2",
     "pyyaml>=6.0.1",
     "docstring-parser>=0.17.0",
     "pylatexenc>=2.10",

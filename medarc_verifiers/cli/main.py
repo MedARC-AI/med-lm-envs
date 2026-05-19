@@ -3,40 +3,48 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import importlib.util
+import json
 import logging
+import os
+import shutil
+import subprocess
 import sys
+import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from textwrap import dedent
+from types import SimpleNamespace
 from typing import Any, Literal, Mapping, Sequence
 
 import yaml
 from pydantic import ValidationError
 from rich.console import Console
 from rich.table import Table
+from verifiers.utils.eval_utils import run_evaluation
 
-from medarc_verifiers.cli._config_loader import ConfigFormatError, load_run_config
 from medarc_verifiers.cli._constants import (
     BENCH_COMMAND,
     COMMAND,
-    DEFAULT_API_BASE_URL,
-    DEFAULT_API_KEY_VAR,
     DEFAULT_ENDPOINTS_PATH,
+    DEFAULT_EVALS_DIR,
     DEFAULT_ENV_CONFIG_ROOT,
     DEFAULT_ENV_DIR,
     DEFAULT_PROCESSED_DIR,
-    DEFAULT_RUNS_RAW_DIR,
-    DEFAULT_WINRATE_DIR,
     PROCESS_COMMAND,
     WINRATE_COMMAND,
 )
-from medarc_verifiers.cli._job_builder import ResolvedJob, build_jobs
-from medarc_verifiers.cli._job_executor import ExecutorSettings, JobExecutionResult, execute_jobs
-from medarc_verifiers.cli._manifest import MANIFEST_FILENAME, ManifestJobEntry, RunManifest, compute_snapshot_checksum
-from medarc_verifiers.cli._manifest_planner import ManifestPlanner
-from medarc_verifiers.cli._manifest_tools import format_validation_issues, validate_manifests_in_runs
 from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, EnvironmentExportConfig
 from medarc_verifiers.cli._single_run import run_single_mode
+from medarc_verifiers.cli.eval_identity import (
+    EvalPathPlan,
+    generate_variant_id,
+    plan_eval_paths,
+)
 from medarc_verifiers.cli.hf import HFSyncConfig, sync_files_to_hub
+from medarc_verifiers.cli.env_lifecycle import EnvPackageRef, resolve_env_package, upstream_module_name
+from medarc_verifiers.cli.isolated_env import install_env_package, temporary_bench_venv
 from medarc_verifiers.cli.process import ProcessOptions, ProcessResult, run_process
 from medarc_verifiers.cli.utils.config_io import load_mapping_file
 from medarc_verifiers.cli.utils.overrides import build_cli_override
@@ -44,9 +52,14 @@ from medarc_verifiers.cli.utils.shared import (
     dataset_is_excluded,
     normalize_dataset_ids,
     normalize_model_ids,
-    slugify,
-    validate_simple_name,
 )
+from medarc_verifiers.cli.upstream_eval import (
+    EvalConfigOverrides,
+    build_eval_config,
+    build_eval_identity_payload,
+    load_toml_eval_configs,
+)
+from medarc_verifiers.utils.pathing import resolve_under
 from medarc_verifiers.cli.winrate import (
     WinrateConfig,
     _resolve_source,
@@ -63,44 +76,14 @@ def build_batch_parser() -> argparse.ArgumentParser:
     """Construct the unified CLI parser."""
     parser = argparse.ArgumentParser(
         prog=COMMAND,
-        description="Run MedARC evaluations using unified configuration files.",
+        description="Run MedARC evaluations using upstream verifiers TOML configs.",
     )
-    parser.add_argument("-c", "--config", required=True, type=Path, help="Path to a run configuration YAML file.")
+    parser.add_argument("-c", "--config", required=True, type=Path, help="Path to an upstream TOML eval config file.")
+    parser.add_argument("--force", action="store_true", help="Archive existing deterministic output and rerun.")
     parser.add_argument(
-        "--run-id",
-        help="Override the generated run identifier (simple name only: no slashes, no '..', not absolute).",
-    )
-    parser.add_argument("--name", help="Override the human-friendly run name (defaults to the config name).")
-    parser.add_argument(
-        "--restart",
-        help=(
-            "Seed jobs from a previous run directory or run_manifest.json path; "
-            "otherwise treated as a run id under output_dir."
-        ),
-    )
-    parser.add_argument(
-        "--auto-resume",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help=(
-            "Automatically resume the newest matching run (default: enabled). "
-            "Pass --no-auto-resume to force a fresh run."
-        ),
-    )
-    parser.add_argument(
-        "--on-complete",
-        choices=("exit", "continue", "rerun", "new", "prompt"),
-        default="prompt",
-        help=(
-            "Action when all selected jobs are already completed. "
-            "Use 'prompt' for interactive selection (default: prompt)."
-        ),
-    )
-    parser.add_argument("--force", action="store_true", help="Re-run every job regardless of manifest state.")
-    parser.add_argument(
-        "--forced",
-        action="append",
-        help="Re-run jobs for the specified environment(s); repeat or comma-separate values.",
+        "--resume",
+        action="store_true",
+        help="Accepted for compatibility; deterministic bench outputs resume automatically when valid artifacts exist.",
     )
     parser.add_argument("--output-dir", type=Path, help="Override the output directory from the configuration.")
     parser.add_argument(
@@ -109,11 +92,19 @@ def build_batch_parser() -> argparse.ArgumentParser:
         default=DEFAULT_ENV_DIR,
         help="Directory containing environments (default: %(default)s).",
     )
-    parser.add_argument(
-        "--env-config-root",
-        type=Path,
-        default=DEFAULT_ENV_CONFIG_ROOT,
-        help="Directory containing environment YAMLs for auto-discovery (default: %(default)s).",
+    auto_install_group = parser.add_mutually_exclusive_group()
+    auto_install_group.add_argument(
+        "--auto-install",
+        dest="auto_install",
+        action="store_true",
+        default=True,
+        help="Auto-install missing local env packages in isolated temporary venvs (default).",
+    )
+    auto_install_group.add_argument(
+        "--no-auto-install",
+        dest="auto_install",
+        action="store_false",
+        help="Require selected environment packages to already be importable in the active Python environment.",
     )
     parser.add_argument(
         "--endpoints-path",
@@ -122,25 +113,22 @@ def build_batch_parser() -> argparse.ArgumentParser:
         help=f"Path to the endpoints registry file (default: {DEFAULT_ENDPOINTS_PATH}).",
     )
     parser.add_argument(
-        "--default-api-key-var",
-        default=DEFAULT_API_KEY_VAR,
-        help=f"Default API key environment variable (default: {DEFAULT_API_KEY_VAR}).",
-    )
-    parser.add_argument(
-        "--default-api-base-url",
-        default=DEFAULT_API_BASE_URL,
-        help=f"Default API base URL (default: {DEFAULT_API_BASE_URL}).",
-    )
-    parser.add_argument(
         "--api-base-url",
         default=None,
-        help=(
-            "Override API base URL for all models (CLI force > model api_base_url > --default-api-base-url). "
-            "Useful when pointing a config at a dynamically assigned endpoint."
-        ),
+        help="Override API base URL for all TOML evals.",
     )
+    parser.add_argument("--api-key-var", default=None, help="Override API key environment variable for TOML bench.")
+    parser.add_argument("--provider", default=None, help="Override provider shorthand for TOML bench.")
+    parser.add_argument("--model", "-m", default=None, help="Override model for every TOML eval.")
     parser.add_argument(
-        "--job-id", action="append", help="Run only the specified job identifier (repeat to select multiple)."
+        "--eval-index", "--job-index", dest="eval_index", type=int, help="Run only one TOML eval by 1-based index."
+    )
+    parser.add_argument("--start-at", type=int, help="Start TOML execution at this 1-based eval index.")
+    parser.add_argument("--stop-after", type=int, help="Stop TOML execution after this 1-based eval index.")
+    parser.add_argument(
+        "--continue-on-error",
+        action="store_true",
+        help="Continue TOML sequential execution after a failed eval.",
     )
     parser.add_argument(
         "--env-arg", action="append", help="Override an environment argument with KEY=VALUE (repeatable)."
@@ -155,49 +143,23 @@ def build_batch_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging.")
     parser.add_argument(
-        "--save-results",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Persist evaluation outputs (default: enabled).",
-    )
-    parser.add_argument(
-        "--save-to-hf-hub",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Upload results to the Hugging Face Hub.",
-    )
-    parser.add_argument("--hf-hub-dataset-name", help="Custom dataset name when uploading to the Hub.")
-    parser.add_argument(
         "--max-concurrent",
         type=int,
         default=None,
-        help="Override env max_concurrent for all jobs (CLI > model > env > defaults).",
+        help="Override max_concurrent for every TOML eval.",
     )
-    parser.add_argument("--max-concurrent-generation", type=int, help="Deprecated: ignored.")
-    parser.add_argument("--max-concurrent-scoring", type=int, help="Deprecated: ignored.")
     parser.add_argument(
         "--timeout",
         type=float,
         default=None,
-        help="Override request timeout in seconds for all jobs (CLI > model > default).",
+        help="Override request timeout in seconds for every TOML eval.",
     )
     parser.add_argument(
-        "--http-max-retries",
+        "--max-retries",
+        dest="rollout_max_retries",
         type=int,
         default=None,
-        help="HTTP/client-level retries for model calls (CLI > model max_retries).",
-    )
-    parser.add_argument(
-        "--rollout-max-retries",
-        type=int,
-        default=0,
-        help="Retry full rollout/group on retryable infra/invalid-response errors.",
-    )
-    parser.add_argument(
-        "--model-call-retries",
-        type=int,
-        default=None,
-        help="Per-model-call MedARC retry attempts (0 disables the monkeypatch).",
+        help="Override upstream rollout max_retries for every TOML eval.",
     )
     parser.add_argument(
         "--sleep",
@@ -206,21 +168,6 @@ def build_batch_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.0,
         help="Sleep this many seconds after each job (overridden by per-job sleep).",
-    )
-    parser.add_argument(
-        "--enable-additional-retries",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Deprecated alias for --model-call-retries (true maps to 3 attempts).",
-    )
-    parser.add_argument(
-        "--include-usage",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help=(
-            "Include usage reporting in API requests (extra_body.usage.include). "
-            "Default: auto-detect (enabled for Prime Inference, disabled otherwise)."
-        ),
     )
     return parser
 
@@ -240,7 +187,7 @@ def build_process_parser() -> argparse.ArgumentParser:
         "--runs-dir",
         type=Path,
         default=None,
-        help=f"Directory containing raw run outputs (default: {DEFAULT_RUNS_RAW_DIR}).",
+        help=f"Directory containing eval output directories (default: {DEFAULT_EVALS_DIR}).",
     )
     parser.add_argument(
         "--output-dir",
@@ -253,12 +200,6 @@ def build_process_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help=f"Directory containing environment YAMLs for export settings (default: {DEFAULT_ENV_CONFIG_ROOT}).",
-    )
-    parser.add_argument(
-        "--status",
-        action="append",
-        default=None,
-        help="Filter runs by manifest status (repeatable).",
     )
     parser.add_argument(
         "--exclude-dataset",
@@ -287,29 +228,33 @@ def build_process_parser() -> argparse.ArgumentParser:
     parser.add_argument("--processed-at", default=None, help="Override processed_at timestamp (ISO8601).")
     parser.add_argument("--dry-run", action="store_true", default=None, help="Plan processing without writing outputs.")
     parser.add_argument(
-        "--validate-manifest",
-        action=argparse.BooleanOptionalAction,
+        "--replace-model",
+        action="append",
         default=None,
-        help="Validate run manifests before processing (default: enabled).",
+        help="Rebuild existing processed outputs for these model ids (repeatable; comma-separated values allowed).",
     )
     parser.add_argument(
-        "--strict-manifest",
-        action="store_true",
+        "--replace-env",
+        action="append",
         default=None,
-        help="Treat manifest validation problems as errors.",
+        help="Rebuild existing processed outputs for these env ids (repeatable; comma-separated values allowed).",
     )
     parser.add_argument(
-        "--process-incomplete",
-        dest="process_incomplete",
-        action="store_true",
+        "--max-results-missing-pct",
+        type=float,
         default=None,
-        help="Include runs where run_manifest.json summary has completed < total.",
+        help=(
+            "Fail if a selected latest eval output is missing more than this percentage of expected results.jsonl rows "
+            "based on metadata num_examples and rollouts_per_example. "
+            "Computed per selected output and enforced only on the latest selected run; does not fall back to older "
+            "runs (default: 2.5)."
+        ),
     )
     parser.add_argument(
         "--winrate",
         type=Path,
         default=None,
-        help="Run winrate after processing using the provided winrate config file.",
+        help="Run winrate after processing using the provided config file. If omitted, an embedded winrate section in --config is used.",
     )
     parser.add_argument(
         "--max-workers",
@@ -321,7 +266,7 @@ def build_process_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hf-repo", default=None, help="Hugging Face repo id for dataset sync.")
     parser.add_argument(
         "--hf-pull-policy",
-        choices=("prompt", "pull", "clean"),
+        choices=("prompt", "pull", "clean", "continue-upload"),
         default=None,
         help="Baseline policy when output dir is non-empty in HF mode.",
     )
@@ -376,7 +321,7 @@ def build_winrate_parser() -> argparse.ArgumentParser:
         "--output-dir",
         type=Path,
         default=None,
-        help=f"Directory to store winrate outputs (default: {DEFAULT_WINRATE_DIR}).",
+        help="Directory to store winrate outputs (default: <processed-dir>/winrate).",
     )
     parser.add_argument(
         "--output",
@@ -465,7 +410,7 @@ def build_winrate_parser() -> argparse.ArgumentParser:
             "per-model uses the legacy behavior where each model may be averaged over a different dataset set."
         ),
     )
-    parser.add_argument("--hf-processed-repo", help="Hugging Face repo id for processed dataset download.")
+    parser.add_argument("--hf-repo", help="Hugging Face repo id used for processed download and winrate upload.")
     parser.add_argument(
         "--hf-processed-pull",
         action="store_true",
@@ -474,7 +419,11 @@ def build_winrate_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--hf-branch", help="Target HF branch or revision for processed download.")
     parser.add_argument("--hf-token", help="Auth token for HF operations.")
-    parser.add_argument("--hf-winrate-repo", help="Hugging Face repo id for winrate artifact upload.")
+    parser.add_argument(
+        "--hf-winrate-dir",
+        default=None,
+        help="Path under the HF repo where winrate artifacts are uploaded (default: winrate).",
+    )
     parser.add_argument(
         "--hf-private",
         action=argparse.BooleanOptionalAction,
@@ -515,7 +464,6 @@ def _run_batch_mode(argv: Sequence[str]) -> int:
     parser = build_batch_parser()
     args = parser.parse_args(argv)
     args.endpoints_path_explicit = _option_was_provided(argv, "--endpoints-path")
-    args.default_api_key_var_explicit = _option_was_provided(argv, "--default-api-key-var")
 
     try:
         args.cli_env_args = build_cli_override(
@@ -530,57 +478,25 @@ def _run_batch_mode(argv: Sequence[str]) -> int:
             json_flag="--sampling-args",
             pair_flag="--sampling-arg",
         )
-        args.model_call_retries = _resolve_model_call_retries(
-            args.model_call_retries,
-            args.enable_additional_retries,
-        )
-        if args.http_max_retries is not None and args.http_max_retries < 0:
-            raise ValueError("--http-max-retries must be >= 0.")
-        if args.rollout_max_retries < 0:
-            raise ValueError("--rollout-max-retries must be >= 0.")
+        if args.rollout_max_retries is not None and args.rollout_max_retries < 0:
+            raise ValueError("--max-retries must be >= 0.")
     except ValueError as exc:
         parser.error(str(exc))
 
-    if args.restart:
-        args.auto_resume = False
-    # Restarting is an explicit workflow; disable auto-resume selection when --restart is set.
-    # The planner may restart in-place when --restart points to an existing run directory.
-
+    config_path = Path(args.config).expanduser()
+    if config_path.suffix.lower() != ".toml":
+        parser.error("medarc-eval bench now accepts upstream TOML configs only.")
     try:
-        return _execute_batch(args)
-    except KeyboardInterrupt:
-        logger.warning("Batch run interrupted by user.")
-        return 1
-    except ConfigFormatError as exc:
-        parser.error(str(exc))
-    except SystemExit:  # pragma: no cover - argparse already handled messaging
-        raise
+        _validate_toml_selection_args(args, parser=parser)
+        return _run_toml_bench(args)
     except Exception as exc:  # noqa: BLE001
-        logger.exception("Unhandled error: %s", exc)
+        logger.exception("TOML bench failed: %s", exc)
         return 1
 
 
 def _run_process_mode(argv: Sequence[str]) -> int:
-    parser = build_process_parser()
-    args = parser.parse_args(argv)
-
-    if args.config:
-        _load_and_apply_config(args, args.config, mode="process", parser=parser)
-    _finalize_config_args(args, mode="process")
-    try:
-        if args.exclude_dataset:
-            normalize_dataset_ids(args.exclude_dataset, label="process exclude dataset")
-        if args.exclude_model:
-            normalize_model_ids(args.exclude_model, label="process exclude model")
-    except ValueError as exc:
-        parser.error(str(exc))
-    winrate_args: argparse.Namespace | None = None
-    if args.winrate:
-        winrate_path = Path(args.winrate).expanduser()
-        if not winrate_path.exists():
-            parser.error(f"Winrate config path '{winrate_path}' does not exist.")
-        args.winrate = winrate_path
-        winrate_args = _build_winrate_args_from_config(winrate_path, parser=parser)
+    parser, args = _resolve_process_args(argv)
+    winrate_args = _resolve_embedded_winrate(args, parser=parser)
 
     try:
         env_export_map = _load_env_export_map(args.env_config_root)
@@ -588,6 +504,52 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         logger.warning("Failed to load environment export configs: %s", exc)
         env_export_map = {}
 
+    options = _build_process_options(args)
+
+    try:
+        result = run_process(options, env_export_map=env_export_map)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Process pipeline failed: %s", exc)
+        return 1
+
+    _log_process_result(result)
+    return _run_process_post_steps(args, parser=parser, options=options, winrate_args=winrate_args)
+
+
+def _resolve_process_args(argv: Sequence[str]) -> tuple[argparse.ArgumentParser, argparse.Namespace]:
+    parser = build_process_parser()
+    args = parser.parse_args(argv)
+
+    if args.config:
+        _load_and_apply_config(args, args.config, mode="process", parser=parser)
+    _finalize_config_args(args, mode="process")
+    _validate_process_args(args, argv=argv, parser=parser)
+    return parser, args
+
+
+def _validate_process_args(
+    args: argparse.Namespace,
+    *,
+    argv: Sequence[str],
+    parser: argparse.ArgumentParser,
+) -> None:
+    for flag, attr in (("--replace-model", "replace_model"), ("--replace-env", "replace_env")):
+        if _option_was_provided(argv, flag) and not getattr(args, attr, None):
+            parser.error(f"{flag} requires at least one non-empty value.")
+    try:
+        if args.exclude_dataset:
+            normalize_dataset_ids(args.exclude_dataset, label="process exclude dataset")
+        if args.exclude_model:
+            normalize_model_ids(args.exclude_model, label="process exclude model")
+        if args.max_results_missing_pct is not None:
+            value = float(args.max_results_missing_pct)
+            if value < 0:
+                parser.error("--max-results-missing-pct must be non-negative.")
+    except ValueError as exc:
+        parser.error(str(exc))
+
+
+def _build_process_options(args: argparse.Namespace) -> ProcessOptions:
     hf_config = HFSyncConfig.from_cli(
         repo=args.hf_repo,
         branch=args.hf_branch,
@@ -598,16 +560,15 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         retries=args.hf_retries,
         max_files_per_commit=args.hf_max_files_per_commit,
     )
-
+    max_results_missing_pct = float(args.max_results_missing_pct) if args.max_results_missing_pct is not None else 2.5
     processed_with_args = {
-        "status": args.status or [],
+        "max_results_missing_pct": max_results_missing_pct,
         "exclude_datasets": args.exclude_dataset or [],
         "exclude_models": args.exclude_model or [],
+        "replace_models": args.replace_model or [],
+        "replace_envs": args.replace_env or [],
         "dry_run": bool(args.dry_run),
         "clean": bool(args.clean),
-        "validate_manifest": bool(args.validate_manifest),
-        "strict_manifest": bool(args.strict_manifest),
-        "only_complete_runs": not bool(args.process_incomplete),
         "hf_repo": args.hf_repo,
         "hf_pull_policy": args.hf_pull_policy,
         "hf_request_timeout": args.hf_request_timeout,
@@ -615,16 +576,16 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         "hf_max_files_per_commit": args.hf_max_files_per_commit,
         "max_workers": args.max_workers,
     }
-
-    options = ProcessOptions(
+    return ProcessOptions(
         runs_dir=args.runs_dir,
         output_dir=args.output_dir,
         exclude_datasets=tuple(args.exclude_dataset or ()),
         exclude_models=tuple(args.exclude_model or ()),
+        replace_models=tuple(args.replace_model or ()),
+        replace_envs=tuple(args.replace_env or ()),
         processed_at=args.processed_at,
         processed_with_args=processed_with_args,
-        status_filter=args.status or (),
-        only_complete_runs=not bool(args.process_incomplete),
+        max_results_missing_pct=max_results_missing_pct,
         dry_run=bool(args.dry_run),
         clean=bool(args.clean),
         assume_yes=bool(args.yes),
@@ -633,80 +594,94 @@ def _run_process_mode(argv: Sequence[str]) -> int:
         max_workers=args.max_workers,
     )
 
-    if args.validate_manifest:
-        validation = validate_manifests_in_runs(options.runs_dir, strict=bool(args.strict_manifest))
-        for line in format_validation_issues(validation.issues):
-            if line.startswith("[ERROR]"):
-                logger.error("%s", line)
-            else:
-                logger.warning("%s", line)
-        logger.info(
-            "Manifest preflight: checked %d manifest(s), %d job(s), %d issue(s).",
-            validation.manifests_checked,
-            validation.jobs_checked,
-            len(validation.issues),
-        )
-        if validation.has_errors:
-            logger.error("Manifest validation failed in strict mode; aborting process.")
-            return 1
 
-    try:
-        result = run_process(options, env_export_map=env_export_map)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Process pipeline failed: %s", exc)
-        return 1
-
-    _log_process_result(result)
+def _resolve_embedded_winrate(
+    args: argparse.Namespace,
+    *,
+    parser: argparse.ArgumentParser,
+) -> argparse.Namespace | None:
+    embedded_winrate = False
+    if args.config and args.winrate is None:
+        try:
+            embedded_winrate = _config_has_embedded_winrate(Path(args.config).expanduser())
+        except (FileNotFoundError, ValueError) as exc:
+            parser.error(str(exc))
 
     if args.winrate:
-        if options.dry_run:
-            logger.info("Skipping winrate post-step for dry-run process.")
-            return 0
-        if winrate_args is None:
-            winrate_args = _build_winrate_args_from_config(Path(args.winrate), parser=parser)
-        winrate_args.processed_dir = options.output_dir
-        winrate_args.hf_processed_repo = None
-        winrate_args.hf_processed_pull = False
-        winrate_cfg = WinrateConfig(
-            missing_policy=winrate_args.missing_policy,
-            epsilon=winrate_args.epsilon,
-            min_common=winrate_args.min_common,
-            weight_policy=winrate_args.weight_policy,
-            weight_cap=winrate_args.weight_cap,
-            dataset_coverage=winrate_args.dataset_coverage,
-            include_models=tuple(winrate_args.include_model or ()),
-            exclude_models=tuple(winrate_args.exclude_model or ()),
-            exclude_datasets=tuple(winrate_args.exclude_dataset or ()),
-            partial_datasets=winrate_args.partial_datasets,
-        )
-        try:
-            winrate_result = run_winrate(
-                processed_dir=options.output_dir,
-                output_dir=winrate_args.output_dir,
-                output_path=winrate_args.output,
-                output_name=winrate_args.output_name,
-                config=winrate_cfg,
-                processed_at=winrate_args.processed_at,
-                hf_config=None,
-                hf_processed_pull=False,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Win rate computation failed: %s", exc)
-            return 1
-        logger.info(
-            "Computed win rates for %d dataset(s): %s", len(winrate_result.datasets), winrate_result.output_path
-        )
-        print_winrate_summary_markdown(winrate_result.result)
-        if winrate_args.hf_winrate_repo:
-            _upload_winrate_outputs(
-                output_dir=winrate_args.output_dir,
-                output_paths=winrate_result.output_paths,
-                repo_id=winrate_args.hf_winrate_repo,
-                token=winrate_args.hf_token,
-                private=bool(winrate_args.hf_private),
-                assume_yes=bool(args.yes),
-            )
+        winrate_path = Path(args.winrate).expanduser()
+        if not winrate_path.exists():
+            parser.error(f"Winrate config path '{winrate_path}' does not exist.")
+        args.winrate = winrate_path
+        return _build_winrate_args_from_config(winrate_path, parser=parser)
 
+    if embedded_winrate:
+        args.winrate = Path(args.config).expanduser()
+        return _build_winrate_args_from_config(Path(args.config).expanduser(), parser=parser)
+    return None
+
+
+def _run_process_post_steps(
+    args: argparse.Namespace,
+    *,
+    parser: argparse.ArgumentParser,
+    options: ProcessOptions,
+    winrate_args: argparse.Namespace | None,
+) -> int:
+    if not args.winrate:
+        return 0
+    if options.dry_run:
+        logger.info("Skipping winrate post-step for dry-run process.")
+        return 0
+
+    if winrate_args is None:
+        winrate_args = _build_winrate_args_from_config(Path(args.winrate), parser=parser)
+    winrate_args.processed_dir = options.output_dir
+    if not getattr(winrate_args, "_output_dir_explicit", False):
+        winrate_args.output_dir = _default_winrate_output_dir(options.output_dir)
+    winrate_args.hf_repo = None
+    winrate_args.hf_processed_pull = False
+
+    winrate_cfg = WinrateConfig(
+        missing_policy=winrate_args.missing_policy,
+        epsilon=winrate_args.epsilon,
+        min_common=winrate_args.min_common,
+        weight_policy=winrate_args.weight_policy,
+        weight_cap=winrate_args.weight_cap,
+        dataset_coverage=winrate_args.dataset_coverage,
+        include_models=tuple(winrate_args.include_model or ()),
+        exclude_models=tuple(winrate_args.exclude_model or ()),
+        exclude_datasets=tuple(winrate_args.exclude_dataset or ()),
+        partial_datasets=winrate_args.partial_datasets,
+    )
+    try:
+        winrate_result = run_winrate(
+            processed_dir=options.output_dir,
+            output_dir=winrate_args.output_dir,
+            output_path=winrate_args.output,
+            output_name=winrate_args.output_name,
+            config=winrate_cfg,
+            processed_at=winrate_args.processed_at,
+            hf_config=None,
+            hf_processed_pull=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Win rate computation failed: %s", exc)
+        return 1
+
+    logger.info("Computed win rates for %d dataset(s): %s", len(winrate_result.datasets), winrate_result.output_path)
+    print_winrate_summary_markdown(winrate_result.result)
+
+    if options.hf_config and options.hf_config.repo_id:
+        _upload_winrate_outputs(
+            output_dir=winrate_args.output_dir,
+            output_paths=winrate_result.output_paths,
+            repo_id=options.hf_config.repo_id,
+            token=options.hf_config.token,
+            branch=options.hf_config.branch,
+            private=bool(options.hf_config.private),
+            winrate_dir=winrate_args.hf_winrate_dir,
+            assume_yes=bool(args.yes),
+        )
     return 0
 
 
@@ -744,18 +719,203 @@ def _set_if_unset(args: argparse.Namespace, attr: str, value: Any) -> None:
         setattr(args, attr, value)
 
 
+def _resolve_config_string_value(key: str, value: Any) -> str:
+    resolved = str(value)
+    if key != "hf_token":
+        return resolved
+
+    trimmed = resolved.strip()
+    env_var: str | None = None
+    if trimmed.startswith("${") and trimmed.endswith("}") and len(trimmed) > 3:
+        env_var = trimmed[2:-1].strip()
+    elif trimmed.startswith("$") and len(trimmed) > 1:
+        env_var = trimmed[1:].strip()
+
+    if not env_var:
+        return resolved
+
+    env_value = os.getenv(env_var)
+    if env_value is None:
+        raise ValueError(f"Config field 'hf.token' references unset environment variable '{env_var}'.")
+    return env_value
+
+
 def _load_config_payload(path: Path, *, mode: Literal["process", "winrate"]) -> dict[str, Any]:
     label = "Process config" if mode == "process" else "Winrate config"
-    return dict(load_mapping_file(path, label=label))
+    raw_payload = dict(load_mapping_file(path, label=label))
+    if mode == "process":
+        _reject_removed_process_config_keys(raw_payload)
+    return _expand_embedded_pipeline_config(raw_payload, mode=mode)
+
+
+def _reject_removed_process_config_keys(payload: Mapping[str, Any]) -> None:
+    if "max_run_missing_pct" in payload:
+        raise ValueError("Process config field 'max_run_missing_pct' was removed; use 'max_results_missing_pct'.")
+    if "status" in payload:
+        raise ValueError("Process config field 'status' was removed; process now reads completed eval outputs.")
+    process_section = payload.get("process")
+    if isinstance(process_section, Mapping) and "max_run_missing_pct" in process_section:
+        raise ValueError(
+            "Process config field 'process.max_run_missing_pct' was removed; use 'process.max_results_missing_pct'."
+        )
+    if isinstance(process_section, Mapping) and "status" in process_section:
+        raise ValueError("Process config field 'process.status' was removed; process now reads completed eval outputs.")
+
+
+def _expand_embedded_pipeline_config(payload: dict[str, Any], *, mode: Literal["process", "winrate"]) -> dict[str, Any]:
+    expanded = dict(payload)
+    process_section = payload.get("process")
+    if isinstance(process_section, Mapping):
+        _merge_process_section(expanded, process_section, mode=mode)
+
+    process_output_dir = _resolve_processed_dir_from_payload(expanded, mode=mode)
+
+    winrate_section = payload.get("winrate")
+    if isinstance(winrate_section, Mapping):
+        if mode == "process":
+            expanded.pop("winrate", None)
+        if mode == "winrate":
+            _merge_winrate_section(expanded, winrate_section, process_output_dir=process_output_dir)
+    elif isinstance(winrate_section, bool) and mode == "process":
+        expanded.pop("winrate", None)
+
+    if mode == "winrate" and "processed_dir" not in expanded and process_output_dir is not None:
+        expanded["processed_dir"] = process_output_dir
+
+    return expanded
+
+
+def _merge_process_section(
+    expanded: dict[str, Any],
+    process_section: Mapping[str, Any],
+    *,
+    mode: Literal["process", "winrate"],
+) -> None:
+    resolved = None
+    if "dir" in process_section:
+        resolved = _resolve_process_dir_value(process_section["dir"], runs_dir=expanded.get("runs_dir"))
+        if mode == "process" and "output_dir" not in expanded and resolved is not None:
+            expanded["output_dir"] = resolved
+        if mode == "winrate" and "processed_dir" not in expanded and resolved is not None:
+            expanded["processed_dir"] = resolved
+    if mode == "winrate" and "processed_dir" not in expanded and "output_dir" in process_section:
+        expanded["processed_dir"] = process_section["output_dir"]
+    key_map = {"runs_dir": "runs_dir"}
+    if mode == "process":
+        key_map.update(
+            {
+                "output_dir": "output_dir",
+                "env_config_root": "env_config_root",
+                "processed_at": "processed_at",
+                "exclude_datasets": "exclude_datasets",
+                "exclude_models": "exclude_models",
+                "replace_models": "replace_models",
+                "replace_envs": "replace_envs",
+                "dry_run": "dry_run",
+                "clean": "clean",
+                "yes": "yes",
+                "max_workers": "max_workers",
+                "max_results_missing_pct": "max_results_missing_pct",
+            }
+        )
+    for key, target in key_map.items():
+        if key in process_section and target not in expanded:
+            expanded[target] = process_section[key]
+
+
+def _merge_winrate_section(
+    expanded: dict[str, Any],
+    winrate_section: Mapping[str, Any],
+    *,
+    process_output_dir: Path | None,
+) -> None:
+    if "dir" in winrate_section and "output_dir" not in expanded:
+        resolved = _resolve_winrate_dir_value(winrate_section["dir"], process_output_dir=process_output_dir)
+        if resolved is not None:
+            expanded["output_dir"] = resolved
+    key_map = {
+        "processed_dir": "processed_dir",
+        "output_dir": "output_dir",
+        "output_name": "output_name",
+        "processed_at": "processed_at",
+        "missing_policy": "missing_policy",
+        "epsilon": "epsilon",
+        "min_common": "min_common",
+        "weight_policy": "weight_policy",
+        "weight_cap": "weight_cap",
+        "dataset_coverage": "dataset_coverage",
+        "include_model": "include_models",
+        "include_models": "include_models",
+        "exclude_model": "exclude_models",
+        "exclude_models": "exclude_models",
+        "exclude_dataset": "exclude_datasets",
+        "exclude_datasets": "exclude_datasets",
+        "partial_datasets": "partial_datasets",
+        "hf_processed_pull": "hf_processed_pull",
+        "hf_winrate_dir": "hf_winrate_dir",
+    }
+    for key, target in key_map.items():
+        if key in winrate_section and target not in expanded:
+            expanded[target] = winrate_section[key]
+
+
+def _resolve_processed_dir_from_payload(
+    payload: Mapping[str, Any], *, mode: Literal["process", "winrate"]
+) -> Path | None:
+    if "processed_dir" in payload and payload["processed_dir"] is not None:
+        return Path(str(payload["processed_dir"]))
+    if mode == "process" and "output_dir" in payload and payload["output_dir"] is not None:
+        return Path(str(payload["output_dir"]))
+    process_section = payload.get("process")
+    if isinstance(process_section, Mapping) and "dir" in process_section:
+        return _resolve_process_dir_value(process_section["dir"], runs_dir=payload.get("runs_dir"))
+    return None
+
+
+def _resolve_process_dir_value(value: Any, *, runs_dir: Any | None) -> Path | None:
+    raw = str(value).strip()
+    if not raw:
+        return None
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        return candidate
+    if runs_dir is not None:
+        return Path(str(runs_dir)).parent / candidate
+    return DEFAULT_EVALS_DIR.parent / candidate
+
+
+def _resolve_winrate_dir_value(value: Any, *, process_output_dir: Path | None) -> Path | None:
+    raw = str(value).strip()
+    if not raw:
+        return None
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        return candidate
+    base = process_output_dir if process_output_dir is not None else DEFAULT_PROCESSED_DIR
+    return base / candidate
+
+
+def _config_has_embedded_winrate(path: Path) -> bool:
+    payload = dict(load_mapping_file(path, label="Process config"))
+    winrate_payload = payload.get("winrate")
+    if isinstance(winrate_payload, Mapping):
+        return bool(winrate_payload.get("enabled", True))
+    return bool(winrate_payload) if isinstance(winrate_payload, bool) else False
 
 
 def _normalize_mode_payload(payload: dict[str, Any], *, mode: Literal["process", "winrate"]) -> None:
+    if mode == "winrate":
+        if "hf_processed_repo" in payload and "hf_repo" not in payload:
+            payload["hf_repo"] = payload["hf_processed_repo"]
+        if "hf_winrate_repo" in payload:
+            raise ValueError("Winrate config field 'hf_winrate_repo' was removed; use 'hf.repo' and 'hf.winrate_dir'.")
+
     hf_payload = payload.get("hf")
     if isinstance(hf_payload, Mapping):
         for key, value in hf_payload.items():
             if mode == "winrate":
                 if key == "repo":
-                    payload.setdefault("hf_processed_repo", value)
+                    payload.setdefault("hf_repo", value)
                     continue
                 if key == "branch":
                     payload.setdefault("hf_branch", value)
@@ -766,6 +926,10 @@ def _normalize_mode_payload(payload: dict[str, Any], *, mode: Literal["process",
                 if key == "private":
                     payload.setdefault("hf_private", value)
                     continue
+                if key == "winrate_repo":
+                    raise ValueError(
+                        "Winrate config field 'hf.winrate_repo' was removed; use 'hf.repo' and 'hf.winrate_dir'."
+                    )
             payload.setdefault(f"hf_{key}", value)
 
     if "exclude_datasets" not in payload and "exclude_dataset" in payload:
@@ -783,9 +947,9 @@ def _load_and_apply_config(
 ) -> None:
     try:
         payload = _load_config_payload(path, mode=mode)
+        _normalize_mode_payload(payload, mode=mode)
     except (FileNotFoundError, ValueError) as exc:
         parser.error(str(exc))
-    _normalize_mode_payload(payload, mode=mode)
 
     path_fields = {
         "process": {
@@ -811,8 +975,8 @@ def _load_and_apply_config(
             "weight_policy": "weight_policy",
             "partial_datasets": "partial_datasets",
             "dataset_coverage": "dataset_coverage",
-            "hf_processed_repo": "hf_processed_repo",
-            "hf_winrate_repo": "hf_winrate_repo",
+            "hf_repo": "hf_repo",
+            "hf_winrate_dir": "hf_winrate_dir",
             "hf_branch": "hf_branch",
             "hf_token": "hf_token",
         },
@@ -822,9 +986,6 @@ def _load_and_apply_config(
             "dry_run": "dry_run",
             "clean": "clean",
             "yes": "yes",
-            "process_incomplete": "process_incomplete",
-            "validate_manifest": "validate_manifest",
-            "strict_manifest": "strict_manifest",
             "hf_private": "hf_private",
         },
         "winrate": {"hf_processed_pull": "hf_processed_pull", "hf_private": "hf_private"},
@@ -838,11 +999,19 @@ def _load_and_apply_config(
         "winrate": {"min_common": "min_common", "weight_cap": "weight_cap"},
     }[mode]
     float_fields = {
-        "process": {"hf_request_timeout": "hf_request_timeout"},
+        "process": {
+            "hf_request_timeout": "hf_request_timeout",
+            "max_results_missing_pct": "max_results_missing_pct",
+        },
         "winrate": {"epsilon": "epsilon"},
     }[mode]
     repeatable_fields = {
-        "process": {"status": "status", "exclude_datasets": "exclude_dataset", "exclude_models": "exclude_model"},
+        "process": {
+            "exclude_datasets": "exclude_dataset",
+            "exclude_models": "exclude_model",
+            "replace_models": "replace_model",
+            "replace_envs": "replace_env",
+        },
         "winrate": {
             "include_models": "include_model",
             "exclude_models": "exclude_model",
@@ -855,7 +1024,11 @@ def _load_and_apply_config(
             _set_if_unset(args, attr, Path(str(payload[key])))
     for key, attr in string_fields.items():
         if key in payload and _is_unset(args, attr):
-            _set_if_unset(args, attr, str(payload[key]))
+            try:
+                resolved = _resolve_config_string_value(key, payload[key])
+            except ValueError as exc:
+                parser.error(str(exc))
+            _set_if_unset(args, attr, resolved)
     for key, attr in boolean_fields.items():
         if key in payload and _is_unset(args, attr):
             _set_if_unset(args, attr, bool(payload[key]))
@@ -891,14 +1064,15 @@ def _build_winrate_args_from_config(path: Path, *, parser: argparse.ArgumentPars
         exclude_model=None,
         exclude_dataset=None,
         partial_datasets=None,
-        hf_processed_repo=None,
+        hf_repo=None,
         hf_processed_pull=None,
-        hf_winrate_repo=None,
+        hf_winrate_dir=None,
         hf_branch=None,
         hf_token=None,
         hf_private=None,
     )
     _load_and_apply_config(args, path, mode="winrate", parser=parser)
+    args._output_dir_explicit = args.output_dir is not None
     _finalize_config_args(args, mode="winrate")
     return args
 
@@ -907,7 +1081,7 @@ def _finalize_config_args(args: argparse.Namespace, *, mode: Literal["process", 
     """Fill any unset process/winrate args with defaults after config + CLI merge."""
     defaults = {
         "process": {
-            "runs_dir": DEFAULT_RUNS_RAW_DIR,
+            "runs_dir": DEFAULT_EVALS_DIR,
             "output_dir": DEFAULT_PROCESSED_DIR,
             "env_config_root": DEFAULT_ENV_CONFIG_ROOT,
             "max_workers": 4,
@@ -915,15 +1089,14 @@ def _finalize_config_args(args: argparse.Namespace, *, mode: Literal["process", 
             "dry_run": False,
             "clean": False,
             "yes": False,
-            "process_incomplete": False,
-            "validate_manifest": True,
-            "strict_manifest": False,
+            "max_results_missing_pct": 2.5,
             "exclude_dataset": [],
             "exclude_model": [],
+            "replace_model": [],
+            "replace_env": [],
         },
         "winrate": {
             "processed_dir": DEFAULT_PROCESSED_DIR,
-            "output_dir": DEFAULT_WINRATE_DIR,
             "missing_policy": "neg-inf",
             "epsilon": 1e-9,
             "min_common": 0,
@@ -935,6 +1108,7 @@ def _finalize_config_args(args: argparse.Namespace, *, mode: Literal["process", 
             "exclude_dataset": [],
             "partial_datasets": "strict",
             "hf_processed_pull": False,
+            "hf_winrate_dir": "winrate",
             "hf_private": False,
             "yes": False,
         },
@@ -942,11 +1116,21 @@ def _finalize_config_args(args: argparse.Namespace, *, mode: Literal["process", 
     for attr, default in defaults.items():
         if getattr(args, attr, None) is None:
             setattr(args, attr, default)
+    if mode == "winrate" and getattr(args, "output_dir", None) is None:
+        args.output_dir = _default_winrate_output_dir(Path(args.processed_dir))
 
     if hasattr(args, "exclude_dataset"):
         args.exclude_dataset = _parse_repeatable_csv(args.exclude_dataset)
     if mode == "process" and hasattr(args, "exclude_model"):
         args.exclude_model = _parse_repeatable_csv(args.exclude_model)
+    if mode == "process" and hasattr(args, "replace_model"):
+        args.replace_model = _parse_repeatable_csv(args.replace_model)
+    if mode == "process" and hasattr(args, "replace_env"):
+        args.replace_env = _parse_repeatable_csv(args.replace_env)
+
+
+def _default_winrate_output_dir(processed_dir: Path) -> Path:
+    return Path(processed_dir) / "winrate"
 
 
 def _upload_winrate_outputs(
@@ -955,10 +1139,18 @@ def _upload_winrate_outputs(
     output_paths: Sequence[Path],
     repo_id: str,
     token: str | None,
+    branch: str | None,
     private: bool,
+    winrate_dir: str | None,
     assume_yes: bool = False,
 ) -> None:
     if not output_paths:
+        return
+    raw_dir = "winrate" if winrate_dir is None else str(winrate_dir).strip()
+    if not raw_dir:
+        raw_dir = "winrate"
+    if resolve_under(Path("."), raw_dir) is None:
+        logger.error("Invalid winrate_dir '%s'; skipping upload.", winrate_dir)
         return
     output_dir = Path(output_dir)
     files: list[str] = []
@@ -981,6 +1173,8 @@ def _upload_winrate_outputs(
         token=token,
         private=private,
         message=message,
+        branch=branch,
+        path_in_repo_prefix=raw_dir,
         is_tty=sys.stdin.isatty(),
         assume_yes=assume_yes,
         prompt_func=input,
@@ -993,20 +1187,21 @@ def _run_winrate_mode(argv: Sequence[str]) -> int:
 
     if args.config:
         _load_and_apply_config(args, args.config, mode="winrate", parser=parser)
+    args._output_dir_explicit = args.output_dir is not None
     _finalize_config_args(args, mode="winrate")
 
     hf_config = HFSyncConfig.from_cli(
-        repo=args.hf_processed_repo,
+        repo=args.hf_repo,
         branch=args.hf_branch,
         token=args.hf_token,
-        private=False,
+        private=bool(args.hf_private),
         dry_run=False,
     )
 
     if args.list_models:
         source_dir, datasets, source_desc = _resolve_source(
             args.processed_dir,
-            hf_config=hf_config if args.hf_processed_repo else None,
+            hf_config=hf_config if args.hf_repo else None,
             hf_processed_pull=bool(args.hf_processed_pull),
         )
         if args.exclude_dataset:
@@ -1054,261 +1249,426 @@ def _run_winrate_mode(argv: Sequence[str]) -> int:
 
     logger.info("Computed win rates for %d dataset(s): %s", len(winrate_result.datasets), winrate_result.output_path)
     print_winrate_summary_markdown(winrate_result.result)
-    if args.hf_winrate_repo:
+    if args.hf_repo:
         _upload_winrate_outputs(
             output_dir=args.output_dir,
             output_paths=winrate_result.output_paths,
-            repo_id=args.hf_winrate_repo,
+            repo_id=args.hf_repo,
             token=args.hf_token,
+            branch=args.hf_branch,
             private=bool(args.hf_private),
+            winrate_dir=args.hf_winrate_dir,
             assume_yes=bool(args.yes),
         )
     return 0
 
 
-def _execute_batch(args: argparse.Namespace) -> int:
-    # Set the include_usage environment variable if explicitly specified
-    if getattr(args, "include_usage", None) is not None:
-        import os
+def _validate_toml_selection_args(args: argparse.Namespace, *, parser: argparse.ArgumentParser) -> None:
+    for attr, flag in (("eval_index", "--eval-index"), ("start_at", "--start-at"), ("stop_after", "--stop-after")):
+        value = getattr(args, attr, None)
+        if value is not None and value < 1:
+            parser.error(f"{flag} must be a 1-based index.")
+    if args.eval_index is not None and (args.start_at is not None or args.stop_after is not None):
+        parser.error("--eval-index cannot be combined with --start-at or --stop-after.")
+    if args.start_at is not None and args.stop_after is not None and args.stop_after < args.start_at:
+        parser.error("--stop-after must be greater than or equal to --start-at.")
 
-        os.environ["MEDARC_INCLUDE_USAGE"] = "true" if args.include_usage else "false"
 
+def _run_toml_bench(args: argparse.Namespace) -> int:
     config_path = Path(args.config).expanduser()
-    env_root_override = Path(args.env_config_root).expanduser().resolve() if args.env_config_root else None
-    run_config = load_run_config(config_path, env_default_root=env_root_override)
-
-    run_name = args.name or run_config.name
-    output_dir = Path(args.output_dir).expanduser() if args.output_dir else Path(run_config.output_dir).expanduser()
-    output_dir = output_dir.resolve()
-    run_id = args.run_id  # May be None when using --auto-resume discovery
-    if run_id is not None:
-        try:
-            run_id = validate_simple_name(run_id, flag="--run-id")
-        except ValueError as exc:
-            logger.error("Invalid --run-id '%s': %s", run_id, exc)
-            logger.error("Suggested safe value: --run-id %s", slugify(run_id))
-            return 1
-
-    if args.restart:
-        restart_raw = args.restart
-        restart_path = Path(restart_raw).expanduser()
-        try:
-            if restart_path.exists():
-                if restart_path.is_dir():
-                    args.restart = str(restart_path)
-                elif restart_path.is_file() and restart_path.name == MANIFEST_FILENAME:
-                    args.restart = str(restart_path.parent)
-                else:
-                    logger.error(
-                        "Invalid --restart '%s': expected a run directory or %s file.",
-                        restart_raw,
-                        MANIFEST_FILENAME,
-                    )
-                    return 1
-            else:
-                args.restart = validate_simple_name(restart_raw, flag="--restart")
-        except OSError as exc:
-            logger.error("Invalid --restart '%s': %s", restart_raw, exc)
-            return 1
-        except ValueError as exc:
-            logger.error("Invalid --restart '%s': %s", restart_raw, exc)
-            return 1
-
-    if args.model_call_retries > 0 and not args.dry_run:
-        from datetime import datetime
-
-        from medarc_verifiers.utils.retry import patch_verifiers_model_response_retry
-
-        cwd = Path.cwd()
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        retry_log_path = cwd / "logs" / f"medarc_model_retry_{ts}.log"
-        patch_verifiers_model_response_retry(
-            attempts=args.model_call_retries,
-            log_path=retry_log_path,
-        )
-
-    jobs = build_jobs(run_config)
-    if not jobs:
-        logger.error("Configuration %s did not produce any jobs.", config_path)
-        return 1
-
-    selected_jobs = _filter_jobs(jobs, args.job_id)
-    if not selected_jobs:
-        logger.error("No jobs matched the provided filters.")
-        return 1
-
-    env_args_map, sampling_args_map = _build_effective_args(jobs)
-    config_checksum = compute_snapshot_checksum(run_config.model_dump())
-    forced_envs = _parse_forced_envs(args.forced)
-    forced_envs.update(_collect_rerun_envs(run_config.envs))
-
-    planner = ManifestPlanner(
-        output_dir=output_dir,
-        run_id=run_id,
-        run_name=run_name,
-        config_path=config_path,
-        config_checksum=config_checksum,
-        jobs=jobs,
-        env_args_map=env_args_map,
-        sampling_args_map=sampling_args_map,
-        restart_source=args.restart,
-        auto_resume=bool(args.auto_resume),
-        persist=not bool(args.dry_run),
+    raw_configs = _prepare_toml_raw_configs(
+        load_toml_eval_configs(config_path, extra_valid_fields={"name", "variant_id"}),
+        args,
     )
-
-    try:
-        manifest_plan = planner.plan(force_all=bool(args.force), forced_envs=forced_envs)
-    except ValueError as exc:
-        logger.error("%s", exc)
-        return 1
-
-    runnable_ids = manifest_plan.runnable_job_ids
-    selected_ids = {job.job_id for job in selected_jobs}
-    planned_jobs = [job for job in jobs if job.job_id in runnable_ids and job.job_id in selected_ids]
-
-    _print_job_plan(
-        selected_jobs,
-        manifest=manifest_plan.manifest,
-        runnable_job_ids=runnable_ids,
-        discovered_total=len(jobs),
-        dry_run=bool(args.dry_run),
-    )
-
-    if not planned_jobs:
-        if manifest_plan.reused_job_ids:
-            logger.info(
-                "All jobs already completed (reused %d job(s) from prior manifests).",
-                len(manifest_plan.reused_job_ids),
-            )
-        else:
-            logger.info("No jobs were scheduled after applying filters and resume settings.")
-
-        # Check if all selected jobs are completed (not just filtered out)
-        all_completed = all(
-            manifest_plan.manifest.job_entry(job.job_id)
-            and manifest_plan.manifest.job_entry(job.job_id).status == "completed"
-            for job in selected_jobs
-        )
-
-        if all_completed and selected_jobs and not args.dry_run and not args.force:
-            choice = args.on_complete
-            if choice == "prompt":
-                choice = _prompt_completed_jobs_action()
-            if choice == "new":
-                logger.info("Creating a new run with all jobs...")
-                # Create a fresh run by disabling auto-resume and forcing a new run_id
-                # Recursively call with updated args to create new manifest
-                new_args = argparse.Namespace(**vars(args))
-                new_args.auto_resume = False
-                new_args.run_id = None  # Force generation of new run_id
-                new_args.restart = None
-                return _execute_batch(new_args)
-            elif choice == "rerun":
-                logger.info("Rerunning all completed jobs...")
-                # Set all selected jobs to runnable
-                runnable_ids = {job.job_id for job in selected_jobs}
-                planned_jobs = [job for job in jobs if job.job_id in runnable_ids and job.job_id in selected_ids]
-                # Continue execution below
-            elif choice == "exit":
-                logger.info("Exiting without running jobs.")
-                _log_summary([], manifest_plan.manifest)
-                return 0
-            else:  # continue/skip
-                logger.info("Continuing without running jobs.")
-                _log_summary([], manifest_plan.manifest)
-                return 0
-        else:
-            _log_summary([], manifest_plan.manifest)
-            return 0
-
-    if not planned_jobs:
-        # After prompting, still no planned jobs (shouldn't happen, but safety check)
-        _log_summary([], manifest_plan.manifest)
+    selected_raw, plan_inputs, path_plans, overrides = _plan_selected_toml_raw_configs(raw_configs, args)
+    display_configs = _display_configs_from_plan_inputs(plan_inputs)
+    missing_envs = _missing_selected_env_refs(plan_inputs, args)
+    _print_toml_bench_plan(display_configs, path_plans, dry_run=bool(args.dry_run))
+    if missing_envs and args.auto_install:
+        _print_auto_install_warning(missing_envs, dry_run=bool(args.dry_run))
+    if args.dry_run:
         return 0
-
-    forced_job_ids = _compute_forced_job_ids(
-        planned_jobs=planned_jobs,
-        runnable_job_ids=runnable_ids,
-        manifest=manifest_plan.manifest,
-        force_all=bool(args.force),
-        forced_envs=forced_envs,
+    if missing_envs and not args.auto_install:
+        raise RuntimeError(_missing_envs_error(missing_envs))
+    return _execute_selected_toml_plan(
+        selected_raw, plan_inputs, path_plans, overrides, args, missing_envs=missing_envs
     )
 
-    settings = ExecutorSettings(
-        run_id=manifest_plan.manifest.model.run_id or "",
-        output_dir=output_dir,
-        env_dir=Path(args.env_dir).expanduser(),
-        endpoints_path=Path(args.endpoints_path).expanduser() if args.endpoints_path else None,
-        endpoints_path_explicit=bool(getattr(args, "endpoints_path_explicit", False)),
-        default_api_key_var=args.default_api_key_var,
-        default_api_key_var_explicit=bool(getattr(args, "default_api_key_var_explicit", False)),
-        default_api_base_url=args.default_api_base_url,
-        api_base_url_override=args.api_base_url,
-        log_level="DEBUG" if args.verbose else "INFO",
-        verbose=args.verbose,
-        save_results=args.save_results,
-        save_to_hf_hub=args.save_to_hf_hub,
-        hf_hub_dataset_name=_coerce_optional_str(args.hf_hub_dataset_name),
-        max_concurrent_generation=args.max_concurrent_generation,
-        max_concurrent_scoring=args.max_concurrent_scoring,
-        max_concurrent=args.max_concurrent,  # CLI override (None if not provided)
-        http_max_retries=args.http_max_retries,
-        rollout_max_retries=args.rollout_max_retries,
-        timeout=args.timeout,
-        sleep=args.sleep,
-        dry_run=args.dry_run,
-        cli_env_args=getattr(args, "cli_env_args", None),
-        cli_sampling_args=getattr(args, "cli_sampling_args", None),
-        forced_job_ids=forced_job_ids,
+
+def _toml_eval_overrides(args: argparse.Namespace) -> EvalConfigOverrides:
+    overrides = EvalConfigOverrides(
+        model=args.model,
+        provider=args.provider,
+        api_base_url=args.api_base_url,
+        api_key_var=args.api_key_var,
+        endpoints_path=args.endpoints_path if getattr(args, "endpoints_path_explicit", False) else None,
+        max_concurrent=args.max_concurrent,
+        env_args=getattr(args, "cli_env_args", None),
+        sampling_args=getattr(args, "cli_sampling_args", None),
     )
-
-    logger.info(
-        "Loaded %d job(s); executing %d after filters (%d reusable).",
-        len(jobs),
-        len(planned_jobs),
-        len(manifest_plan.reused_job_ids),
-    )
-
-    endpoints_cache: dict[str, Any] = {}
-    env_metadata_cache: dict[str, Any] = {}
-
-    results = execute_jobs(
-        planned_jobs,
-        settings,
-        endpoints_cache=endpoints_cache,
-        env_metadata_cache=env_metadata_cache,
-        manifest=None if args.dry_run else manifest_plan.manifest,
-    )
-
-    _log_summary(results, manifest_plan.manifest)
-
-    has_failures = any(result.status == "failed" for result in results if result.status != "skipped")
-    return 1 if has_failures else 0
+    return overrides
 
 
-def _build_effective_args(
-    jobs: Sequence[ResolvedJob],
-) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
-    env_map: dict[str, dict[str, Any]] = {}
-    sampling_map: dict[str, dict[str, Any]] = {}
-    for job in jobs:
-        env_map[job.job_id] = dict(job.env_args)
-        sampling_map[job.job_id] = dict(job.sampling_args)
-    return env_map, sampling_map
+def _plan_selected_toml_raw_configs(
+    raw_configs: Sequence[dict[str, Any]],
+    args: argparse.Namespace,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[EvalPathPlan], EvalConfigOverrides]:
+    selected_raw = _select_toml_raw_configs(raw_configs, args)
+    overrides = _toml_eval_overrides(args)
+    plan_inputs = [build_eval_identity_payload(raw, overrides=overrides) for raw in selected_raw]
+    output_root = _resolve_toml_output_root_from_raw(selected_raw, args)
+    path_plans = plan_eval_paths(plan_inputs, output_root=output_root)
+    return selected_raw, plan_inputs, path_plans, overrides
 
 
-def _parse_forced_envs(values: Sequence[str] | None) -> set[str]:
-    forced: set[str] = set()
-    if not values:
-        return forced
-    for chunk in values:
-        if not chunk:
+def _missing_selected_env_refs(
+    plan_inputs: Sequence[Mapping[str, Any]],
+    args: argparse.Namespace,
+) -> dict[str, EnvPackageRef]:
+    missing: dict[str, EnvPackageRef] = {}
+    for plan_input in plan_inputs:
+        env_id = str(plan_input["env_id"])
+        if _module_importable(upstream_module_name(env_id)):
             continue
-        for item in chunk.split(","):
-            value = item.strip()
-            if value:
-                forced.add(value.lower())
-    return forced
+        if env_id not in missing:
+            missing[env_id] = resolve_env_package(env_id, args.env_dir)
+    return missing
+
+
+def _print_auto_install_warning(missing_envs: Mapping[str, EnvPackageRef], *, dry_run: bool) -> None:
+    verb = "would auto-install" if dry_run else "will auto-install"
+    console = Console(stderr=True)
+    console.print(
+        f"[yellow]Warning:[/yellow] {len(missing_envs)} selected environment package(s) are not installed "
+        "in the active Python environment."
+    )
+    console.print(f"MedARC {verb} missing local envs in isolated temporary venvs for this run.")
+    console.print("Preinstall envs with vf-install or pass --no-auto-install to require installed packages.")
+    for env_id, ref in missing_envs.items():
+        console.print(f"  - {env_id}: {ref.env_path}")
+
+
+def _missing_envs_error(missing_envs: Mapping[str, EnvPackageRef]) -> str:
+    lines = [
+        "Selected environment packages are not importable and --no-auto-install was passed:",
+        *[f"- {env_id}: {ref.env_path}" for env_id, ref in missing_envs.items()],
+        "Preinstall envs with vf-install or rerun without --no-auto-install.",
+    ]
+    return "\n".join(lines)
+
+
+def _module_importable(module_name: str) -> bool:
+    return importlib.util.find_spec(module_name) is not None
+
+
+def _prepare_toml_raw_configs(raw_configs: Sequence[dict[str, Any]], args: argparse.Namespace) -> list[dict[str, Any]]:
+    prepared: list[dict[str, Any]] = []
+    for raw in raw_configs:
+        item = dict(raw)
+        item.setdefault("save_results", True)
+        item.setdefault("env_dir_path", str(args.env_dir))
+        if args.max_concurrent is None and "max_concurrent" not in item:
+            item["max_concurrent"] = 1
+        if args.timeout is not None:
+            item["timeout"] = args.timeout
+        if args.rollout_max_retries is not None:
+            item["max_retries"] = args.rollout_max_retries
+        if args.verbose:
+            item["verbose"] = True
+        prepared.append(item)
+    return prepared
+
+
+def _select_toml_raw_configs(raw_configs: Sequence[dict[str, Any]], args: argparse.Namespace) -> list[dict[str, Any]]:
+    indexed = list(raw_configs)
+    if args.eval_index is not None:
+        start = args.eval_index - 1
+        indexed = indexed[start : start + 1]
+    else:
+        if args.start_at is not None:
+            indexed = indexed[args.start_at - 1 :]
+        if args.stop_after is not None:
+            indexed = indexed[: args.stop_after - (args.start_at or 1) + 1]
+    if not indexed:
+        raise ValueError("No TOML evals matched the requested selection.")
+    return list(indexed)
+
+
+def _resolve_toml_output_root_from_raw(raw_configs: Sequence[Mapping[str, Any]], args: argparse.Namespace) -> Path:
+    if args.output_dir:
+        return Path(args.output_dir).expanduser()
+
+    configured_roots = {str(config["output_dir"]) for config in raw_configs if config.get("output_dir")}
+    if len(configured_roots) > 1:
+        raise ValueError(
+            "TOML bench deterministic output supports one output_dir per run; use a single global output_dir."
+        )
+    if configured_roots:
+        return Path(configured_roots.pop()).expanduser()
+    return DEFAULT_EVALS_DIR
+
+
+def _display_configs_from_plan_inputs(plan_inputs: Sequence[Mapping[str, Any]]) -> list[Any]:
+    return [
+        SimpleNamespace(
+            model=str(payload["model"]),
+            env_id=str(payload["env_id"]),
+            num_examples=payload.get("num_examples", "-"),
+            rollouts_per_example=payload.get("rollouts_per_example", "-"),
+            max_concurrent=payload.get("max_concurrent", "-"),
+        )
+        for payload in plan_inputs
+    ]
+
+
+def _execute_selected_toml_plan(
+    raw_configs: Sequence[Mapping[str, Any]],
+    plan_inputs: Sequence[Mapping[str, Any]],
+    path_plans: Sequence[EvalPathPlan],
+    overrides: EvalConfigOverrides,
+    args: argparse.Namespace,
+    *,
+    missing_envs: Mapping[str, EnvPackageRef],
+) -> int:
+    failures = 0
+    for index, (raw, plan_input, path_plan) in enumerate(zip(raw_configs, plan_inputs, path_plans), start=1):
+        try:
+            env_id = str(plan_input["env_id"])
+            if env_id in missing_envs:
+                _execute_isolated_toml_eval(
+                    raw,
+                    plan_input,
+                    path_plan,
+                    overrides,
+                    args,
+                    index=index,
+                    total=len(raw_configs),
+                    env_ref=missing_envs[env_id],
+                )
+            else:
+                config = build_eval_config(raw, overrides=overrides)
+                if config.env_id != plan_input["env_id"]:
+                    raise ValueError(f"Resolved env_id {config.env_id!r}, expected {plan_input['env_id']!r}.")
+                if config.model != plan_input["model"]:
+                    raise ValueError(f"Resolved model {config.model!r}, expected {plan_input['model']!r}.")
+                _prepare_toml_results_dir(path_plan.results_path, force=bool(args.force))
+                run_config = config.model_copy(update={"resume_path": path_plan.results_path, "save_results": True})
+                logger.info("Running TOML eval %d/%d: %s on %s", index, len(raw_configs), config.env_id, config.model)
+                asyncio.run(_run_one_toml_eval(run_config))
+        except Exception as exc:  # noqa: BLE001
+            failures += 1
+            logger.exception("TOML eval %d failed: %s", index, exc)
+            if not args.continue_on_error:
+                return 1
+        if args.sleep and index < len(raw_configs):
+            import time
+
+            time.sleep(float(args.sleep))
+    return 1 if failures else 0
+
+
+def _execute_isolated_toml_eval(
+    raw: Mapping[str, Any],
+    plan_input: Mapping[str, Any],
+    path_plan: EvalPathPlan,
+    overrides: EvalConfigOverrides,
+    args: argparse.Namespace,
+    *,
+    index: int,
+    total: int,
+    env_ref: EnvPackageRef,
+) -> None:
+    with tempfile.TemporaryDirectory(prefix="medarc-bench-child-") as temp_dir:
+        temp_root = Path(temp_dir)
+        payload_path = temp_root / f"eval-{index}.json"
+        status_path = temp_root / f"eval-{index}-status.json"
+        with temporary_bench_venv() as child_python:
+            install_env_package(child_python, env_ref.env_path)
+            _prepare_toml_results_dir(path_plan.results_path, force=bool(args.force))
+            payload = _bench_child_payload(
+                raw,
+                plan_input,
+                path_plan,
+                overrides,
+                args,
+                status_path=status_path,
+                cleanup_env_package=False,
+                env_preinstalled=True,
+            )
+            payload_path.write_text(json.dumps(payload, sort_keys=True, default=str), encoding="utf-8")
+            logger.info(
+                "Running TOML eval %d/%d in isolated venv: %s on %s",
+                index,
+                total,
+                plan_input["env_id"],
+                plan_input["model"],
+            )
+            completed = subprocess.run(
+                [str(child_python), "-m", "medarc_verifiers.cli.bench_child", str(payload_path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            status = _load_child_status(status_path, completed=completed)
+            if completed.returncode != 0 or int(status.get("exit_code", 1)) != 0:
+                detail = status.get("primary_error") or status.get("cleanup_error") or status.get("exit_reason")
+                output_tail = _completed_process_tail(completed)
+                if output_tail:
+                    detail = f"{detail}\n{output_tail}" if detail else output_tail
+                raise RuntimeError(f"Bench child failed: {detail}")
+
+
+def _bench_child_payload(
+    raw: Mapping[str, Any],
+    plan_input: Mapping[str, Any],
+    path_plan: EvalPathPlan,
+    overrides: EvalConfigOverrides,
+    args: argparse.Namespace,
+    *,
+    status_path: Path,
+    cleanup_env_package: bool = True,
+    env_preinstalled: bool = False,
+) -> dict[str, Any]:
+    return {
+        "raw_config": _jsonable_mapping(raw),
+        "overrides": _jsonable_mapping(_overrides_payload(overrides)),
+        "env_dir": str(Path(args.env_dir).expanduser()),
+        "resume_path": str(path_plan.results_path),
+        "status_path": str(status_path),
+        "expected_env_id": str(plan_input["env_id"]),
+        "expected_model": str(plan_input["model"]),
+        "cleanup_env_package": cleanup_env_package,
+        "env_preinstalled": env_preinstalled,
+    }
+
+
+def _overrides_payload(overrides: EvalConfigOverrides) -> dict[str, Any]:
+    return {
+        "model": overrides.model,
+        "provider": overrides.provider,
+        "api_base_url": overrides.api_base_url,
+        "api_key_var": overrides.api_key_var,
+        "api_client_type": overrides.api_client_type,
+        "endpoints_path": str(overrides.endpoints_path) if overrides.endpoints_path is not None else None,
+        "max_concurrent": overrides.max_concurrent,
+        "env_args": dict(overrides.env_args or {}),
+        "sampling_args": dict(overrides.sampling_args or {}),
+    }
+
+
+def _jsonable_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, item in value.items():
+        if isinstance(item, Path):
+            result[key] = str(item)
+        elif isinstance(item, Mapping):
+            result[key] = _jsonable_mapping(item)
+        elif isinstance(item, list):
+            result[key] = [str(element) if isinstance(element, Path) else element for element in item]
+        else:
+            result[key] = item
+    return result
+
+
+def _load_child_status(
+    status_path: Path, *, completed: subprocess.CompletedProcess[str] | None = None
+) -> dict[str, Any]:
+    if not status_path.is_file():
+        tail = _completed_process_tail(completed) if completed is not None else ""
+        detail = f"\n{tail}" if tail else ""
+        raise RuntimeError(f"Bench child did not write status file: {status_path}{detail}")
+    try:
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        tail = _completed_process_tail(completed) if completed is not None else ""
+        detail = f"\n{tail}" if tail else ""
+        raise RuntimeError(f"Bench child wrote malformed status file {status_path}: {exc}{detail}") from exc
+    if not isinstance(status, dict):
+        raise RuntimeError(f"Bench child wrote non-object status file: {status_path}")
+    return status
+
+
+def _completed_process_tail(completed: subprocess.CompletedProcess[str] | None, *, lines: int = 20) -> str:
+    if completed is None:
+        return ""
+    parts: list[str] = []
+    for label, text in (("stderr", completed.stderr), ("stdout", completed.stdout)):
+        stripped = (text or "").strip()
+        if stripped:
+            parts.append(f"{label} tail:\n" + "\n".join(stripped.splitlines()[-lines:]))
+    return "\n".join(parts)
+
+
+async def _run_one_toml_eval(config: Any) -> Any:
+    return await run_evaluation(config)
+
+
+def _prepare_toml_results_dir(
+    results_path: Path,
+    *,
+    force: bool,
+) -> None:
+    if results_path.exists() and force:
+        _archive_existing_path(results_path)
+
+    metadata_path = results_path / "metadata.json"
+    results_file = results_path / "results.jsonl"
+    if results_path.exists():
+        if results_path.is_dir() and not any(results_path.iterdir()):
+            return
+        has_metadata = metadata_path.is_file()
+        has_results = results_file.is_file()
+        if not (has_metadata and has_results):
+            raise ValueError(
+                f"Cannot use existing output {results_path}: metadata.json and results.jsonl are both required. "
+                "Use --force to archive and rerun."
+            )
+        return
+
+    results_path.mkdir(parents=True, exist_ok=True)
+
+
+def _archive_existing_path(path: Path) -> Path:
+    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    candidate = path.with_name(f"{path.name}__old_{timestamp}")
+    suffix = 1
+    while candidate.exists():
+        candidate = path.with_name(f"{path.name}__old_{timestamp}_{suffix}")
+        suffix += 1
+    shutil.move(str(path), str(candidate))
+    return candidate
+
+
+def _print_toml_bench_plan(eval_configs: Sequence[Any], path_plans: Sequence[EvalPathPlan], *, dry_run: bool) -> None:
+    console = Console(width=240)
+    action = "dry-run" if dry_run else "run"
+    table = Table(
+        title="TOML Bench Dry Run" if dry_run else "TOML Bench Plan",
+        caption=f"{len(eval_configs)} eval(s) to {action}",
+        expand=True,
+    )
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("Model", style="magenta", overflow="fold")
+    table.add_column("Environment", style="green", overflow="fold")
+    table.add_column("Variant", style="cyan", overflow="fold")
+    table.add_column("Examples", justify="right")
+    table.add_column("Rollouts", justify="right")
+    table.add_column("Max Concurrency", justify="right")
+    table.add_column("Output Path", overflow="fold")
+
+    for index, (config, path_plan) in enumerate(zip(eval_configs, path_plans), start=1):
+        table.add_row(
+            str(index),
+            config.model,
+            config.env_id,
+            path_plan.identity.variant_id or "-",
+            str(config.num_examples),
+            str(config.rollouts_per_example),
+            str(config.max_concurrent),
+            str(path_plan.results_path),
+        )
+
+    console.print(table)
 
 
 def _parse_repeatable_csv(values: Sequence[str] | None) -> list[str]:
@@ -1330,23 +1690,6 @@ def _option_was_provided(argv: Sequence[str], long_flag: str) -> bool:
     return False
 
 
-def _resolve_model_call_retries(model_call_retries: int | None, deprecated_toggle: bool | None) -> int:
-    if model_call_retries is not None:
-        if model_call_retries < 0:
-            raise ValueError("--model-call-retries must be >= 0.")
-        if deprecated_toggle is not None:
-            logger.warning(
-                "Ignoring deprecated --enable-additional-retries because --model-call-retries was explicitly set."
-            )
-        return model_call_retries
-
-    if deprecated_toggle is None:
-        return 0
-
-    logger.warning("Flag --enable-additional-retries is deprecated; use --model-call-retries <attempts> instead.")
-    return 3 if deprecated_toggle else 0
-
-
 def _filter_winrate_datasets(
     datasets: Sequence[tuple[str, Sequence[Path]]],
     exclude_datasets: Sequence[str],
@@ -1366,132 +1709,16 @@ def _filter_winrate_datasets(
     return filtered
 
 
-def _collect_rerun_envs(envs: Mapping[str, EnvironmentConfigSchema]) -> set[str]:
-    rerun: set[str] = set()
-    for env in envs.values():
-        if getattr(env, "rerun", False):
-            for key in (env.id, env.module, env.matrix_base_id):
-                if key:
-                    rerun.add(str(key).lower())
-    return rerun
-
-
-def _compute_forced_job_ids(
-    *,
-    planned_jobs: Sequence[ResolvedJob],
-    runnable_job_ids: set[str],
-    manifest: RunManifest | None,
-    force_all: bool,
-    forced_envs: set[str],
-) -> set[str]:
-    forced_ids: set[str] = set()
-    if force_all:
-        return {job.job_id for job in planned_jobs}
-
-    for job in planned_jobs:
-        entry = manifest.job_entry(job.job_id) if manifest is not None else None
-        env_forced = any(key in forced_envs for key in _force_keys_for_job(job, entry))
-        completed_but_runnable = bool(
-            entry is not None and entry.status == "completed" and job.job_id in runnable_job_ids
-        )
-        if env_forced or completed_but_runnable:
-            forced_ids.add(job.job_id)
-    return forced_ids
-
-
-def _force_keys_for_job(job: ResolvedJob, entry: ManifestJobEntry | None) -> set[str]:
-    keys: set[str] = {job.job_id.lower()}
-    for value in (
-        getattr(job.env, "id", None),
-        getattr(job.env, "module", None),
-        getattr(job.env, "matrix_base_id", None),
-        getattr(entry, "env_id", None),
-    ):
-        if value:
-            keys.add(str(value).lower())
-    return keys
-
-
-def _filter_jobs(jobs: Sequence[ResolvedJob], job_filters: Sequence[str] | None) -> list[ResolvedJob]:
-    if not job_filters:
-        return list(jobs)
-    filters = set(job_filters)
-    selected = [job for job in jobs if job.job_id in filters]
-    missing = filters - {job.job_id for job in selected}
-    if missing:
-        logger.warning("Unknown job ids requested: %s", ", ".join(sorted(missing)))
-    return selected
-
-
-def _coerce_optional_str(value: str | None) -> str | None:
-    if value is None or value == "":
-        return None
-    return value
-
-
-def _prompt_completed_jobs_action() -> str:
-    """Prompt user to choose what to do when all jobs are completed.
-
-    Returns:
-        "new", "rerun", "continue", or "exit"
-    """
-    console = Console()
-
-    message = "\n[bold yellow]All jobs are already completed.[/bold yellow]\n"
-    message += "What would you like to do?\n"
-    message += "  [bold cyan]n[/bold cyan] - Create a new run\n"
-    message += "  [bold cyan]r[/bold cyan] - Rerun all jobs (ignore completion status)\n"
-    message += "  [bold cyan]c[/bold cyan] - Continue without running (default)\n"
-    message += "  [bold cyan]e[/bold cyan] - Exit\n"
-
-    console.print(message)
-
-    try:
-        response = input("Choose [n/r/c/e]: ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print()  # New line after Ctrl+C
-        return "exit"
-
-    if response == "n" or response == "new":
-        return "new"
-    elif response == "r" or response == "rerun":
-        return "rerun"
-    elif response == "e" or response == "exit":
-        return "exit"
-    else:
-        # Default to continue for any other input (including empty/enter)
-        return "continue"
-
-
-def _log_summary(results: Sequence[JobExecutionResult], manifest: RunManifest | None = None) -> None:
-    if manifest is not None:
-        summary = manifest.summary
-        logger.info(
-            "Run complete: %d completed, %d pending, %d failed, %d skipped (total %d).",
-            summary.get("completed", 0),
-            summary.get("pending", 0),
-            summary.get("failed", 0),
-            summary.get("skipped", 0),
-            summary.get("total", 0),
-        )
-        return
-    total = len(results)
-    succeeded = sum(result.status == "succeeded" for result in results)
-    skipped = sum(result.status == "skipped" for result in results)
-    failed = sum(result.status == "failed" for result in results)
-    logger.info("Run complete: %d succeeded, %d skipped, %d failed (total %d).", succeeded, skipped, failed, total)
-
-
 def _print_general_help() -> None:
     message = dedent(
         f"""\
         Usage:
           {COMMAND} <ENV> [options]                 # Single run (ENV must be first; use ENV --help for details)
-          {COMMAND} {BENCH_COMMAND} --config CONFIG.yaml ...  # Batch run (see: {COMMAND} {BENCH_COMMAND} --help)
-          {COMMAND} {PROCESS_COMMAND} [options]               # Export raw runs to parquet (see: {COMMAND} {PROCESS_COMMAND} --help)
+          {COMMAND} {BENCH_COMMAND} --config CONFIG.toml ...  # Sequential TOML bench
+          {COMMAND} {PROCESS_COMMAND} [options]               # Export eval outputs to parquet (see: {COMMAND} {PROCESS_COMMAND} --help)
           {COMMAND} {WINRATE_COMMAND} [options]               # Compute win rates from processed parquet outputs
 
-        First argument must be the environment slug for single runs. Use '{COMMAND} {BENCH_COMMAND} --help' for batch mode options."""
+        First argument must be the environment slug for single runs. Use '{COMMAND} {BENCH_COMMAND} --help' for TOML bench options."""
     )
     print(message)
 
@@ -1565,77 +1792,12 @@ def _load_env_export_map(root: Path | None) -> dict[str, EnvironmentExportConfig
             if env_cfg.export is None:
                 continue
             keys = {env_cfg.id, env_cfg.matrix_base_id}
+            if env_cfg.module and env_cfg.env_args:
+                keys.add(f"{env_cfg.module}::{generate_variant_id({'env_args': env_cfg.env_args})}")
             for key in filter(None, keys):
                 export_map[key] = env_cfg.export
 
     return export_map
-
-
-def _print_job_plan(
-    jobs: Sequence[ResolvedJob],
-    *,
-    manifest: RunManifest | None,
-    runnable_job_ids: set[str],
-    discovered_total: int,
-    dry_run: bool,
-) -> None:
-    """Render a human-friendly summary of the jobs scheduled for execution."""
-    listed_total = len(jobs)
-    scheduled_total = sum(1 for job in jobs if job.job_id in runnable_job_ids)
-    caption_parts: list[str] = [f"{listed_total} job(s) listed"]
-    caption_parts.append(f"{scheduled_total} to {'dry-run' if dry_run else 'run'}")
-    if discovered_total != listed_total:
-        caption_parts.append(f"{discovered_total} discovered")
-    caption = " | ".join(part for part in caption_parts if part)
-
-    if not jobs:
-        logger.info("No jobs to display (%s).", caption)
-        return
-
-    def _format_label(primary: str | None, secondary: str | None) -> str:
-        if primary and secondary and primary != secondary:
-            return f"{primary} ({secondary})"
-        return primary or secondary or "-"
-
-    def _resolve_status(job_id: str, entry: ManifestJobEntry | None) -> str:
-        if job_id in runnable_job_ids:
-            return "next"
-        if entry and entry.status == "completed":
-            return "completed"
-        return "pending"
-
-    entries = {}
-    if manifest is not None:
-        entries = {entry.job_id: entry for entry in manifest.jobs if entry.job_id}
-
-    console = Console()
-    table = Table(title="Planned Jobs", caption=caption, expand=True)
-    table.add_column("#", justify="right", style="dim")
-    table.add_column("Job ID", style="bold cyan", overflow="fold")
-    table.add_column("Status", style="yellow")
-    table.add_column("Name", style="white", overflow="fold")
-    table.add_column("Model", style="magenta", overflow="fold")
-    table.add_column("Environment", style="green", overflow="fold")
-    table.add_column("Examples", justify="right")
-    table.add_column("Rollouts", justify="right")
-
-    for index, job in enumerate(jobs, start=1):
-        entry = entries.get(job.job_id)
-        model_label = _format_label(job.model.id, job.model.model)
-        env_label = _format_label(job.env.id, job.env.module)
-        status = _resolve_status(job.job_id, entry)
-        table.add_row(
-            str(index),
-            job.job_id,
-            status,
-            job.name or "-",
-            model_label,
-            env_label,
-            str(job.env.num_examples),
-            str(job.env.rollouts_per_example),
-        )
-
-    console.print(table)
 
 
 if __name__ == "__main__":  # pragma: no cover

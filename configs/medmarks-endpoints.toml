@@ -1,0 +1,942 @@
+# MedMarks model alias registry ported from configs/old model sections.
+# URL, key, max_concurrent, orchestration, and job matrix settings are intentionally omitted.
+# Supply deployment-specific API settings with --provider or --api-base-url/--api-key-var.
+
+[[endpoint]]
+endpoint_id = "afm-4-5b"
+model = "arcee-ai/AFM-4.5B"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.5
+top_p = 0.95
+top_k = 50
+
+
+[[endpoint]]
+endpoint_id = "ai21-jamba2-mini"
+model = "ai21labs/AI21-Jamba2-Mini"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 1.0
+
+
+[[endpoint]]
+endpoint_id = "antangelmed"
+model = "MedAIBase/AntAngelMed"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+
+
+[[endpoint]]
+endpoint_id = "baichuan-m2"
+model = "baichuan-inc/Baichuan-M2-32B"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+
+
+[[endpoint]]
+endpoint_id = "baichuan-m3"
+model = "baichuan-inc/Baichuan-M3-235B"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+
+
+[[endpoint]]
+endpoint_id = "dasd-30b-a3b"
+model = "Alibaba-Apsara/DASD-30B-A3B-Thinking-Preview"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 1.0
+
+
+[[endpoint]]
+endpoint_id = "dasd-4b-thinking"
+model = "Alibaba-Apsara/DASD-4B-Thinking"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 1.0
+
+
+[[endpoint]]
+endpoint_id = "deepseek-v3.2-speciale"
+model = "deepseek/deepseek-v3.2-speciale"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1
+top_p = 0.95
+
+[endpoint.sampling_args.extra_body]
+
+[endpoint.sampling_args.extra_body.usage]
+include = true
+
+
+[[endpoint]]
+endpoint_id = "fiercefalcon"
+model = "fiercefalcon"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+reasoning_effort = "low"
+temperature = 1
+top_p = 0.95
+
+
+[[endpoint]]
+endpoint_id = "gemini-3-pro-preview"
+model = "gemini-3-pro-preview"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1
+
+
+[[endpoint]]
+endpoint_id = "gemma-3-12b-it"
+model = "google/gemma-3-12b-it"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+top_k = 60
+
+
+[[endpoint]]
+endpoint_id = "gemma-3-27b-it"
+model = "google/gemma-3-27b-it"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+top_k = 60
+
+
+[[endpoint]]
+endpoint_id = "gemma-3-4b-it"
+model = "google/gemma-3-4b-it"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+top_k = 60
+
+
+[[endpoint]]
+endpoint_id = "glm-4.5-air"
+model = "zai-org/GLM-4.5-Air"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+
+
+[[endpoint]]
+endpoint_id = "glm-4.7-fp8"
+model = "zai-org/GLM-4.7-FP8"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+
+
+[[endpoint]]
+endpoint_id = "glm-4_7-flash"
+model = "zai-org/GLM-4.7-Flash"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+
+
+# Medmarks 1.0 GPT runs predated Verifiers Responses API support.
+# These aliases now use openai_responses to better match OpenAI GPT model behavior.
+[[endpoint]]
+endpoint_id = "gpt-5-nano"
+model = "openai/gpt-5-nano"
+api_client_type = "openai_responses"
+
+[endpoint.sampling_args]
+reasoning_effort = "medium"
+
+[endpoint.sampling_args.extra_body]
+
+[endpoint.sampling_args.extra_body.usage]
+include = true
+
+
+[[endpoint]]
+endpoint_id = "gpt-5_2"
+model = "openai/gpt-5.2"
+api_client_type = "openai_responses"
+
+[endpoint.sampling_args]
+reasoning_effort = "medium"
+
+[endpoint.sampling_args.extra_body]
+
+[endpoint.sampling_args.extra_body.usage]
+include = true
+
+
+[[endpoint]]
+endpoint_id = "gpt-5_2-high"
+model = "openai/gpt-5.2"
+api_client_type = "openai_responses"
+
+[endpoint.sampling_args]
+reasoning_effort = "high"
+
+[endpoint.sampling_args.extra_body]
+
+[endpoint.sampling_args.extra_body.usage]
+include = true
+
+
+# Medmarks 1.0 GPT-OSS runs predated Verifiers Responses API support.
+# These aliases now use openai_responses to better match gpt-oss model behavior.
+[[endpoint]]
+endpoint_id = "gpt-oss-120b"
+model = "openai/gpt-oss-120b"
+api_client_type = "openai_responses"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 1.0
+top_k = 0
+reasoning_effort = "medium"
+
+
+[[endpoint]]
+endpoint_id = "gpt-oss-120b-high"
+model = "openai/gpt-oss-120b"
+api_client_type = "openai_responses"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 1.0
+top_k = 0
+reasoning_effort = "high"
+
+
+[[endpoint]]
+endpoint_id = "gpt-oss-120b-low"
+model = "openai/gpt-oss-120b"
+api_client_type = "openai_responses"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 1.0
+top_k = 0
+reasoning_effort = "low"
+
+
+[[endpoint]]
+endpoint_id = "gpt-oss-20b"
+model = "openai/gpt-oss-20b"
+api_client_type = "openai_responses"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 1.0
+top_k = 0
+reasoning_effort = "medium"
+
+
+[[endpoint]]
+endpoint_id = "gpt-oss-20b-high"
+model = "openai/gpt-oss-20b"
+api_client_type = "openai_responses"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 1.0
+top_k = 0
+reasoning_effort = "high"
+
+
+[[endpoint]]
+endpoint_id = "gpt-oss-20b-low"
+model = "openai/gpt-oss-20b"
+api_client_type = "openai_responses"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 1.0
+top_k = 0
+reasoning_effort = "low"
+
+
+# Medmarks 1.0 GPT runs predated Verifiers Responses API support.
+# These aliases now use openai_responses to better match OpenAI GPT model behavior.
+[[endpoint]]
+endpoint_id = "gpt_5_1"
+model = "openai/gpt-5.1"
+api_client_type = "openai_responses"
+
+[endpoint.sampling_args]
+reasoning_effort = "medium"
+
+[endpoint.sampling_args.extra_body]
+
+[endpoint.sampling_args.extra_body.usage]
+include = true
+
+
+[[endpoint]]
+endpoint_id = "gpt_5_mini"
+model = "openai/gpt-5-mini"
+api_client_type = "openai_responses"
+
+[endpoint.sampling_args]
+reasoning_effort = "low"
+
+[endpoint.sampling_args.extra_body]
+
+[endpoint.sampling_args.extra_body.usage]
+include = true
+
+
+[[endpoint]]
+endpoint_id = "granite-4-0-h-small"
+model = "ibm-granite/granite-4.0-h-small"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.0
+top_p = 1.0
+top_k = 0
+
+
+[[endpoint]]
+endpoint_id = "granite-4-0-h-tiny"
+model = "ibm-granite/granite-4.0-h-tiny"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.0
+top_p = 1.0
+top_k = 0
+
+
+[[endpoint]]
+endpoint_id = "grok-4"
+model = "x-ai/grok-4"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1
+top_p = 0.95
+
+[endpoint.sampling_args.extra_body]
+
+[endpoint.sampling_args.extra_body.usage]
+include = true
+
+
+[[endpoint]]
+endpoint_id = "hermes-4-14b"
+model = "NousResearch/Hermes-4-14B"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+
+
+[[endpoint]]
+endpoint_id = "hermes-4-70b"
+model = "NousResearch/Hermes-4-70B"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+
+
+[[endpoint]]
+endpoint_id = "intellect3"
+model = "PrimeIntellect/INTELLECT-3"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+
+
+[[endpoint]]
+endpoint_id = "kimi-k2-thinking"
+model = "moonshotai/Kimi-K2-Thinking"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+
+
+[[endpoint]]
+endpoint_id = "kimi-linear"
+model = "moonshotai/Kimi-Linear-48B-A3B-Instruct"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+
+
+[[endpoint]]
+endpoint_id = "ling-2-flash"
+model = "inclusionAI/Ling-flash-2.0"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.7
+top_p = 0.8
+
+
+[[endpoint]]
+endpoint_id = "llama-3-70b-instruct"
+model = "meta-llama/Llama-3.3-70B-Instruct"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.7
+top_p = 0.95
+top_k = 0
+
+
+[[endpoint]]
+endpoint_id = "llama-3-8b-instruct"
+model = "meta-llama/Llama-3.1-8B-Instruct"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.7
+top_p = 0.95
+top_k = 0
+
+
+[[endpoint]]
+endpoint_id = "magistral-small"
+model = "mistralai/Magistral-Small-2509"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.7
+top_p = 0.95
+
+
+[[endpoint]]
+endpoint_id = "medgemma-27b-text"
+model = "google/medgemma-27b-text-it"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.0
+top_p = 1.0
+top_k = 0
+
+
+[[endpoint]]
+endpoint_id = "medgemma-4b-1_5-it"
+model = "google/medgemma-1.5-4b-it"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.0
+top_p = 0.95
+top_k = 64
+
+
+[[endpoint]]
+endpoint_id = "medgemma-4b-it"
+model = "google/medgemma-4b-it"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.0
+top_p = 1.0
+top_k = 0
+
+
+[[endpoint]]
+endpoint_id = "mediphi"
+model = "microsoft/MediPhi-Instruct"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.0
+top_p = 0.95
+
+
+[[endpoint]]
+endpoint_id = "minimax-m2"
+model = "MiniMaxAI/MiniMax-M2"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+top_k = 40
+
+
+[[endpoint]]
+endpoint_id = "minimax-m2.1"
+model = "MiniMaxAI/MiniMax-M2.1"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+top_k = 40
+
+
+[[endpoint]]
+endpoint_id = "ministral3-14b-instruct"
+model = "mistralai/Ministral-3-14B-Instruct-2512"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.1
+top_p = 0.95
+
+
+[[endpoint]]
+endpoint_id = "ministral3-14b-reason"
+model = "mistralai/Ministral-3-14B-Reasoning-2512"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.7
+top_p = 0.95
+
+
+[[endpoint]]
+endpoint_id = "ministral3-3b-instruct"
+model = "mistralai/Ministral-3-3B-Instruct-2512"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.1
+top_p = 0.95
+
+
+[[endpoint]]
+endpoint_id = "ministral3-3b-reason"
+model = "mistralai/Ministral-3-3B-Reasoning-2512"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.7
+top_p = 0.95
+
+
+[[endpoint]]
+endpoint_id = "ministral3-8b-instruct"
+model = "mistralai/Ministral-3-8B-Instruct-2512"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.1
+top_p = 0.95
+
+
+[[endpoint]]
+endpoint_id = "ministral3-8b-reason"
+model = "mistralai/Ministral-3-8B-Reasoning-2512"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.7
+top_p = 0.95
+
+
+[[endpoint]]
+endpoint_id = "mirothinker-235b-a22b"
+model = "miromind-ai/MiroThinker-v1.5-235B"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+
+
+[[endpoint]]
+endpoint_id = "mirothinker-30b-a3b"
+model = "miromind-ai/MiroThinker-v1.5-30B"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+
+
+[[endpoint]]
+endpoint_id = "nemotron-nano-v2"
+model = "nvidia/NVIDIA-Nemotron-Nano-12B-v2"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+
+
+[[endpoint]]
+endpoint_id = "nemotron-nano-v3"
+model = "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 1.0
+
+
+[[endpoint]]
+endpoint_id = "olmo-3-32b-think"
+model = "allenai/Olmo-3-32B-Think"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+
+
+[[endpoint]]
+endpoint_id = "olmo-3-7b-instruct"
+model = "allenai/Olmo-3-7B-Instruct"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+
+
+[[endpoint]]
+endpoint_id = "olmo-3-7b-think"
+model = "allenai/Olmo-3-7B-Think"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+
+
+[[endpoint]]
+endpoint_id = "olmo-3_1-32b-instruct"
+model = "allenai/Olmo-3.1-32B-Instruct"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+
+
+[[endpoint]]
+endpoint_id = "olmo-3_1-32b-think"
+model = "allenai/Olmo-3.1-32B-Think"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+
+
+[[endpoint]]
+endpoint_id = "phi-4-reasoning"
+model = "microsoft/Phi-4-reasoning"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.8
+top_p = 0.95
+top_k = 50
+
+
+[[endpoint]]
+endpoint_id = "phi-4-reasoning-plus"
+model = "microsoft/Phi-4-reasoning-plus"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.8
+top_p = 0.95
+top_k = 50
+
+
+[[endpoint]]
+endpoint_id = "qwen-235b-a22b-thinking"
+model = "Qwen/Qwen3-235B-A22B-Thinking-2507"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+min_p = 0
+
+
+[[endpoint]]
+endpoint_id = "qwen-3-14b-thinking"
+model = "Qwen/Qwen3-14B"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+min_p = 0
+
+
+[[endpoint]]
+endpoint_id = "qwen-3-4b-thinking"
+model = "Qwen/Qwen3-4B-Thinking-2507"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+min_p = 0
+
+
+[[endpoint]]
+endpoint_id = "qwen-3-8b-thinking"
+model = "Qwen/Qwen3-8B"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+min_p = 0
+
+
+[[endpoint]]
+endpoint_id = "qwen-30b-a3b-instruct"
+model = "Qwen/Qwen3-30B-A3B-Instruct-2507"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.7
+top_p = 0.8
+top_k = 20
+min_p = 0
+
+
+[[endpoint]]
+endpoint_id = "qwen-30b-a3b-instruct-awq-4bit"
+model = "cpatonn/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.7
+top_p = 0.8
+top_k = 20
+min_p = 0
+
+
+[[endpoint]]
+endpoint_id = "qwen-30b-a3b-instruct-awq-8bit"
+model = "cpatonn/Qwen3-30B-A3B-Instruct-2507-AWQ-8bit"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.7
+top_p = 0.8
+top_k = 20
+min_p = 0
+
+
+[[endpoint]]
+endpoint_id = "qwen-30b-a3b-instruct-fp8"
+model = "Qwen/Qwen3-30B-A3B-Instruct-2507-FP8"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.7
+top_p = 0.8
+top_k = 20
+min_p = 0
+
+
+[[endpoint]]
+endpoint_id = "qwen-30b-a3b-thinking"
+model = "Qwen/Qwen3-30B-A3B-Thinking-2507"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+min_p = 0
+
+
+[[endpoint]]
+endpoint_id = "qwen-30b-a3b-thinking-awq-4bit"
+model = "cpatonn/Qwen3-30B-A3B-Thinking-2507-AWQ-4bit"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+min_p = 0
+
+
+[[endpoint]]
+endpoint_id = "qwen-30b-a3b-thinking-awq-8bit"
+model = "cpatonn/Qwen3-30B-A3B-Thinking-2507-AWQ-8bit"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+min_p = 0
+
+
+[[endpoint]]
+endpoint_id = "qwen-30b-a3b-thinking-fp8"
+model = "Qwen/Qwen3-30B-A3B-Thinking-2507-FP8"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+min_p = 0
+
+
+[[endpoint]]
+endpoint_id = "qwen-next-80b-a3b-instruct"
+model = "Qwen/Qwen3-Next-80B-A3B-Instruct"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.7
+top_p = 0.8
+top_k = 20
+min_p = 0
+
+
+[[endpoint]]
+endpoint_id = "qwen-next-80b-a3b-thinking"
+model = "Qwen/Qwen3-Next-80B-A3B-Thinking"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+min_p = 0
+
+
+# Qwen3-VL temperature guidance varies across official sources and examples;
+# 1.0, 0.8, and 0.6 are all referenced. This preserves the legacy run config.
+[[endpoint]]
+endpoint_id = "qwen-vl-30b-a3b-thinking"
+model = "Qwen/Qwen3-VL-30B-A3B-Thinking"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+top_k = 20
+min_p = 0
+
+
+[[endpoint]]
+endpoint_id = "qwen2_5-32b-instruct"
+model = "Qwen/Qwen2.5-32B-Instruct"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.7
+top_p = 0.8
+top_k = 20
+
+
+[[endpoint]]
+endpoint_id = "qwen3-max"
+model = "qwen/qwen3-max"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+min_p = 0
+
+[endpoint.sampling_args.extra_body]
+
+[endpoint.sampling_args.extra_body.usage]
+include = true
+
+
+[[endpoint]]
+endpoint_id = "smollm3-3b"
+model = "HuggingFaceTB/SmolLM3-3B"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
+
+
+[[endpoint]]
+endpoint_id = "sonnet-4_5"
+model = "claude-sonnet-4-5-20250929"
+api_client_type = "anthropic_messages"
+
+[endpoint.sampling_args]
+temperature = 0.7
+
+
+[[endpoint]]
+endpoint_id = "trinity-mini"
+model = "arcee-ai/Trinity-Mini"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.15
+top_k = 50
+top_p = 0.75
+min_p = 0.06
+
+
+[[endpoint]]
+endpoint_id = "trinity-nano-preview"
+model = "arcee-ai/Trinity-Nano-Preview"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.5
+top_k = 50
+top_p = 0.95

@@ -7,7 +7,6 @@ import asyncio
 import importlib
 import json
 import os
-import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,7 +30,6 @@ from medarc_verifiers.orchestrate.bundle import (
     write_execution_allocation,
     write_runtime_state,
 )
-from medarc_verifiers.orchestrate.config import load_job_config
 from medarc_verifiers.orchestrate.docker_vllm import (
     sanitize_container_name,
     wait_for_readiness_async,
@@ -48,20 +46,17 @@ from medarc_verifiers.orchestrate.state import (
     write_task_result,
     write_text,
 )
-from medarc_verifiers.orchestrate.task_naming import bench_run_id, sanitize_task_dirname
 from medarc_verifiers.orchestrate.topology import ResolvedTopology, resolve_task_spec_topology
 from medarc_verifiers.orchestrate.vllm_args import build_container_args, normalize_volume_mounts
 
 _COMMAND_TEMPLATE_UV = (
     "uv run medarc-eval bench --config {job_config_path} --api-base-url {base_url} "
-    "--run-id {bench_run_id} --on-complete exit"
+    "--provider local --output-dir {output_dir} {endpoints_arg}"
 )
 _COMMAND_TEMPLATE_BARE = (
     "medarc-eval bench --config {job_config_path} --api-base-url {base_url} "
-    "--run-id {bench_run_id} --on-complete exit"
+    "--provider local --output-dir {output_dir} {endpoints_arg}"
 )
-_DEFAULT_BENCH_OUTPUT_DIR = Path("runs") / "raw"
-
 StateHandler = Callable[[TaskManifest, TaskPaths, str], None]
 LogFn = Callable[[str], None]
 HandleRegistration = Callable[[str, RuntimeHandle], None]
@@ -263,10 +258,9 @@ class TaskWorker:
                 return
             log(f"JOB ready task={self._spec.task_id} attempts={readiness.attempts}")
 
-            effective_bench_run_id = _effective_bench_run_id(self._options.run_id, self._spec)
+            endpoints_arg = f"--endpoints-path {self._spec.endpoints_path}" if self._spec.endpoints_path else ""
             command_context = {
                 "base_url": self._active_handle.base_url,
-                "bench_run_id": effective_bench_run_id,
                 "host_port": str(_require_server_port(self._allocation)),
                 "model_key": self._spec.model_key,
                 "model_id": self._spec.model_id,
@@ -274,14 +268,10 @@ class TaskWorker:
                 "run_id": self._options.run_id,
                 "task_id": self._spec.task_id,
                 "job_config_path": self._spec.bundled_eval_config_path,
+                "endpoints_arg": endpoints_arg,
             }
             command = render_command(self._command_template, command_context)
-            manifest.bench_run_id = effective_bench_run_id
-            restart_source = _resolved_restart_source(paths.state_path, self._spec)
-            if restart_source:
-                manifest.restart_source = restart_source
-                if "--restart" not in command:
-                    command.extend(["--restart", restart_source])
+            manifest.bench_run_id = None
             manifest.bench_command = shlex.join(command)
             log(f"JOB bench-start task={self._spec.task_id} cmd={_shorten(manifest.bench_command)}")
             state_handler(manifest, paths, JobState.running)
@@ -295,30 +285,6 @@ class TaskWorker:
             )
             if self._callbacks is not None and self._callbacks.register_bench is not None:
                 self._callbacks.register_bench(self._spec.task_id, self._bench_process)
-            discovered_run_dir = await _discover_bench_run_dir(
-                job_config_path=Path(self._spec.bundled_eval_config_path),
-                repo_root=Path(__file__).resolve().parents[2],
-                timeout_s=15.0,
-            )
-            if discovered_run_dir is not None:
-                manifest.bench_run_dir = str(discovered_run_dir)
-                if restart_source is None:
-                    manifest.restart_source = _format_restart_source(
-                        discovered_run_dir,
-                        repo_root=Path(__file__).resolve().parents[2],
-                    )
-                    write_runtime_state(
-                        paths.state_path,
-                        RuntimeState(
-                            task_id=self._spec.task_id,
-                            state=manifest.state,
-                            restart_source=manifest.restart_source,
-                            restart_source_strategy="runtime_state",
-                            bench_run_id=manifest.bench_run_id,
-                            bench_run_dir=manifest.bench_run_dir,
-                        ),
-                    )
-                write_task_manifest(paths, manifest)
             bench_result = await wait_benchmark(self._bench_process)
             if self._callbacks is not None and self._callbacks.unregister_bench is not None:
                 self._callbacks.unregister_bench(self._spec.task_id)
@@ -481,13 +447,6 @@ def _load_hf_token_from_login() -> str | None:
     return text or None
 
 
-def _resolved_restart_source(state_path: Path, spec: ResolvedTaskSpec) -> str | None:
-    state = load_runtime_state(state_path)
-    if state is not None and state.restart_source:
-        return state.restart_source
-    return spec.restart_source
-
-
 def _normalize_allocation(allocation: ExecutionAllocation, *, task_spec: ResolvedTaskSpec) -> ExecutionAllocation:
     allocated_gpus = allocation.allocated_gpus
     if allocated_gpus is None:
@@ -542,56 +501,6 @@ def _dp_gpu_memory_utilization_deduction(data_parallel_size: int) -> float:
         4: 0.03,
         8: 0.05,
     }.get(data_parallel_size, 0.0)
-
-
-_RUN_ID_TIMESTAMP_RE = re.compile(r"(\d{8}-\d{6})")
-
-
-def _effective_bench_run_id(run_id: str, spec: ResolvedTaskSpec) -> str:
-    short_from_timestamp = _short_bench_run_id_from_timestamp(run_id, spec)
-    if short_from_timestamp is not None:
-        return short_from_timestamp
-    task_slug = sanitize_task_dirname(spec.task_id, max_len=80)
-    if run_id.endswith(task_slug):
-        return run_id
-    return bench_run_id(run_id, spec.task_id)
-
-
-def _short_bench_run_id_from_timestamp(run_id: str, spec: ResolvedTaskSpec) -> str | None:
-    match = _RUN_ID_TIMESTAMP_RE.search(run_id)
-    if match is None:
-        return None
-    timestamp = match.group(1)
-    short_name = _short_bench_name_from_task_id(spec.task_id)
-    if short_name is None:
-        return None
-    return f"{sanitize_task_dirname(short_name, max_len=80)}-{timestamp}"
-
-
-def _short_bench_name_from_task_id(task_id: str) -> str | None:
-    job_name, _, model_name = task_id.partition(":")
-    candidates = [_normalize_short_bench_name_part(job_name)]
-    if model_name:
-        candidates.append(_normalize_short_bench_name_part(model_name))
-    candidates = [candidate for candidate in candidates if candidate]
-    if not candidates:
-        return None
-    primary = candidates[0]
-    for candidate in candidates[1:]:
-        if _canonical_short_bench_name(primary) == _canonical_short_bench_name(candidate):
-            return primary
-    return primary
-
-
-def _normalize_short_bench_name_part(value: str) -> str:
-    normalized = value.strip()
-    if normalized.startswith("job-") and len(normalized) > 4:
-        normalized = normalized[4:]
-    return normalized.strip()
-
-
-def _canonical_short_bench_name(value: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9]+", "-", value).strip("-").lower()
 
 
 def _infer_allocated_gpu_count_from_environment() -> int | None:
@@ -683,59 +592,6 @@ def _load_env_file(path: object, *, base_dir: Path) -> dict[str, str]:
         raise RuntimeLaunchError(f"env_file not found: {env_path}")
     values = dotenv_values(env_path)
     return {key: value for key, value in values.items() if value is not None}
-
-
-def _resolve_bench_output_dir(*, job_config_path: Path, repo_root: Path) -> Path:
-    payload = dict(load_job_config(job_config_path))
-    configured = payload.get("output_dir")
-    output_dir = Path(configured) if configured is not None else _DEFAULT_BENCH_OUTPUT_DIR
-    if not output_dir.is_absolute():
-        output_dir = repo_root / output_dir
-    return output_dir.resolve()
-
-
-async def _discover_bench_run_dir(*, job_config_path: Path, repo_root: Path, timeout_s: float) -> Path | None:
-    runs_root = _resolve_bench_output_dir(job_config_path=job_config_path, repo_root=repo_root)
-    target_source = str(job_config_path.expanduser().resolve())
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + max(timeout_s, 0.0)
-    while True:
-        candidate = _find_matching_bench_run_dir(runs_root=runs_root, config_source=target_source)
-        if candidate is not None:
-            return candidate
-        if loop.time() >= deadline:
-            return None
-        await asyncio.sleep(0.5)
-
-
-def _find_matching_bench_run_dir(*, runs_root: Path, config_source: str) -> Path | None:
-    if not runs_root.exists():
-        return None
-    latest: tuple[str, Path] | None = None
-    for child in runs_root.iterdir():
-        manifest_path = child / "run_manifest.json"
-        if not manifest_path.is_file():
-            continue
-        try:
-            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001
-            continue
-        if not isinstance(payload, dict):
-            continue
-        if str(payload.get("config_source") or "") != config_source:
-            continue
-        created_at = str(payload.get("created_at") or "")
-        candidate = (created_at, child.resolve())
-        if latest is None or candidate > latest:
-            latest = candidate
-    return latest[1] if latest is not None else None
-
-
-def _format_restart_source(run_dir: Path, *, repo_root: Path) -> str:
-    try:
-        return str(run_dir.resolve().relative_to(repo_root.resolve()))
-    except ValueError:
-        return str(run_dir.resolve())
 
 
 def _normalize_runtime(value: str) -> str:

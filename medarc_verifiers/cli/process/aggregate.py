@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
-from medarc_verifiers.cli.process.rollout import derive_base_env_id
+from medarc_verifiers.cli.process.metadata import RunIdentity
+from medarc_verifiers.cli.process.rollout import extract_rollout_index
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +20,8 @@ class AggregatedEnvRows:
     env_id: str
     base_env_id: str
     model_id: str | None
+    variant_id: str | None
+    variant_payload: Mapping[str, Any] | None
     rows: list[Mapping[str, Any]]
     column_names: tuple[str, ...]
     job_run_ids: tuple[str, ...]
@@ -25,15 +29,25 @@ class AggregatedEnvRows:
 
 def aggregate_rows_by_env(
     rows: Iterable[Mapping[str, Any]],
+    *,
+    identities: Iterable[RunIdentity] | None = None,
 ) -> list[AggregatedEnvRows]:
-    """Group enriched rows by (model_id, base_env_id), capturing unioned schemas."""
-    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    """Group enriched rows by (model_id, base_env_id, variant_id), capturing unioned schemas."""
+    groups: dict[tuple[str, str, str], dict[str, Any]] = {}
+    identity_list = list(identities or ())
+    fake_rollout_groups = {
+        (identity.model_id, identity.output_env_id, identity.variant_id or "")
+        for identity in identity_list
+        if identity.rollout_index is not None
+    }
 
     for row in rows:
         base_env_id = str(row.get("base_env_id") or row.get("env_id") or "")
         env_id = str(row.get("env_id") or base_env_id)
         model_id = str(row.get("model_id") or "unknown")
-        group_key = (model_id, base_env_id or env_id)
+        variant_id = _string_or_none(row.get("variant_id"))
+        variant_payload = _decode_variant_payload(row.get("variant_payload"))
+        group_key = (model_id, base_env_id or env_id, variant_id or "")
         if not group_key[1]:  # no env identifier
             logger.debug("Skipping row without env identifiers.")
             continue
@@ -43,6 +57,8 @@ def aggregate_rows_by_env(
                 "env_id": env_id if env_id else base_env_id,
                 "base_env_id": base_env_id,
                 "model_id": model_id,
+                "variant_id": variant_id,
+                "variant_payload": variant_payload,
                 "rows": [],
                 "column_names": set(),
                 "job_run_ids": set(),
@@ -55,6 +71,10 @@ def aggregate_rows_by_env(
             group["base_env_id"] = base_env_id
         if not group["model_id"] and model_id:
             group["model_id"] = model_id
+        if not group["variant_id"] and variant_id:
+            group["variant_id"] = variant_id
+        if group["variant_payload"] is None and variant_payload is not None:
+            group["variant_payload"] = variant_payload
         group["rows"].append(row)
         group["column_names"].update(row.keys())
         job_run_id = row.get("job_run_id")
@@ -68,7 +88,16 @@ def aggregate_rows_by_env(
         # processing "fake rollouts" that are created by running separate jobs with rollout suffixes
         # (e.g., env-a-rollout7) and then combining them under a shared base_env_id.
         normalized_rows: list[Mapping[str, Any]] = list(group["rows"])  # shallow copy
-        if _group_uses_rollout_suffixes(normalized_rows, base_env_id=group["base_env_id"] or key[1]):
+        if key in fake_rollout_groups:
+            _ensure_rollout_index_from_identities(
+                normalized_rows,
+                identities=identity_list,
+                model_id=group["model_id"],
+                base_env_id=group["base_env_id"] or key[1],
+                variant_id=group["variant_id"],
+            )
+            _normalize_rollout_indices(normalized_rows)
+        elif _group_uses_rollout_suffixes(normalized_rows, base_env_id=group["base_env_id"] or key[1]):
             _ensure_rollout_index_from_suffix(normalized_rows, base_env_id=group["base_env_id"] or key[1])
             _normalize_rollout_indices(normalized_rows)
         candidate_env_id = group["env_id"] or group["base_env_id"] or ""
@@ -77,6 +106,8 @@ def aggregate_rows_by_env(
                 env_id=candidate_env_id,
                 base_env_id=group["base_env_id"] or key[1],
                 model_id=group["model_id"],
+                variant_id=group["variant_id"],
+                variant_payload=group["variant_payload"],
                 rows=normalized_rows,
                 column_names=tuple(sorted(group["column_names"])),
                 job_run_ids=tuple(sorted(group["job_run_ids"])),
@@ -85,13 +116,50 @@ def aggregate_rows_by_env(
     return aggregated
 
 
+def _ensure_rollout_index_from_identities(
+    rows: list[Mapping[str, Any]],
+    *,
+    identities: list[RunIdentity],
+    model_id: str,
+    base_env_id: str,
+    variant_id: str | None,
+) -> None:
+    rollout_by_manifest_env: dict[str, int] = {}
+    for identity in identities:
+        if identity.model_id != model_id or identity.output_env_id != base_env_id:
+            continue
+        if identity.variant_id != variant_id:
+            continue
+        if identity.rollout_index is None:
+            continue
+        rollout_by_manifest_env[identity.manifest_env_id] = identity.rollout_index
+
+    if not rollout_by_manifest_env:
+        return
+
+    for row in rows:
+        value = row.get("rollout_index")
+        if _coerce_rollout_index(value) is not None:
+            continue
+        manifest_env_id = row.get("manifest_env_id")
+        if not isinstance(manifest_env_id, str):
+            continue
+        resolved = rollout_by_manifest_env.get(manifest_env_id)
+        if resolved is None:
+            continue
+        try:
+            row["rollout_index"] = resolved
+        except TypeError:
+            continue
+
+
 def _group_uses_rollout_suffixes(rows: list[Mapping[str, Any]], *, base_env_id: str) -> bool:
     for row in rows:
         manifest_env_id = row.get("manifest_env_id")
         if not isinstance(manifest_env_id, str) or not manifest_env_id:
             continue
-        derived_base, _ = derive_base_env_id(manifest_env_id)
-        if derived_base and derived_base == base_env_id and manifest_env_id != derived_base:
+        row_base_env_id = str(row.get("base_env_id") or base_env_id or "")
+        if row_base_env_id and manifest_env_id != row_base_env_id:
             return True
     return False
 
@@ -104,8 +172,11 @@ def _ensure_rollout_index_from_suffix(rows: list[Mapping[str, Any]], *, base_env
         manifest_env_id = row.get("manifest_env_id")
         if not isinstance(manifest_env_id, str) or not manifest_env_id:
             continue
-        derived_base, derived_index = derive_base_env_id(manifest_env_id)
-        if not derived_base or derived_base != base_env_id:
+        row_base_env_id = str(row.get("base_env_id") or base_env_id or "")
+        if not row_base_env_id or manifest_env_id == row_base_env_id:
+            continue
+        derived_index = extract_rollout_index(manifest_env_id)
+        if derived_index <= 0:
             continue
         try:
             row["rollout_index"] = derived_index
@@ -116,10 +187,39 @@ def _ensure_rollout_index_from_suffix(rows: list[Mapping[str, Any]], *, base_env
 def _coerce_rollout_index(value: Any) -> int | None:
     if value is None or isinstance(value, bool):
         return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value.is_integer():
+            return int(value)
+        return None
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _string_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _decode_variant_payload(value: Any) -> Mapping[str, Any] | None:
+    if isinstance(value, Mapping):
+        return dict(value)
+    if not isinstance(value, str) or not value.strip():
+        return None
     try:
-        return int(value)
+        payload = json.loads(value)
     except (TypeError, ValueError):
         return None
+    if isinstance(payload, Mapping):
+        return dict(payload)
+    return None
 
 
 def _normalize_rollout_indices(rows: list[Mapping[str, Any]]) -> None:

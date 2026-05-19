@@ -28,84 +28,120 @@ def load_rows(
     """Load results.jsonl rows and attach manifest metadata."""
     record = metadata.record
     if not record.has_results:
-        logger.debug("Run %s missing results.jsonl; skipping.", record.job_id)
-        return []
+        raise FileNotFoundError(
+            "Missing results.jsonl for selected run "
+            f"(job_run_id={record.manifest.job_run_id}, job_id={record.job_id}, path={record.results_path})"
+        )
 
     results_path = record.results_path
     extras_keys = {column for column in extra_columns or () if column}
     drop = {column for column in drop_columns or () if column}
     drop.update(DEFAULT_DROP_COLUMNS)
     drop.update(PROMPT_COMPLETION_COLUMNS)
-
-    # First pass: decode and clean rows, and count example_id occurrences to
-    # detect multiple rollouts within a single JSONL (example_id repetition).
-    decoded_rows: list[tuple[int, Mapping[str, Any]]] = []
-    example_counts: dict[Any, int] = {}
-    try:
-        with results_path.open("r", encoding="utf-8") as handle:
-            for line_number, raw_line in enumerate(handle, start=1):
-                line = raw_line.strip()
-                if not line:
-                    continue
-                payload = _decode_line(line, results_path, line_number)
-                decoded_rows.append((line_number, payload))
-                ex_id = payload.get("example_id")
-                # Count occurrences to infer intra-file rollout structure.
-                try:
-                    example_counts[ex_id] = example_counts.get(ex_id, 0) + 1
-                except TypeError:
-                    # Non-hashable example_id shouldn't happen (schema requires
-                    # primitive), but guard just in case.
-                    pass
-    except ValueError:
-        raise
-    except OSError as exc:  # noqa: FBT003
-        logger.warning("Failed to read %s: %s", results_path, exc)
-        return []
-
-    multi_rollout = any(count > 1 for count in example_counts.values())
+    decoded_rows, example_counts = _decode_results_jsonl(results_path)
+    multi_rollout = _detect_multi_rollout_shape(example_counts)
     version_info_json = _encode_metadata_json_column(metadata.raw_metadata.get("version_info"))
+    variant_payload_json = _encode_metadata_json_column(metadata.variant_payload)
 
-    # Second pass: enrich rows. If the file contains multiple rollouts, compute
-    # a data-driven rollout_index by counting seen occurrences per example_id.
-    # Otherwise, retain the suffix/dir-derived rollout_index from metadata.
     rows: list[dict[str, Any]] = []
     seen_per_example: dict[Any, int] = {}
     for line_number, payload in decoded_rows:
-        extras = _extract_extras(payload, extras_keys=extras_keys)
-        cleaned = _clean_row(payload, drop=drop, extras_keys=extras_keys)
-        cleaned.pop("rollout_index", None)
-        _map_answer_column(cleaned, payload, answer_column=answer_column)
-        _flatten_token_usage(cleaned)
-        payload_rollout_index = _coerce_rollout_index(payload.get("rollout_index"))
-        if payload_rollout_index is not None:
-            rollout_index = payload_rollout_index
-            cleaned["rollout_index"] = payload_rollout_index
-        elif multi_rollout:
-            ex_id = payload.get("example_id")
-            try:
-                seen = seen_per_example.get(ex_id, 0)
-                rollout_index = seen  # 0-based occurrence index
-                seen_per_example[ex_id] = seen + 1
-            except TypeError:
-                # Fallback to metadata rollout_index if example_id is unusable as key
-                rollout_index = metadata.rollout_index
-        else:
-            rollout_index = metadata.rollout_index
+        cleaned, extras = _clean_payload_row(
+            payload,
+            extras_keys=extras_keys,
+            drop=drop,
+            answer_column=answer_column,
+        )
+        rollout_index = _resolve_rollout_index(
+            payload,
+            metadata,
+            multi_rollout=multi_rollout,
+            seen_per_example=seen_per_example,
+        )
         if extras_keys and extras:
             cleaned["extras"] = json.dumps(extras, sort_keys=True)
         else:
             cleaned["extras"] = None
-        enriched = _attach_metadata(
+        enriched = _attach_row_metadata(
             cleaned,
             metadata,
             line_number=line_number,
             rollout_index=rollout_index,
             version_info_json=version_info_json,
+            variant_payload_json=variant_payload_json,
         )
         rows.append(enriched)
 
     return rows
+
+
+def _decode_results_jsonl(path: Path) -> tuple[list[tuple[int, Mapping[str, Any]]], dict[Any, int]]:
+    """Decode results.jsonl and count example_id occurrences for rollout detection."""
+    decoded_rows: list[tuple[int, Mapping[str, Any]]] = []
+    example_counts: dict[Any, int] = {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line_number, raw_line in enumerate(handle, start=1):
+                line = raw_line.strip()
+                if not line:
+                    continue
+                payload = _decode_line(line, path, line_number)
+                decoded_rows.append((line_number, payload))
+                ex_id = payload.get("example_id")
+                try:
+                    example_counts[ex_id] = example_counts.get(ex_id, 0) + 1
+                except TypeError:
+                    pass
+    except ValueError:
+        raise
+    except OSError as exc:  # noqa: FBT003
+        logger.warning("Failed to read %s: %s", path, exc)
+        return [], {}
+    return decoded_rows, example_counts
+
+
+def _detect_multi_rollout_shape(example_counts: Mapping[Any, int]) -> bool:
+    return any(count > 1 for count in example_counts.values())
+
+
+def _clean_payload_row(
+    payload: Mapping[str, Any],
+    *,
+    extras_keys: set[str],
+    drop: set[str],
+    answer_column: str | None,
+) -> tuple[MutableMapping[str, Any], Mapping[str, Any]]:
+    extras = _extract_extras(payload, extras_keys=extras_keys)
+    cleaned = _clean_row(payload, drop=drop, extras_keys=extras_keys)
+    cleaned.pop("rollout_index", None)
+    _map_answer_column(cleaned, payload, answer_column=answer_column)
+    _normalize_token_usage(cleaned)
+    payload_rollout_index = _coerce_rollout_index(payload.get("rollout_index"))
+    if payload_rollout_index is not None:
+        cleaned["rollout_index"] = payload_rollout_index
+    return cleaned, extras
+
+
+def _resolve_rollout_index(
+    payload: Mapping[str, Any],
+    metadata: NormalizedMetadata,
+    *,
+    multi_rollout: bool,
+    seen_per_example: MutableMapping[Any, int],
+) -> int:
+    payload_rollout_index = _coerce_rollout_index(payload.get("rollout_index"))
+    if payload_rollout_index is not None:
+        return payload_rollout_index
+    if not multi_rollout:
+        return metadata.rollout_index
+
+    ex_id = payload.get("example_id")
+    try:
+        seen = seen_per_example.get(ex_id, 0)
+        seen_per_example[ex_id] = seen + 1
+        return seen
+    except TypeError:
+        return metadata.rollout_index
 
 
 def _map_answer_column(
@@ -202,29 +238,31 @@ def _coerce_rollout_index(value: Any) -> int | None:
     return None
 
 
-def _attach_metadata(
+def _attach_row_metadata(
     row: MutableMapping[str, Any],
     metadata: NormalizedMetadata,
     *,
     line_number: int,
     rollout_index: int,
     version_info_json: str | None,
+    variant_payload_json: str | None,
 ) -> MutableMapping[str, Any]:
     record = metadata.record
+    identity = metadata.identity
 
     error_value = record.reason if record.status == "failed" else None
 
-    env_identifier = metadata.base_env_id or metadata.manifest_env_id
-
     row.update(
         {
-            "env_id": env_identifier,
-            "manifest_env_id": metadata.manifest_env_id,
-            "base_env_id": metadata.base_env_id,
+            "env_id": identity.output_env_id,
+            "manifest_env_id": identity.manifest_env_id,
+            "base_env_id": identity.base_env_id,
             "job_run_id": record.manifest.job_run_id,
             "run_id": record.job_id,
-            "model_id": metadata.model_id,
+            "model_id": identity.model_id,
             "version_info": version_info_json,
+            "variant_id": metadata.variant_id,
+            "variant_payload": variant_payload_json,
             "status": record.status,
             "error": error_value,
             "started_at": record.started_at,
@@ -236,7 +274,7 @@ def _attach_metadata(
     return row
 
 
-def _flatten_token_usage(row: MutableMapping[str, Any]) -> None:
+def _normalize_token_usage(row: MutableMapping[str, Any]) -> None:
     """Flatten token_usage dict into explicit columns and drop the original field."""
     if "token_usage" not in row:
         return

@@ -182,7 +182,7 @@ class TaskScheduler:
         return task_sort_key(task)
 
     def _allocate(self, task: TaskSpec) -> Allocation:
-        model_cfg = task.orchestrate.get(task.model_key, {}) or {}
+        model_cfg = task.orchestrate.get("vllm", {}) or {}
         gpus_required = minimum_required_gpus(task)
         min_free_gb = model_cfg.get("memory_min_gb")
         require_contiguous = bool(model_cfg.get("require_contiguous_gpus", gpus_required > 1))

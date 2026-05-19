@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
-from medarc_verifiers.cli.hf import HFSyncConfig, download_hf_repo
+from medarc_verifiers.cli.hf import HFSyncConfig, compute_pending_parquet_uploads, download_hf_repo
 from medarc_verifiers.utils.pathing import resolve_under
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -18,7 +21,14 @@ class BaselineResult:
     files_copied: list[Path] = field(default_factory=list)
     files_overwritten: list[Path] = field(default_factory=list)
     files_skipped: list[Path] = field(default_factory=list)
+    pending_parquet_uploads: set[str] = field(default_factory=set)
     snapshot_dir: Path | None = None
+
+
+@dataclass(slots=True)
+class WorkspacePreparationResult:
+    cleaned: bool = False
+    baseline_result: BaselineResult | None = None
 
 
 def ensure_output_dir(output_dir: Path) -> None:
@@ -31,6 +41,37 @@ def is_nonempty_dir(path: Path) -> bool:
     for entry in path.iterdir():
         return True
     return False
+
+
+def prepare_output_workspace(
+    *,
+    output_dir: Path,
+    hf_config: HFSyncConfig | None,
+    pull_policy: str | None,
+    clean: bool,
+    assume_yes: bool,
+    is_tty: bool,
+    prompt_func: Callable[[str], str] | None = None,
+) -> WorkspacePreparationResult:
+    """Prepare local processed outputs before selection reads local inventory state."""
+    ensure_output_dir(output_dir)
+
+    if clean:
+        confirm_clean_output_dir(output_dir, assume_yes=assume_yes, is_tty=is_tty, prompt_func=prompt_func)
+        clear_output_dir(output_dir)
+        return WorkspacePreparationResult(cleaned=True)
+
+    if hf_config and hf_config.repo_id:
+        baseline_result = prepare_hf_baseline(
+            output_dir=output_dir,
+            hf_config=hf_config,
+            pull_policy=pull_policy,
+            is_tty=is_tty,
+            prompt_func=prompt_func,
+        )
+        return WorkspacePreparationResult(cleaned=False, baseline_result=baseline_result)
+
+    return WorkspacePreparationResult(cleaned=False)
 
 
 def prepare_hf_baseline(
@@ -47,8 +88,10 @@ def prepare_hf_baseline(
         return BaselineResult(policy="local")
 
     policy = _resolve_pull_policy(pull_policy, is_tty=is_tty)
-    result = BaselineResult(policy=policy)
     if not is_nonempty_dir(output_dir):
+        if policy == "continue-upload":
+            logger.warning("HF continue-upload requested with an empty output dir; falling back to pull.")
+        result = BaselineResult(policy="pull" if policy == "continue-upload" else policy)
         snapshot_dir = download_hf_repo(
             repo_id=hf_config.repo_id,
             branch=hf_config.branch,
@@ -61,10 +104,38 @@ def prepare_hf_baseline(
         _copy_snapshot(snapshot_dir, output_dir, result, overwrite=True)
         return result
 
+    result = BaselineResult(policy=policy)
+    if policy == "prompt":
+        try:
+            result.pending_parquet_uploads = compute_pending_parquet_uploads(
+                output_dir=output_dir,
+                repo_id=hf_config.repo_id,
+                branch=hf_config.branch,
+                token=hf_config.token,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("HF upload recovery check failed before prompt; hiding upload option: %s", exc)
+    elif policy == "continue-upload":
+        try:
+            result.pending_parquet_uploads = compute_pending_parquet_uploads(
+                output_dir=output_dir,
+                repo_id=hf_config.repo_id,
+                branch=hf_config.branch,
+                token=hf_config.token,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "HF upload recovery check failed for continue-upload; uploading only current touched files: %s", exc
+            )
+
     prompt_conflicts = False
     if policy == "prompt":
-        choice = _prompt_baseline_choice(prompt_func, is_tty=is_tty)
-        policy = choice
+        choice = _prompt_baseline_choice(
+            prompt_func,
+            is_tty=is_tty,
+            show_upload=bool(result.pending_parquet_uploads),
+        )
+        policy = "continue-upload" if choice == "upload" else choice
         result.policy = policy
         prompt_conflicts = policy == "pull"
 
@@ -104,7 +175,30 @@ def prepare_hf_baseline(
         )
         return result
 
+    if policy == "continue-upload":
+        return result
+
     raise ValueError(f"Unsupported HF pull policy: {policy}")
+
+
+def confirm_clean_output_dir(
+    output_dir: Path,
+    *,
+    assume_yes: bool,
+    is_tty: bool,
+    prompt_func: Callable[[str], str] | None,
+) -> None:
+    if assume_yes:
+        return
+    if not is_tty or prompt_func is None:
+        raise RuntimeError("Refusing to clean processed outputs without confirmation. Re-run with --yes to confirm.")
+    prompt = f"--clean will delete all contents of {output_dir} and rebuild from runs. Type 'clean' to continue: "
+    try:
+        response = prompt_func(prompt).strip().lower()
+    except (EOFError, KeyboardInterrupt):  # noqa: PERF203
+        raise RuntimeError("Aborted clean process.") from None
+    if response != "clean":
+        raise RuntimeError("Aborted clean process.")
 
 
 def _resolve_pull_policy(pull_policy: str | None, *, is_tty: bool) -> str:
@@ -113,17 +207,27 @@ def _resolve_pull_policy(pull_policy: str | None, *, is_tty: bool) -> str:
     return "prompt" if is_tty else "pull"
 
 
-def _prompt_baseline_choice(prompt_func: Callable[[str], str] | None, *, is_tty: bool) -> str:
+def _prompt_baseline_choice(
+    prompt_func: Callable[[str], str] | None,
+    *,
+    is_tty: bool,
+    show_upload: bool = False,
+) -> str:
     if not is_tty or prompt_func is None:
         return "pull"
+    choices = ["pull", "clean"]
+    if show_upload:
+        choices.append("upload")
     if prompt_func is not input:
-        prompt = (
+        prompt_lines = [
             "HF baseline exists locally.\n"
-            "  pull  -> download missing data without deleting local files\n"
-            "  clean -> redownload everything after deleting local files\n"
-            "Choose [pull/clean]: "
-        )
-        return _read_choice(prompt_func, prompt, {"pull", "clean"})
+            "  pull   -> download missing data without deleting local files\n"
+            "  clean  -> redownload everything after deleting local files\n"
+        ]
+        if show_upload:
+            prompt_lines.append("  upload -> keep local files and resume/upload pending HF artifacts\n")
+        prompt_lines.append(f"Choose [{'/'.join(choices)}]: ")
+        return _read_choice(prompt_func, "".join(prompt_lines), choices)
     from rich.console import Console
     from rich.prompt import Prompt
 
@@ -131,7 +235,12 @@ def _prompt_baseline_choice(prompt_func: Callable[[str], str] | None, *, is_tty:
     console.print("[bold yellow]HF baseline exists locally.[/bold yellow]")
     console.print("  [cyan]pull[/cyan]  -> download missing data without deleting local files")
     console.print("  [cyan]clean[/cyan] -> redownload everything after deleting local files")
-    return Prompt.ask("Choose", choices=["pull", "clean"], default="pull")
+    if show_upload:
+        console.print("  [cyan]upload[/cyan] -> keep local files and resume/upload pending HF artifacts")
+    try:
+        return Prompt.ask("Choose", choices=choices, default="pull")
+    except (EOFError, KeyboardInterrupt):  # noqa: PERF203
+        raise RuntimeError("Aborted HF baseline selection.") from None
 
 
 def _prompt_overwrite_file(prompt_func: Callable[[str], str] | None, *, path: Path, is_tty: bool) -> bool:
@@ -147,7 +256,7 @@ def _read_choice(prompt_func: Callable[[str], str], prompt: str, choices: Sequen
     while True:
         try:
             response = prompt_func(prompt).strip().lower()
-        except EOFError:  # noqa: PERF203
+        except (EOFError, KeyboardInterrupt):  # noqa: PERF203
             raise RuntimeError("Aborted HF baseline selection.") from None
         if response in choices_set:
             return response
@@ -228,8 +337,11 @@ def clear_output_dir(output_dir: Path) -> None:
 
 __all__ = [
     "BaselineResult",
+    "WorkspacePreparationResult",
     "clear_output_dir",
+    "confirm_clean_output_dir",
     "ensure_output_dir",
     "is_nonempty_dir",
+    "prepare_output_workspace",
     "prepare_hf_baseline",
 ]

@@ -29,7 +29,7 @@ def minimum_required_gpus(task: TaskSpec) -> int:
     model_cfg = _task_model_cfg(task)
     gpus = int(model_cfg.get("gpus", 1) or 1)
     if gpus < 1:
-        raise ValueError(f"Task {task.task_id} orchestrate.{task.model_key}.gpus must be >= 1.")
+        raise ValueError(f"Task {task.task_id} orchestrate.vllm.gpus must be >= 1.")
     return gpus
 
 
@@ -37,7 +37,7 @@ def configured_tensor_parallel_size(task: TaskSpec) -> int:
     model_cfg = _task_model_cfg(task)
     tensor_parallel = int(model_cfg.get("tensor_parallel_size", 1) or 1)
     if tensor_parallel < 1:
-        raise ValueError(f"Task {task.task_id} orchestrate.{task.model_key}.tensor_parallel_size must be >= 1.")
+        raise ValueError(f"Task {task.task_id} orchestrate.vllm.tensor_parallel_size must be >= 1.")
     return tensor_parallel
 
 
@@ -127,9 +127,9 @@ def _resolve_topology(
 
 
 def _task_model_cfg(task: TaskSpec) -> dict[str, object]:
-    model_cfg = task.orchestrate.get(task.model_key, {}) or {}
+    model_cfg = task.orchestrate.get("vllm", {}) or {}
     if not isinstance(model_cfg, dict):
-        raise ValueError(f"Task {task.task_id} orchestrate.{task.model_key} must be a mapping.")
+        raise ValueError(f"Task {task.task_id} orchestrate.vllm must be a mapping.")
     return model_cfg
 
 

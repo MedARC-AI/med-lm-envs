@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Sequence
+
+from medarc_verifiers.utils.pathing import resolve_under
 
 if TYPE_CHECKING:
     from medarc_verifiers.cli.process.writer import EnvWriteSummary
@@ -58,6 +61,29 @@ def _is_repo_not_found_error(exc: BaseException) -> bool:
     if "404" in message and "Not Found" in message:
         return True
     return False
+
+
+def _status_code_from_exc(exc: BaseException) -> int | None:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if status_code is None:
+        status_code = getattr(exc, "status_code", None)
+    try:
+        return int(status_code) if status_code is not None else None
+    except Exception:
+        return None
+
+
+def _is_transient_hf_error(exc: BaseException) -> bool:
+    status_code = _status_code_from_exc(exc)
+    if status_code == 429 or (status_code is not None and 500 <= status_code < 600):
+        return True
+    try:
+        import httpx  # type: ignore[import-not-found]
+
+        return isinstance(exc, (httpx.TimeoutException, httpx.TransportError))
+    except Exception:
+        return False
 
 
 def _confirm_create_repo(
@@ -153,6 +179,181 @@ class HFSyncSummary:
     files: Sequence[str]
 
 
+def _local_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _repo_tree_entry_path(entry: Any) -> str | None:
+    for attr in ("path", "rfilename"):
+        value = getattr(entry, attr, None)
+        if isinstance(value, str) and value.strip():
+            return Path(value).as_posix()
+    if isinstance(entry, dict):
+        value = entry.get("path") or entry.get("rfilename")
+        if isinstance(value, str) and value.strip():
+            return Path(value).as_posix()
+    return None
+
+
+def _repo_tree_entry_lfs_sha256(entry: Any) -> str | None:
+    lfs = getattr(entry, "lfs", None)
+    if lfs is None and isinstance(entry, dict):
+        lfs = entry.get("lfs")
+    if isinstance(lfs, dict):
+        sha256 = lfs.get("sha256")
+        return str(sha256) if sha256 else None
+    sha256 = getattr(lfs, "sha256", None)
+    return str(sha256) if sha256 else None
+
+
+def _normalize_output_files(output_dir: Path, files: Iterable[str | Path]) -> list[str]:
+    normalized: list[str] = []
+    for path in files:
+        candidate = Path(path)
+        if candidate.is_absolute():
+            try:
+                rel_path = candidate.relative_to(output_dir)
+            except ValueError:
+                continue
+        else:
+            # Accept caller inputs like "runs/processed/foo.parquet" when output_dir is also relative.
+            output_parts = output_dir.parts
+            if output_parts and candidate.parts[: len(output_parts)] == output_parts:
+                try:
+                    rel_path = candidate.relative_to(output_dir)
+                except ValueError:
+                    continue
+            else:
+                rel_path = candidate
+        rel_text = rel_path.as_posix()
+        if rel_text:
+            normalized.append(rel_text)
+    return sorted(set(normalized))
+
+
+def _prepare_upload_file_entries(output_dir: Path, files: Sequence[str | Path]) -> list[tuple[str, Path]]:
+    output_dir = output_dir.resolve()
+    prepared: list[tuple[str, Path]] = []
+    seen: set[str] = set()
+    for path in files:
+        candidate = Path(path)
+        raw_text = candidate.as_posix()
+        if not raw_text:
+            continue
+        if candidate.is_absolute():
+            try:
+                rel_path = candidate.resolve().relative_to(output_dir).as_posix()
+            except ValueError as exc:
+                raise ValueError(f"Upload file path must be under output_dir: {candidate}") from exc
+        else:
+            resolved = resolve_under(output_dir, raw_text)
+            if resolved is None:
+                raise ValueError(f"Upload file path must be relative to output_dir without traversal: {raw_text!r}")
+            try:
+                rel_path = resolved.resolve().relative_to(output_dir).as_posix()
+            except ValueError as exc:
+                raise ValueError(f"Upload file path resolves outside output_dir: {raw_text!r}") from exc
+        local_path = (output_dir / rel_path).resolve()
+        try:
+            local_path.relative_to(output_dir)
+        except ValueError as exc:
+            raise ValueError(f"Upload file path resolves outside output_dir: {raw_text!r}") from exc
+        if rel_path in seen:
+            continue
+        prepared.append((rel_path, local_path))
+        seen.add(rel_path)
+    return prepared
+
+
+def collect_changed_output_files(
+    env_summaries: Sequence[EnvWriteSummary],
+    *,
+    output_dir: Path,
+    metadata_paths: Sequence[Path] | None = None,
+) -> list[str]:
+    changed_paths = {summary.output_path for summary in env_summaries if summary.changed}
+    if metadata_paths:
+        for path in metadata_paths:
+            candidate = Path(path)
+            if not candidate.is_absolute():
+                output_parts = output_dir.parts
+                if output_parts and candidate.parts[: len(output_parts)] != output_parts:
+                    candidate = output_dir / candidate
+            changed_paths.add(candidate)
+    return _normalize_output_files(output_dir, changed_paths)
+
+
+def _collect_changed_output_files(
+    env_summaries: Sequence[EnvWriteSummary],
+    *,
+    output_dir: Path,
+    metadata_paths: Sequence[Path] | None = None,
+) -> list[str]:
+    return collect_changed_output_files(env_summaries, output_dir=output_dir, metadata_paths=metadata_paths)
+
+
+def compute_pending_parquet_uploads(
+    output_dir: Path,
+    repo_id: str,
+    branch: str | None,
+    token: str | None,
+) -> set[str]:
+    """Return local parquet paths that are missing remotely or differ from remote lfs.sha256."""
+    output_dir = Path(output_dir)
+    local_parquets = sorted(path for path in output_dir.rglob("*.parquet") if path.is_file())
+    if not local_parquets:
+        return set()
+
+    try:
+        from huggingface_hub import HfApi  # type: ignore[import-not-found]
+    except Exception as exc:  # noqa: BLE001
+        raise ImportError("huggingface_hub is required for HF upload recovery.") from exc
+
+    api = HfApi(token=token)
+    list_kwargs = {
+        "repo_id": repo_id,
+        "repo_type": "dataset",
+        "revision": branch,
+        "recursive": True,
+        "expand": True,
+    }
+    try:
+        try:
+            tree_entries = list(api.list_repo_tree(**list_kwargs))
+        except TypeError as exc:
+            if "expand" not in str(exc):
+                raise
+            list_kwargs.pop("expand", None)
+            tree_entries = list(api.list_repo_tree(**list_kwargs))
+    except Exception as exc:  # noqa: BLE001
+        if _is_repo_not_found_error(exc):
+            tree_entries = []
+        else:
+            raise
+
+    remote_parquets: dict[str, str | None] = {}
+    for entry in tree_entries:
+        rel_path = _repo_tree_entry_path(entry)
+        if not rel_path or not rel_path.endswith(".parquet"):
+            continue
+        remote_parquets[rel_path] = _repo_tree_entry_lfs_sha256(entry)
+
+    pending: set[str] = set()
+    for parquet_path in local_parquets:
+        rel_path = parquet_path.relative_to(output_dir).as_posix()
+        if rel_path not in remote_parquets:
+            pending.add(rel_path)
+            continue
+        remote_sha256 = remote_parquets[rel_path]
+        if remote_sha256 is None or remote_sha256 != _local_sha256(parquet_path):
+            pending.add(rel_path)
+    return pending
+
+
 def sync_files_to_hub(
     *,
     repo_id: str,
@@ -166,25 +367,27 @@ def sync_files_to_hub(
     request_timeout_s: float | None = None,
     retries: int = 3,
     max_files_per_commit: int | None = None,
+    path_in_repo_prefix: str | None = None,
     is_tty: bool = False,
     assume_yes: bool = False,
     prompt_func: Callable[[str], str] | None = None,
-) -> None:
-    """Upload explicit file paths from output_dir to a HF dataset repo."""
+) -> bool:
+    """Upload explicit file paths from output_dir to a HF dataset repo.
+
+    Returns False only when upload is skipped because repo creation was declined.
+    """
     if not repo_id:
         logger.debug("HF sync skipped: no repo_id provided.")
-        return
-    file_list = []
-    for path in files:
-        rel_path = Path(path).as_posix() if not isinstance(path, str) else Path(path).as_posix()
-        if rel_path:
-            file_list.append(rel_path)
+        return True
+    output_dir = Path(output_dir)
+    prepared_files = _prepare_upload_file_entries(output_dir, files)
+    file_list = [rel_path for rel_path, _ in prepared_files]
     if not file_list:
         logger.debug("HF sync skipped: no files provided.")
-        return
+        return True
     if dry_run:
         logger.debug("HF sync dry-run; skipping push.")
-        return
+        return True
 
     try:
         from huggingface_hub import CommitOperationAdd, HfApi  # type: ignore[import-not-found]
@@ -195,6 +398,9 @@ def sync_files_to_hub(
         _configure_hf_http_timeout(float(request_timeout_s))
 
     api = HfApi(token=token)
+    repo_prefix = _normalize_repo_path_prefix(path_in_repo_prefix)
+
+    file_map = dict(prepared_files)
 
     if max_files_per_commit is None or max_files_per_commit <= 0:
         batches = [file_list]
@@ -203,11 +409,12 @@ def sync_files_to_hub(
             file_list[index : index + max_files_per_commit] for index in range(0, len(file_list), max_files_per_commit)
         ]
 
-    output_dir = Path(output_dir)
-
     for batch_index, batch_files in enumerate(batches, start=1):
         operations = [
-            CommitOperationAdd(path_in_repo=rel_path, path_or_fileobj=str(output_dir / rel_path))
+            CommitOperationAdd(
+                path_in_repo=_join_repo_path(repo_prefix, rel_path),
+                path_or_fileobj=str(file_map[rel_path]),
+            )
             for rel_path in batch_files
         ]
         commit_message = message
@@ -234,9 +441,11 @@ def sync_files_to_hub(
                         prompt_func=prompt_func,
                     )
                     if not should_create:
-                        raise RuntimeError(
-                            f"HF dataset repo '{repo_id}' not found. Create it on the Hub or re-run with --yes to allow creation."
-                        ) from exc
+                        logger.warning(
+                            "HF dataset repo '%s' not found; skipping upload because repo creation was declined.",
+                            repo_id,
+                        )
+                        return False
                     api.create_repo(
                         repo_id=repo_id,
                         repo_type="dataset",
@@ -245,13 +454,7 @@ def sync_files_to_hub(
                     )
                     # Retry the commit immediately after repo creation.
                     continue
-                try:
-                    import httpx  # type: ignore[import-not-found]
-
-                    is_retryable = isinstance(exc, (httpx.TimeoutException, httpx.TransportError))
-                except Exception:
-                    is_retryable = False
-                if not is_retryable or attempt >= int(retries):
+                if not _is_transient_hf_error(exc) or attempt >= int(retries):
                     raise
                 delay = _sleep_backoff_seconds(attempt)
                 logger.warning(
@@ -262,6 +465,27 @@ def sync_files_to_hub(
                     delay,
                 )
                 time.sleep(delay)
+    return True
+
+
+def _normalize_repo_path_prefix(value: str | None) -> str | None:
+    if value is None:
+        return None
+    raw = str(value).strip().replace("\\", "/").strip("/")
+    if not raw:
+        return None
+    candidate = resolve_under(Path("."), raw)
+    if candidate is None:
+        raise ValueError(f"Invalid path_in_repo_prefix: {value!r}")
+    normalized = candidate.as_posix().lstrip("./")
+    return normalized or None
+
+
+def _join_repo_path(prefix: str | None, rel_path: str) -> str:
+    rel = rel_path.strip().replace("\\", "/").lstrip("/")
+    if not prefix:
+        return rel
+    return f"{prefix}/{rel}" if rel else prefix
 
 
 def sync_to_hub(
@@ -270,6 +494,7 @@ def sync_to_hub(
     *,
     output_dir: Path,
     metadata_paths: Sequence[Path] | None = None,
+    files: Sequence[str | Path] | None = None,
     is_tty: bool = False,
     assume_yes: bool = False,
     prompt_func: Callable[[str], str] | None = None,
@@ -278,37 +503,27 @@ def sync_to_hub(
     if not config.repo_id:
         logger.debug("HF sync skipped: no repo_id provided.")
         return None
-    if not env_summaries:
-        logger.debug("HF sync skipped: no environment summaries available.")
-        return None
-    if all(summary.dry_run for summary in env_summaries):
-        logger.debug("HF sync skipped: only dry-run summaries available.")
-        return None
-
-    changed = [summary for summary in env_summaries if summary.changed]
-    if not changed:
-        logger.debug("HF sync skipped: no changed outputs.")
+    if config.dry_run:
+        logger.debug("HF sync dry-run; skipping summary generation and upload.")
         return None
 
     output_dir = Path(output_dir)
-    changed_paths = {summary.output_path for summary in changed}
-    if metadata_paths:
-        for path in metadata_paths:
-            candidate = Path(path)
-            if not candidate.is_absolute():
-                output_parts = output_dir.parts
-                if output_parts and candidate.parts[: len(output_parts)] != output_parts:
-                    candidate = output_dir / candidate
-            changed_paths.add(candidate)
+    changed = [summary for summary in env_summaries if summary.changed]
+    if files is None:
+        if not env_summaries:
+            logger.debug("HF sync skipped: no environment summaries available.")
+            return None
+        if all(summary.dry_run for summary in env_summaries):
+            logger.debug("HF sync skipped: only dry-run summaries available.")
+            return None
+        files = collect_changed_output_files(env_summaries, output_dir=output_dir, metadata_paths=metadata_paths)
+    else:
+        files = _normalize_output_files(output_dir, files)
 
-    files = []
-    for path in changed_paths:
-        try:
-            rel_path = path.relative_to(output_dir)
-        except ValueError:
-            continue
-        files.append(rel_path.as_posix())
-    files = sorted(set(files))
+    if not files:
+        logger.debug("HF sync skipped: no files selected for upload.")
+        return None
+
     summary = HFSyncSummary(
         repo_id=config.repo_id,
         strategy="file",
@@ -318,7 +533,7 @@ def sync_to_hub(
     )
 
     message = f"Update {summary.total_files} file(s) from medarc-eval process"
-    sync_files_to_hub(
+    uploaded = sync_files_to_hub(
         repo_id=config.repo_id,
         output_dir=output_dir,
         files=files,
@@ -334,6 +549,8 @@ def sync_to_hub(
         assume_yes=assume_yes,
         prompt_func=prompt_func,
     )
+    if not uploaded:
+        return None
     return summary
 
 
@@ -383,6 +600,8 @@ def download_hf_repo(
 __all__ = [
     "HFSyncSummary",
     "HFSyncConfig",
+    "collect_changed_output_files",
+    "compute_pending_parquet_uploads",
     "sync_files_to_hub",
     "sync_to_hub",
 ]

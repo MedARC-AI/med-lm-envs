@@ -9,7 +9,7 @@ authors = [
 ]
 dependencies = [
     "datasets>=4.0.0",
-    "verifiers>=0.1.2.post0",
+    "verifiers>=0.1.12,<0.2",
     "pandas>=2.0.0",
     "medarc-verifiers>=0.1.0",
 ]

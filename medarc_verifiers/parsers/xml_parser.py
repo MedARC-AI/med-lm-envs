@@ -61,6 +61,25 @@ class XMLParser(BaseXMLParser):
                 return parsed
         return None
 
+    def parse_answer(self, completion: Messages | str) -> str | None:
+        """Extract the last answer field from a completion."""
+        if isinstance(completion, str):
+            parsed = self.parse(completion, last=True)
+            if parsed is not None and hasattr(parsed, self.answer_field):
+                value = getattr(parsed, self.answer_field)
+                if value is not None:
+                    return value
+            return None
+
+        for msg in reversed(self.get_assistant_messages(completion)):
+            content = str(msg.get("content", ""))
+            parsed = self.parse(content, last=True)
+            if parsed is not None and hasattr(parsed, self.answer_field):
+                value = getattr(parsed, self.answer_field)
+                if value is not None:
+                    return value
+        return None
+
     def _has_any_field(self, parsed: Any) -> bool:
         for _, alternatives in self._fields:
             for alt in alternatives:

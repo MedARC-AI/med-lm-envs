@@ -1,0 +1,281 @@
+# MedARC multiple-choice benchmark suite.
+# Ablations become deterministic variant directories such as
+# runs/evals/<model>/<env>/env_args.shuffle_seed-1618/.
+
+save_results = true
+output_dir = "runs/evals"
+
+[[eval]]
+env_id = "careqa"
+num_examples = -1
+rollouts_per_example = 1
+env_args = { split = "en" }
+
+[[ablation]]
+env_id = "careqa"
+name = "shuffle_seed-{env_args.shuffle_seed}"
+num_examples = -1
+rollouts_per_example = 1
+env_args = { split = "en", shuffle_answers = true }
+
+[ablation.sweep.env_args]
+shuffle_seed = [1618, 9331]
+
+[[eval]]
+env_id = "head_qa_v2"
+num_examples = -1
+rollouts_per_example = 1
+
+[[ablation]]
+env_id = "longhealth"
+name = "{env_args.task}"
+num_examples = -1
+rollouts_per_example = 1
+env_args = { doc_shuffle_seed = 2718 }
+
+[ablation.sweep.env_args]
+task = ["task1", "task2"]
+
+[[ablation]]
+env_id = "longhealth"
+name = "{env_args.task}__shuffle_seed-1618"
+num_examples = -1
+rollouts_per_example = 1
+env_args = { shuffle_answers = true, shuffle_seed = 1618, doc_shuffle_seed = 1618 }
+
+[ablation.sweep.env_args]
+task = ["task1", "task2"]
+
+[[ablation]]
+env_id = "longhealth"
+name = "{env_args.task}__shuffle_seed-9331"
+num_examples = -1
+rollouts_per_example = 1
+env_args = { shuffle_answers = true, shuffle_seed = 9331, doc_shuffle_seed = 9331 }
+
+[ablation.sweep.env_args]
+task = ["task1", "task2"]
+
+[[eval]]
+env_id = "m_arc"
+num_examples = -1
+rollouts_per_example = 1
+
+[[ablation]]
+env_id = "m_arc"
+name = "shuffle_seed-{env_args.shuffle_seed}"
+num_examples = -1
+rollouts_per_example = 1
+env_args = { shuffle_answers = true }
+
+[ablation.sweep.env_args]
+shuffle_seed = [1618, 9331]
+
+[[ablation]]
+env_id = "med_halt"
+name = "{env_args.question_type}"
+num_examples = -1
+rollouts_per_example = 1
+
+[ablation.sweep.env_args]
+question_type = ["reasoning_fct", "reasoning_nota"]
+
+[[eval]]
+env_id = "med_mcqa"
+num_examples = -1
+rollouts_per_example = 1
+
+[[ablation]]
+env_id = "med_mcqa"
+name = "shuffle_seed-{env_args.shuffle_seed}"
+num_examples = -1
+rollouts_per_example = 1
+env_args = { shuffle_answers = true }
+
+[ablation.sweep.env_args]
+shuffle_seed = [1618, 9331]
+
+[[ablation]]
+env_id = "medbullets"
+name = "num_options-{env_args.num_options}"
+num_examples = -1
+rollouts_per_example = 1
+
+[ablation.sweep.env_args]
+num_options = [4, 5]
+
+[[ablation]]
+env_id = "medbullets"
+name = "num_options-{env_args.num_options}__shuffle_seed-{env_args.shuffle_seed}"
+num_examples = -1
+rollouts_per_example = 1
+env_args = { shuffle_answers = true }
+
+[ablation.sweep.env_args]
+num_options = [4, 5]
+shuffle_seed = [1618, 9331]
+
+[[eval]]
+env_id = "medcalc_bench"
+name = "version-1.2"
+num_examples = -1
+rollouts_per_example = 1
+env_args = { version = "1.2" }
+
+[[eval]]
+env_id = "medcalc_bench"
+name = "tools"
+num_examples = -1
+rollouts_per_example = 1
+env_args = { version = "verified", add_python_tool = true, add_calculator_tool = true }
+
+[[ablation]]
+env_id = "medconceptsqa"
+name = "{env_args.difficulty}"
+num_examples = -1
+rollouts_per_example = 1
+env_args = { vocab = "icd10cm_sample" }
+
+[ablation.sweep.env_args]
+difficulty = ["easy", "medium", "hard"]
+
+[[ablation]]
+env_id = "medconceptsqa"
+name = "{env_args.difficulty}__shuffle_seed-{env_args.shuffle_seed}"
+num_examples = -1
+rollouts_per_example = 1
+env_args = { vocab = "icd10cm_sample", shuffle_answers = true }
+
+[ablation.sweep.env_args]
+difficulty = ["easy", "medium", "hard"]
+shuffle_seed = [1618, 9331]
+
+[[ablation]]
+env_id = "medhallu"
+name = "{env_args.difficulty}"
+num_examples = -1
+rollouts_per_example = 1
+
+[ablation.sweep.env_args]
+difficulty = ["easy", "medium", "hard"]
+
+[[eval]]
+env_id = "medqa"
+num_examples = -1
+rollouts_per_example = 1
+
+[[ablation]]
+env_id = "medqa"
+name = "shuffle_seed-{env_args.shuffle_seed}"
+num_examples = -1
+rollouts_per_example = 1
+env_args = { shuffle_answers = true }
+
+[ablation.sweep.env_args]
+shuffle_seed = [1618, 9331]
+
+[[ablation]]
+env_id = "medxpertqa"
+name = "{env_args.question_type}"
+num_examples = -1
+rollouts_per_example = 1
+
+[ablation.sweep.env_args]
+question_type = ["reasoning", "understanding"]
+
+[[ablation]]
+env_id = "medxpertqa"
+name = "{env_args.question_type}__shuffle_seed-{env_args.shuffle_seed}"
+num_examples = -1
+rollouts_per_example = 1
+env_args = { shuffle_answers = true }
+
+[ablation.sweep.env_args]
+question_type = ["reasoning", "understanding"]
+shuffle_seed = [1618, 9331]
+
+[[eval]]
+env_id = "metamedqa"
+num_examples = -1
+rollouts_per_example = 1
+
+[[ablation]]
+env_id = "metamedqa"
+name = "shuffle_seed-{env_args.shuffle_seed}"
+num_examples = -1
+rollouts_per_example = 1
+env_args = { shuffle_answers = true }
+
+[ablation.sweep.env_args]
+shuffle_seed = [1618, 9331]
+
+[[eval]]
+env_id = "mmlu_pro_health"
+num_examples = -1
+rollouts_per_example = 1
+
+[[ablation]]
+env_id = "mmlu_pro_health"
+name = "shuffle_seed-{env_args.shuffle_seed}"
+num_examples = -1
+rollouts_per_example = 1
+env_args = { shuffle_answers = true }
+
+[ablation.sweep.env_args]
+shuffle_seed = [1618, 9331]
+
+[[eval]]
+env_id = "pubhealthbench"
+num_examples = -1
+rollouts_per_example = 1
+env_args = { split = "reviewed" }
+
+[[ablation]]
+env_id = "pubhealthbench"
+name = "shuffle_seed-{env_args.shuffle_seed}"
+num_examples = -1
+rollouts_per_example = 1
+env_args = { split = "reviewed", shuffle_answers = true }
+
+[ablation.sweep.env_args]
+shuffle_seed = [1618, 9331]
+
+[[eval]]
+env_id = "pubmedqa"
+num_examples = -1
+rollouts_per_example = 1
+
+[[ablation]]
+env_id = "pubmedqa"
+name = "shuffle_seed-{env_args.shuffle_seed}"
+num_examples = -1
+rollouts_per_example = 1
+env_args = { shuffle_answers = true }
+
+[ablation.sweep.env_args]
+shuffle_seed = [1618, 9331]
+
+[[eval]]
+env_id = "sctpublic"
+num_examples = -1
+rollouts_per_example = 1
+
+[[ablation]]
+env_id = "supergpqa_medicine"
+name = "{env_args.difficulty}"
+num_examples = -1
+rollouts_per_example = 1
+
+[ablation.sweep.env_args]
+difficulty = ["easy", "hard"]
+
+[[ablation]]
+env_id = "supergpqa_medicine"
+name = "{env_args.difficulty}__shuffle_seed-{env_args.shuffle_seed}"
+num_examples = -1
+rollouts_per_example = 1
+env_args = { shuffle_answers = true }
+
+[ablation.sweep.env_args]
+difficulty = ["easy", "hard"]
+shuffle_seed = [1618, 9331]

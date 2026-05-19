@@ -6,7 +6,6 @@ import hashlib
 import json
 import re
 import uuid
-from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,7 +13,8 @@ from typing import Any, Mapping
 
 from omegaconf import OmegaConf
 
-from medarc_verifiers.orchestrate.config import TaskSpec, load_job_config
+from medarc_verifiers.orchestrate.config import TaskSpec
+from medarc_verifiers.orchestrate.internal_io import load_internal_mapping
 from medarc_verifiers.orchestrate.task_naming import sanitize_task_dirname
 
 SPEC_VERSION = 2
@@ -61,42 +61,6 @@ def _sha256_file(path: Path) -> str:
     return _sha256_bytes(path.read_bytes())
 
 
-def _yaml_bytes(payload: Mapping[str, Any]) -> bytes:
-    return OmegaConf.to_yaml(OmegaConf.create(payload), resolve=True).encode("utf-8")
-
-
-def _deep_merge(base: Mapping[str, Any], overlay: Mapping[str, Any]) -> dict[str, Any]:
-    merged = dict(base)
-    for key, value in overlay.items():
-        current = merged.get(key)
-        if isinstance(current, Mapping) and isinstance(value, Mapping):
-            merged[key] = _deep_merge(current, value)
-        else:
-            merged[key] = deepcopy(value)
-    return merged
-
-
-def _extract_restart_source(payload: Mapping[str, Any]) -> str | None:
-    orchestrate = payload.get("orchestrate")
-    if not isinstance(orchestrate, Mapping):
-        return None
-    value = orchestrate.get("restart")
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
-def _apply_restart_source(payload: dict[str, Any], restart_source: str | None) -> dict[str, Any]:
-    orchestrate = dict(payload.get("orchestrate") or {})
-    if restart_source:
-        orchestrate["restart"] = restart_source
-    else:
-        orchestrate.pop("restart", None)
-    payload["orchestrate"] = orchestrate
-    return payload
-
-
 @dataclass(frozen=True)
 class TaskBundlePaths:
     root: Path
@@ -107,7 +71,7 @@ class TaskBundlePaths:
 
     @property
     def eval_config_path(self) -> Path:
-        return self.root / "eval-config.yaml"
+        return self.root / "eval-config.toml"
 
     @property
     def runtime_dir(self) -> Path:
@@ -136,6 +100,14 @@ class TaskBundlePaths:
     @property
     def submit_script_path(self) -> Path:
         return self.root / "submit.sh"
+
+    @property
+    def orchestrate_snapshot_path(self) -> Path:
+        return self.root / "orchestrate-snapshot.toml"
+
+    @property
+    def eval_images_snapshot_path(self) -> Path:
+        return self.root / "eval_images-snapshot.toml"
 
 
 @dataclass(frozen=True)
@@ -197,6 +169,15 @@ class ResolvedTaskSpec:
     restart_source: str | None
     restart_source_strategy: str
     output_paths: TaskOutputPaths
+    endpoints_path: str | None = None
+    orchestrate_registry_path: str | None = None
+    orchestrate_registry_checksum: str | None = None
+    orchestrate_registry_schema_version: int | None = None
+    matched_model: Mapping[str, Any] = field(default_factory=dict)
+    eval_images_registry_path: str | None = None
+    eval_images_registry_checksum: str | None = None
+    eval_images_registry_schema_version: int | None = None
+    selected_eval_images: list[Mapping[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -254,6 +235,39 @@ class ResolvedTaskSpec:
                 sidecar_dir=str(output_paths.get("sidecar_dir") or (Path(root) / "sidecars")),
                 submit_script_path=str(output_paths["submit_script_path"]),
             ),
+            endpoints_path=(str(payload["endpoints_path"]) if payload.get("endpoints_path") is not None else None),
+            orchestrate_registry_path=(
+                str(payload["orchestrate_registry_path"])
+                if payload.get("orchestrate_registry_path") is not None
+                else None
+            ),
+            orchestrate_registry_checksum=(
+                str(payload["orchestrate_registry_checksum"])
+                if payload.get("orchestrate_registry_checksum") is not None
+                else None
+            ),
+            orchestrate_registry_schema_version=(
+                int(payload["orchestrate_registry_schema_version"])
+                if payload.get("orchestrate_registry_schema_version") is not None
+                else None
+            ),
+            matched_model=dict(payload.get("matched_model") or {}),
+            eval_images_registry_path=(
+                str(payload["eval_images_registry_path"])
+                if payload.get("eval_images_registry_path") is not None
+                else None
+            ),
+            eval_images_registry_checksum=(
+                str(payload["eval_images_registry_checksum"])
+                if payload.get("eval_images_registry_checksum") is not None
+                else None
+            ),
+            eval_images_registry_schema_version=(
+                int(payload["eval_images_registry_schema_version"])
+                if payload.get("eval_images_registry_schema_version") is not None
+                else None
+            ),
+            selected_eval_images=[dict(item) for item in payload.get("selected_eval_images", [])],
         )
 
 
@@ -437,7 +451,7 @@ def write_run_bundle_manifest(path: Path, manifest: RunBundleManifest) -> None:
 
 
 def load_task_spec(path: Path) -> ResolvedTaskSpec:
-    payload = dict(load_job_config(path))
+    payload = dict(load_internal_mapping(path, label="task spec"))
     raw_version = payload.get("spec_version")
     try:
         spec_version = int(raw_version)
@@ -619,16 +633,9 @@ def _resolve_restart_source(
     state: RuntimeState | None,
     existing_entry: RunBundleEntry | None,
 ) -> tuple[str | None, str]:
+    del task, spec, existing_entry
     if state is not None and state.restart_source:
         return state.restart_source, state.restart_source_strategy or "runtime_state"
-    if existing_entry is not None and existing_entry.restart_source:
-        return existing_entry.restart_source, existing_entry.restart_source_strategy or "persisted"
-    if spec.restart_source:
-        return spec.restart_source, spec.restart_source_strategy
-    source_payload = dict(load_job_config(task.job_config_path))
-    source_restart = _extract_restart_source(source_payload)
-    if source_restart:
-        return source_restart, "source_config"
     return None, "none"
 
 
@@ -658,30 +665,18 @@ def _build_task_spec(
     mode: str,
     runtime: str,
     eval_config_override: Mapping[str, Any],
-) -> tuple[dict[str, Any], ResolvedTaskSpec]:
-    source_payload = deepcopy(dict(load_job_config(task.job_config_path)))
-    source_checksum = _sha256_file(task.job_config_path)
-    restart_source = _extract_restart_source(source_payload)
-    restart_strategy = "source_config" if restart_source else "none"
+) -> tuple[bytes, ResolvedTaskSpec]:
     if eval_config_override:
-        source_payload = _deep_merge(source_payload, eval_config_override)
-    _apply_restart_source(source_payload, restart_source)
-    bundled_checksum = _sha256_bytes(_yaml_bytes(source_payload))
+        raise ValueError("Task-local eval config overrides are not supported for TOML bench bundles.")
+    source_bytes = task.job_config_path.read_bytes()
+    source_checksum = _sha256_file(task.job_config_path)
+    bundled_bytes = _rewrite_eval_toml_paths(source_bytes, base_dir=task.job_config_path.parent)
+    bundled_checksum = _sha256_bytes(bundled_bytes)
 
-    model_cfg = _resolve_orchestrate_section(source_payload, key=task.model_key, task_id=task.task_id)
-    container_cfg = _resolve_orchestrate_section(
-        source_payload,
-        key="vllm-container",
-        task_id=task.task_id,
-        fallback_key="vllm-docker",
-    )
-    pyxis_cfg = _resolve_orchestrate_section(source_payload, key="pyxis", task_id=task.task_id)
-    sidecars = _parse_sidecars(
-        source_payload.get("orchestrate"),
-        task_id=task.task_id,
-        mode=mode,
-        runtime=runtime,
-    )
+    model_cfg = dict(_mapping_section(task.orchestrate, "vllm", task_id=task.task_id))
+    container_cfg = dict(_mapping_section(task.orchestrate, "container", task_id=task.task_id))
+    pyxis_cfg = dict(task.orchestrate.get("pyxis") or {})
+    sidecars = _parse_eval_image_sidecars(task.eval_images, task_id=task.task_id, mode=mode, runtime=runtime)
     pyxis_srun_extra_args = [str(item) for item in pyxis_cfg.get("srun_extra_args", []) or []]
     if sidecars and not _srun_args_include_flag(pyxis_srun_extra_args, "--overlap"):
         pyxis_srun_extra_args.append("--overlap")
@@ -712,8 +707,8 @@ def _build_task_spec(
         pyxis_srun_extra_args=pyxis_srun_extra_args,
         serve_args=dict(model_cfg.get("serve") or {}),
         sidecars=sidecars,
-        restart_source=restart_source,
-        restart_source_strategy=restart_strategy,
+        restart_source=None,
+        restart_source_strategy="none",
         output_paths=TaskOutputPaths(
             root=str(paths.root),
             task_spec_path=str(paths.task_spec_path),
@@ -725,8 +720,17 @@ def _build_task_spec(
             sidecar_dir=str(paths.sidecar_dir),
             submit_script_path=str(paths.submit_script_path),
         ),
+        endpoints_path=str(task.endpoints_path) if task.endpoints_path is not None else None,
+        orchestrate_registry_path=task.orchestrate_registry.path,
+        orchestrate_registry_checksum=task.orchestrate_registry.checksum,
+        orchestrate_registry_schema_version=task.orchestrate_registry.schema_version,
+        matched_model=dict(task.matched_model),
+        eval_images_registry_path=task.eval_images_registry.path,
+        eval_images_registry_checksum=task.eval_images_registry.checksum,
+        eval_images_registry_schema_version=task.eval_images_registry.schema_version,
+        selected_eval_images=[dict(item) for item in task.eval_images],
     )
-    return source_payload, spec
+    return bundled_bytes, spec
 
 
 def _sidecar_from_dict(payload: Mapping[str, Any]) -> SidecarSpec:
@@ -792,6 +796,147 @@ def _parse_sidecars(
         _validate_sidecar_srun_args(srun_args, task_id=task_id, sidecar_name=name)
         env = _sidecar_env(cfg.get("env", {}), task_id=task_id, sidecar_name=name)
         readiness = _sidecar_readiness(cfg.get("readiness", {}), task_id=task_id, sidecar_name=name)
+        specs.append(
+            SidecarSpec(
+                name=name,
+                runtime=sidecar_runtime,
+                image=image,
+                srun_args=srun_args,
+                env=env,
+                command=command,
+                readiness=readiness,
+            )
+        )
+    return specs
+
+
+def _rewrite_eval_toml_paths(source_bytes: bytes, *, base_dir: Path) -> bytes:
+    text = source_bytes.decode("utf-8")
+    lines = text.splitlines(keepends=True)
+    changed = False
+    rewritten: list[str] = []
+    in_array_table = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[[") and stripped.endswith("]]"):
+            in_array_table = True
+        if not in_array_table:
+            updated = _rewrite_top_level_path_line(line, key="endpoints_path", base_dir=base_dir)
+            if updated is not None:
+                rewritten.append(updated)
+                changed = True
+                continue
+            updated = _rewrite_top_level_path_line(line, key="env_dir_path", base_dir=base_dir)
+            if updated is not None:
+                rewritten.append(updated)
+                changed = True
+                continue
+        rewritten.append(line)
+    if not changed:
+        return source_bytes
+    return "".join(rewritten).encode("utf-8")
+
+
+def _rewrite_top_level_path_line(line: str, *, key: str, base_dir: Path) -> str | None:
+    import json as _json
+    import re as _re
+
+    match = _re.match(rf"^(?P<prefix>\s*{_re.escape(key)}\s*=\s*)(?P<quote>['\"])(?P<value>.*?)(?P=quote)(?P<suffix>\s*(?:#.*)?\n?)$", line)
+    if match is None:
+        return None
+    value = match.group("value").strip()
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return line
+    resolved = (base_dir / path).resolve()
+    return f"{match.group('prefix')}{_json.dumps(str(resolved))}{match.group('suffix')}"
+
+
+def _write_snapshot_toml(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_render_toml_mapping(payload), encoding="utf-8")
+
+
+def _render_toml_mapping(payload: Mapping[str, Any]) -> str:
+    lines: list[str] = []
+    arrays: list[tuple[str, list[Mapping[str, Any]]]] = []
+    tables: list[tuple[str, Mapping[str, Any]]] = []
+    for key, value in payload.items():
+        if value is None:
+            continue
+        if isinstance(value, list) and all(isinstance(item, Mapping) for item in value):
+            arrays.append((str(key), [dict(item) for item in value]))
+        elif isinstance(value, Mapping):
+            tables.append((str(key), value))
+        else:
+            lines.append(f"{key} = {_toml_value(value)}")
+    for name, table in tables:
+        lines.append("")
+        lines.append(f"[{name}]")
+        _append_toml_table(lines, table)
+    for name, items in arrays:
+        for item in items:
+            lines.append("")
+            lines.append(f"[[{name}]]")
+            _append_toml_table(lines, item)
+    return "\n".join(lines).strip() + "\n"
+
+
+def _append_toml_table(lines: list[str], table: Mapping[str, Any], *, prefix: str = "") -> None:
+    nested: list[tuple[str, Mapping[str, Any]]] = []
+    for key, value in table.items():
+        if value is None:
+            continue
+        full_key = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, Mapping):
+            nested.append((full_key, value))
+        elif isinstance(value, list) and all(isinstance(item, Mapping) for item in value):
+            continue
+        else:
+            lines.append(f"{full_key} = {_toml_value(value)}")
+    for full_key, value in nested:
+        _append_toml_table(lines, value, prefix=full_key)
+
+
+def _toml_value(value: Any) -> str:
+    import json as _json
+
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int | float):
+        return str(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
+    return _json.dumps(str(value))
+
+
+def _parse_eval_image_sidecars(
+    eval_images: list[Mapping[str, Any]],
+    *,
+    task_id: str,
+    mode: str,
+    runtime: str,
+) -> list[SidecarSpec]:
+    if not eval_images:
+        return []
+    if mode != "slurm":
+        raise ValueError(f"Task {task_id} configures eval images, but eval images are only supported in slurm mode.")
+    specs: list[SidecarSpec] = []
+    for entry in eval_images:
+        name = str(entry["id"])
+        if _SIDECAR_NAME_RE.fullmatch(name) is None:
+            raise ValueError(f"Task {task_id} eval image id {name!r} must match [A-Za-z0-9_.-]+.")
+        sidecar_runtime = str(entry.get("runtime", "")).strip().lower()
+        if sidecar_runtime != "pyxis":
+            raise ValueError(f"Task {task_id} eval image {name} runtime must be 'pyxis' in v1.")
+        if runtime != "pyxis":
+            raise ValueError(f"Task {task_id} eval image {name} requires orchestrate runtime 'pyxis'.")
+        image = _required_string(entry.get("image"), f"Task {task_id} eval image {name} image")
+        command = _required_string_list(entry.get("command"), f"Task {task_id} eval image {name} command")
+        srun_args = _optional_string_list(entry.get("srun_args", []), f"Task {task_id} eval image {name} srun_args")
+        _validate_sidecar_srun_args(srun_args, task_id=task_id, sidecar_name=name)
+        env = _sidecar_env(entry.get("env", {}), task_id=task_id, sidecar_name=name)
+        readiness = _sidecar_readiness(entry.get("readiness", {}), task_id=task_id, sidecar_name=name)
         specs.append(
             SidecarSpec(
                 name=name,
@@ -879,30 +1024,35 @@ def _srun_arg_key(arg: str) -> str:
     return arg.split("=", maxsplit=1)[0]
 
 
-def _write_task_bundle(*, paths: TaskBundlePaths, eval_payload: Mapping[str, Any], spec: ResolvedTaskSpec) -> None:
-    _write_yaml_atomic(paths.eval_config_path, eval_payload)
+def _write_task_bundle(*, paths: TaskBundlePaths, eval_payload: bytes, spec: ResolvedTaskSpec) -> None:
+    paths.eval_config_path.write_bytes(eval_payload)
     _write_task_spec(paths.task_spec_path, spec)
+    _write_snapshot_toml(
+        paths.orchestrate_snapshot_path,
+        {
+            "schema_version": spec.orchestrate_registry_schema_version,
+            "registry_path": spec.orchestrate_registry_path,
+            "registry_checksum": spec.orchestrate_registry_checksum,
+            "model": spec.matched_model,
+        },
+    )
+    _write_snapshot_toml(
+        paths.eval_images_snapshot_path,
+        {
+            "schema_version": spec.eval_images_registry_schema_version,
+            "registry_path": spec.eval_images_registry_path,
+            "registry_checksum": spec.eval_images_registry_checksum,
+            "eval_image": spec.selected_eval_images,
+        },
+    )
 
 
 def _write_task_spec(path: Path, spec: ResolvedTaskSpec) -> None:
     _write_yaml_atomic(path, spec.to_dict())
 
 
-def _resolve_orchestrate_section(
-    payload: Mapping[str, Any],
-    *,
-    key: str,
-    task_id: str,
-    fallback_key: str | None = None,
-) -> dict[str, Any]:
-    orchestrate = payload.get("orchestrate")
-    if not isinstance(orchestrate, Mapping):
-        raise ValueError(f"Task {task_id} bundled payload is missing a valid orchestrate mapping.")
-    section = orchestrate.get(key)
-    if section is None and fallback_key is not None:
-        section = orchestrate.get(fallback_key)
-    if section is None:
-        return {}
+def _mapping_section(payload: Mapping[str, Any], key: str, *, task_id: str) -> dict[str, Any]:
+    section = payload.get(key)
     if not isinstance(section, Mapping):
         raise ValueError(f"Task {task_id} orchestrate.{key} must be a mapping.")
     return dict(section)

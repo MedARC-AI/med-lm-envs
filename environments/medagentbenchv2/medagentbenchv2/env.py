@@ -362,12 +362,14 @@ def load_environment(
                 "content": _build_user_message(task["instruction"], task.get("context")),
             },
         ]
+        info = dict(task)
+        info.pop("task", None)
+        info["medagentbench_task"] = "medagentbenchv2"
         return {
             "id": task["id"],
             "prompt": prompt,
-            "info": dict(task),
+            "info": info,
             "answer": "",
-            "task": "medagentbenchv2",
         }
 
     eval_dataset = Dataset.from_list([_map(task) for task in tasks])

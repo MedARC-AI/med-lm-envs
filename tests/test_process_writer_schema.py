@@ -9,6 +9,8 @@ def test_process_writer_emits_stable_schema_with_all_null_values(tmp_path) -> No
         env_id="medcalc_bench",
         base_env_id="medcalc_bench",
         model_id="test-model",
+        variant_id=None,
+        variant_payload=None,
         rows=[
             {
                 "env_id": "medcalc_bench",
@@ -44,6 +46,7 @@ def test_process_writer_emits_stable_schema_with_all_null_values(tmp_path) -> No
     summaries = writer.write_env_groups([group], config, write_index=False)
     schema = pq.ParquetFile(summaries[0].output_path).schema_arrow
 
+    assert str(schema.field("example_id").type) == "large_string"
     assert str(schema.field("extras").type) == "large_string"
     assert str(schema.field("answer").type) == "large_string"
     assert str(schema.field("error").type) == "large_string"
@@ -56,6 +59,8 @@ def test_process_writer_emits_stable_schema_for_empty_groups(tmp_path) -> None:
         env_id="empty_env",
         base_env_id="empty_env",
         model_id="test-model",
+        variant_id=None,
+        variant_payload=None,
         rows=[],
         column_names=(),
         job_run_ids=(),
@@ -64,6 +69,7 @@ def test_process_writer_emits_stable_schema_for_empty_groups(tmp_path) -> None:
     summaries = writer.write_env_groups([group], config, write_index=False)
     schema = pq.ParquetFile(summaries[0].output_path).schema_arrow
 
+    assert str(schema.field("example_id").type) == "large_string"
     assert str(schema.field("extras").type) == "large_string"
     assert str(schema.field("answer").type) == "large_string"
     assert str(schema.field("error").type) == "large_string"

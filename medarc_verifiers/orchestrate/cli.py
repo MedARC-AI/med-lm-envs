@@ -95,6 +95,9 @@ def _add_local_arguments(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Run 'medarc-eval bench' directly instead of via 'uv run' (use when venv is pre-activated).",
     )
+    parser.add_argument("--orchestrate-config", type=Path, help="Path to model-serving orchestrate.toml registry.")
+    parser.add_argument("--eval-images-config", type=Path, help="Path to eval auxiliary image registry TOML.")
+    parser.add_argument("--endpoints-path", type=Path, help="Path to endpoints.toml used for model alias resolution and bench.")
     parser.set_defaults(command="local", handler=_run_local)
 
 
@@ -167,7 +170,7 @@ def _validate_schedule(
             allowed_indices = list(discovered_indices)
             allowed_desc = "all"
         for task in tasks:
-            model_cfg = task.orchestrate.get(task.model_key, {}) or {}
+            model_cfg = task.orchestrate.get("vllm", {}) or {}
             gpus_required = minimum_required_gpus(task)
             resolve_topology(task, allocated_gpus=gpus_required)
             require_contiguous = bool(model_cfg.get("require_contiguous_gpus", gpus_required > 1))
@@ -196,7 +199,20 @@ def _run_local(args: argparse.Namespace) -> int:
         plan = load_plan(plan_path)
         plan_base_dir = plan_path.parent
     else:
-        plan = make_plan(job_configs=args.job_configs or [], base_dir=plan_base_dir, name=args.name)
+        plan = make_plan(
+            job_configs=args.job_configs or [],
+            base_dir=plan_base_dir,
+            name=args.name,
+            orchestrate_config=args.orchestrate_config,
+            eval_images_config=args.eval_images_config,
+            endpoints_path=args.endpoints_path,
+        )
+    if args.orchestrate_config is not None:
+        plan.orchestrate_config = args.orchestrate_config.expanduser().resolve()
+    if args.eval_images_config is not None:
+        plan.eval_images_config = args.eval_images_config.expanduser().resolve()
+    if args.endpoints_path is not None:
+        plan.endpoints_path = args.endpoints_path.expanduser().resolve()
     runtime = args.runtime or plan.runtime or _default_local_runtime()
     if args.env_file is not None:
         env_file = args.env_file.expanduser()

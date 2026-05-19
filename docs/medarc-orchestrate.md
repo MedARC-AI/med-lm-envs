@@ -1,263 +1,152 @@
-## vLLM orchestrator (`medarc-orchestrate`)
+## vLLM orchestrator (Docker or Pyxis)
 
-`medarc-orchestrate` has two public execution modes:
-
-- `medarc-orchestrate local`
-- `medarc-orchestrate slurm`
-
-The older top-level public forms were removed. Commands such as `medarc-orchestrate --plan ...` and `medarc-orchestrate --job-config ...` now fail in the parser; use `local` or `slurm` explicitly.
-
-The internal worker entrypoint still exists for generated Slurm scripts:
-
-```bash
-medarc-orchestrate worker --task ... --allocation ... --runtime pyxis
-```
-
-It is not part of the public CLI.
-
-### Execution modes
-
-`local` runs the worker directly from your current shell state.
-
-- Default runtime selection is automatic: prefer `docker`, fall back to `podman`.
-- `local --runtime pyxis` is still supported when you are already inside a Slurm allocation and want the worker to launch with `srun --container-image ...`.
-
-`slurm` is the queued submission path.
-
-- It writes one `sbatch` script per resolved task.
-- Generated jobs invoke `medarc-orchestrate worker`.
-- The runtime on the compute node defaults to `pyxis`.
+This repo includes an experimental vLLM orchestrator for running `medarc-eval` against
+locally hosted vLLM containers with GPU/port scheduling.
 
 ### Requirements
 
-All modes:
-
 - `medarc-orchestrate` runs `medarc-eval bench` as a local subprocess on the same host.
-- The configured container image must be available to the selected runtime.
+- Container image available for the selected runtime.
 
-`local` with Docker:
+Docker runtime:
 
-- `docker` available on `PATH`
-- NVIDIA runtime support
-- local GPUs available through NVML / `nvidia-ml-py`
-- Python `docker` package installed
+- Docker installed with NVIDIA runtime support.
+- Local GPUs available (NVML via `nvidia-ml-py`).
+- vLLM image available locally or pullable.
 
-`local` with Podman:
+Pyxis runtime:
 
-- `podman` available on `PATH`
-- local GPUs available through NVML / `nvidia-ml-py`
+- Slurm with the Pyxis plugin installed.
+- Enroot available on compute nodes.
+- Run `medarc-orchestrate` inside an existing Slurm allocation on a GPU node.
+- The Pyxis `--container-image` value must match cluster policy:
+  - registry-backed URI such as `docker://vllm/vllm-openai:latest`
+  - or a pre-staged squashfs image path
 
-`local --runtime pyxis` or `slurm`:
+Notes for Pyxis:
 
-- Slurm with Pyxis installed
-- Enroot available on compute nodes
-- a valid Pyxis `--container-image` value for the cluster
+- Recommended interactive workflow: `salloc --nodes=1 --gpus=4 --time=02:00:00`, then `uv run medarc-orchestrate --runtime pyxis ...`.
+- `srun --pty bash` shells can block later `srun` steps on some clusters unless overlap is enabled. Prefer `salloc` or `sbatch`.
+- Pulling large registry images at launch can fail on systems with limited local storage. Pre-staging a squashfs image is often more reliable.
+- In shell scripts, image strings containing `#` may need escaping, for example `nvcr.io\\#nvidia/pytorch:25.01-py3`.
 
-### Inputs
+Note: This machine does not have Docker installed, so integration runs are not available here.
 
-Both public commands accept either a reusable plan file or one or more direct job configs:
+### Plan file
 
-```bash
-medarc-orchestrate local --plan plans/local-vllm.yaml
-medarc-orchestrate local --job-config configs/job-gpt-oss-20b.yaml
-
-medarc-orchestrate slurm --plan plans/local-vllm.yaml
-medarc-orchestrate slurm --job-config configs/job-gpt-oss-20b.yaml
-```
-
-Direct job-config mode can be repeated:
-
-```bash
-medarc-orchestrate local \
-  --job-config configs/job-a.yaml \
-  --job-config configs/job-b.yaml \
-  --name local-vllm
-
-medarc-orchestrate slurm \
-  --job-config configs/job-a.yaml \
-  --job-config configs/job-b.yaml \
-  --name cluster-batch
-```
-
-Each job config must define exactly one model under `models:` and include a top-level `orchestrate:` block with per-model serve settings.
-
-Example:
+Create a plan YAML listing the job configs you want to orchestrate:
 
 ```yaml
-models:
-  qwen-30b-a3b:
-    model: Qwen/Qwen3-30B-A3B
+name: local-vllm
+job_configs:
+  - configs/eval/local-qwen.toml
+env_file: .env
+gpu_range: "0-3"
+port_range: "8000-8999"
+max_parallel: 2
+readiness_timeout_s: 1800
+resume: false
+rerun_failed: false
+```
 
-orchestrate:
-  qwen-30b-a3b:
-    gpus: 2
-    tensor_parallel_size: 2
-    serve:
-      max_model_len: 40960
+Each job config should be an upstream `medarc-eval bench` TOML config with a top-level
+`model` and a namespaced `[medarc.orchestrate]` table.
 
-  vllm-container:
-    image: vllm/vllm-openai:latest
-    container_port: 8000
-    volumes:
-      - /data/huggingface:/root/.cache/huggingface
-    ipc_mode: host
+The `env_file` is a dotenv file that is loaded for every Docker launch. If unset and a repo-level `.env` exists,
+it is used automatically. You can also override it via `--env-file`.
 
-  pyxis:
-    srun_extra_args: []
+Shared container config:
 
-slurm:
-  partition: gpu
-  time: 04:00:00
-  cpus_per_gpu: 12
-  slurm_resume: true
+```toml
+model = "Qwen/Qwen3-30B-A3B"
+
+[[eval]]
+env_id = "medqa"
+
+[medarc.orchestrate.qwen-30b-a3b]
+gpus = 2
+tensor_parallel_size = 2
+
+[medarc.orchestrate.qwen-30b-a3b.serve]
+max_model_len = 40960
+
+[medarc.orchestrate.vllm-container]
+image = "vllm/vllm-openai:latest"
+container_port = 8000
+volumes = ["/data/huggingface:/root/.cache/huggingface"]
+ipc_mode = "host"
+
+[medarc.orchestrate.pyxis]
+srun_extra_args = []
 ```
 
 Config notes:
 
-- `orchestrate.vllm-container` is the preferred key.
-- `orchestrate.vllm-docker` is still accepted as a deprecated config alias.
-- `orchestrate.<model>.gpus` is the minimum compatible outer allocation.
-- `allocated_gpus` is the runtime allocation actually handed to the worker.
-- `data_parallel_size` is derived as `allocated_gpus // tensor_parallel_size`.
-- `vllm_world_size` is `tensor_parallel_size * data_parallel_size`.
-- Valid launch shapes are `1`, `2`, `4`, and `8` GPUs.
-- Launch validation fails when `allocated_gpus < gpus`, `allocated_gpus < tensor_parallel_size`, or `allocated_gpus % tensor_parallel_size != 0`.
+- `medarc.orchestrate.vllm-container` is required.
+- `ipc_mode` is Docker-only and is ignored in `--runtime pyxis`.
+- `medarc.orchestrate.pyxis` is Pyxis-only and is ignored in `--runtime docker`.
+- In Pyxis mode, Slurm allocates GPUs per `srun` step. The orchestrator only reserves localhost ports.
 
-### `local`
-
-Typical examples:
+### CLI usage
 
 ```bash
-medarc-orchestrate local --plan plans/local-vllm.yaml
-medarc-orchestrate local --plan plans/local-vllm.yaml --runtime podman
-medarc-orchestrate local --plan plans/local-vllm.yaml --runtime pyxis
+uv run medarc-orchestrate --plan plans/local-vllm.yaml
 ```
 
-Default runtime behavior:
-
-- If `--runtime` is set, that wins.
-- Otherwise `plan.runtime` is used when present.
-- Otherwise `local` prefers `docker` when it is available and falls back to `podman`.
-
-Important `local` flags:
-
-- `--plan PATH` or repeated `--job-config PATH`
-- `--name NAME` for direct job-config mode
-- `--runtime {docker,podman,pyxis}`
-- `--env-file PATH`
-- `--dry-run`
-- `--gpu-range 0-3`
-- `--port-range 8000-8999`
-- `--run-id RUN_ID`
-- `--output-dir PATH`
-- `--max-parallel N`
-- `--readiness-timeout-s SECONDS`
-- `--resume`
-- `--rerun-failed`
-- `--status`
-- `--kill-orphans`
-- `--prune-logs-on-success`
-- `--no-uv-run`
-
-### `slurm`
-
-Typical examples:
+Runtime examples:
 
 ```bash
-medarc-orchestrate slurm --plan plans/local-vllm.yaml
-
-medarc-orchestrate slurm \
-  --job-config configs/job-a.yaml \
-  --job-config configs/job-b.yaml \
-  --partition gpu \
-  --time 04:00:00
+uv run medarc-orchestrate --plan plans/local-vllm.yaml --runtime docker
+uv run medarc-orchestrate --plan plans/local-vllm.yaml --runtime pyxis
 ```
 
-Important `slurm` flags:
+Common flags:
 
-- `--plan PATH` or repeated `--job-config PATH`
-- `--name NAME` for direct job-config mode
-- `--run-id RUN_ID`
-- `--output-dir PATH`
-- `--env-file PATH`
-- `--readiness-timeout-s SECONDS`
-- `--prune-logs-on-success`
-- `--node-gpus N` to set the outer Slurm allocation per task job
-- `--max-simultaneous-nodes N`
-- `--run-simultaneously`
-- `--cpus-per-gpu`, `--time`, `--partition`, `--account`, `--qos`, `--mail-type`, `--mail-user`
-- `--dependency` for chain heads
-- `--test-only`
-- `--dry-run`
-- `--slurm-resume`
-- `--source-dir PATH`
-- `--activate-script PATH`
+- `--runtime {docker,pyxis}` selects the serve backend. Default: CLI value, else `plan.runtime`, else `docker`.
+- `--dry-run` prints resolved tasks and exits.
+- `--gpu-range 0-3` restricts GPU indices (overrides `gpu_range` from the plan file).
+- `--port-range 8000-8999` restricts ports (overrides `port_range` from the plan file).
+- `--run-id` sets a custom run identifier (overrides `run_id` from the plan file).
+- `--output-dir` overrides the output root (overrides `output_dir` from the plan file).
+- `--max-parallel` caps concurrent tasks (overrides `max_parallel` from the plan file; defaults to GPU count).
+- `--readiness-timeout-s` controls server readiness wait (overrides `readiness_timeout_s` from the plan file).
+- `--resume` skips completed tasks using `summary.json` (enables resume even if `resume: false` in the plan).
+- `--rerun-failed` reruns failed tasks on resume (enables rerun even if `rerun_failed: false` in the plan).
+- `--status` prints the latest summary status and exits.
+- `--kill-orphans` cleans up containers labeled as orchestrator-managed (also enabled by `kill_orphans: true` in the plan).
+- `--prune-logs-on-success` deletes per-task `serve/container_logs.txt` and `bench/stdout.txt`+`stderr.txt` for completed tasks.
 
-`slurm` behavior:
-
-- Each resolved task becomes one generated `sbatch` script.
-- Generated scripts source the activation script, then run `medarc-orchestrate worker`.
-- Execution on the compute node uses `--runtime pyxis`.
-- Tasks are ordered by largest minimum `gpus` first, with `tensor_parallel_size` as the tie-breaker.
-
-#### Slurm sidecars
-
-`medarc-orchestrate slurm` supports optional task-local sidecars under `orchestrate.sidecars`. Sidecars run as background
-`srun --overlap` Pyxis steps in the same Slurm allocation before the worker starts. They are intended for node-local
-services such as a MedAgentBench FHIR server that the benchmark reaches through `127.0.0.1`.
-
-Example:
+Plan files may also set:
 
 ```yaml
-orchestrate:
-  sidecars:
-    medagentbench-fhir:
-      runtime: pyxis
-      image: /path/to/medagentbench_withsh.sqsh
-      srun_args:
-        - --mem=16G
-        - --no-container-entrypoint
-        - --container-env=JAVA_TOOL_OPTIONS
-      env:
-        JAVA_TOOL_OPTIONS: "-XX:+UseSerialGC -Xms256m -Xmx1024m"
-      command:
-        - /usr/bin/java
-        - --class-path
-        - /app/main.war
-        - "-Dloader.path=main.war!/WEB-INF/classes/,main.war!/WEB-INF/,/app/extra-classes"
-        - org.springframework.boot.loader.PropertiesLauncher
-      readiness:
-        url: http://127.0.0.1:8080/fhir/metadata
-        timeout_s: 240
-        interval_s: 2
+runtime: pyxis
 ```
-
-Sidecar constraints:
-
-- Supported only in `slurm` mode with Pyxis.
-- Sidecars start sequentially in YAML order and must pass readiness before the worker starts.
-- Logs are written under `tasks/<task-slug>/sidecars/<name>.log`.
-- Cleanup sends `SIGTERM` to each background `srun` PID through a single `EXIT` trap.
-- `srun_args` may add step options, but renderer-owned/resource-conflicting flags such as `--overlap`, `--nodes`,
-  `--ntasks`, `--container-image`, `--cpus-per-task`, `--cpus-per-gpu`, GPU, GRES, and TRES flags are rejected.
-- If a sidecar exits or times out before readiness, the generated script runs `medarc-orchestrate record-failure` so
-  `runtime/state.json`, `runtime/result.json`, `runtime/task_manifest.json`, and `summary.json` show a failed task.
 
 ### Outputs
 
-Orchestrator-owned artifacts are written under `outputs/orchestrate/<run_id>/`.
+Artifacts are written under `outputs/orchestrator/<run_id>/`:
 
-Typical files:
+- `summary.json` aggregates task states.
+- per-task folders contain orchestrator task state, `serve/` logs, `bench/` outputs, and `result.json`.
 
-- `run_manifest.json`
-- `summary.json`
-- `tasks/<task-slug>/task.yaml`
-- `tasks/<task-slug>/eval-config.yaml`
-- `tasks/<task-slug>/runtime/allocation.json`
-- `tasks/<task-slug>/runtime/state.json`
-- `tasks/<task-slug>/runtime/result.json`
-- `tasks/<task-slug>/runtime/task_manifest.json`
-- `tasks/<task-slug>/sidecars/*.log` when sidecars are configured
-- `tasks/<task-slug>/submit.sh` for Slurm submission
+### Runtime behavior
 
-`medarc-eval bench` raw outputs still live under `runs/raw/<bench_run_id>/`.
+For each task, the orchestrator launches vLLM, waits for readiness, then runs:
+
+```bash
+medarc-eval bench --config <job.toml> --api-base-url <allocated-local-url> --provider local
+```
+
+The bench command exits naturally on completion; the orchestrator passes TOML bench flags only.
+
+Docker mode:
+
+- The orchestrator reserves concrete local GPU IDs and host ports.
+- vLLM listens on `container_port` inside the container and is mapped to a reserved localhost port.
+
+Pyxis mode:
+
+- The orchestrator assumes it is already running on the target GPU node within a Slurm allocation.
+- Each task launches vLLM with `srun --container-image ... vllm serve --host 127.0.0.1 --port <reserved-port> ...`.
+- Base URLs stay on localhost, for example `http://127.0.0.1:8123/v1`.
+- `max_parallel > 1` is supported by reserving different localhost ports per task.

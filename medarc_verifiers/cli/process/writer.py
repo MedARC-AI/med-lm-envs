@@ -36,6 +36,8 @@ ALLOWED_COLUMNS: tuple[str, ...] = (
     "model_cost",
     "model_id",
     "version_info",
+    "variant_id",
+    "variant_payload",
     "model_token_completion",
     "model_token_prompt",
     "model_token_total",
@@ -51,7 +53,7 @@ ALLOWED_COLUMNS: tuple[str, ...] = (
 EXPECTED_POLARS_DTYPES: dict[str, pl.DataType] = {
     "env_id": pl.String,
     "error": pl.String,
-    "example_id": pl.Int64,
+    "example_id": pl.String,
     "answer": pl.String,
     "extras": pl.String,
     "generation_ms": pl.Float64,
@@ -63,6 +65,8 @@ EXPECTED_POLARS_DTYPES: dict[str, pl.DataType] = {
     "model_cost": pl.Float64,
     "model_id": pl.String,
     "version_info": pl.String,
+    "variant_id": pl.String,
+    "variant_payload": pl.String,
     "model_token_completion": pl.Float64,
     "model_token_prompt": pl.Float64,
     "model_token_total": pl.Float64,
@@ -79,7 +83,7 @@ EXPECTED_ARROW_SCHEMA = pa.schema(
     [
         pa.field("env_id", pa.large_string()),
         pa.field("error", pa.large_string()),
-        pa.field("example_id", pa.int64()),
+        pa.field("example_id", pa.large_string()),
         pa.field("answer", pa.large_string()),
         pa.field("extras", pa.large_string()),
         pa.field("generation_ms", pa.float64()),
@@ -91,6 +95,8 @@ EXPECTED_ARROW_SCHEMA = pa.schema(
         pa.field("model_cost", pa.float64()),
         pa.field("model_id", pa.large_string()),
         pa.field("version_info", pa.large_string()),
+        pa.field("variant_id", pa.large_string()),
+        pa.field("variant_payload", pa.large_string()),
         pa.field("model_token_completion", pa.float64()),
         pa.field("model_token_prompt", pa.float64()),
         pa.field("model_token_total", pa.float64()),
@@ -147,6 +153,8 @@ class EnvWriteSummary:
     env_id: str
     base_env_id: str
     model_id: str
+    variant_id: str | None
+    variant_payload: Mapping[str, Any] | None
     output_path: Path
     row_count: int
     job_run_ids: tuple[str, ...]
@@ -250,7 +258,7 @@ def _write_group(group: AggregatedEnvRows, config: WriterConfig) -> EnvWriteSumm
     model_id = group.model_id
     if not model_id:
         raise ValueError("model_id is required for parquet output.")
-    output_path = build_output_path(config.output_dir, model_id=model_id, env_id=env_id)
+    output_path = build_output_path(config.output_dir, model_id=model_id, env_id=env_id, variant_id=group.variant_id)
     if not config.dry_run:
         output_path.parent.mkdir(parents=True, exist_ok=True)
     file_exists = output_path.exists()
@@ -261,6 +269,8 @@ def _write_group(group: AggregatedEnvRows, config: WriterConfig) -> EnvWriteSumm
         "processed_with_args": dict(config.processed_with_args),
         "env_id": env_id,
         "model_id": model_id,
+        "variant_id": group.variant_id,
+        "variant_payload": group.variant_payload,
     }
     row_count = len(group.rows)
     job_run_ids_set = set(group.job_run_ids)
@@ -271,6 +281,8 @@ def _write_group(group: AggregatedEnvRows, config: WriterConfig) -> EnvWriteSumm
             env_id=env_id,
             base_env_id=group.base_env_id,
             model_id=model_id,
+            variant_id=group.variant_id,
+            variant_payload=group.variant_payload,
             output_path=output_path,
             row_count=row_count,
             job_run_ids=group.job_run_ids,
@@ -293,6 +305,8 @@ def _write_group(group: AggregatedEnvRows, config: WriterConfig) -> EnvWriteSumm
         env_id=env_id,
         base_env_id=group.base_env_id,
         model_id=model_id,
+        variant_id=group.variant_id,
+        variant_payload=group.variant_payload,
         output_path=output_path,
         row_count=row_count,
         job_run_ids=group.job_run_ids,
@@ -364,7 +378,10 @@ def _write_env_index(
         timestamps: list[str] = []
         files[path_str] = {
             "env_id": summary.env_id,
+            "base_env_id": summary.base_env_id,
             "model_id": summary.model_id,
+            "variant_id": summary.variant_id,
+            "variant_payload": summary.variant_payload,
             "row_count": summary.row_count,
         }
         for job_run_id in summary.job_run_ids:
@@ -468,14 +485,17 @@ def _normalize_columns(df: pl.DataFrame) -> pl.DataFrame:
     return out
 
 
-def build_output_path(output_dir: Path, *, model_id: str, env_id: str) -> Path:
-    """Return the canonical parquet output path for a (model_id, env_id) dataset."""
+def build_output_path(output_dir: Path, *, model_id: str, env_id: str, variant_id: str | None = None) -> Path:
+    """Return the canonical parquet output path for a processed dataset."""
     if not model_id:
         raise ValueError("model_id is required for output path.")
     if not env_id:
         raise ValueError("env_id is required for output path.")
     model_dir = output_dir / slugify_filename_component(model_id)
-    return model_dir / f"{slugify_filename_component(env_id)}.parquet"
+    env_slug = slugify_filename_component(env_id)
+    if variant_id:
+        return model_dir / f"{env_slug}__variants" / f"{slugify_filename_component(variant_id)}.parquet"
+    return model_dir / f"{env_slug}.parquet"
 
 
 __all__ = ["EnvWriteSummary", "WriterConfig", "build_output_path", "write_env_groups", "write_env_index"]

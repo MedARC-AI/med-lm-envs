@@ -19,6 +19,7 @@ def _make_record(
     results_dir_name: str = "job-abc",
     env_args: dict | None = None,
     sampling_args: dict | None = None,
+    avg_reward: float | None = None,
     num_examples: int | None = 10,
     rollouts_per_example: int | None = None,
     has_metadata: bool = True,
@@ -60,8 +61,10 @@ def _make_record(
         reason=None,
         started_at="2024-01-01T00:00:10Z",
         ended_at="2024-01-01T00:00:50Z",
+        avg_reward=avg_reward,
         num_examples=num_examples,
         rollouts_per_example=rollouts_per_example,
+        row_count=1,
         env_args=env_args or {},
         sampling_args=sampling_args or {},
         env_config=env_config or {},
@@ -70,11 +73,12 @@ def _make_record(
     return record
 
 
-def test_load_normalized_metadata_prefers_manifest_fields(tmp_path: Path) -> None:
+def test_load_normalized_metadata_prefers_metadata_fields(tmp_path: Path) -> None:
     record = _make_record(
         tmp_path,
         env_args={"difficulty": "hard"},
         sampling_args={"temperature": 0.1},
+        avg_reward=0.8,
         rollouts_per_example=None,
     )
     _write_json(
@@ -84,6 +88,7 @@ def test_load_normalized_metadata_prefers_manifest_fields(tmp_path: Path) -> Non
             "model": "gpt-4o-mini",
             "env_args": {"difficulty": "easy", "split": "dev"},
             "sampling_args": {"temperature": 0.9, "top_p": 0.95},
+            "avg_reward": 0.8,
             "num_examples": 20,
             "rollouts_per_example": 2,
         },
@@ -94,9 +99,9 @@ def test_load_normalized_metadata_prefers_manifest_fields(tmp_path: Path) -> Non
     assert normalized.manifest_env_id == "demo-env-rollout3"
     assert normalized.base_env_id == "demo-env"
     assert normalized.rollout_index == 3
-    assert normalized.env_args == {"difficulty": "hard", "split": "dev"}
-    assert normalized.sampling_args == {"temperature": 0.1, "top_p": 0.95}
-    assert normalized.num_examples == 10
+    assert normalized.env_args == {"difficulty": "easy", "split": "dev"}
+    assert normalized.sampling_args == {"temperature": 0.9, "top_p": 0.95}
+    assert normalized.num_examples == 20
     assert normalized.rollouts_per_example == 2
     assert normalized.model_id == "gpt-4o"
     assert normalized.metadata_model == "gpt-4o-mini"
@@ -210,3 +215,54 @@ def test_load_normalized_metadata_validation_failure_sanitizes_raw_metadata(tmp_
         "endpoint_id": "cluster-a",
         "base_url": "https://example.invalid/v1",
     }
+
+
+def test_load_normalized_metadata_keeps_zero_num_examples_from_metadata(tmp_path: Path) -> None:
+    record = _make_record(tmp_path, manifest_env_id="demo-env", num_examples=0, rollouts_per_example=1)
+    _write_json(
+        record.metadata_path,
+        {
+            "env_id": "demo-env",
+            "num_examples": 0,
+            "rollouts_per_example": 3,
+        },
+    )
+
+    normalized = load_normalized_metadata(record)
+
+    assert normalized.num_examples == 0
+    assert normalized.rollouts_per_example == 3
+
+
+def test_load_normalized_metadata_keeps_zero_rollouts_from_metadata(tmp_path: Path) -> None:
+    record = _make_record(tmp_path, manifest_env_id="demo-env", num_examples=10, rollouts_per_example=0)
+    _write_json(
+        record.metadata_path,
+        {
+            "env_id": "demo-env",
+            "num_examples": 20,
+            "rollouts_per_example": 0,
+        },
+    )
+
+    normalized = load_normalized_metadata(record)
+
+    assert normalized.num_examples == 20
+    assert normalized.rollouts_per_example == 0
+
+
+def test_load_normalized_metadata_keeps_all_examples_sentinel_from_metadata(tmp_path: Path) -> None:
+    record = _make_record(tmp_path, manifest_env_id="demo-env", num_examples=-1, rollouts_per_example=1)
+    _write_json(
+        record.metadata_path,
+        {
+            "env_id": "demo-env",
+            "num_examples": -1,
+            "rollouts_per_example": 3,
+        },
+    )
+
+    normalized = load_normalized_metadata(record)
+
+    assert normalized.num_examples == -1
+    assert normalized.rollouts_per_example == 3

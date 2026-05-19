@@ -28,6 +28,9 @@ def _add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--run-id", help="Submission bundle run identifier.")
     parser.add_argument("--output-dir", type=Path, help="Override the Slurm bundle output directory.")
     parser.add_argument("--env-file", type=Path, default=None, help="Dotenv file passed through to inner orchestrator runs.")
+    parser.add_argument("--orchestrate-config", type=Path, help="Path to model-serving orchestrate.toml registry.")
+    parser.add_argument("--eval-images-config", type=Path, help="Path to eval auxiliary image registry TOML.")
+    parser.add_argument("--endpoints-path", type=Path, help="Path to endpoints.toml used for model alias resolution and bench.")
     parser.add_argument("--readiness-timeout-s", type=int, default=None, help="Inner readiness timeout in seconds.")
     parser.add_argument(
         "--prune-logs-on-success",
@@ -103,7 +106,21 @@ def run_from_args(args: argparse.Namespace) -> int:
         plan = load_plan(plan_path)
         plan_base_dir = plan_path.parent
     else:
-        plan = make_plan(job_configs=args.job_configs or [], base_dir=plan_base_dir, name=args.name)
+        plan = make_plan(
+            job_configs=args.job_configs or [],
+            base_dir=plan_base_dir,
+            name=args.name,
+            orchestrate_config=args.orchestrate_config,
+            eval_images_config=args.eval_images_config,
+            endpoints_path=args.endpoints_path,
+        )
+
+    if args.orchestrate_config is not None:
+        plan.orchestrate_config = args.orchestrate_config.expanduser().resolve()
+    if args.eval_images_config is not None:
+        plan.eval_images_config = args.eval_images_config.expanduser().resolve()
+    if args.endpoints_path is not None:
+        plan.endpoints_path = args.endpoints_path.expanduser().resolve()
 
     if args.env_file is not None:
         env_file = args.env_file.expanduser()

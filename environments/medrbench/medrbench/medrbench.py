@@ -105,11 +105,11 @@ def _to_vf_format_diagnosis(data: dict[str, Any], rare_disease_only: bool = Fals
         else:
             question = MULTI_TURN_FIRST_TURN_PROMPT.format(case=case_without_tests)
 
+        medrbench_task = f"medrbench-diagnosis-{task.value}"
         records.append(
             {
                 "question": question,
                 "answer": diagnosis_results,
-                "task": f"medrbench-diagnosis-{task.value}",
                 "info": {
                     "pmc_id": pmc_id,
                     "case_summary": case_summary,
@@ -118,6 +118,7 @@ def _to_vf_format_diagnosis(data: dict[str, Any], rare_disease_only: bool = Fals
                     "differential_diagnosis": differential_diagnosis,
                     "reference_response": diagnosis_results,
                     "task_type": "medrbench-diagnosis",
+                    "medrbench_task": medrbench_task,
                     "body_category": case.get("body_category", []),
                     "disorder_category": case.get("disorder_category", []),
                     "checked_rare_disease": case.get("checked_rare_disease", []),
@@ -149,13 +150,13 @@ def _to_vf_format_treatment(data: dict[str, Any], rare_disease_only: bool = Fals
             {
                 "question": question,
                 "answer": treatment_plan_results,
-                "task": "medrbench-treatment",
                 "info": {
                     "pmc_id": pmc_id,
                     "case_summary": case_summary,
                     "treatment_planning_analysis": treatment_planning_analysis,
                     "reference_response": treatment_plan_results,
                     "task_type": "medrbench-treatment",
+                    "medrbench_task": "medrbench-treatment",
                     "body_category": case.get("body_category", []),
                     "disorder_category": case.get("disorder_category", []),
                     "checked_rare_disease": case.get("checked_rare_disease", []),
@@ -497,7 +498,7 @@ def load_environment(
         gold_response = str(info.get("reference_response") or "")
         extracted_answer = parser.parse_answer(completion) or ""
 
-        task_name = str(state.get("task") or info.get("task_type") or "medrbench-diagnosis")
+        task_name = str(info.get("medrbench_task") or info.get("task_type") or "medrbench-diagnosis")
         if task_name.startswith("medrbench-diagnosis-free_turn"):
             info.setdefault("turns_used", _turn_count(state))
 

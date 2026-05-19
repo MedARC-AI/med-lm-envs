@@ -363,12 +363,12 @@ def load_environment(
                 answer_format=answer_format,
             ),
             "answer": row["Ground Truth Answer"],
-            "task": "medcalc_bench",
             "info": {
                 "calc_id": row["Calculator ID"],
                 "ground_truth": row["Ground Truth Answer"],
                 "lower_bound": row["Lower Limit"],
                 "upper_bound": row["Upper Limit"],
+                "medcalc_task": "medcalc_bench",
             },
         }
 

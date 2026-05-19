@@ -25,7 +25,7 @@ from medarc_verifiers.orchestrate.bundle import (
     write_execution_allocation,
     write_runtime_state,
 )
-from medarc_verifiers.orchestrate.config import PlanConfig, TaskSpec, load_job_config
+from medarc_verifiers.orchestrate.config import PlanConfig, TaskSpec
 from medarc_verifiers.orchestrate.dashboard import ACTIVE_STATES, OrchestratorDashboard
 from medarc_verifiers.orchestrate.resources import ResourceManager
 from medarc_verifiers.orchestrate.runtime import LogStreamer, RuntimeAdapter, RuntimeHandle, RuntimeLaunchError
@@ -45,13 +45,12 @@ from medarc_verifiers.orchestrate.worker import TaskWorker, WorkerCallbacks, Wor
 
 _COMMAND_TEMPLATE_UV = (
     "uv run medarc-eval bench --config {job_config_path} --api-base-url {base_url} "
-    "--run-id {bench_run_id} --on-complete exit"
+    "--provider local --output-dir {output_dir} {endpoints_arg}"
 )
 _COMMAND_TEMPLATE_BARE = (
     "medarc-eval bench --config {job_config_path} --api-base-url {base_url} "
-    "--run-id {bench_run_id} --on-complete exit"
+    "--provider local --output-dir {output_dir} {endpoints_arg}"
 )
-_DEFAULT_BENCH_OUTPUT_DIR = Path("runs") / "raw"
 
 def _shorten(text: str, *, max_len: int = 220) -> str:
     if len(text) <= max_len:
@@ -161,7 +160,7 @@ class OrchestratorRunner:
                 gpu_ids=list(allocation.gpu_ids),
                 server_port=allocation.server_port,
                 require_contiguous_gpus=bool(
-                    _get_mapping(task.orchestrate.get(task.model_key), f"orchestrate.{task.model_key}").get(
+                    _get_mapping(task.orchestrate.get("vllm"), "orchestrate.vllm").get(
                         "require_contiguous_gpus",
                         bool(allocation.gpu_ids and len(allocation.gpu_ids) > 1),
                     )
@@ -213,7 +212,7 @@ class OrchestratorRunner:
                 gpu_ids=list(allocation.gpu_ids),
                 server_port=allocation.server_port,
                 require_contiguous_gpus=bool(
-                    _get_mapping(task.orchestrate.get(task.model_key), f"orchestrate.{task.model_key}").get(
+                    _get_mapping(task.orchestrate.get("vllm"), "orchestrate.vllm").get(
                         "require_contiguous_gpus",
                         bool(allocation.gpu_ids and len(allocation.gpu_ids) > 1),
                     )
@@ -485,59 +484,6 @@ def _format_elapsed(started_at: str | None, completed_at: str | None) -> str:
     if minutes:
         return f"{minutes}m{seconds:02d}s"
     return f"{seconds}s"
-
-
-def _resolve_bench_output_dir(*, job_config_path: Path, repo_root: Path) -> Path:
-    payload = dict(load_job_config(job_config_path))
-    configured = payload.get("output_dir")
-    output_dir = Path(configured) if configured is not None else _DEFAULT_BENCH_OUTPUT_DIR
-    if not output_dir.is_absolute():
-        output_dir = repo_root / output_dir
-    return output_dir.resolve()
-
-
-async def _discover_bench_run_dir(*, job_config_path: Path, repo_root: Path, timeout_s: float) -> Path | None:
-    runs_root = _resolve_bench_output_dir(job_config_path=job_config_path, repo_root=repo_root)
-    target_source = str(job_config_path.expanduser().resolve())
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + max(timeout_s, 0.0)
-    while True:
-        candidate = _find_matching_bench_run_dir(runs_root=runs_root, config_source=target_source)
-        if candidate is not None:
-            return candidate
-        if loop.time() >= deadline:
-            return None
-        await asyncio.sleep(0.5)
-
-
-def _find_matching_bench_run_dir(*, runs_root: Path, config_source: str) -> Path | None:
-    if not runs_root.exists():
-        return None
-    latest: tuple[str, Path] | None = None
-    for child in runs_root.iterdir():
-        manifest_path = child / "run_manifest.json"
-        if not manifest_path.is_file():
-            continue
-        try:
-            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if not isinstance(payload, dict):
-            continue
-        if str(payload.get("config_source") or "") != config_source:
-            continue
-        created_at = str(payload.get("created_at") or "")
-        candidate = (created_at, child.resolve())
-        if latest is None or candidate > latest:
-            latest = candidate
-    return latest[1] if latest is not None else None
-
-
-def _format_restart_source(run_dir: Path, *, repo_root: Path) -> str:
-    try:
-        return str(run_dir.resolve().relative_to(repo_root.resolve()))
-    except ValueError:
-        return str(run_dir.resolve())
 
 
 def _parse_time(value: str | None):

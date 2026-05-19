@@ -64,6 +64,28 @@ class ModelCentricResult:
     datasets: dict[str, dict[str, Any]]
 
 
+@dataclass(slots=True)
+class DatasetModelMissingness:
+    """Missing reward coverage for one (dataset, model) pair."""
+
+    dataset: str
+    model: str
+    expected_n: int
+    present_nonnull_n: int
+    missing_count: int
+    missing_pct: float
+
+
+@dataclass(slots=True)
+class MissingnessSummary:
+    """Aggregate missingness summary across retained datasets."""
+
+    n_pairs_total: int
+    n_pairs_with_missing: int
+    missing_cells_total: int
+    worst_offenders: list[DatasetModelMissingness]
+
+
 def read_dataset_lazy(
     parquet_path: Path | str | Sequence[Path | str | PLDataFrame | PLLazyFrame] | PLDataFrame | PLLazyFrame,
 ) -> pl.LazyFrame:
@@ -288,19 +310,22 @@ def compute_winrates(
     n_questions_by_ds: dict[str, int] = {}
     models_by_ds: dict[str, list[str]] = {}
     models_present_by_ds: dict[str, set[str]] = {}
+    missingness_by_ds: dict[str, list[DatasetModelMissingness]] = {}
     seen_models: set[str] = set()
     seen_model_case_map: dict[str, str] = {}
 
     dataset_iter: Iterable[tuple[str, Path | str]] = datasets
-    try:
-        from rich.progress import track
+    console = _get_console()
+    if console is not None and getattr(console, "is_terminal", False):
+        try:
+            from rich.progress import track
 
-        dataset_iter = track(datasets, description="Computing win rates", transient=True)
-    except Exception:
-        dataset_iter = datasets
+            dataset_iter = track(datasets, description="Computing win rates", transient=True, console=console)
+        except Exception:
+            dataset_iter = datasets
 
     for dataset_name, parquet_path in dataset_iter:
-        stats, models_present = _process_dataset(
+        stats, models_present, missingness = _process_dataset(
             dataset_name,
             parquet_path,
             cfg,
@@ -329,6 +354,7 @@ def compute_winrates(
         avg_rewards_by_dataset[dataset_name] = stats.avg_reward_per_model
         n_questions_by_ds[dataset_name] = stats.n_questions
         models_by_ds[dataset_name] = stats.models
+        missingness_by_ds[dataset_name] = missingness
 
     if not known_model_set:
         if include_set:
@@ -349,6 +375,7 @@ def compute_winrates(
         per_dataset_model_means=per_dataset_model_means,
         avg_rewards_by_dataset=avg_rewards_by_dataset,
         models_by_ds=models_by_ds,
+        missingness_by_ds=missingness_by_ds,
         include_map=include_map,
         seen_model_case_map=seen_model_case_map,
     )
@@ -373,6 +400,7 @@ def compute_winrates(
                 avg_rewards_by_dataset.pop(dataset_name, None)
                 n_questions_by_ds.pop(dataset_name, None)
                 models_by_ds.pop(dataset_name, None)
+                missingness_by_ds.pop(dataset_name, None)
             if not per_dataset_pairwise:
                 _raise_user_error(
                     "No datasets remain after enforcing dataset_coverage=all-models. "
@@ -384,6 +412,8 @@ def compute_winrates(
                 models_by_ds=models_by_ds,
                 coverage=dataset_coverage,
             )
+
+    _emit_missingness_report(_summarize_missingness(missingness_by_ds))
 
     return build_model_centric_result(
         per_dataset_pairwise=per_dataset_pairwise,
@@ -583,7 +613,7 @@ def _process_dataset(
     include_map: Mapping[str, str],
     seen_model_case_map: Mapping[str, str],
     partial_datasets: str,
-) -> tuple[DatasetStats | None, list[str]]:
+) -> tuple[DatasetStats | None, list[str], list[DatasetModelMissingness]]:
     """Read and process a dataset, raising on failure and honoring selection policies."""
     try:
         lf = read_dataset_lazy(parquet_path)
@@ -599,7 +629,7 @@ def _process_dataset(
             if missing_required and partial_datasets == "strict":
                 missing_labels = [include_map.get(model, model) for model in missing_required]
                 _emit_note(f"Dropping dataset {dataset_name} (missing include models: {missing_labels}).")
-                return None, models_present
+                return None, models_present, []
 
         if include_set:
             models_filtered = [models_present_map[model] for model in target_models if model in models_present_map]
@@ -648,6 +678,7 @@ def _process_dataset(
             else:
                 pairwise[key] = (1.0 - wr, n_used)
         avg_reward_per_model = _mean_reward_per_model(df_avg, allowed=models)
+        missingness = _compute_dataset_missingness(dataset_name, df_filtered, models)
         return (
             DatasetStats(
                 pairwise=pairwise,
@@ -656,10 +687,52 @@ def _process_dataset(
                 avg_reward_per_model=avg_reward_per_model,
             ),
             models_present,
+            missingness,
         )
     except Exception as exc:  # noqa: BLE001
         message = f"Failed to process dataset {dataset_name} at {_format_parquet_source(parquet_path)}: {exc}"
         _raise_user_error(message, exc)
+
+
+def _compute_dataset_missingness(
+    dataset_name: str,
+    df_avg: pl.DataFrame,
+    models: Sequence[str],
+) -> list[DatasetModelMissingness]:
+    deduped_models = list(dict.fromkeys(str(model) for model in models))
+    if not deduped_models:
+        return []
+
+    expected_n = 0
+    present_nonnull_by_model: dict[str, int] = {}
+    if not df_avg.is_empty() and EXAMPLE_ID_COL in df_avg.columns:
+        expected_n = int(df_avg.select(pl.col(EXAMPLE_ID_COL).n_unique()).item())
+        if MODEL_COL in df_avg.columns:
+            grouped = (
+                df_avg.filter(pl.col("reward_mean").is_not_null())
+                .group_by(MODEL_COL)  # type: ignore[arg-type]
+                .agg(pl.col(EXAMPLE_ID_COL).n_unique().alias("present_nonnull_n"))
+            )
+            present_nonnull_by_model = {
+                str(model): int(present_nonnull or 0) for model, present_nonnull in grouped.iter_rows()
+            }
+
+    missingness: list[DatasetModelMissingness] = []
+    for model in deduped_models:
+        present_nonnull_n = max(present_nonnull_by_model.get(model, 0), 0)
+        missing_count = max(expected_n - present_nonnull_n, 0)
+        missing_pct = (100.0 * missing_count / expected_n) if expected_n > 0 else 0.0
+        missingness.append(
+            DatasetModelMissingness(
+                dataset=dataset_name,
+                model=model,
+                expected_n=expected_n,
+                present_nonnull_n=present_nonnull_n,
+                missing_count=missing_count,
+                missing_pct=missing_pct,
+            )
+        )
+    return missingness
 
 
 def _mean_reward_per_model(df_avg: pl.DataFrame, allowed: Sequence[str] | None = None) -> dict[str, float | None]:
@@ -688,8 +761,13 @@ def _models_present(df_avg: pl.DataFrame) -> list[str]:
 
 
 def _is_dataset_excluded(dataset_name: str, exclude_set: set[str]) -> bool:
-    base, _ = derive_base_env_id(dataset_name)
-    return dataset_is_excluded(dataset_name, exclude_set, base_dataset_id=base)
+    env_name, _, variant_id = dataset_name.partition("::")
+    base, _ = derive_base_env_id(env_name)
+    if dataset_is_excluded(dataset_name, exclude_set, base_dataset_id=base):
+        return True
+    if variant_id:
+        return dataset_is_excluded(env_name, exclude_set, base_dataset_id=base)
+    return False
 
 
 def _filter_models(
@@ -745,6 +823,7 @@ def _canonicalize_dataset_model_labels(
     per_dataset_model_means: dict[str, dict[str, float]],
     avg_rewards_by_dataset: dict[str, dict[str, float | None]],
     models_by_ds: dict[str, list[str]],
+    missingness_by_ds: dict[str, list[DatasetModelMissingness]],
     include_map: Mapping[str, str],
     seen_model_case_map: Mapping[str, str],
 ) -> None:
@@ -805,6 +884,70 @@ def _canonicalize_dataset_model_labels(
             seen.add(canonical_model)
             deduped.append(canonical_model)
         models_by_ds[dataset] = deduped
+
+    for dataset, rows in list(missingness_by_ds.items()):
+        canonical_rows: list[DatasetModelMissingness] = []
+        for row in rows:
+            canonical_rows.append(
+                DatasetModelMissingness(
+                    dataset=row.dataset,
+                    model=canonical(row.model),
+                    expected_n=row.expected_n,
+                    present_nonnull_n=row.present_nonnull_n,
+                    missing_count=row.missing_count,
+                    missing_pct=row.missing_pct,
+                )
+            )
+        missingness_by_ds[dataset] = canonical_rows
+
+
+def _summarize_missingness(
+    missingness_by_ds: Mapping[str, Sequence[DatasetModelMissingness]],
+) -> MissingnessSummary:
+    rows = [row for dataset_rows in missingness_by_ds.values() for row in dataset_rows]
+    rows_with_missing = [row for row in rows if row.missing_count > 0]
+    worst_offenders = sorted(
+        rows_with_missing,
+        key=lambda row: (-row.missing_pct, -row.missing_count, row.dataset, row.model),
+    )[:10]
+    return MissingnessSummary(
+        n_pairs_total=len(rows),
+        n_pairs_with_missing=len(rows_with_missing),
+        missing_cells_total=sum(row.missing_count for row in rows),
+        worst_offenders=worst_offenders,
+    )
+
+
+def _emit_missingness_report(summary: MissingnessSummary) -> None:
+    logger.info(
+        "Winrate missingness summary: n_pairs_total=%d n_pairs_with_missing=%d missing_cells_total=%d",
+        summary.n_pairs_total,
+        summary.n_pairs_with_missing,
+        summary.missing_cells_total,
+    )
+    console = _get_console()
+    if not console or not getattr(console, "is_terminal", False) or not summary.worst_offenders:
+        return
+    try:
+        from rich.table import Table
+    except Exception:
+        return
+
+    table = Table(title="Winrate missingness (top offenders)")
+    table.add_column("dataset", style="cyan")
+    table.add_column("model", style="magenta")
+    table.add_column("missing", justify="right")
+    table.add_column("expected", justify="right")
+    table.add_column("missing %", justify="right")
+    for row in summary.worst_offenders:
+        table.add_row(
+            row.dataset,
+            row.model,
+            str(row.missing_count),
+            str(row.expected_n),
+            f"{row.missing_pct:.1f}",
+        )
+    console.print(table)
 
 
 def _format_parquet_source(

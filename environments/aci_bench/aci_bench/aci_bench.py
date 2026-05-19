@@ -29,11 +29,11 @@ def _to_vf_format(dataset: Dataset) -> Dataset:
         lambda row: {
             "question": prompt.format(conversation=row["dialogue"]),
             "answer": row["note"],
-            "task": "aci-bench",
             "info": {
                 "conversation": row["dialogue"],
                 "reference_response": row["note"],
                 "transcript_version": row["transcript_version"],
+                "aci_bench_task": "aci-bench",
             },
         }
     )

@@ -1,5 +1,0 @@
-- id: sctpublic
-  module: sctpublic
-  num_examples: -1
-  rollouts_per_example: 1
-  verbose: false

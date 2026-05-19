@@ -1,8 +1,14 @@
 """Tests for the simplified MCQ accuracy grader."""
 
+import time
+
 import pytest
 
-from medarc_verifiers.rewards.multiple_choice_accuracy import MCQAccuracyResult, multiple_choice_accuracy
+from medarc_verifiers.rewards.multiple_choice_accuracy import (
+    MCQAccuracyResult,
+    _contains_multiple_option_led_sentences,
+    multiple_choice_accuracy,
+)
 
 
 def test_anchored_final_answer_colon():
@@ -35,12 +41,41 @@ def test_anchored_numeric():
     assert multiple_choice_accuracy("The answer is 3", answer_letter="3", answer_text="Third option")
 
 
+@pytest.mark.parametrize(
+    ("response", "answer_letter"),
+    [
+        ("The answer is option A", "A"),
+        ("Final answer: choice (B)", "B"),
+        ("Option 2", "2"),
+    ],
+)
+def test_option_word_forms_are_parsed(response: str, answer_letter: str):
+    assert multiple_choice_accuracy(response, answer_letter=answer_letter, answer_text="Option")
+
+
 def test_last_token_single_letter_at_end():
     assert multiple_choice_accuracy("I think it's C", answer_letter="C", answer_text="Correct option")
 
 
 def test_last_token_with_period():
     assert multiple_choice_accuracy("My selection is B.", answer_letter="B", answer_text="Some text")
+
+
+@pytest.mark.parametrize(
+    ("response", "answer_letter"),
+    [
+        ("My selection is [C]", "C"),
+        ("My selection is C]", "C"),
+        ("My selection is C)", "C"),
+        ("My selection is (C)", "C"),
+        ("My selection is [2]", "2"),
+        ("My selection is 2]", "2"),
+        ("My selection is 2)", "2"),
+        ("My selection is (2)", "2"),
+    ],
+)
+def test_last_token_bracket_like_variants(response: str, answer_letter: str):
+    assert multiple_choice_accuracy(response, answer_letter=answer_letter, answer_text="Option")
 
 
 def test_last_token_multiple_letters_takes_last():
@@ -58,6 +93,35 @@ def test_last_token_numeric():
 
 def test_last_token_wrong():
     assert not multiple_choice_accuracy("My answer is A", answer_letter="B", answer_text="Correct")
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "A, C",
+        "A; C",
+        "A: C",
+        "A. C",
+        "A) C",
+        r"A,\ C,\ D",
+        "B, C, E",
+        "D / G / J",
+        "(A), (C)",
+        "[B], [C], [E]",
+        "A or C",
+        "B and E",
+        "B, and E",
+        "B, & D",
+        "both A and C",
+        "A & C",
+        "A + C",
+        "A y C",
+        "A e D",
+        "A ou C",
+    ],
+)
+def test_last_token_rejects_compact_multi_option_lists(response: str):
+    assert not multiple_choice_accuracy(response, answer_letter="C", answer_text="Option", accept_answer_text=False)
 
 
 def test_last_token_disabled_when_explicit_anchor_exists_even_if_wrong():
@@ -82,12 +146,66 @@ def test_answer_text_exact_match():
     )
 
 
+def test_answer_text_exact_match_allows_numeric_boxed_content():
+    assert multiple_choice_accuracy(
+        r"\boxed{4}",
+        answer_letter="A",
+        answer_text="4.",
+    )
+
+
 def test_answer_text_in_sentence():
     assert multiple_choice_accuracy(
         "Based on the symptoms, acute myocardial infarction is most likely.",
         answer_letter="B",
         answer_text="acute myocardial infarction",
     )
+
+
+@pytest.mark.parametrize(
+    ("response", "answer_letter", "answer_text"),
+    [
+        (" c ", "C", "Correct option"),
+        ("(2)", "2", "Second option"),
+        ("  Chemotherapy and radiation.  ", "C", "chemotherapy and radiation"),
+        ("B. Video-capsule endoscopy", "B", "Video-capsule endoscopy"),
+        ("**(3)** Third option", "3", "Third option"),
+    ],
+)
+def test_strict_accepts_only_exact_option_text_or_both(response: str, answer_letter: str, answer_text: str):
+    assert multiple_choice_accuracy(response, answer_letter=answer_letter, answer_text=answer_text, strict=True)
+
+
+@pytest.mark.parametrize(
+    ("response", "answer_letter", "answer_text"),
+    [
+        ("Final answer: C", "C", "Correct option"),
+        ("I think it's C", "C", "Correct option"),
+        ("Based on the symptoms, acute myocardial infarction is most likely.", "B", "acute myocardial infarction"),
+        ("The answer is all of the above.", "D", "All of the above"),
+    ],
+)
+def test_strict_rejects_permissive_heuristic_matches(response: str, answer_letter: str, answer_text: str):
+    assert multiple_choice_accuracy(response, answer_letter=answer_letter, answer_text=answer_text)
+    assert not multiple_choice_accuracy(response, answer_letter=answer_letter, answer_text=answer_text, strict=True)
+
+
+@pytest.mark.parametrize("response", ["All of the above", "The answer is all of the above."])
+def test_answer_text_all_of_the_above_is_not_rejected(response: str):
+    assert multiple_choice_accuracy(response, answer_letter="D", answer_text="All of the above")
+
+
+@pytest.mark.parametrize("response", ["None of the above", "The answer is none of the above."])
+def test_answer_text_none_of_the_above_is_not_rejected(response: str):
+    assert multiple_choice_accuracy(response, answer_letter="E", answer_text="None of the above")
+
+
+def test_multi_answer_tail_does_not_count_as_all_of_the_above():
+    assert not multiple_choice_accuracy("A and B", answer_letter="D", answer_text="All of the above")
+
+
+def test_all_of_the_above_does_not_match_plain_option_text():
+    assert not multiple_choice_accuracy("All of the above", answer_letter="C", answer_text="acute appendicitis")
 
 
 def test_answer_text_case_insensitive():
@@ -105,6 +223,31 @@ def test_answer_text_disabled():
 def test_answer_text_substring_not_matched():
     # "tension" should not match "hypertension"
     assert not multiple_choice_accuracy("Patient has tension headaches", answer_letter="A", answer_text="hypertension")
+
+
+def test_answer_text_fallback_rejects_bulleted_option_elimination_lines():
+    response = (
+        "The most likely diagnosis is Kawasaki Disease (D).\n"
+        "Elimination of other options:\n"
+        "   - Measles: Measles typically presents differently.\n"
+        "   - Scarlet fever: also less likely."
+    )
+    result = multiple_choice_accuracy(response, answer_letter="A", answer_text="Measles.", return_details=True)
+    assert result.is_correct is False
+    assert result.method == "none"
+
+
+def test_answer_text_fallback_rejects_bulleted_other_options_lines():
+    response = (
+        "The safest and fastest airway is cricothyrotomy (Choice A).\n"
+        "Other options:\n"
+        "   - Emergency tracheostomy - more time-consuming in an unstable patient."
+    )
+    result = multiple_choice_accuracy(
+        response, answer_letter="D", answer_text="Emergency tracheostomy", return_details=True
+    )
+    assert result.is_correct is False
+    assert result.method == "none"
 
 
 def test_normalization_extra_whitespace():
@@ -152,17 +295,6 @@ def test_return_details_last_token():
     assert result.method == "last_token"
     assert result.matched_answer == "B"
     assert result.correct_answer == "B"
-
-
-def test_return_details_answer_text():
-    result = multiple_choice_accuracy(
-        "The patient has acute appendicitis", answer_letter="D", answer_text="acute appendicitis", return_details=True
-    )
-    assert isinstance(result, MCQAccuracyResult)
-    assert result.is_correct is True
-    assert result.method == "answer_text"
-    assert result.matched_answer == "the patient has acute appendicitis"
-    assert result.correct_answer == "acute appendicitis"
 
 
 def test_return_details_no_match():
@@ -221,6 +353,16 @@ def test_unpaired_think_close_with_spurious_match():
     assert multiple_choice_accuracy(response, answer_letter="A", answer_text="Option A")
 
 
+def test_multiple_think_blocks_use_last_close():
+    response = "<think>first</think> draft <think>second</think>\n\nFinal answer: B"
+    assert multiple_choice_accuracy(response, answer_letter="B", answer_text="Option B")
+
+
+def test_unclosed_think_open_returns_empty():
+    response = "<think>reasoning only Final answer: C"
+    assert not multiple_choice_accuracy(response, answer_letter="C", answer_text="Option C")
+
+
 def test_cot_prevents_early_letter_matching():
     # Should not match A or B from the reasoning
     cot_response = """
@@ -245,6 +387,15 @@ def test_edge_case_letter_in_medical_term():
     # "C" in "Vitamin C" should not be matched as answer
     assert multiple_choice_accuracy(
         "Patient needs Vitamin C supplementation. Answer: D", answer_letter="D", answer_text="Supplement"
+    )
+
+
+def test_answer_text_match_ignores_terminal_period_difference():
+    response = "Final answer: Furosemide-responsive cardiogenic pulmonary edema"
+    assert multiple_choice_accuracy(
+        response,
+        answer_letter="B",
+        answer_text="Furosemide-responsive cardiogenic pulmonary edema.",
     )
 
 
@@ -353,10 +504,19 @@ def test_leading_option_with_no_and_punctuation_should_pass():
     assert multiple_choice_accuracy("B) No.", answer_letter="B", answer_text="No")
 
 
-def test_last_token_negation_same_sentence_blocks():
-    # No anchor phrase, so it falls to last_token.
-    # Because "Not" is in the same sentence, the final "C" should be blocked.
-    assert not multiple_choice_accuracy("Not C, wait, C", answer_letter="C", answer_text="Option C")
+@pytest.mark.parametrize(
+    ("response", "answer_text"),
+    [
+        ("A (Nadolol)", "Nadolol"),
+        ("A - Nadolol", "Nadolol"),
+        ("A – Nadolol", "Nadolol"),
+    ],
+)
+def test_leading_option_with_parenthetical_or_dash_answer_text(response: str, answer_text: str):
+    result = multiple_choice_accuracy(response, answer_letter="A", answer_text=answer_text, return_details=True)
+    assert result.is_correct is True
+    assert result.method == "anchored_token"
+    assert result.matched_answer == "A"
 
 
 def test_last_token_negation_previous_sentence_does_not_block():
@@ -368,8 +528,143 @@ def test_last_token_isnt_previous_sentence_does_not_block():
     assert multiple_choice_accuracy("It isn't C. C", answer_letter="C", answer_text="Option C")
 
 
-def test_last_token_isnt_same_sentence_blocks():
-    assert not multiple_choice_accuracy("It isn't C, but maybe C", answer_letter="C", answer_text="Option C")
+def test_answer_text_rather_than_prefix_blocks():
+    response = "The diagnosis is viral rather than bacterial pneumonia."
+    assert not multiple_choice_accuracy(response, answer_letter="B", answer_text="bacterial pneumonia")
+
+
+def test_answer_text_wrong_prefix_blocks():
+    response = "The wrong diagnosis is bacterial pneumonia."
+    assert not multiple_choice_accuracy(response, answer_letter="B", answer_text="bacterial pneumonia")
+
+
+def test_anchored_token_contradicted_by_later_option_blocks():
+    response = "Answer: C, but D is correct."
+    assert not multiple_choice_accuracy(response, answer_letter="C", answer_text="Option C")
+
+
+def test_anchored_token_instead_correction_blocks():
+    response = "Answer: C, instead D is correct."
+    assert not multiple_choice_accuracy(response, answer_letter="C", answer_text="Option C")
+
+
+def test_anchored_token_instead_of_preference_does_not_block():
+    response = "Answer: C instead of D."
+    assert multiple_choice_accuracy(response, answer_letter="C", answer_text="Option C")
+    assert not multiple_choice_accuracy(response, answer_letter="D", answer_text="Option D")
+
+
+def test_multi_answer_anchors_elsewhere_do_not_poison_final_anchor():
+    response = "Option A and Option C were considered earlier. Final answer: B"
+    result = multiple_choice_accuracy(response, answer_letter="B", answer_text="Option B", return_details=True)
+    assert result.is_correct is True
+    assert result.method == "anchored_token"
+    assert result.matched_answer == "B"
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        (
+            "Option (A) and Option (I) are both correct statements concerning feeding for this patient, but "
+            "since the prompt asks for a singular choice that is true, the most directly relevant and universally "
+            "accepted principle would be (A) Enteral nutrition may decrease infection due to the prevention of "
+            "bacterial translocation, highlighting a key benefit of enteral feeding in acute pancreatitis management."
+        ),
+        (
+            "Answer: option A and option I are both correct. If I must pick one, I would lean toward A because "
+            "enteral nutrition may decrease infection due to the prevention of bacterial translocation."
+        ),
+        (
+            "Option A as well as option I are valid here. The better-supported statement is A: "
+            "Enteral nutrition may decrease infection due to the prevention of bacterial translocation."
+        ),
+        (
+            "Choice A or choice I could both be defended. The most directly relevant principle would be A "
+            "(Enteral nutrition may decrease infection due to the prevention of bacterial translocation)."
+        ),
+        (
+            "Selected options: A and I. Since only one answer is requested, I would prefer A - "
+            "Enteral nutrition may decrease infection due to the prevention of bacterial translocation."
+        ),
+        (
+            "Option (A), together with option (I), is correct for feeding in severe acute pancreatitis; "
+            "among them, (A) Enteral nutrition may decrease infection due to the prevention of bacterial "
+            "translocation is the most important principle."
+        ),
+    ],
+)
+def test_answer_text_fallback_allows_disambiguated_multi_candidate_payloads(response: str):
+    result_a = multiple_choice_accuracy(
+        response,
+        answer_letter="A",
+        answer_text="Enteral nutrition may decrease infection due to the prevention of bacterial translocation.",
+        accept_answer_text=True,
+        return_details=True,
+    )
+    assert result_a.is_correct is True
+    assert result_a.method in {"answer_text", "anchored_token"}
+
+    result_i = multiple_choice_accuracy(
+        response,
+        answer_letter="I",
+        answer_text="Feeding should begin within 24-48 hours.",
+        accept_answer_text=True,
+        return_details=True,
+    )
+    assert result_i.is_correct is False
+    assert result_i.method in {"none", "anchored_token"}
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "(A) Naloxone is a synthetic N-allyl derivative of oxymorphone. (D) Naloxone is not rapidly absorbed after oral administration.",
+        "A. Naloxone is a synthetic N-allyl derivative of oxymorphone.\nD. Naloxone is not rapidly absorbed after oral administration.",
+        "(A) First statement. (C) Second statement.",
+    ],
+)
+def test_answer_text_fallback_rejects_multiple_option_led_sentences(response: str):
+    result_a = multiple_choice_accuracy(
+        response,
+        answer_letter="A",
+        answer_text="Naloxone is a synthetic N-allyl derivative of oxymorphone.",
+        accept_answer_text=True,
+        return_details=True,
+    )
+    assert result_a.is_correct is False
+    assert result_a.method == "none"
+
+
+def test_answer_text_fallback_allows_option_led_sentences_after_prose_preface():
+    response = (
+        "Let me compare the statements before picking one.\n"
+        "A. Naloxone is a synthetic N-allyl derivative of oxymorphone.\n"
+        "D. Naloxone is not rapidly absorbed after oral administration.\n"
+        "The correct statement is Naloxone is a synthetic N-allyl derivative of oxymorphone."
+    )
+    result = multiple_choice_accuracy(
+        response,
+        answer_letter="A",
+        answer_text="Naloxone is a synthetic N-allyl derivative of oxymorphone.",
+        accept_answer_text=True,
+        return_details=True,
+    )
+    assert result.is_correct is True
+    assert result.method == "answer_text"
+
+
+def test_multiple_option_led_sentence_scan_handles_large_payload_linearly():
+    response = ("Reasoning sentence with details. " * 12000) + "Final answer: C"
+    started = time.perf_counter()
+    assert _contains_multiple_option_led_sentences(response, answer_letter="C") is False
+    elapsed = time.perf_counter() - started
+    assert elapsed < 1.0
+
+
+def test_large_reasoning_payload_still_accepts_final_answer():
+    response = ("Reasoning sentence with details. " * 12000) + "Final answer: C"
+    assert multiple_choice_accuracy(response, answer_letter="C", answer_text="Option C")
 
 
 def test_answer_text_does_not_override_explicit_wrong_choice():
@@ -394,6 +689,15 @@ def test_answer_text_used_when_no_explicit_choice_letter_present():
         "Therefore the diagnosis is poststreptocococcal glomerulonephritis."
     )
     assert multiple_choice_accuracy(response, answer_letter="B", answer_text="poststreptocococcal glomerulonephritis")
+
+
+def test_answer_text_fallback_does_not_match_single_letter_article():
+    response = (
+        "The question asks which structure would most likely change with another infectious illness.\n"
+        "A is often the heart, B the diaphragm, C the aorta, and D a bony structure.\n"
+        "Thus the changing structure is E."
+    )
+    assert not multiple_choice_accuracy(response, answer_letter="A", answer_text="A", return_details=False)
 
 
 def test_negated_anchor_does_not_block_answer_text_fallback():
@@ -479,6 +783,18 @@ def test_block_prompt_then_option_on_next_line_parses_choice_letter():
     )
 
 
+def test_parenthesized_answer_text_does_not_fall_to_trailing_option_letter():
+    result = multiple_choice_accuracy(
+        "B (5-fluorouracil and mitomycin C)",
+        answer_letter="B",
+        answer_text="5-fluorouracil and mitomycin C",
+        return_details=True,
+    )
+    assert result.is_correct is True
+    assert result.method == "anchored_token"
+    assert result.matched_answer == "B"
+
+
 def test_anchor_phrase_with_markdown_wrapper_parses_choice_letter():
     response = "Answer: **(C)**"
     result = multiple_choice_accuracy(response, answer_letter="C", answer_text="Option C", return_details=True)
@@ -561,6 +877,18 @@ def test_non_english_without_separator_does_not_match_choice_letter(response):
 def test_answer_text_requires_exact_formatting_beyond_normalization(response, answer_text):
     # We only allow whitespace/case/unicode normalization; punctuation differences should not match.
     assert not multiple_choice_accuracy(response, answer_letter="D", answer_text=answer_text, accept_answer_text=True)
+
+
+@pytest.mark.parametrize(
+    "response, answer_text",
+    [
+        ("<answer>Proliferation of surfactant‑secreting cells</answer>", "Proliferation of surfactant-secreting cells"),
+        ("<answer>Anti‑D IgG</answer>", "Anti-D IgG"),
+        ("<answer>Upslope of T‑wave</answer>", "Upslope of T-wave"),
+    ],
+)
+def test_answer_text_matches_unicode_dash_variants(response, answer_text):
+    assert multiple_choice_accuracy(response, answer_letter="D", answer_text=answer_text, accept_answer_text=True)
 
 
 def test_multiple_answers_last_explicit_anchor_wins():

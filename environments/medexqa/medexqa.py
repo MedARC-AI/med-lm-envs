@@ -175,6 +175,7 @@ def _to_vf_format(ds: Dataset, shuffle_answers: bool = False, shuffle_seed: int 
 
         # Keep original data in info
         info = dict(row)
+        info.pop("task", None)
         info["answer_text"] = answer_text
         info["answer"] = answer_letter
         info["question"] = question

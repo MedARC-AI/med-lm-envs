@@ -214,8 +214,12 @@ environments/healthbench/test*
 .vscode/
 pyrightconfig.json
 
-
-configs/
+.claude
+.codex
+.devcontainer
+.enroot/
 logs/
 plans/
 runs/
+verifiers/
+.gitmodules
