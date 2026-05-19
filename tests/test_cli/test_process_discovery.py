@@ -74,6 +74,23 @@ def test_discover_run_records_includes_deterministic_eval_variants(tmp_path: Pat
     assert normalized.medarc_config_fingerprint_payload is None
 
 
+def test_discover_run_records_includes_nested_orchestrator_task_bench_outputs(tmp_path: Path) -> None:
+    run_root = tmp_path / "outputs" / "orchestrate" / "run-1"
+    output_dir = run_root / "tasks" / "task-1" / "bench" / "gpt-5-mini" / "medqa" / "base"
+    _write_eval_output(output_dir)
+
+    records = discover_run_records(run_root, filter_status=("completed",))
+
+    assert len(records) == 1
+    record = records[0]
+    assert record.results_dir == output_dir
+    assert record.model_id == "gpt-5-mini"
+    assert record.manifest_env_id == "medqa"
+    assert record.manifest.job_run_id == "gpt-5-mini::medqa::base"
+    normalized = load_normalized_metadata(record)
+    assert normalized.variant_id == "base"
+
+
 def test_discover_run_records_preserves_path_safe_variant_identity(tmp_path: Path) -> None:
     evals_dir = tmp_path / "runs" / "evals"
     variant_id = "name.with-safe_chars-123"

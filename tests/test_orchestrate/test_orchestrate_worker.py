@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from medarc_verifiers.orchestrate.bundle import ExecutionAllocation, ensure_run_bundle
+from medarc_verifiers.orchestrate.bundle import ExecutionAllocation, ensure_run_bundle, load_task_spec
 from medarc_verifiers.orchestrate.config import expand_tasks, load_plan
 from medarc_verifiers.orchestrate.state import TaskManifest
 from medarc_verifiers.orchestrate.runtime import RuntimeLaunchError
@@ -125,6 +125,15 @@ def test_ensure_run_bundle_rejects_orphaned_task_bundle_artifacts(tmp_path: Path
             mode="slurm",
             runtime="pyxis",
         )
+
+
+def test_load_task_spec_rejects_bundled_eval_config_checksum_mismatch(tmp_path: Path) -> None:
+    tasks, bundle = _bundle(tmp_path)
+    task_bundle = bundle.tasks[tasks[0].task_id]
+    Path(task_bundle.spec.bundled_eval_config_path).write_text('model = "changed"\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Bundled eval config checksum mismatch"):
+        load_task_spec(Path(task_bundle.spec.output_paths.task_spec_path))
 
 
 def test_worker_cli_loads_task_and_allocation(tmp_path: Path, monkeypatch) -> None:

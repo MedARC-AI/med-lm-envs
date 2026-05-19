@@ -1,152 +1,138 @@
-## vLLM orchestrator (Docker or Pyxis)
+## vLLM Orchestrator
 
-This repo includes an experimental vLLM orchestrator for running `medarc-eval` against
-locally hosted vLLM containers with GPU/port scheduling.
+`medarc-orchestrate` runs TOML `medarc-eval bench` configs against locally served vLLM instances. It keeps benchmark semantics in upstream eval TOML files and resolves runtime infrastructure from separate registries.
 
-### Requirements
+### Config Files
 
-- `medarc-orchestrate` runs `medarc-eval bench` as a local subprocess on the same host.
-- Container image available for the selected runtime.
-
-Docker runtime:
-
-- Docker installed with NVIDIA runtime support.
-- Local GPUs available (NVML via `nvidia-ml-py`).
-- vLLM image available locally or pullable.
-
-Pyxis runtime:
-
-- Slurm with the Pyxis plugin installed.
-- Enroot available on compute nodes.
-- Run `medarc-orchestrate` inside an existing Slurm allocation on a GPU node.
-- The Pyxis `--container-image` value must match cluster policy:
-  - registry-backed URI such as `docker://vllm/vllm-openai:latest`
-  - or a pre-staged squashfs image path
-
-Notes for Pyxis:
-
-- Recommended interactive workflow: `salloc --nodes=1 --gpus=4 --time=02:00:00`, then `uv run medarc-orchestrate --runtime pyxis ...`.
-- `srun --pty bash` shells can block later `srun` steps on some clusters unless overlap is enabled. Prefer `salloc` or `sbatch`.
-- Pulling large registry images at launch can fail on systems with limited local storage. Pre-staging a squashfs image is often more reliable.
-- In shell scripts, image strings containing `#` may need escaping, for example `nvcr.io\\#nvidia/pytorch:25.01-py3`.
-
-Note: This machine does not have Docker installed, so integration runs are not available here.
-
-### Plan file
-
-Create a plan YAML listing the job configs you want to orchestrate:
+A plan is still YAML because it is an orchestrator control file, not a bench config:
 
 ```yaml
 name: local-vllm
 job_configs:
-  - configs/eval/local-qwen.toml
+  - configs/qwen-30b-a3b-medqa.toml
+orchestrate_config: configs/orchestrate.toml
+eval_images_config: configs/eval_images.toml
+endpoints_path: configs/endpoints.toml
 env_file: .env
 gpu_range: "0-3"
 port_range: "8000-8999"
 max_parallel: 2
 readiness_timeout_s: 1800
-resume: false
-rerun_failed: false
+prune_logs_on_success: true
 ```
 
-Each job config should be an upstream `medarc-eval bench` TOML config with a top-level
-`model` and a namespaced `[medarc.orchestrate]` table.
-
-The `env_file` is a dotenv file that is loaded for every Docker launch. If unset and a repo-level `.env` exists,
-it is used automatically. You can also override it via `--env-file`.
-
-Shared container config:
+Each `job_configs` entry must be an upstream eval TOML config accepted by `medarc-eval bench`:
 
 ```toml
 model = "Qwen/Qwen3-30B-A3B"
+output_dir = "runs/evals"
 
 [[eval]]
 env_id = "medqa"
+num_examples = 5
+rollouts_per_example = 1
+```
 
-[medarc.orchestrate.qwen-30b-a3b]
+Runtime settings live in `orchestrate.toml`:
+
+```toml
+schema_version = 1
+
+[[model]]
+id = "Qwen/Qwen3-30B-A3B"
+aliases = ["qwen-30b-a3b"]
+
+[model.vllm]
 gpus = 2
 tensor_parallel_size = 2
 
-[medarc.orchestrate.qwen-30b-a3b.serve]
+[model.vllm.serve]
 max_model_len = 40960
 
-[medarc.orchestrate.vllm-container]
+[model.container]
 image = "vllm/vllm-openai:latest"
 container_port = 8000
-volumes = ["/data/huggingface:/root/.cache/huggingface"]
+volumes = ["/data/huggingface:/root/.cache/huggingface:rw"]
 ipc_mode = "host"
 
-[medarc.orchestrate.pyxis]
-srun_extra_args = []
+[model.pyxis]
+srun_extra_args = ["--overlap"]
+
+[model.slurm]
+account = "training"
+time = "04:00:00"
+slurm_resume = true
 ```
 
-Config notes:
+Eval auxiliary images, such as benchmark services, live in `eval_images.toml` and are selected by eval or env id:
 
-- `medarc.orchestrate.vllm-container` is required.
-- `ipc_mode` is Docker-only and is ignored in `--runtime pyxis`.
-- `medarc.orchestrate.pyxis` is Pyxis-only and is ignored in `--runtime docker`.
-- In Pyxis mode, Slurm allocates GPUs per `srun` step. The orchestrator only reserves localhost ports.
+```toml
+schema_version = 1
 
-### CLI usage
+[[eval_image]]
+id = "medagentbench-fhir"
+evals = ["medagentbenchv2_patient", "medagentbenchv2_test"]
+runtime = "pyxis"
+image = "/path/to/medagentbench_withsh.sqsh"
+command = ["bash", "-lc", "serve-fhir"]
 
-```bash
-uv run medarc-orchestrate --plan plans/local-vllm.yaml
+[eval_image.readiness]
+url = "http://127.0.0.1:8080/health"
+timeout_s = 240
 ```
 
-Runtime examples:
+### Local Usage
 
 ```bash
-uv run medarc-orchestrate --plan plans/local-vllm.yaml --runtime docker
-uv run medarc-orchestrate --plan plans/local-vllm.yaml --runtime pyxis
+uv run medarc-orchestrate local --plan plans/local-vllm.yaml --runtime podman
+uv run medarc-orchestrate local --job-config configs/qwen-30b-a3b-medqa.toml --orchestrate-config configs/orchestrate.toml --runtime pyxis
 ```
 
 Common flags:
 
-- `--runtime {docker,pyxis}` selects the serve backend. Default: CLI value, else `plan.runtime`, else `docker`.
-- `--dry-run` prints resolved tasks and exits.
-- `--gpu-range 0-3` restricts GPU indices (overrides `gpu_range` from the plan file).
-- `--port-range 8000-8999` restricts ports (overrides `port_range` from the plan file).
-- `--run-id` sets a custom run identifier (overrides `run_id` from the plan file).
-- `--output-dir` overrides the output root (overrides `output_dir` from the plan file).
-- `--max-parallel` caps concurrent tasks (overrides `max_parallel` from the plan file; defaults to GPU count).
-- `--readiness-timeout-s` controls server readiness wait (overrides `readiness_timeout_s` from the plan file).
-- `--resume` skips completed tasks using `summary.json` (enables resume even if `resume: false` in the plan).
-- `--rerun-failed` reruns failed tasks on resume (enables rerun even if `rerun_failed: false` in the plan).
-- `--status` prints the latest summary status and exits.
-- `--kill-orphans` cleans up containers labeled as orchestrator-managed (also enabled by `kill_orphans: true` in the plan).
-- `--prune-logs-on-success` deletes per-task `serve/container_logs.txt` and `bench/stdout.txt`+`stderr.txt` for completed tasks.
+- `--runtime {docker,podman,pyxis}` selects the serve backend.
+- `--orchestrate-config` overrides the model runtime registry.
+- `--eval-images-config` overrides the eval image registry.
+- `--endpoints-path` is used for endpoint/model resolution and is passed through to `medarc-eval bench`.
+- `--output-dir` sets the orchestrator output root.
+- `--max-parallel`, `--gpu-range`, and `--port-range` control local scheduling.
+- `--prune-logs-on-success` removes per-task serve and bench logs after successful tasks.
 
-Plan files may also set:
-
-```yaml
-runtime: pyxis
-```
-
-### Outputs
-
-Artifacts are written under `outputs/orchestrator/<run_id>/`:
-
-- `summary.json` aggregates task states.
-- per-task folders contain orchestrator task state, `serve/` logs, `bench/` outputs, and `result.json`.
-
-### Runtime behavior
-
-For each task, the orchestrator launches vLLM, waits for readiness, then runs:
+### Slurm Usage
 
 ```bash
-medarc-eval bench --config <job.toml> --api-base-url <allocated-local-url> --provider local
+uv run medarc-orchestrate slurm --plan plan-qwen-small-slurm.yaml --dry-run
+uv run medarc-orchestrate slurm --plan plan-qwen-small-slurm.yaml --output-dir outputs/orchestrate/qwen-run
 ```
 
-The bench command exits naturally on completion; the orchestrator passes TOML bench flags only.
+Slurm options come from `[model.slurm]` in `orchestrate.toml`, with CLI overrides taking precedence. `slurm_resume = true` renders `#SBATCH --requeue`, so resubmitting the same task bundle reuses the same task-local bench output directory.
 
-Docker mode:
+### Task Bundles
 
-- The orchestrator reserves concrete local GPU IDs and host ports.
-- vLLM listens on `container_port` inside the container and is mapped to a reserved localhost port.
+Before launching a task, the orchestrator creates a task bundle under `outputs/orchestrate/<run_id>/tasks/<task-slug>/`:
 
-Pyxis mode:
+- `eval-config.toml`: copied eval TOML used by the worker.
+- `task.yaml`: resolved task spec and registry snapshots for worker execution.
+- `orchestrate-snapshot.toml`: matched model runtime entry and registry provenance.
+- `eval_images-snapshot.toml`: selected eval images and registry provenance.
+- `allocation.json`: GPU/port allocation for the worker.
+- `bench/`: deterministic `medarc-eval bench --output-dir` root.
+- `serve/` and `runtime/`: runtime logs, state, and task manifest files.
 
-- The orchestrator assumes it is already running on the target GPU node within a Slurm allocation.
-- Each task launches vLLM with `srun --container-image ... vllm serve --host 127.0.0.1 --port <reserved-port> ...`.
-- Base URLs stay on localhost, for example `http://127.0.0.1:8123/v1`.
-- `max_parallel > 1` is supported by reserving different localhost ports per task.
+The worker always runs bench against bundled `eval-config.toml`, not the original source path:
+
+```bash
+medarc-eval bench --config <task>/eval-config.toml --api-base-url <local-url> --provider local --output-dir <task>/bench
+```
+
+Removed YAML-runner flags such as `--run-id`, `--restart`, and `--on-complete` are not passed to bench. Requeue and retry behavior relies on TOML bench deterministic output paths.
+
+### Processing Outputs
+
+Process orchestrated task outputs by pointing `medarc-eval process` at the orchestrator run root or a parent directory. Discovery recursively finds nested `results.jsonl` and `metadata.json` files under task-local `bench/` directories:
+
+```bash
+uv run medarc-eval process --runs-dir outputs/orchestrate/<run_id> --output-dir runs/processed
+```
+
+Metadata remains authoritative for model and environment identity. The orchestrator does not add a separate manifest-based processing path.

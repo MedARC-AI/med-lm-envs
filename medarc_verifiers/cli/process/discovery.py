@@ -201,6 +201,11 @@ def _infer_eval_output_layout(
         parts = results_dir.relative_to(evals_root).parts
     except ValueError:
         parts = results_dir.parts
+    if "bench" in parts:
+        bench_index = parts.index("bench")
+        bench_parts = parts[bench_index + 1 :]
+        if bench_parts:
+            parts = bench_parts
 
     metadata_env_id = _string_or_none(metadata_payload.get("env_id"))
     metadata_model = _string_or_none(metadata_payload.get("model"))
