@@ -12,30 +12,44 @@ from medarc_verifiers.orchestrate.podman_vllm import PodmanRuntimeAdapter
 from medarc_verifiers.orchestrate.worker import _load_runtime_env, main as worker_main
 
 
-def _write_job_config(
+def _write_job_config(path: Path) -> None:
+    path.write_text(
+        """
+model = "Foo/Bar"
+
+[[eval]]
+env_id = "medqa"
+num_examples = 1
+rollouts_per_example = 1
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+
+def _write_orchestrate_config(
     path: Path,
     *,
     gpus: int = 1,
     tensor_parallel_size: int = 1,
     data_parallel_size: int | None = 1,
 ) -> None:
-    dp_block = ""
-    if data_parallel_size is not None:
-        dp_block = f"    data_parallel_size: {data_parallel_size}\n"
+    dp_line = f"data_parallel_size = {data_parallel_size}\n" if data_parallel_size is not None else ""
     path.write_text(
-        (
-            "models:\n"
-            "  foo:\n"
-            "    model: Foo/Bar\n"
-            "orchestrate:\n"
-            "  vllm-container:\n"
-            "    image: fake\n"
-            "  foo:\n"
-            f"    gpus: {gpus}\n"
-            f"    tensor_parallel_size: {tensor_parallel_size}\n"
-            f"{dp_block}"
-            "    serve: {}\n"
-        ),
+        f"""
+schema_version = 1
+
+[[model]]
+id = "Foo/Bar"
+
+[model.vllm]
+gpus = {gpus}
+tensor_parallel_size = {tensor_parallel_size}
+{dp_line}
+[model.vllm.serve]
+
+[model.container]
+image = "fake"
+""".lstrip(),
         encoding="utf-8",
     )
 
@@ -48,15 +62,20 @@ def _bundle(
     data_parallel_size: int | None = 1,
     allocated_gpus: int = 1,
 ):
-    job_cfg = tmp_path / "job.yaml"
+    job_cfg = tmp_path / "job.toml"
+    orchestrate_cfg = tmp_path / "orchestrate.toml"
     plan_path = tmp_path / "plan.yaml"
-    _write_job_config(
-        job_cfg,
+    _write_job_config(job_cfg)
+    _write_orchestrate_config(
+        orchestrate_cfg,
         gpus=gpus,
         tensor_parallel_size=tensor_parallel_size,
         data_parallel_size=data_parallel_size,
     )
-    plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\n", encoding="utf-8")
+    plan_path.write_text(
+        f"job_configs:\n  - {job_cfg.name}\norchestrate_config: {orchestrate_cfg.name}\n",
+        encoding="utf-8",
+    )
     tasks = expand_tasks(load_plan(plan_path))
     return tasks, ensure_run_bundle(
         tasks=tasks,
@@ -88,10 +107,12 @@ def test_ensure_run_bundle_rejects_output_root_from_different_run_id(tmp_path: P
 
 
 def test_ensure_run_bundle_rejects_orphaned_task_bundle_artifacts(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
+    job_cfg = tmp_path / "job.toml"
+    orchestrate_cfg = tmp_path / "orchestrate.toml"
     plan_path = tmp_path / "plan.yaml"
     _write_job_config(job_cfg)
-    plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\n", encoding="utf-8")
+    _write_orchestrate_config(orchestrate_cfg)
+    plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\norchestrate_config: {orchestrate_cfg.name}\n", encoding="utf-8")
     tasks = expand_tasks(load_plan(plan_path))
     orphan_root = tmp_path / "outputs" / "tasks" / "orphan-task"
     orphan_root.mkdir(parents=True)

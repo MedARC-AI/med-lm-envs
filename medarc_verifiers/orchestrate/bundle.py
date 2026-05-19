@@ -922,10 +922,18 @@ def _parse_eval_image_sidecars(
     if mode != "slurm":
         raise ValueError(f"Task {task_id} configures eval images, but eval images are only supported in slurm mode.")
     specs: list[SidecarSpec] = []
+    suffixes: dict[str, str] = {}
     for entry in eval_images:
         name = str(entry["id"])
         if _SIDECAR_NAME_RE.fullmatch(name) is None:
             raise ValueError(f"Task {task_id} eval image id {name!r} must match [A-Za-z0-9_.-]+.")
+        suffix = _sidecar_shell_suffix(name)
+        previous = suffixes.get(suffix)
+        if previous is not None:
+            raise ValueError(
+                f"Task {task_id} eval image ids {previous!r} and {name!r} produce the same shell variable suffix."
+            )
+        suffixes[suffix] = name
         sidecar_runtime = str(entry.get("runtime", "")).strip().lower()
         if sidecar_runtime != "pyxis":
             raise ValueError(f"Task {task_id} eval image {name} runtime must be 'pyxis' in v1.")

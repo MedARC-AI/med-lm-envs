@@ -10,7 +10,7 @@ import os
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Mapping
 
 from dotenv import dotenv_values
 
@@ -25,7 +25,6 @@ from medarc_verifiers.orchestrate.bundle import (
     ResolvedTaskSpec,
     RuntimeState,
     load_execution_allocation,
-    load_runtime_state,
     load_task_spec,
     write_execution_allocation,
     write_runtime_state,
@@ -258,16 +257,20 @@ class TaskWorker:
                 return
             log(f"JOB ready task={self._spec.task_id} attempts={readiness.attempts}")
 
-            endpoints_arg = f"--endpoints-path {self._spec.endpoints_path}" if self._spec.endpoints_path else ""
+            endpoints_arg = (
+                f"--endpoints-path {_command_template_value(self._spec.endpoints_path)}"
+                if self._spec.endpoints_path
+                else ""
+            )
             command_context = {
-                "base_url": self._active_handle.base_url,
-                "host_port": str(_require_server_port(self._allocation)),
-                "model_key": self._spec.model_key,
-                "model_id": self._spec.model_id,
-                "output_dir": str(paths.bench_dir),
-                "run_id": self._options.run_id,
-                "task_id": self._spec.task_id,
-                "job_config_path": self._spec.bundled_eval_config_path,
+                "base_url": _command_template_value(self._active_handle.base_url),
+                "host_port": _command_template_value(_require_server_port(self._allocation)),
+                "model_key": _command_template_value(self._spec.model_key),
+                "model_id": _command_template_value(self._spec.model_id),
+                "output_dir": _command_template_value(paths.bench_dir),
+                "run_id": _command_template_value(self._options.run_id),
+                "task_id": _command_template_value(self._spec.task_id),
+                "job_config_path": _command_template_value(self._spec.bundled_eval_config_path),
                 "endpoints_arg": endpoints_arg,
             }
             command = render_command(self._command_template, command_context)
@@ -632,6 +635,10 @@ def _require_server_port(allocation: ExecutionAllocation) -> int:
     if allocation.server_port is None:
         raise RuntimeError(f"Task {allocation.task_id} is missing server_port in execution allocation.")
     return allocation.server_port
+
+
+def _command_template_value(value: object) -> str:
+    return shlex.quote(str(value))
 
 
 def _shorten(text: str, *, max_len: int = 220) -> str:

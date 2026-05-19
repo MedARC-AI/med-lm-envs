@@ -154,25 +154,29 @@ async def test_benchmark_termination_ends_process(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_runner_shutdown_state_machine(tmp_path: Path) -> None:
-    plan = PlanConfig(job_configs=[tmp_path / "job.yaml"])
-    (tmp_path / "job-1.yaml").write_text(
+    job_config_path = tmp_path / "job-1.toml"
+    plan = PlanConfig(job_configs=[job_config_path])
+    job_config_path.write_text(
         (
-            "models:\n"
-            "  foo:\n"
-            "    model: Foo/Bar\n"
-            "orchestrate:\n"
-            "  foo:\n"
-            "    gpus: 1\n"
+            'model = "Foo/Bar"\n'
+            "\n"
+            "[[eval]]\n"
+            'env_id = "env-a"\n'
+            "num_examples = 1\n"
         ),
         encoding="utf-8",
     )
     tasks = [
         TaskSpec(
             task_id="task-1",
-            job_config_path=tmp_path / "job-1.yaml",
+            job_config_path=job_config_path,
             model_key="foo",
             model_id="Foo/Bar",
-            orchestrate={"foo": {"gpus": 1}},
+            orchestrate={
+                "vllm": {"gpus": 1, "tensor_parallel_size": 1, "serve": {}},
+                "container": {"image": "fake"},
+                "pyxis": {},
+            },
         )
     ]
     options = OrchestratorOptions(

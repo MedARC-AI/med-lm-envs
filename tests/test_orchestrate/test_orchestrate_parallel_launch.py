@@ -1,5 +1,6 @@
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -110,27 +111,16 @@ def _task(
     async_scheduling: bool = False,
     gpu_memory_utilization: float | None = None,
 ) -> TaskSpec:
-    job_config_path = tmp_path / f"{task_id}.yaml"
-    async_scheduling_block = "      async_scheduling: true\n" if async_scheduling else ""
-    gpu_memory_utilization_block = (
-        f"      gpu_memory_utilization: {gpu_memory_utilization}\n" if gpu_memory_utilization is not None else ""
-    )
+    job_config_path = tmp_path / f"{task_id}.toml"
     job_config_path.write_text(
-        (
-            "models:\n"
-            "  foo:\n"
-            f"    model: Foo/{task_id}\n"
-            "orchestrate:\n"
-            "  vllm-container:\n"
-            "    image: fake\n"
-            "  foo:\n"
-            f"    gpus: {gpus}\n"
-            f"    tensor_parallel_size: {tensor_parallel_size}\n"
-            f"    data_parallel_size: {data_parallel_size}\n"
-            "    serve:\n"
-            f"{async_scheduling_block}"
-            f"{gpu_memory_utilization_block}"
-        ),
+        f"""
+model = "Foo/{task_id}"
+
+[[eval]]
+env_id = "medqa"
+num_examples = 1
+rollouts_per_example = 1
+""".lstrip(),
         encoding="utf-8",
     )
     serve_args: dict[str, object] = {}
@@ -141,11 +131,11 @@ def _task(
     return TaskSpec(
         task_id=task_id,
         job_config_path=job_config_path,
-        model_key="foo",
+        model_key=task_id.replace("/", "-"),
         model_id=f"Foo/{task_id}",
         orchestrate={
-            "vllm-container": {"image": "fake"},
-            "foo": {
+            "container": {"image": "fake"},
+            "vllm": {
                 "gpus": gpus,
                 "tensor_parallel_size": tensor_parallel_size,
                 "data_parallel_size": data_parallel_size,
@@ -157,17 +147,14 @@ def _task(
 
 def _write_job_config(path: Path) -> None:
     path.write_text(
-        (
-            "models:\n"
-            "  foo:\n"
-            "    model: Foo/Bar\n"
-            "orchestrate:\n"
-            "  vllm-container:\n"
-            "    image: fake\n"
-            "  foo:\n"
-            "    gpus: 1\n"
-            "    serve: {}\n"
-        ),
+        """
+model = "Foo/Bar"
+
+[[eval]]
+env_id = "medqa"
+num_examples = 1
+rollouts_per_example = 1
+""".lstrip(),
         encoding="utf-8",
     )
 
@@ -183,7 +170,7 @@ async def test_parallel_launch_runs_concurrently(
     runtime: str,
     resource_manager: ResourceManager,
 ) -> None:
-    plan = PlanConfig(job_configs=[tmp_path / "job-1.yaml", tmp_path / "job-2.yaml"])
+    plan = PlanConfig(job_configs=[tmp_path / "job-1.toml", tmp_path / "job-2.toml"])
     tasks = [_task(tmp_path, "task-1"), _task(tmp_path, "task-2")]
     options = OrchestratorOptions(
         run_id="run-1",
@@ -260,7 +247,7 @@ async def test_parallel_launch_records_gpu_accounting_and_dp_args(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    plan = PlanConfig(job_configs=[tmp_path / "job.yaml"])
+    plan = PlanConfig(job_configs=[tmp_path / "job.toml"])
     tasks = [_task(tmp_path, "task-1", gpus=8, tensor_parallel_size=2, data_parallel_size=4)]
     options = OrchestratorOptions(
         run_id="run-1",
@@ -327,7 +314,7 @@ async def test_parallel_launch_records_gpu_accounting_and_dp_args(
     ]
 
     manifest = json.loads((options.output_root / "tasks" / "task-1" / "runtime" / "task_manifest.json").read_text())
-    assert manifest["bench_run_id"] == "run-1-task-1"
+    assert manifest["bench_run_id"] is None
     assert manifest["allocated_gpus"] == 8
     assert manifest["gpus"] == 8
     assert manifest["tensor_parallel_size"] == 2
@@ -396,7 +383,7 @@ async def test_parallel_launch_does_not_duplicate_task_slug_in_bench_run_id(
     await runner._run_async()
 
     manifest = json.loads((options.output_root / "tasks" / "task-1" / "runtime" / "task_manifest.json").read_text())
-    assert manifest["bench_run_id"] == "run-1-task-1"
+    assert manifest["bench_run_id"] is None
 
 
 @pytest.mark.asyncio
@@ -460,14 +447,14 @@ async def test_parallel_launch_does_not_duplicate_hashed_slurm_task_slug_in_benc
     await runner._run_async()
 
     manifest = json.loads((task_root_for_id(options.output_root, task.task_id) / "runtime" / "task_manifest.json").read_text())
-    assert manifest["bench_run_id"] == "qwen-3.0_6b-thinking-20260315-171932"
+    assert manifest["bench_run_id"] is None
 
 @pytest.mark.asyncio
 async def test_parallel_launch_disables_async_scheduling_when_dp_is_active(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    plan = PlanConfig(job_configs=[tmp_path / "job.yaml"])
+    plan = PlanConfig(job_configs=[tmp_path / "job.toml"])
     tasks = [_task(tmp_path, "task-1", gpus=8, tensor_parallel_size=2, data_parallel_size=4, async_scheduling=True)]
     options = OrchestratorOptions(
         run_id="run-1",
@@ -541,7 +528,7 @@ async def test_parallel_launch_adjusts_gpu_memory_utilization_for_dp(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    plan = PlanConfig(job_configs=[tmp_path / "job.yaml"])
+    plan = PlanConfig(job_configs=[tmp_path / "job.toml"])
     tasks = [_task(tmp_path, "task-1", gpus=8, tensor_parallel_size=2, data_parallel_size=4, gpu_memory_utilization=0.9)]
     options = OrchestratorOptions(
         run_id="run-1",
@@ -617,7 +604,7 @@ async def test_parallel_launch_defaults_gpu_memory_utilization_for_dp_when_unset
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    plan = PlanConfig(job_configs=[tmp_path / "job.yaml"])
+    plan = PlanConfig(job_configs=[tmp_path / "job.toml"])
     tasks = [_task(tmp_path, "task-1", gpus=8, tensor_parallel_size=2, data_parallel_size=4)]
     options = OrchestratorOptions(
         run_id="run-1",
@@ -682,7 +669,7 @@ async def test_parallel_launch_keeps_gpu_memory_utilization_unchanged_without_dp
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    plan = PlanConfig(job_configs=[tmp_path / "job.yaml"])
+    plan = PlanConfig(job_configs=[tmp_path / "job.toml"])
     tasks = [_task(tmp_path, "task-1", gpus=1, tensor_parallel_size=1, data_parallel_size=1, gpu_memory_utilization=0.9)]
     options = OrchestratorOptions(
         run_id="run-1",
@@ -745,7 +732,7 @@ async def test_parallel_launch_keeps_async_scheduling_when_dp_is_one(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    plan = PlanConfig(job_configs=[tmp_path / "job.yaml"])
+    plan = PlanConfig(job_configs=[tmp_path / "job.toml"])
     tasks = [_task(tmp_path, "task-1", gpus=1, tensor_parallel_size=1, data_parallel_size=1, async_scheduling=True)]
     options = OrchestratorOptions(
         run_id="run-1",
@@ -802,13 +789,16 @@ async def test_parallel_launch_keeps_async_scheduling_when_dp_is_one(
     assert "--async-scheduling" in launch["container_args"]
 
 @pytest.mark.asyncio
-async def test_runner_persists_discovered_restart_source(tmp_path: Path, monkeypatch) -> None:
-    plan = PlanConfig(job_configs=[tmp_path / "job.yaml"])
-    task = _task(tmp_path, "task-1", gpus=1, tensor_parallel_size=1, data_parallel_size=1)
-    _write_job_config(task.job_config_path)
+async def test_runner_uses_task_local_bench_output_without_restart_flags(tmp_path: Path, monkeypatch) -> None:
+    plan = PlanConfig(job_configs=[tmp_path / "job.toml"])
+    endpoints_path = tmp_path / "endpoints with spaces.json"
+    task = replace(
+        _task(tmp_path, "task-1", gpus=1, tensor_parallel_size=1, data_parallel_size=1),
+        endpoints_path=endpoints_path,
+    )
     options = OrchestratorOptions(
         run_id="run-1",
-        output_root=tmp_path / "outputs",
+        output_root=tmp_path / "outputs with spaces",
         readiness_timeout_s=1,
         max_parallel=1,
     )
@@ -822,8 +812,7 @@ async def test_runner_persists_discovered_restart_source(tmp_path: Path, monkeyp
         runtime_adapter=adapter,
         use_dashboard=False,
     )
-
-    discovered_run_dir = tmp_path / "runs" / "raw" / "actual-run"
+    captured: dict[str, object] = {}
 
     async def fake_wait_for_readiness_async(*args, **kwargs):
         class Result:
@@ -834,7 +823,9 @@ async def test_runner_persists_discovered_restart_source(tmp_path: Path, monkeyp
 
         return Result()
 
-    async def fake_start_benchmark(*args, **kwargs):
+    async def fake_start_benchmark(command, **kwargs):
+        captured["command"] = command
+
         class Proc:
             pass
 
@@ -848,28 +839,33 @@ async def test_runner_persists_discovered_restart_source(tmp_path: Path, monkeyp
 
         return Result()
 
-    async def fake_discover_bench_run_dir(*args, **kwargs):
-        return discovered_run_dir
-
     async def fake_to_thread(func, /, *args, **kwargs):
         return func(*args, **kwargs)
 
     monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_for_readiness_async", fake_wait_for_readiness_async)
     monkeypatch.setattr("medarc_verifiers.orchestrate.worker.start_benchmark", fake_start_benchmark)
     monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_benchmark", fake_wait_benchmark)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.worker._discover_bench_run_dir", fake_discover_bench_run_dir)
     monkeypatch.setattr("medarc_verifiers.orchestrate.run._register_signal_handlers", lambda loop, handler: None)
     monkeypatch.setattr("medarc_verifiers.orchestrate.worker.asyncio.to_thread", fake_to_thread)
 
     await runner._run_async()
 
-    bundled_payload = (options.output_root / "tasks" / "task-1" / "eval-config.yaml").read_text(encoding="utf-8")
-    assert "restart:" not in bundled_payload
-    assert "restart:" not in task.job_config_path.read_text(encoding="utf-8")
+    command = captured["command"]
+    assert "--config" in command
+    assert str(options.output_root / "tasks" / "task-1" / "eval-config.toml") in command
+    assert "--output-dir" in command
+    assert str(options.output_root / "tasks" / "task-1" / "bench") in command
+    assert "--endpoints-path" in command
+    assert str(endpoints_path) in command
+    assert "--restart" not in command
+    assert "--run-id" not in command
+    assert "--on-complete" not in command
 
+    bundled_payload = (options.output_root / "tasks" / "task-1" / "eval-config.toml").read_text(encoding="utf-8")
+    assert "restart" not in bundled_payload
     manifest = json.loads((options.output_root / "tasks" / "task-1" / "runtime" / "task_manifest.json").read_text())
-    assert manifest["bench_run_dir"] == str(discovered_run_dir)
-    assert manifest["restart_source"] == str(discovered_run_dir)
+    assert manifest["bench_run_dir"] is None
+    assert manifest["restart_source"] is None
     state = load_runtime_state(options.output_root / "tasks" / "task-1" / "runtime" / "state.json")
     assert state is not None
-    assert state.restart_source == str(discovered_run_dir)
+    assert state.restart_source is None

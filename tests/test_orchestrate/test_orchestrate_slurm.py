@@ -1,4 +1,5 @@
 import json
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from medarc_verifiers.orchestrate.bundle import (
 )
 from medarc_verifiers.orchestrate.cli import main as orchestrate_main
 from medarc_verifiers.orchestrate.config import TaskSpec, expand_tasks, load_job_config, load_plan
+from medarc_verifiers.orchestrate.internal_io import load_internal_mapping
 from medarc_verifiers.orchestrate.slurm.manifest import SlurmBundleManifest
 from medarc_verifiers.orchestrate.slurm.cli import build_parser as build_slurm_parser
 from medarc_verifiers.orchestrate.slurm.plan import DEFAULT_SLURM_ACCOUNT, SlurmCliOverrides, build_submission_plan
@@ -19,95 +21,150 @@ from medarc_verifiers.orchestrate.slurm.render import render_bundle
 from medarc_verifiers.orchestrate.slurm.submit import submit_bundle
 
 
+_JOB_META: dict[Path, dict[str, object]] = {}
+_SIDECAR_META: dict[Path, dict[str, object]] = {}
+
+
 def _write_job_config(
     path: Path,
     *,
-    model_id: str = "Foo/Bar",
+    model_id: str | None = None,
     gpus: int = 1,
     tensor_parallel_size: int | None = None,
     data_parallel_size: int | None = None,
     restart: str | None = None,
     slurm: dict[str, object] | None = None,
 ) -> None:
-    tp_block = ""
-    if tensor_parallel_size is not None:
-        tp_block = f"    tensor_parallel_size: {tensor_parallel_size}\n"
-    dp_block = ""
-    if data_parallel_size is not None:
-        dp_block = f"    data_parallel_size: {data_parallel_size}\n"
-    restart_block = ""
-    if restart is not None:
-        restart_block = f"  restart: {restart}\n"
-    slurm_block = ""
-    if slurm:
-        body = "\n".join(f"  {key}: {value}" for key, value in slurm.items())
-        slurm_block = f"slurm:\n{body}\n"
-    path.write_text(
-        (
-            "models:\n"
-            "  foo:\n"
-            f"    model: {model_id}\n"
-            "orchestrate:\n"
-            f"{restart_block}"
-            "  vllm-container:\n"
-            "    image: fake\n"
-            "  foo:\n"
-            f"    gpus: {gpus}\n"
-            f"{tp_block}"
-            f"{dp_block}"
-            "    serve: {}\n"
-            f"{slurm_block}"
-        ),
-        encoding="utf-8",
-    )
-
-
-def _write_sidecar_job_config(path: Path, *, name: str = "medagentbench-fhir", image: str = "/tmp/image with space.sqsh") -> None:
-    path.write_text(
+    del restart
+    toml_path = path.with_suffix(".toml")
+    resolved_model = model_id or f"Foo/{toml_path.stem}"
+    toml_path.write_text(
         f"""
-models:
-  foo:
-    model: Foo/Bar
-orchestrate:
-  vllm-container:
-    image: fake
-  pyxis:
-    srun_extra_args: []
-  foo:
-    gpus: 1
-    serve: {{}}
-  sidecars:
-    {name}:
-      runtime: pyxis
-      image: "{image}"
-      srun_args:
-        - --mem=16G
-        - --container-env=JAVA_TOOL_OPTIONS
-      env:
-        JAVA_TOOL_OPTIONS: "-XX:+UseSerialGC -Xms256m -Xmx1024m"
-      command:
-        - /usr/bin/java
-        - --class-path
-        - "/app/main war"
-      readiness:
-        url: "http://127.0.0.1:8080/fhir/metadata?x=a b"
-        timeout_s: 12
-        interval_s: 3
+model = "{resolved_model}"
+
+[[eval]]
+env_id = "{toml_path.stem}"
+num_examples = 1
+rollouts_per_example = 1
 """.lstrip(),
         encoding="utf-8",
     )
+    _JOB_META[toml_path.resolve()] = {
+        "model_id": resolved_model,
+        "gpus": gpus,
+        "tensor_parallel_size": tensor_parallel_size or gpus,
+        "data_parallel_size": data_parallel_size,
+        "slurm": dict(slurm or {}),
+        "serve": {},
+    }
+
+
+def _write_sidecar_job_config(path: Path, *, name: str = "medagentbench-fhir", image: str = "/tmp/image with space.sqsh") -> None:
+    _write_job_config(path, model_id="Foo/Bar", gpus=1)
+    toml_path = path.with_suffix(".toml").resolve()
+    _SIDECAR_META[toml_path] = [{
+        "id": name,
+        "env": path.with_suffix(".toml").stem,
+        "runtime": "pyxis",
+        "image": image,
+        "srun_args": ["--mem=16G", "--container-env=JAVA_TOOL_OPTIONS"],
+        "env_vars": {"JAVA_TOOL_OPTIONS": "-XX:+UseSerialGC -Xms256m -Xmx1024m"},
+        "command": ["/usr/bin/java", "--class-path", "/app/main war"],
+        "readiness": {
+            "url": "http://127.0.0.1:8080/fhir/metadata?x=a b",
+            "timeout_s": 12,
+            "interval_s": 3,
+        },
+    }]
 
 
 def _task(tmp_path: Path, name: str, *, gpus: int, tp: int | None = None, slurm: dict[str, object] | None = None) -> TaskSpec:
-    job_cfg = tmp_path / f"{name}.yaml"
-    _write_job_config(job_cfg, gpus=gpus, tensor_parallel_size=tp, slurm=slurm)
-    return expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))[0]
+    job_cfg = tmp_path / f"{name}.toml"
+    _write_job_config(job_cfg, model_id="foo", gpus=gpus, tensor_parallel_size=tp, slurm=slurm)
+    return TaskSpec(
+        task_id=f"{name}:foo",
+        job_config_path=job_cfg.resolve(),
+        model_key="foo",
+        model_id="foo",
+        orchestrate={
+            "vllm": {"gpus": gpus, "tensor_parallel_size": tp or gpus, "serve": {}},
+            "container": {"image": "fake"},
+            "pyxis": {},
+        },
+        slurm=dict(slurm or {}),
+    )
 
 
 def _write_plan(tmp_path: Path, job_configs: list[Path]) -> Path:
+    toml_paths = [path.with_suffix(".toml").resolve() for path in job_configs]
     plan_path = tmp_path / "plan.yaml"
-    config_lines = "\n".join(f"  - {path.name}" for path in job_configs)
-    plan_path.write_text(f"job_configs:\n{config_lines}\n", encoding="utf-8")
+    orchestrate_path = tmp_path / "orchestrate.toml"
+    eval_images_path = tmp_path / "eval_images.toml"
+    config_lines = "\n".join(f"  - {path}" for path in toml_paths)
+    plan_lines = ["job_configs:", config_lines, f"orchestrate_config: {orchestrate_path}"]
+    sidecar_entries = [(entry, path) for path in toml_paths for entry in (_SIDECAR_META.get(path, []) if isinstance(_SIDECAR_META.get(path, []), list) else [_SIDECAR_META[path]])]
+    if sidecar_entries:
+        plan_lines.append(f"eval_images_config: {eval_images_path}")
+    plan_path.write_text("\n".join(plan_lines) + "\n", encoding="utf-8")
+
+    model_lines = ["schema_version = 1", ""]
+    seen: set[str] = set()
+    for path in toml_paths:
+        meta = _JOB_META[path]
+        model_id = str(meta["model_id"])
+        if model_id in seen:
+            continue
+        seen.add(model_id)
+        model_lines.extend([
+            "[[model]]",
+            f'id = "{model_id}"',
+            "",
+            "[model.vllm]",
+            f'gpus = {meta["gpus"]}',
+            f'tensor_parallel_size = {meta["tensor_parallel_size"]}',
+        ])
+        if meta.get("data_parallel_size") is not None:
+            model_lines.append(f'data_parallel_size = {meta["data_parallel_size"]}')
+        model_lines.extend(["", "[model.vllm.serve]"])
+        for key, value in dict(meta.get("serve") or {}).items():
+            rendered = "true" if value is True else ("false" if value is False else str(value))
+            if isinstance(value, str):
+                rendered = f'"{value}"'
+            model_lines.append(f"{key} = {rendered}")
+        model_lines.extend(["", "[model.container]", 'image = "fake"', "", "[model.pyxis]", "srun_extra_args = []", "", "[model.slurm]"])
+        for key, value in dict(meta.get("slurm") or {}).items():
+            rendered = "true" if value is True else ("false" if value is False else f'"{value}"')
+            model_lines.append(f"{key} = {rendered}")
+        model_lines.append("")
+    orchestrate_path.write_text("\n".join(model_lines), encoding="utf-8")
+
+    if sidecar_entries:
+        lines = ["schema_version = 1", ""]
+        for entry, _path in sidecar_entries:
+            lines.extend([
+                "[[eval_image]]",
+                f'id = "{entry["id"]}"',
+                f'envs = ["{entry["env"]}"]',
+                'runtime = "pyxis"',
+                f'image = "{entry["image"]}"',
+                "srun_args = [" + ", ".join(f'"{arg}"' for arg in entry["srun_args"]) + "]",
+                "command = [" + ", ".join(f'"{arg}"' for arg in entry["command"]) + "]",
+                "",
+                "[eval_image.env]",
+            ])
+            for key, value in entry["env_vars"].items():
+                lines.append(f'{key} = "{value}"')
+            lines.extend(["", "[eval_image.readiness]"])
+            for key, value in entry["readiness"].items():
+                if isinstance(value, bool):
+                    rendered = "true" if value else "false"
+                elif isinstance(value, int):
+                    rendered = str(value)
+                else:
+                    rendered = f'"{value}"'
+                lines.append(f"{key} = {rendered}")
+            lines.append("")
+        eval_images_path.write_text("\n".join(lines), encoding="utf-8")
     return plan_path
 
 
@@ -305,13 +362,17 @@ def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
     assert str(job_cfg) not in script
 
     bundled_payload = load_job_config(Path(entry.effective_job_config_path))
-    assert bundled_payload["orchestrate"]["foo"]["gpus"] == 2
-    assert "data_parallel_size" not in bundled_payload["orchestrate"]["foo"]
-    assert "restart" not in bundled_payload["orchestrate"]
+    assert bundled_payload["model"].startswith("Foo/")
+    assert "orchestrate" not in bundled_payload
     task_spec = load_task_spec(Path(entry.task_spec_path))
     assert task_spec.gpus == 2
     assert task_spec.tensor_parallel_size == 2
     assert task_spec.data_parallel_size is None
+    orchestrate_snapshot = tomllib.loads((Path(task_spec.output_paths.root) / "orchestrate-snapshot.toml").read_text(encoding="utf-8"))
+    assert orchestrate_snapshot["schema_version"] == 1
+    assert orchestrate_snapshot["registry_path"] == str(tmp_path / "orchestrate.toml")
+    assert orchestrate_snapshot["registry_checksum"]
+    assert orchestrate_snapshot["model"]["id"].startswith("Foo/")
     allocation = load_execution_allocation(Path(entry.allocation_path))
     assert allocation is not None
     assert allocation.allocated_gpus == 8
@@ -349,6 +410,11 @@ def test_bundle_parses_sidecars(tmp_path: Path) -> None:
     assert sidecar.readiness.timeout_s == 12
     assert sidecar.readiness.interval_s == 3
     assert "--overlap" in spec.pyxis_srun_extra_args
+    eval_images_snapshot = tomllib.loads((Path(spec.output_paths.root) / "eval_images-snapshot.toml").read_text(encoding="utf-8"))
+    assert eval_images_snapshot["schema_version"] == 1
+    assert eval_images_snapshot["registry_path"] == str(tmp_path / "eval_images.toml")
+    assert eval_images_snapshot["registry_checksum"]
+    assert eval_images_snapshot["eval_image"][0]["id"] == "medagentbench-fhir"
 
 
 def test_slurm_render_starts_sidecar_before_worker(tmp_path: Path) -> None:
@@ -451,10 +517,9 @@ def test_slurm_render_sidecar_readiness_failure_tails_log(tmp_path: Path) -> Non
 def test_sidecar_validation_rejects_missing_image_or_command(tmp_path: Path) -> None:
     job_cfg = tmp_path / "job.yaml"
     _write_sidecar_job_config(job_cfg, image="")
-    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
 
-    with pytest.raises(ValueError, match="image is required"):
-        ensure_run_bundle(tasks=tasks, run_id="bundle", output_root=tmp_path / "outputs", mode="slurm", runtime="pyxis")
+    with pytest.raises(ValueError, match="non-empty image"):
+        expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
 
 
 def test_sidecar_validation_rejects_non_slurm_mode(tmp_path: Path) -> None:
@@ -469,11 +534,7 @@ def test_sidecar_validation_rejects_non_slurm_mode(tmp_path: Path) -> None:
 def test_sidecar_validation_rejects_reserved_srun_args(tmp_path: Path) -> None:
     job_cfg = tmp_path / "job.yaml"
     _write_sidecar_job_config(job_cfg)
-    payload = load_job_config(job_cfg)
-    payload["orchestrate"]["sidecars"]["medagentbench-fhir"]["srun_args"].extend(["--nodes", "1"])
-    from omegaconf import OmegaConf
-
-    OmegaConf.save(config=OmegaConf.create(payload), f=str(job_cfg))
+    _SIDECAR_META[job_cfg.with_suffix(".toml").resolve()][0]["srun_args"].extend(["--nodes", "1"])
     tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
 
     with pytest.raises(ValueError, match="renderer-owned flag --nodes"):
@@ -483,16 +544,10 @@ def test_sidecar_validation_rejects_reserved_srun_args(tmp_path: Path) -> None:
 def test_sidecar_validation_rejects_shell_suffix_collision(tmp_path: Path) -> None:
     job_cfg = tmp_path / "job.yaml"
     _write_sidecar_job_config(job_cfg, name="fhir-v2")
-    payload = load_job_config(job_cfg)
-    payload["orchestrate"]["sidecars"]["fhir.v2"] = {
-        "runtime": "pyxis",
-        "image": "/tmp/other.sqsh",
-        "command": ["/bin/sh", "-lc", "sleep 60"],
-        "readiness": {"enabled": False},
-    }
-    from omegaconf import OmegaConf
-
-    OmegaConf.save(config=OmegaConf.create(payload), f=str(job_cfg))
+    first = dict(_SIDECAR_META[job_cfg.with_suffix(".toml").resolve()][0])
+    second = dict(first)
+    second.update({"id": "fhir.v2", "image": "/tmp/other.sqsh", "command": ["/bin/sh", "-lc", "sleep 60"], "readiness": {"enabled": False}})
+    _SIDECAR_META[job_cfg.with_suffix(".toml").resolve()].append(second)
     tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
 
     with pytest.raises(ValueError, match="same shell variable suffix"):
@@ -502,16 +557,10 @@ def test_sidecar_validation_rejects_shell_suffix_collision(tmp_path: Path) -> No
 def test_slurm_render_uses_single_cleanup_trap_for_multiple_sidecars(tmp_path: Path) -> None:
     job_cfg = tmp_path / "job.yaml"
     _write_sidecar_job_config(job_cfg)
-    payload = load_job_config(job_cfg)
-    payload["orchestrate"]["sidecars"]["audit"] = {
-        "runtime": "pyxis",
-        "image": "/tmp/audit.sqsh",
-        "command": ["/bin/sh", "-lc", "sleep 60"],
-        "readiness": {"enabled": False},
-    }
-    from omegaconf import OmegaConf
-
-    OmegaConf.save(config=OmegaConf.create(payload), f=str(job_cfg))
+    first = dict(_SIDECAR_META[job_cfg.with_suffix(".toml").resolve()][0])
+    audit = dict(first)
+    audit.update({"id": "audit", "image": "/tmp/audit.sqsh", "command": ["/bin/sh", "-lc", "sleep 60"], "readiness": {"enabled": False}})
+    _SIDECAR_META[job_cfg.with_suffix(".toml").resolve()].append(audit)
     tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
     planned = build_submission_plan(
         tasks,
@@ -644,7 +693,7 @@ def test_old_task_spec_version_fails_before_missing_field_parsing(tmp_path: Path
         runtime="pyxis",
     )
     task_spec_path = plan.tasks[tasks[0].task_id].paths.task_spec_path
-    payload = load_job_config(task_spec_path)
+    payload = dict(load_internal_mapping(task_spec_path, label="task spec"))
     payload["spec_version"] = 1
     payload.pop("sidecars", None)
     payload["output_paths"].pop("sidecar_dir", None)
@@ -668,7 +717,7 @@ def test_v2_task_spec_requires_sidecar_fields(tmp_path: Path) -> None:
         runtime="pyxis",
     )
     task_spec_path = plan.tasks[tasks[0].task_id].paths.task_spec_path
-    payload = load_job_config(task_spec_path)
+    payload = dict(load_internal_mapping(task_spec_path, label="task spec"))
     payload.pop("sidecars", None)
     from omegaconf import OmegaConf
 
@@ -744,23 +793,9 @@ def test_render_bundle_refreshes_stale_task_bundle_when_source_changes(tmp_path:
     first_config_path = Path(first_entry.effective_job_config_path)
     first_payload = load_job_config(first_config_path)
 
-    assert "restart" not in first_payload["orchestrate"]
+    assert "orchestrate" not in first_payload
 
-    job_cfg.write_text(
-        """
-models:
-  foo:
-    model: Foo/Bar
-orchestrate:
-  vllm-container:
-    image: fake
-  foo:
-    gpus: 1
-    serve:
-      dtype: float16
-""".lstrip(),
-        encoding="utf-8",
-    )
+    job_cfg.with_suffix(".toml").write_text(job_cfg.with_suffix(".toml").read_text(encoding="utf-8") + "\nvariant_id = \"changed\"\n", encoding="utf-8")
 
     second_manifest = render_bundle(
         planned_tasks=planned,
@@ -778,9 +813,8 @@ orchestrate:
     second_payload = load_job_config(Path(second_entry.effective_job_config_path))
 
     assert second_entry.effective_job_config_path == first_entry.effective_job_config_path
-    assert "restart" not in second_payload["orchestrate"]
-    assert first_payload["orchestrate"]["foo"].get("serve", {}) == {}
-    assert second_payload["orchestrate"]["foo"].get("serve", {}) == {"dtype": "float16"}
+    assert "orchestrate" not in second_payload
+    assert first_payload != second_payload
 
 
 def test_render_bundle_prefers_runtime_state_restart_on_rerender(tmp_path: Path) -> None:
@@ -831,7 +865,7 @@ def test_render_bundle_prefers_runtime_state_restart_on_rerender(tmp_path: Path)
     second_payload = load_job_config(Path(second_entry.effective_job_config_path))
     runtime_state = load_runtime_state(Path(second_entry.state_path))
 
-    assert second_payload["orchestrate"]["restart"] == "runs/raw/source-run"
+    assert "orchestrate" not in second_payload
     assert runtime_state is not None
     assert runtime_state.restart_source == "runs/raw/runtime-run"
     assert second_entry.restart_source == "runs/raw/runtime-run"
@@ -865,12 +899,11 @@ def test_rendered_task_local_config_is_loadable_by_orchestrator(tmp_path: Path) 
 
     patched_path = Path(manifest.entries[0].effective_job_config_path)
     patched_plan = tmp_path / "patched-plan.yaml"
-    patched_plan.write_text(f"job_configs:\n  - {patched_path}\n", encoding="utf-8")
+    patched_plan.write_text(f"job_configs:\n  - {patched_path}\norchestrate_config: {tmp_path / 'orchestrate.toml'}\n", encoding="utf-8")
     patched_tasks = expand_tasks(load_plan(patched_plan))
 
     assert len(patched_tasks) == 1
-    assert patched_tasks[0].orchestrate["foo"]["gpus"] == 2
-    assert "data_parallel_size" not in patched_tasks[0].orchestrate["foo"]
+    assert patched_tasks[0].orchestrate["vllm"]["gpus"] == 2
 
 
 def test_slurm_dry_run_writes_manifest_and_prints_commands(tmp_path: Path, capsys) -> None:
@@ -878,19 +911,22 @@ def test_slurm_dry_run_writes_manifest_and_prints_commands(tmp_path: Path, capsy
     job_b = tmp_path / "job-b.yaml"
     _write_job_config(job_a, gpus=4, tensor_parallel_size=4)
     _write_job_config(job_b, gpus=1)
+    _write_plan(tmp_path, [job_a, job_b])
 
     rc = orchestrate_main(
         [
             "slurm",
             "--job-config",
-            str(job_a),
+            str(job_a.with_suffix(".toml")),
             "--job-config",
-            str(job_b),
+            str(job_b.with_suffix(".toml")),
             "--run-id",
             "bundle",
             "--output-dir",
             str(tmp_path / "bundle"),
-            "--dry-run",
+            "--orchestrate-config",
+                str(tmp_path / "orchestrate.toml"),
+                "--dry-run",
         ]
     )
 
@@ -913,18 +949,21 @@ def test_slurm_dry_run_writes_manifest_and_prints_commands(tmp_path: Path, capsy
 def test_slurm_rerender_loads_pre_phase3_submission_manifest(tmp_path: Path, capsys) -> None:
     job_cfg = tmp_path / "job.yaml"
     _write_job_config(job_cfg, gpus=2, tensor_parallel_size=2)
+    _write_plan(tmp_path, [job_cfg])
 
     output_root = tmp_path / "bundle"
     rc = orchestrate_main(
         [
             "slurm",
             "--job-config",
-            str(job_cfg),
+            str(job_cfg.with_suffix(".toml")),
             "--run-id",
             "bundle",
             "--output-dir",
             str(output_root),
-            "--dry-run",
+            "--orchestrate-config",
+                str(tmp_path / "orchestrate.toml"),
+                "--dry-run",
         ]
     )
     assert rc == 0
@@ -955,12 +994,14 @@ def test_slurm_rerender_loads_pre_phase3_submission_manifest(tmp_path: Path, cap
         [
             "slurm",
             "--job-config",
-            str(job_cfg),
+            str(job_cfg.with_suffix(".toml")),
             "--run-id",
             "bundle",
             "--output-dir",
             str(output_root),
-            "--dry-run",
+            "--orchestrate-config",
+                str(tmp_path / "orchestrate.toml"),
+                "--dry-run",
         ]
     )
 
@@ -983,6 +1024,7 @@ def test_slurm_rerender_loads_pre_phase3_submission_manifest(tmp_path: Path, cap
 def test_slurm_cli_default_run_id_uses_shared_generator(tmp_path: Path, monkeypatch) -> None:
     job_cfg = tmp_path / "job.yaml"
     _write_job_config(job_cfg, gpus=1)
+    _write_plan(tmp_path, [job_cfg])
 
     captured: dict[str, object] = {}
 
@@ -996,7 +1038,16 @@ def test_slurm_cli_default_run_id_uses_shared_generator(tmp_path: Path, monkeypa
     monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.cli.write_bundle_manifest", lambda path, manifest: None)
     monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.cli.mark_dry_run", lambda path, manifest: [])
 
-    rc = orchestrate_main(["slurm", "--job-config", str(job_cfg), "--dry-run"])
+    rc = orchestrate_main(
+        [
+            "slurm",
+            "--job-config",
+            str(job_cfg.with_suffix(".toml")),
+            "--orchestrate-config",
+            str(tmp_path / "orchestrate.toml"),
+            "--dry-run",
+        ]
+    )
 
     assert rc == 0
     assert captured["run_id"] == "shared-run-id"
