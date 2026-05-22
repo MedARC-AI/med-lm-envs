@@ -54,7 +54,6 @@ class TaskManifest:
     port: int | None = None
     container_id: str | None = None
     container_name: str | None = None
-    container_exit_code: int | None = None
     image: str | None = None
     readiness: Mapping[str, Any] | None = None
     bench_command: str | None = None
@@ -106,10 +105,6 @@ class TaskPaths:
         return self.runtime_dir / "state.json"
 
     @property
-    def allocation_path(self) -> Path:
-        return self.runtime_dir / "allocation.json"
-
-    @property
     def stdout_path(self) -> Path:
         return self.bench_dir / "stdout.txt"
 
@@ -137,25 +132,6 @@ def write_task_manifest(paths: TaskPaths, manifest: TaskManifest) -> None:
 
 def write_task_result(paths: TaskPaths, payload: Mapping[str, Any]) -> None:
     _write_json_atomic(paths.result_path, payload)
-
-
-def write_summary(path: Path, tasks: list[TaskManifest]) -> None:
-    payload = {
-        "updated_at": _now(),
-        "tasks": [
-            {
-                "task_id": task.task_id,
-                "state": task.state,
-                "model_key": task.model_key,
-                "model_id": task.model_id,
-                "config_path": task.config_path,
-                "failure_reason": task.failure_reason,
-                "error": task.error,
-            }
-            for task in tasks
-        ],
-    }
-    _write_json_atomic(path, payload)
 
 
 def upsert_summary_entry(path: Path, task: TaskManifest) -> None:
@@ -199,7 +175,6 @@ __all__ = [
     "TaskPaths",
     "load_summary",
     "upsert_summary_entry",
-    "write_summary",
     "write_task_manifest",
     "write_task_result",
     "write_text",

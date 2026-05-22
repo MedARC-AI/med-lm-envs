@@ -46,12 +46,6 @@ class LaunchStatusTarget:
     output_root: Path
 
 
-@dataclass(frozen=True)
-class LaunchCleanupTarget:
-    runtime: str
-    run_id: str | None
-
-
 def resolve_launch_plan(request: LaunchRequest, *, cwd: Path) -> LaunchPlan:
     plan, base_dir = _resolve_plan_config(request, cwd=cwd)
     if request.env_file is not None:
@@ -91,12 +85,6 @@ def resolve_status_target(*, run_id: str | None, output_dir: Path | None, cwd: P
     else:
         root = (root_dir / "outputs" / "orchestrate").expanduser().resolve()
     return LaunchStatusTarget(run_id=run_id, output_root=root)
-
-
-def resolve_cleanup_target(*, runtime: str, run_id: str | None) -> LaunchCleanupTarget:
-    if runtime not in {"docker", "podman"}:
-        raise ValueError(f"cleanup --runtime {runtime!r} is not supported; use 'docker' or 'podman'.")
-    return LaunchCleanupTarget(runtime=runtime, run_id=run_id)
 
 
 def _resolve_plan_config(request: LaunchRequest, *, cwd: Path) -> tuple[PlanConfig, Path]:
@@ -145,11 +133,9 @@ def _resolve_path(path: Path, *, base_dir: Path) -> Path:
 
 
 __all__ = [
-    "LaunchCleanupTarget",
     "LaunchPlan",
     "LaunchRequest",
     "LaunchStatusTarget",
-    "resolve_cleanup_target",
     "resolve_launch_plan",
     "resolve_output_root",
     "resolve_status_target",

@@ -58,11 +58,7 @@ from medarc_verifiers.orchestrate.state import (
 from medarc_verifiers.orchestrate.topology import ResolvedTopology, resolve_task_spec_topology
 from medarc_verifiers.orchestrate.vllm_args import build_container_args, normalize_volume_mounts
 
-_COMMAND_TEMPLATE_UV = (
-    "uv run medarc-eval bench --config {job_config_path} --api-base-url {base_url} "
-    "--provider local --output-dir {output_dir} {endpoints_arg}"
-)
-_COMMAND_TEMPLATE_BARE = (
+_COMMAND_TEMPLATE = (
     "medarc-eval bench --config {job_config_path} --api-base-url {base_url} "
     "--provider local --output-dir {output_dir} {endpoints_arg}"
 )
@@ -83,7 +79,6 @@ class WorkerOptions:
     command_template: str | None = None
     env_file: Path | None = None
     prune_logs_on_success: bool = False
-    uv_run: bool = True
 
 
 @dataclass(frozen=True)
@@ -113,9 +108,7 @@ class TaskWorker:
         self._options = options
         self._runtime = normalize_runtime(options.runtime)
         self._runtime_adapter = runtime_adapter or build_runtime_adapter(self._runtime)
-        self._command_template = options.command_template or (
-            _COMMAND_TEMPLATE_UV if options.uv_run else _COMMAND_TEMPLATE_BARE
-        )
+        self._command_template = options.command_template or _COMMAND_TEMPLATE
         self._callbacks = callbacks
         self._active_handle: RuntimeHandle | None = None
         self._bench_process: BenchProcess | None = None
@@ -143,7 +136,7 @@ class TaskWorker:
         manifest.allocated_gpus = self._allocation.allocated_gpus
         if manifest.started_at is None:
             manifest.started_at = _utcnow()
-        write_execution_allocation(paths.allocation_path, self._allocation)
+        write_execution_allocation(Path(self._spec.output_paths.allocation_path), self._allocation)
         state_handler = state_handler or (
             self._callbacks.set_state
             if self._callbacks is not None and self._callbacks.set_state is not None
@@ -368,7 +361,6 @@ def main(argv: list[str] | None = None) -> int:
         readiness_timeout_s=args.readiness_timeout_s,
         env_file=args.env_file.expanduser().resolve() if args.env_file is not None else None,
         prune_logs_on_success=bool(args.prune_logs_on_success),
-        uv_run=False,
     )
     worker = TaskWorker(task_spec, allocation, options=options)
     paths = TaskPaths(Path(task_spec.output_paths.root))

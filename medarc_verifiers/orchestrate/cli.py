@@ -10,7 +10,6 @@ from pathlib import Path
 from medarc_verifiers.orchestrate.docker_vllm import cleanup_orphan_containers as cleanup_docker_orphans
 from medarc_verifiers.orchestrate.launch import (
     LaunchRequest,
-    resolve_cleanup_target,
     resolve_launch_plan,
     resolve_status_target,
 )
@@ -164,8 +163,7 @@ def _run_status(args: argparse.Namespace) -> int:
 
 
 def _run_cleanup(args: argparse.Namespace) -> int:
-    target = resolve_cleanup_target(runtime=args.runtime, run_id=args.run_id)
-    removed = _cleanup_orphans(runtime=target.runtime, run_id=target.run_id)
+    removed = _cleanup_orphans(runtime=args.runtime, run_id=args.run_id)
     if removed:
         print("\n".join(removed))
     return 0

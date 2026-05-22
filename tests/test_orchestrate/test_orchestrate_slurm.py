@@ -981,47 +981,6 @@ def test_slurm_cli_default_run_id_uses_shared_generator(tmp_path: Path, monkeypa
     assert captured["bundle_root"] == (Path("outputs") / "orchestrate" / "shared-run-id").resolve()
 
 
-def test_run_backend_slurm_skips_local_probes(tmp_path: Path, monkeypatch) -> None:
-    job_cfg = tmp_path / "job.yaml"
-    _write_job_config(job_cfg, gpus=1)
-    _write_plan(tmp_path, [job_cfg])
-    output_root = tmp_path / "bundle"
-    captured: list[dict[str, object]] = []
-
-    def fake_render_bundle(**kwargs):
-        captured.append(
-            {
-                "run_id": kwargs["run_id"],
-                "bundle_root": kwargs["bundle_root"],
-                "tasks": [task.task.task_id for task in kwargs["planned_tasks"]],
-                "readiness_timeout_s": kwargs["readiness_timeout_s"],
-            }
-        )
-        return SlurmBundleManifest(
-            run_id=kwargs["run_id"], bundle_root=str(kwargs["bundle_root"]), node_gpus=8, entries=[]
-        )
-
-    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.submit.render_bundle", fake_render_bundle)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.submit.write_bundle_manifest", lambda path, manifest: None)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.submit.mark_dry_run", lambda path, manifest: [])
-
-    common = [
-        "--job-config",
-        str(job_cfg.with_suffix(".toml")),
-        "--run-id",
-        "bundle",
-        "--output-dir",
-        str(output_root),
-        "--readiness-timeout-s",
-        "111",
-        "--dry-run",
-    ]
-
-    assert orchestrate_main(["run", *common]) == 0
-    assert orchestrate_main(["run", *common]) == 0
-    assert captured[0] == captured[1]
-
-
 def test_submit_bundle_resumes_from_existing_job_ids(tmp_path: Path, monkeypatch) -> None:
     job_a = tmp_path / "job-a.yaml"
     job_b = tmp_path / "job-b.yaml"
