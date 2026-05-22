@@ -3,7 +3,7 @@
 # URL, key, and max_concurrent are intentionally omitted; supply deployment-specific API settings at runtime.
 
 [[endpoint]]
-endpoint_id = "afm-4-5b"
+endpoint_id = "afm-4.5b"
 model = "arcee-ai/AFM-4.5B"
 api_client_type = "openai_chat_completions"
 
@@ -531,7 +531,7 @@ ipc_mode = "host"
 
 
 [[endpoint]]
-endpoint_id = "gpt_5_1"
+endpoint_id = "gpt-5.1"
 model = "openai/gpt-5.1"
 api_client_type = "openai_responses"
 
@@ -543,7 +543,7 @@ include = true
 
 
 [[endpoint]]
-endpoint_id = "gpt_5_mini"
+endpoint_id = "gpt-5-mini"
 model = "openai/gpt-5-mini"
 api_client_type = "openai_responses"
 
@@ -733,7 +733,7 @@ ipc_mode = "host"
 
 
 [[endpoint]]
-endpoint_id = "ling-2-flash"
+endpoint_id = "ling-flash-2.0"
 model = "inclusionAI/Ling-flash-2.0"
 api_client_type = "openai_chat_completions"
 
@@ -758,7 +758,7 @@ ipc_mode = "host"
 
 
 [[endpoint]]
-endpoint_id = "llama-3-70b-instruct"
+endpoint_id = "llama-3.3-70b-instruct"
 model = "meta-llama/Llama-3.3-70B-Instruct"
 api_client_type = "openai_chat_completions"
 
@@ -781,7 +781,7 @@ ipc_mode = "host"
 
 
 [[endpoint]]
-endpoint_id = "llama-3-8b-instruct"
+endpoint_id = "llama-3.1-8b-instruct"
 model = "meta-llama/Llama-3.1-8B-Instruct"
 api_client_type = "openai_chat_completions"
 
@@ -854,7 +854,7 @@ ipc_mode = "host"
 
 
 [[endpoint]]
-endpoint_id = "medgemma-4b-1.5-it"
+endpoint_id = "medgemma-1.5-4b-it"
 model = "google/medgemma-1.5-4b-it"
 api_client_type = "openai_chat_completions"
 
@@ -1134,7 +1134,7 @@ ipc_mode = "host"
 
 
 [[endpoint]]
-endpoint_id = "mirothinker-235b-a22b"
+endpoint_id = "mirothinker-v1.5-235b"
 model = "miromind-ai/MiroThinker-v1.5-235B"
 api_client_type = "openai_chat_completions"
 
@@ -1158,7 +1158,7 @@ ipc_mode = "host"
 
 
 [[endpoint]]
-endpoint_id = "mirothinker-30b-a3b"
+endpoint_id = "mirothinker-v1.5-30b"
 model = "miromind-ai/MiroThinker-v1.5-30B"
 api_client_type = "openai_chat_completions"
 
@@ -1399,7 +1399,7 @@ ipc_mode = "host"
 
 
 [[endpoint]]
-endpoint_id = "qwen-3-0_6b-instruct"
+endpoint_id = "qwen3-0.6b-instruct"
 model = "Qwen/Qwen3-0.6B"
 api_client_type = "openai_chat_completions"
 
@@ -1429,7 +1429,7 @@ ipc_mode = "host"
 
 
 [[endpoint]]
-endpoint_id = "qwen-3-0_6b-thinking"
+endpoint_id = "qwen3-0.6b-thinking"
 model = "Qwen/Qwen3-0.6B"
 api_client_type = "openai_chat_completions"
 
@@ -1459,7 +1459,7 @@ ipc_mode = "host"
 
 
 [[endpoint]]
-endpoint_id = "qwen-3-1_7b-instruct"
+endpoint_id = "qwen3-1.7b-instruct"
 model = "Qwen/Qwen3-1.7B"
 api_client_type = "openai_chat_completions"
 
@@ -1489,7 +1489,7 @@ ipc_mode = "host"
 
 
 [[endpoint]]
-endpoint_id = "qwen-3-1_7b-thinking"
+endpoint_id = "qwen3-1.7b-thinking"
 model = "Qwen/Qwen3-1.7B"
 api_client_type = "openai_chat_completions"
 
@@ -1519,7 +1519,7 @@ ipc_mode = "host"
 
 
 [[endpoint]]
-endpoint_id = "qwen-3-4b-instruct-2507"
+endpoint_id = "qwen3-4b-instruct-2507"
 model = "Qwen/Qwen3-4B-Instruct-2507"
 api_client_type = "openai_chat_completions"
 
@@ -2009,7 +2009,7 @@ ipc_mode = "host"
 
 
 [[endpoint]]
-endpoint_id = "qwen3_5-0_8b-instruct"
+endpoint_id = "qwen3.5-0.8b-instruct"
 model = "Qwen/Qwen3.5-0.8B"
 api_client_type = "openai_chat_completions"
 
@@ -2041,7 +2041,7 @@ ipc_mode = "host"
 
 
 [[endpoint]]
-endpoint_id = "qwen3_5-0_8b-thinking"
+endpoint_id = "qwen3.5-0.8b-thinking"
 model = "Qwen/Qwen3.5-0.8B"
 api_client_type = "openai_chat_completions"
 
@@ -2073,7 +2073,7 @@ ipc_mode = "host"
 
 
 [[endpoint]]
-endpoint_id = "qwen3_5-2b-instruct"
+endpoint_id = "qwen3.5-2b-instruct"
 model = "Qwen/Qwen3.5-2B"
 api_client_type = "openai_chat_completions"
 
@@ -2105,7 +2105,7 @@ ipc_mode = "host"
 
 
 [[endpoint]]
-endpoint_id = "qwen3_5-2b-thinking"
+endpoint_id = "qwen3.5-2b-thinking"
 model = "Qwen/Qwen3.5-2B"
 api_client_type = "openai_chat_completions"
 
@@ -2137,7 +2137,7 @@ ipc_mode = "host"
 
 
 [[endpoint]]
-endpoint_id = "qwen3_5-4b-instruct"
+endpoint_id = "qwen3.5-4b-instruct"
 model = "Qwen/Qwen3.5-4B"
 api_client_type = "openai_chat_completions"
 
@@ -2169,7 +2169,7 @@ ipc_mode = "host"
 
 
 [[endpoint]]
-endpoint_id = "qwen3_5-4b-thinking"
+endpoint_id = "qwen3.5-4b-thinking"
 model = "Qwen/Qwen3.5-4B"
 api_client_type = "openai_chat_completions"
 
@@ -2201,7 +2201,7 @@ ipc_mode = "host"
 
 
 [[endpoint]]
-endpoint_id = "qwen3_5-9b-instruct"
+endpoint_id = "qwen3.5-9b-instruct"
 model = "Qwen/Qwen3.5-9B"
 api_client_type = "openai_chat_completions"
 
@@ -2233,7 +2233,7 @@ ipc_mode = "host"
 
 
 [[endpoint]]
-endpoint_id = "qwen3_5-9b-thinking"
+endpoint_id = "qwen3.5-9b-thinking"
 model = "Qwen/Qwen3.5-9B"
 api_client_type = "openai_chat_completions"
 
