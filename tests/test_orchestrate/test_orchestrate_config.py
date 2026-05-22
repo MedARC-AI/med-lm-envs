@@ -98,7 +98,7 @@ eval_images_config = "configs/eval_images.toml"
 gpu_range = "0-3"
 port_range = "8100-8199"
 run_id = "hello"
-output_dir = "outputs/orchestrator/test-run"
+output_dir = "outputs/orchestrate/test-run"
 max_parallel = 2
 readiness_timeout_s = 123
 resume = true
@@ -110,7 +110,7 @@ rerun_failed = true
     plan = load_plan(plan_path)
     assert plan.job_configs == [job_cfg.resolve()]
     assert plan.eval_images_config == eval_images_cfg.resolve()
-    assert plan.output_dir == (tmp_path / "outputs" / "orchestrator" / "test-run").resolve()
+    assert plan.output_dir == (tmp_path / "outputs" / "orchestrate" / "test-run").resolve()
     assert plan.resume is True
 
     task = expand_tasks(plan)[0]
@@ -139,6 +139,14 @@ def test_load_job_config_rejects_yaml_public_configs(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="expected .toml"):
         load_job_config(path)
+
+
+def test_load_plan_rejects_yaml_configs(tmp_path: Path) -> None:
+    path = tmp_path / "plan.yaml"
+    path.write_text("job_configs:\n  - job.toml\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="expected .toml"):
+        load_plan(path)
 
 
 def test_make_plan_resolves_paths_relative_to_base_dir(tmp_path: Path) -> None:
@@ -171,8 +179,8 @@ endpoint_id = "gpt-oss-120b-high"
 model = "openai/gpt-oss-120b"
 """
         )
-    plan_path = tmp_path / "plan.yaml"
-    plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\n", encoding="utf-8")
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text(f'job_configs = ["{job_cfg.name}"]\n', encoding="utf-8")
 
     with pytest.raises(ValueError, match="with \\[endpoint.orchestrate\\] matches endpoint_id 'gpt-oss-120b-high'"):
         expand_tasks(load_plan(plan_path))
@@ -216,8 +224,8 @@ reasoning_parser = "qwen3"
 def test_endpoint_orchestration_rejects_unknown_nested_fields(tmp_path: Path) -> None:
     job_cfg = _write_eval_config(tmp_path / "job.toml")
     _write_endpoint_registry(tmp_path / "endpoints.toml", extra_serve='unknown = "bad"')
-    plan_path = tmp_path / "plan.yaml"
-    plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\n", encoding="utf-8")
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text(f'job_configs = ["{job_cfg.name}"]\n', encoding="utf-8")
 
     with pytest.raises(ValueError, match="Unknown fields"):
         expand_tasks(load_plan(plan_path))
@@ -238,8 +246,8 @@ image = "fake"
 """.lstrip(),
         encoding="utf-8",
     )
-    plan_path = tmp_path / "plan.yaml"
-    plan_path.write_text(f"job_configs:\n  - {job_cfg.name}\n", encoding="utf-8")
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text(f'job_configs = ["{job_cfg.name}"]\n', encoding="utf-8")
 
     with pytest.raises(ValueError, match="must set \\[endpoint.orchestrate.vllm\\].gpus"):
         expand_tasks(load_plan(plan_path))
@@ -281,9 +289,9 @@ command = ["bash", "-lc", "serve"]
 """.lstrip(),
         encoding="utf-8",
     )
-    plan_path = tmp_path / "plan.yaml"
+    plan_path = tmp_path / "plan.toml"
     plan_path.write_text(
-        f"job_configs:\n  - {job_cfg.name}\neval_images_config: {eval_images_cfg.name}\n",
+        f'job_configs = ["{job_cfg.name}"]\neval_images_config = "{eval_images_cfg.name}"\n',
         encoding="utf-8",
     )
 
@@ -307,9 +315,9 @@ command = ["bash"]
 """.lstrip(),
         encoding="utf-8",
     )
-    plan_path = tmp_path / "plan.yaml"
+    plan_path = tmp_path / "plan.toml"
     plan_path.write_text(
-        f"job_configs:\n  - {job_cfg.name}\neval_images_config: {eval_images_cfg.name}\n",
+        f'job_configs = ["{job_cfg.name}"]\neval_images_config = "{eval_images_cfg.name}"\n',
         encoding="utf-8",
     )
 

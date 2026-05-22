@@ -14,8 +14,7 @@ from medarc_verifiers.orchestrate.cli import main as orchestrate_main
 from medarc_verifiers.orchestrate.config import TaskSpec, expand_tasks, load_job_config, load_plan
 from medarc_verifiers.orchestrate.internal_io import load_internal_mapping
 from medarc_verifiers.orchestrate.slurm.manifest import SlurmBundleManifest
-from medarc_verifiers.orchestrate.slurm.cli import build_parser as build_slurm_parser
-from medarc_verifiers.orchestrate.slurm.plan import DEFAULT_SLURM_ACCOUNT, SlurmCliOverrides, build_submission_plan
+from medarc_verifiers.orchestrate.slurm.plan import SlurmCliOverrides, build_submission_plan
 from medarc_verifiers.orchestrate.slurm.render import render_bundle
 from medarc_verifiers.orchestrate.slurm.submit import submit_bundle
 
@@ -103,10 +102,10 @@ def _task(
 
 def _write_plan(tmp_path: Path, job_configs: list[Path]) -> Path:
     toml_paths = [path.with_suffix(".toml").resolve() for path in job_configs]
-    plan_path = tmp_path / "plan.yaml"
+    plan_path = tmp_path / "plan.toml"
     eval_images_path = tmp_path / "eval_images.toml"
-    config_lines = "\n".join(f"  - {path}" for path in toml_paths)
-    plan_lines = ["job_configs:", config_lines]
+    config_list = ", ".join(f'"{path}"' for path in toml_paths)
+    plan_lines = [f"job_configs = [{config_list}]"]
     sidecar_entries = [
         (entry, path)
         for path in toml_paths
@@ -115,7 +114,7 @@ def _write_plan(tmp_path: Path, job_configs: list[Path]) -> Path:
         )
     ]
     if sidecar_entries:
-        plan_lines.append(f"eval_images_config: {eval_images_path}")
+        plan_lines.append(f'eval_images_config = "{eval_images_path}"')
     plan_path.write_text("\n".join(plan_lines) + "\n", encoding="utf-8")
 
     endpoint_lines = []
@@ -194,17 +193,6 @@ def _write_plan(tmp_path: Path, job_configs: list[Path]) -> Path:
         eval_images_path.write_text("\n".join(lines), encoding="utf-8")
     return plan_path
 
-
-def test_slurm_parser_accepts_direct_job_configs() -> None:
-    parser = build_slurm_parser()
-
-    args = parser.parse_args(["--job-config", "a.yaml", "--job-config", "b.yaml", "--node-gpus", "8"])
-
-    assert args.job_configs == [Path("a.yaml"), Path("b.yaml")]
-    assert args.plan is None
-    assert args.node_gpus == 8
-
-
 def test_build_submission_plan_derives_dp_and_sorts(tmp_path: Path) -> None:
     tasks = [
         _task(tmp_path, "small", gpus=1),
@@ -234,7 +222,7 @@ def test_build_submission_plan_derives_dp_and_sorts(tmp_path: Path) -> None:
         (1, 1, 8, 8, 8),
     ]
     assert planned[1].predecessor_task_id == "large:foo"
-    assert all(task.options.account == DEFAULT_SLURM_ACCOUNT for task in planned)
+    assert all(task.options.account is None for task in planned)
 
 
 def test_build_submission_plan_round_robins_two_chains(tmp_path: Path) -> None:
@@ -913,8 +901,8 @@ def test_rendered_task_local_config_is_loadable_by_orchestrator(tmp_path: Path) 
     )
 
     patched_path = Path(manifest.entries[0].effective_job_config_path)
-    patched_plan = tmp_path / "patched-plan.yaml"
-    patched_plan.write_text(f"job_configs:\n  - {patched_path}\n", encoding="utf-8")
+    patched_plan = tmp_path / "patched-plan.toml"
+    patched_plan.write_text(f'job_configs = ["{patched_path}"]\n', encoding="utf-8")
     patched_tasks = expand_tasks(load_plan(patched_plan))
 
     assert len(patched_tasks) == 1
@@ -930,6 +918,8 @@ def test_slurm_dry_run_writes_manifest_and_prints_commands(tmp_path: Path, capsy
 
     rc = orchestrate_main(
         [
+            "run",
+            "--backend",
             "slurm",
             "--job-config",
             str(job_a.with_suffix(".toml")),
@@ -946,88 +936,17 @@ def test_slurm_dry_run_writes_manifest_and_prints_commands(tmp_path: Path, capsy
     assert rc == 0
     stdout_lines = capsys.readouterr().out.strip().splitlines()
     assert len(stdout_lines) == 2
-    assert stdout_lines[0].startswith(f"sbatch --account {DEFAULT_SLURM_ACCOUNT} ")
-    assert f"sbatch --account {DEFAULT_SLURM_ACCOUNT} " in stdout_lines[1]
+    assert stdout_lines[0].startswith("sbatch --parsable ")
+    assert stdout_lines[1].startswith("sbatch --parsable ")
     assert "--dependency=afterany:$JOBID_1" in stdout_lines[1]
 
     manifest = json.loads((tmp_path / "bundle" / "submission_manifest.json").read_text())
     assert [entry["state"] for entry in manifest["entries"]] == ["dry-run", "dry-run"]
     assert all(entry["slurm_job_id"] is None for entry in manifest["entries"])
-    assert all(entry["account"] == DEFAULT_SLURM_ACCOUNT for entry in manifest["entries"])
+    assert all(entry["account"] is None for entry in manifest["entries"])
 
     run_manifest = json.loads((tmp_path / "bundle" / "run_manifest.json").read_text())
     assert len(run_manifest["tasks"]) == 2
-
-
-def test_slurm_rerender_loads_pre_phase3_submission_manifest(tmp_path: Path, capsys) -> None:
-    job_cfg = tmp_path / "job.yaml"
-    _write_job_config(job_cfg, gpus=2, tensor_parallel_size=2)
-    _write_plan(tmp_path, [job_cfg])
-
-    output_root = tmp_path / "bundle"
-    rc = orchestrate_main(
-        [
-            "slurm",
-            "--job-config",
-            str(job_cfg.with_suffix(".toml")),
-            "--run-id",
-            "bundle",
-            "--output-dir",
-            str(output_root),
-            "--dry-run",
-        ]
-    )
-    assert rc == 0
-    capsys.readouterr()
-
-    manifest_path = output_root / "submission_manifest.json"
-    current_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    current_entry = dict(current_manifest["entries"][0])
-    old_entry = dict(current_entry)
-    old_entry["tp_size"] = old_entry.pop("tensor_parallel_size")
-    old_entry["dp_size"] = old_entry.pop("data_parallel_size")
-    old_entry["effective_gpus"] = old_entry.pop("allocated_gpus")
-    old_entry.pop("gpus")
-    old_entry.pop("vllm_world_size")
-    old_entry["state"] = "submitted"
-    old_entry["slurm_job_id"] = "12345"
-    old_manifest = {
-        "run_id": current_manifest["run_id"],
-        "bundle_root": current_manifest["bundle_root"],
-        "node_gpus": current_manifest["node_gpus"],
-        "created_at": current_manifest["created_at"],
-        "updated_at": current_manifest["updated_at"],
-        "entries": [old_entry],
-    }
-    manifest_path.write_text(json.dumps(old_manifest, indent=2), encoding="utf-8")
-
-    rc = orchestrate_main(
-        [
-            "slurm",
-            "--job-config",
-            str(job_cfg.with_suffix(".toml")),
-            "--run-id",
-            "bundle",
-            "--output-dir",
-            str(output_root),
-            "--dry-run",
-        ]
-    )
-
-    assert rc == 0
-    assert capsys.readouterr().out.strip() == ""
-    rerendered = json.loads(manifest_path.read_text(encoding="utf-8"))
-    rerendered_entry = rerendered["entries"][0]
-    assert rerendered_entry["slurm_job_id"] == "12345"
-    assert rerendered_entry["state"] == "submitted"
-    assert rerendered_entry["gpus"] == 2
-    assert rerendered_entry["allocated_gpus"] == 8
-    assert rerendered_entry["tensor_parallel_size"] == 2
-    assert rerendered_entry["data_parallel_size"] == 4
-    assert rerendered_entry["vllm_world_size"] == 8
-    assert "tp_size" not in rerendered_entry
-    assert "dp_size" not in rerendered_entry
-    assert "effective_gpus" not in rerendered_entry
 
 
 def test_slurm_cli_default_run_id_uses_shared_generator(tmp_path: Path, monkeypatch) -> None:
@@ -1051,6 +970,8 @@ def test_slurm_cli_default_run_id_uses_shared_generator(tmp_path: Path, monkeypa
 
     rc = orchestrate_main(
         [
+            "run",
+            "--backend",
             "slurm",
             "--job-config",
             str(job_cfg.with_suffix(".toml")),
@@ -1063,7 +984,7 @@ def test_slurm_cli_default_run_id_uses_shared_generator(tmp_path: Path, monkeypa
     assert captured["bundle_root"] == (Path("outputs") / "orchestrate" / "shared-run-id").resolve()
 
 
-def test_run_backend_slurm_matches_slurm_alias_and_skips_local_probes(tmp_path: Path, monkeypatch) -> None:
+def test_run_backend_slurm_skips_local_probes(tmp_path: Path, monkeypatch) -> None:
     job_cfg = tmp_path / "job.yaml"
     _write_job_config(job_cfg, gpus=1)
     _write_plan(tmp_path, [job_cfg])
@@ -1111,7 +1032,7 @@ def test_run_backend_slurm_matches_slurm_alias_and_skips_local_probes(tmp_path: 
         "--dry-run",
     ]
 
-    assert orchestrate_main(["slurm", *common]) == 0
+    assert orchestrate_main(["run", "--backend", "slurm", *common]) == 0
     assert orchestrate_main(["run", "--backend", "slurm", *common]) == 0
     assert captured[0] == captured[1]
 
@@ -1165,7 +1086,7 @@ def test_submit_bundle_resumes_from_existing_job_ids(tmp_path: Path, monkeypatch
 
     submit_bundle(tmp_path / "bundle" / "submission_manifest.json", manifest)
 
-    assert calls[0][0:4] == ["sbatch", "--account", DEFAULT_SLURM_ACCOUNT, "--parsable"]
+    assert calls[0][0:2] == ["sbatch", "--parsable"]
     assert "--dependency=afterany:101" in calls[0]
     assert "--dependency=afterany:202" in calls[1]
     assert [entry.slurm_job_id for entry in manifest.entries] == ["101", "202", "303"]

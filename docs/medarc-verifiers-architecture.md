@@ -174,12 +174,12 @@ Historical raw-run manifest schemas are not part of the runtime package. Use
 Docs: `docs/medarc-orchestrate.md`.
 
 `medarc-orchestrate` accepts the same upstream eval TOML job configs that
-`medarc-eval bench` accepts. Runtime infrastructure is resolved separately:
+`medarc-eval bench` accepts. Runtime infrastructure is resolved from endpoint registry entries:
 
-- `orchestrate.toml` stores matched model serving settings under `[[model]]`.
+- `endpoints.toml` or `medmarks-endpoints.toml` stores aliases under `[[endpoint]]`; entries with
+  `[endpoint.orchestrate]` are orchestratable.
 - `eval_images.toml` stores eval-scoped auxiliary images selected by eval/env id.
-- `endpoints.toml`, when configured, is used for model matching and passed
-  through to the worker bench command.
+- The same endpoint registry is used for exact `endpoint_id` matching and passed through to the worker bench command.
 
 Task bundles live under `outputs/orchestrate/<run_id>/tasks/<task-slug>/` and
 contain bundled `eval-config.toml`, internal `task.yaml`, registry snapshot TOML
@@ -268,7 +268,7 @@ It:
 1. Launches vLLM containers.
 2. Waits for readiness.
 3. Runs `uv run medarc-eval bench --config <job.toml> --api-base-url <allocated> --provider local`.
-4. Tracks orchestration state under `outputs/orchestrator/<run_id>/`.
+4. Tracks orchestration state under `outputs/orchestrate/<run_id>/`.
 
 ## Where To Change Things
 

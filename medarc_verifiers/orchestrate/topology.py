@@ -27,7 +27,7 @@ def task_sort_key(task: TaskSpec) -> tuple[int, int, str]:
 
 def minimum_required_gpus(task: TaskSpec) -> int:
     model_cfg = _task_model_cfg(task)
-    gpus = int(model_cfg.get("gpus", 1) or 1)
+    gpus = _required_int(model_cfg.get("gpus"), f"Task {task.task_id} orchestrate.vllm.gpus")
     if gpus < 1:
         raise ValueError(f"Task {task.task_id} orchestrate.vllm.gpus must be >= 1.")
     return gpus
@@ -35,7 +35,9 @@ def minimum_required_gpus(task: TaskSpec) -> int:
 
 def configured_tensor_parallel_size(task: TaskSpec) -> int:
     model_cfg = _task_model_cfg(task)
-    tensor_parallel = int(model_cfg.get("tensor_parallel_size", 1) or 1)
+    tensor_parallel = _required_int(
+        model_cfg.get("tensor_parallel_size"), f"Task {task.task_id} orchestrate.vllm.tensor_parallel_size"
+    )
     if tensor_parallel < 1:
         raise ValueError(f"Task {task.task_id} orchestrate.vllm.tensor_parallel_size must be >= 1.")
     return tensor_parallel
@@ -133,6 +135,12 @@ def _task_model_cfg(task: TaskSpec) -> dict[str, object]:
     if not isinstance(model_cfg, dict):
         raise ValueError(f"Task {task.task_id} orchestrate.vllm must be a mapping.")
     return model_cfg
+
+
+def _required_int(value: object, label: str) -> int:
+    if value is None:
+        raise ValueError(f"{label} is required.")
+    return int(value)
 
 
 __all__ = [

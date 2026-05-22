@@ -27,7 +27,15 @@ from medarc_verifiers.orchestrate.bundle import (
 from medarc_verifiers.orchestrate.config import PlanConfig, TaskSpec
 from medarc_verifiers.orchestrate.dashboard import ACTIVE_STATES, OrchestratorDashboard
 from medarc_verifiers.orchestrate.resources import ResourceManager
-from medarc_verifiers.orchestrate.runtime import LogStreamer, RuntimeAdapter, RuntimeHandle, RuntimeLaunchError
+from medarc_verifiers.orchestrate.runtime import (
+    LogStreamer,
+    RuntimeAdapter,
+    RuntimeHandle,
+    RuntimeLaunchError,
+    RuntimeName,
+    build_runtime_adapter,
+    normalize_runtime,
+)
 from medarc_verifiers.orchestrate.scheduler import Allocation, TaskScheduler
 from medarc_verifiers.orchestrate.state import (
     JobState,
@@ -78,17 +86,17 @@ class OrchestratorRunner:
         resource_manager: ResourceManager,
         *,
         options: OrchestratorOptions,
-        runtime: str,
+        runtime: RuntimeName,
         runtime_adapter: RuntimeAdapter | None = None,
         uv_run: bool = True,
         use_dashboard: bool = True,
     ) -> None:
-        self._runtime = _normalize_runtime(runtime)
+        self._runtime = normalize_runtime(runtime)
         self._plan = plan
         self._tasks = sorted(list(tasks), key=task_sort_key)
         self._resource_manager = resource_manager
         self._options = options
-        self._runtime_adapter = runtime_adapter or _build_runtime_adapter(self._runtime)
+        self._runtime_adapter = runtime_adapter or build_runtime_adapter(self._runtime)
         self._command_template = _COMMAND_TEMPLATE_UV if uv_run else _COMMAND_TEMPLATE_BARE
         self._dashboard = OrchestratorDashboard(enabled=use_dashboard)
         self._manifests: dict[str, TaskManifest] = {}
@@ -582,29 +590,6 @@ def _is_transient_error(exc: Exception) -> bool:
     return (
         "connection reset" in message or "read timed out" in message or "timeout" in message or "timed out" in message
     )
-
-
-def _normalize_runtime(value: str) -> str:
-    runtime = str(value).strip().lower()
-    if runtime not in {"docker", "podman", "pyxis"}:
-        raise ValueError(f"Unsupported runtime {value!r}; expected 'docker', 'podman', or 'pyxis'.")
-    return runtime
-
-
-def _build_runtime_adapter(runtime: str) -> RuntimeAdapter:
-    if runtime == "docker":
-        from medarc_verifiers.orchestrate.docker_vllm import DockerRuntimeAdapter
-
-        return DockerRuntimeAdapter()
-    if runtime == "podman":
-        from medarc_verifiers.orchestrate.podman_vllm import PodmanRuntimeAdapter
-
-        return PodmanRuntimeAdapter()
-    if runtime == "pyxis":
-        from medarc_verifiers.orchestrate.pyxis_vllm import PyxisRuntimeAdapter
-
-        return PyxisRuntimeAdapter()
-    raise ValueError(f"Unsupported runtime {runtime!r}.")
 
 
 __all__ = ["OrchestratorOptions", "OrchestratorRunner"]

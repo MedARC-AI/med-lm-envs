@@ -40,9 +40,6 @@ class SlurmTaskEntry:
     tensor_parallel_size: int
     data_parallel_size: int
     vllm_world_size: int
-    inner_run_id: str
-    restart_source: str | None
-    restart_strategy: str | None
     script_path: str
     generated_dependency: str | None
     base_dependency: str | None
@@ -59,21 +56,38 @@ class SlurmTaskEntry:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "SlurmTaskEntry":
-        normalized = dict(payload)
-        tensor_parallel_size = normalized.get("tensor_parallel_size", normalized.get("tp_size"))
-        data_parallel_size = normalized.get("data_parallel_size", normalized.get("dp_size"))
-        effective_gpus = normalized.get("effective_gpus")
-        normalized["tensor_parallel_size"] = int(tensor_parallel_size)
-        normalized["data_parallel_size"] = int(data_parallel_size)
-        normalized["allocated_gpus"] = int(normalized.get("allocated_gpus", effective_gpus))
-        normalized["gpus"] = int(normalized.get("gpus", effective_gpus))
-        normalized["vllm_world_size"] = int(
-            normalized.get("vllm_world_size", normalized["tensor_parallel_size"] * normalized["data_parallel_size"])
+        return cls(
+            run_id=str(payload["run_id"]),
+            task_id=str(payload["task_id"]),
+            task_slug=str(payload["task_slug"]),
+            original_job_config_path=str(payload["original_job_config_path"]),
+            original_job_config_checksum=str(payload["original_job_config_checksum"]),
+            effective_job_config_path=str(payload["effective_job_config_path"]),
+            bundled_eval_config_checksum=str(payload["bundled_eval_config_checksum"]),
+            task_spec_path=str(payload["task_spec_path"]),
+            task_spec_checksum=str(payload["task_spec_checksum"]),
+            allocation_path=str(payload["allocation_path"]),
+            state_path=str(payload["state_path"]),
+            gpus=int(payload["gpus"]),
+            allocated_gpus=int(payload["allocated_gpus"]),
+            tensor_parallel_size=int(payload["tensor_parallel_size"]),
+            data_parallel_size=int(payload["data_parallel_size"]),
+            vllm_world_size=int(payload["vllm_world_size"]),
+            script_path=str(payload["script_path"]),
+            generated_dependency=(
+                str(payload["generated_dependency"]) if payload.get("generated_dependency") is not None else None
+            ),
+            base_dependency=str(payload["base_dependency"]) if payload.get("base_dependency") is not None else None,
+            predecessor_task_id=(
+                str(payload["predecessor_task_id"]) if payload.get("predecessor_task_id") is not None else None
+            ),
+            chain_index=int(payload["chain_index"]),
+            submission_order=int(payload["submission_order"]),
+            job_name=str(payload["job_name"]),
+            account=str(payload["account"]) if payload.get("account") is not None else None,
+            slurm_job_id=str(payload["slurm_job_id"]) if payload.get("slurm_job_id") is not None else None,
+            state=str(payload.get("state") or "pending"),
         )
-        normalized.pop("tp_size", None)
-        normalized.pop("dp_size", None)
-        normalized.pop("effective_gpus", None)
-        return cls(**normalized)
 
 
 @dataclass

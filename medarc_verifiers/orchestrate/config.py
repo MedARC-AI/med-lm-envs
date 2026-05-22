@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
-from omegaconf import OmegaConf
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from medarc_verifiers.cli.eval_identity import BASE_VARIANT_ID, plan_eval_paths, slug_component
@@ -94,7 +93,9 @@ class ConfigFormatError(ValueError):
 
 def load_plan(path: Path) -> PlanConfig:
     resolved = path.expanduser().resolve()
-    payload = _load_mapping_any(resolved)
+    if resolved.suffix != ".toml":
+        raise ValueError(f"Unsupported plan format: {resolved} (expected .toml)")
+    payload = _load_toml_mapping(resolved)
     try:
         plan = PlanConfig(**payload)
     except ValidationError as exc:
@@ -294,22 +295,6 @@ def resolve_default_endpoints_path(cwd: Path | None = None) -> Path | None:
     if endpoints.exists():
         return endpoints
     return None
-
-
-def _load_mapping_any(path: Path) -> Mapping[str, Any]:
-    if not path.exists():
-        raise FileNotFoundError(f"Config not found: {path}")
-    if path.suffix == ".toml":
-        return _load_toml_mapping(path)
-    if path.suffix not in {".yaml", ".yml", ".json"}:
-        raise ValueError(f"Unsupported config format: {path} (expected .yaml/.yml/.json/.toml)")
-    try:
-        data = OmegaConf.to_container(OmegaConf.load(path), resolve=True)
-    except Exception as exc:  # pragma: no cover - OmegaConf error types vary
-        raise ConfigFormatError(f"Failed to load config: {path}") from exc
-    if not isinstance(data, Mapping):
-        raise ConfigFormatError(f"Config must be a mapping at top level: {path}")
-    return data
 
 
 def _load_toml_mapping(path: Path) -> Mapping[str, Any]:

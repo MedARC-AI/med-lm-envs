@@ -74,14 +74,14 @@ async def test_scheduler_shutdown_stops_new_tasks(tmp_path: Path) -> None:
             job_config_path=tmp_path / "job-1.yaml",
             model_key="foo",
             model_id="Foo/Bar",
-            orchestrate={"vllm": {"gpus": 1}},
+            orchestrate={"vllm": {"gpus": 1, "tensor_parallel_size": 1}},
         ),
         TaskSpec(
             task_id="task-2",
             job_config_path=tmp_path / "job-2.yaml",
             model_key="foo",
             model_id="Foo/Bar",
-            orchestrate={"vllm": {"gpus": 1}},
+            orchestrate={"vllm": {"gpus": 1, "tensor_parallel_size": 1}},
         ),
     ]
     shutdown_event = asyncio.Event()
@@ -113,7 +113,7 @@ async def test_scheduler_shutdown_during_allocation(tmp_path: Path) -> None:
             job_config_path=tmp_path / "job-1.yaml",
             model_key="foo",
             model_id="Foo/Bar",
-            orchestrate={"vllm": {"gpus": 1}},
+            orchestrate={"vllm": {"gpus": 1, "tensor_parallel_size": 1}},
         )
     ]
     shutdown_event = asyncio.Event()
@@ -166,11 +166,11 @@ async def test_runner_shutdown_state_machine(tmp_path: Path) -> None:
             job_config_path=job_config_path,
             model_key="foo",
             model_id="Foo/Bar",
-            orchestrate={
-                "vllm": {"gpus": 1, "tensor_parallel_size": 1, "serve": {}},
-                "container": {"image": "fake"},
-                "pyxis": {},
-            },
+                orchestrate={
+                    "vllm": {"gpus": 1, "tensor_parallel_size": 1, "serve": {}},
+                    "container": {"image": "fake", "container_port": 8000},
+                    "pyxis": {},
+                },
         )
     ]
     options = OrchestratorOptions(

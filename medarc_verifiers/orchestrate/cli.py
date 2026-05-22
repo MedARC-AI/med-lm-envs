@@ -53,12 +53,7 @@ def _add_local_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Dotenv file shared by runtime launches (overrides plan env_file; defaults to repo .env when present).",
     )
-    parser.add_argument(
-        "--runtime",
-        choices=("docker", "podman", "pyxis"),
-        default=None,
-        help="Serve runtime backend (defaults to docker when available, otherwise podman, unless plan.runtime is set).",
-    )
+    parser.add_argument("--runtime", choices=("docker", "podman", "pyxis"), default=None, help="Serve runtime backend.")
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -99,7 +94,7 @@ def _add_local_arguments(parser: argparse.ArgumentParser) -> None:
         type=Path,
         help="Path to endpoint registry TOML with [endpoint.orchestrate] blocks.",
     )
-    parser.set_defaults(command="run", handler=_run_local, backend="local")
+    parser.set_defaults(command="run", handler=_run_launch, backend="local")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -107,10 +102,10 @@ def build_parser() -> argparse.ArgumentParser:
         prog="medarc-orchestrate",
         description="Run vLLM orchestration with explicit execution modes.",
     )
-    subparsers = parser.add_subparsers(dest="command", metavar="{run,local,slurm}")
+    subparsers = parser.add_subparsers(dest="command", metavar="{run}")
     subparsers.required = True
 
-    from medarc_verifiers.orchestrate.slurm.cli import add_slurm_executor_arguments, add_slurm_subparser
+    from medarc_verifiers.orchestrate.slurm.cli import add_slurm_executor_arguments
 
     run_parser = subparsers.add_parser(
         "run",
@@ -121,25 +116,15 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--backend", choices=("local", "slurm"), default="local")
     add_slurm_executor_arguments(run_parser)
     run_parser.set_defaults(command="run", handler=_run_launch)
-
-    local_parser = subparsers.add_parser(
-        "local",
-        description="Run vLLM orchestration locally or inside an existing allocation.",
-        help="Run tasks locally with docker/podman autodetection or an explicit runtime.",
-    )
-    _add_local_arguments(local_parser)
-    local_parser.set_defaults(command="local", handler=_run_local, backend="local")
-
-    add_slurm_subparser(subparsers)
     return parser
-
-
-def _run_local(args: argparse.Namespace) -> int:
-    return _run_launch(args)
 
 
 def _run_launch(args: argparse.Namespace) -> int:
     backend = getattr(args, "backend", "local")
+    if backend == "slurm":
+        _reject_local_only_slurm_args(args)
+    else:
+        _reject_slurm_only_local_args(args)
     if args.status:
         target = resolve_status_target(args, cwd=Path.cwd())
         summary = load_summary(target.output_root / "summary.json")
@@ -154,7 +139,6 @@ def _run_launch(args: argparse.Namespace) -> int:
         return 0
     _require_source(args)
     if backend == "slurm":
-        _reject_local_only_slurm_args(args)
         from medarc_verifiers.orchestrate.slurm.cli import run_from_args
 
         return run_from_args(args)
@@ -231,10 +215,39 @@ def _reject_local_only_slurm_args(args: argparse.Namespace) -> None:
         used.append("--resume")
     if bool(getattr(args, "rerun_failed", False)):
         used.append("--rerun-failed")
+    if bool(getattr(args, "no_uv_run", False)):
+        used.append("--no-uv-run")
     if used:
         raise SystemExit(
             "medarc-orchestrate run --backend slurm does not accept local launch flags: " + ", ".join(used)
         )
+
+
+def _reject_slurm_only_local_args(args: argparse.Namespace) -> None:
+    slurm_only = {
+        "--node-gpus": getattr(args, "node_gpus", None),
+        "--max-simultaneous-nodes": getattr(args, "max_simultaneous_nodes", None),
+        "--cpus-per-gpu": getattr(args, "cpus_per_gpu", None),
+        "--time": getattr(args, "time", None),
+        "--partition": getattr(args, "partition", None),
+        "--account": getattr(args, "account", None),
+        "--qos": getattr(args, "qos", None),
+        "--nice": getattr(args, "nice", None),
+        "--dependency": getattr(args, "dependency", None),
+        "--mail-type": getattr(args, "mail_type", None),
+        "--mail-user": getattr(args, "mail_user", None),
+        "--source-dir": getattr(args, "source_dir", None),
+        "--activate-script": getattr(args, "activate_script", None),
+    }
+    used = [flag for flag, value in slurm_only.items() if value is not None]
+    if bool(getattr(args, "run_simultaneously", False)):
+        used.append("--run-simultaneously")
+    if bool(getattr(args, "test_only", False)):
+        used.append("--test-only")
+    if getattr(args, "slurm_resume", None) is not None:
+        used.append("--slurm-resume")
+    if used:
+        raise SystemExit("medarc-orchestrate run does not accept Slurm flags without --backend slurm: " + ", ".join(used))
 
 
 def main(argv: list[str] | None = None) -> int:

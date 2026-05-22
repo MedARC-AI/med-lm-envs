@@ -50,21 +50,21 @@ async def test_scheduler_backfill_prefers_large_then_small(tmp_path: Path) -> No
             job_config_path=tmp_path / "job-2gpu.yaml",
             model_key="foo",
             model_id="Foo/Bar",
-            orchestrate={"vllm": {"gpus": 2}},
+            orchestrate={"vllm": {"gpus": 2, "tensor_parallel_size": 2}},
         ),
         TaskSpec(
             task_id="task-1gpu-a",
             job_config_path=tmp_path / "job-1gpu-a.yaml",
             model_key="foo",
             model_id="Foo/Baz",
-            orchestrate={"vllm": {"gpus": 1}},
+            orchestrate={"vllm": {"gpus": 1, "tensor_parallel_size": 1}},
         ),
         TaskSpec(
             task_id="task-1gpu-b",
             job_config_path=tmp_path / "job-1gpu-b.yaml",
             model_key="foo",
             model_id="Foo/Qux",
-            orchestrate={"vllm": {"gpus": 1}},
+            orchestrate={"vllm": {"gpus": 1, "tensor_parallel_size": 1}},
         ),
     ]
     scheduler = TaskScheduler(DummyResourceManager(), max_parallel=4)

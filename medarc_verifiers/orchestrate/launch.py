@@ -17,11 +17,12 @@ from medarc_verifiers.orchestrate.config import (
     resolve_default_endpoints_path,
 )
 from medarc_verifiers.orchestrate.resources import ResourceError, discover_gpus, parse_index_range
+from medarc_verifiers.orchestrate.runtime import RuntimeName, normalize_runtime
 from medarc_verifiers.orchestrate.topology import minimum_required_gpus, resolve_topology
 from medarc_verifiers.utils.run_naming import generate_run_id
 
 Backend = Literal["local", "slurm"]
-Runtime = Literal["docker", "podman", "pyxis"]
+Runtime = RuntimeName
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,8 @@ class LaunchCleanupTarget:
 def resolve_launch_plan(args, *, backend: Backend, cwd: Path) -> LaunchPlan:
     source = resolve_plan_source(args, cwd=cwd)
     plan = source.plan
+    if backend == "slurm":
+        validate_slurm_plan_fields(plan)
     default_endpoint_path = None if plan.endpoints_path is not None else resolve_default_endpoints_path(cwd)
     runtime = resolve_runtime(getattr(args, "runtime", None) or plan.runtime, backend=backend)
     tasks = expand_tasks(plan, default_endpoints_path=default_endpoint_path)
@@ -139,7 +142,7 @@ def resolve_runtime(value: str | None, *, backend: Backend) -> Runtime:
     if backend == "slurm":
         return "pyxis"
     if value is not None:
-        return _normalize_runtime(value)
+        return normalize_runtime(value)
     return _resolve_local_auto()
 
 
@@ -167,13 +170,13 @@ def resolve_max_parallel(
     gpu_indices: list[int] | None,
     port_range: tuple[int, int],
 ) -> int:
+    if backend == "slurm":
+        return 1
     explicit = getattr(args, "max_parallel", None)
     if explicit is not None:
         return int(explicit)
     if plan.max_parallel is not None:
         return int(plan.max_parallel)
-    if backend == "slurm":
-        return 1
     if runtime == "pyxis":
         return 1
     port_capacity = port_range[1] - port_range[0] + 1
@@ -227,10 +230,33 @@ def resolve_cleanup_target(args, *, cwd: Path) -> LaunchCleanupTarget:
     plan: PlanConfig | None = None
     if getattr(args, "plan", None) is not None:
         plan = load_plan(args.plan.expanduser().resolve())
-    runtime_value = getattr(args, "runtime", None) or (plan.runtime if plan is not None else None)
-    runtime = _normalize_runtime(runtime_value) if runtime_value is not None else "docker"
+    if getattr(args, "backend", "local") == "slurm":
+        runtime: Runtime = "pyxis"
+    else:
+        runtime_value = getattr(args, "runtime", None)
+        if runtime_value is None:
+            raise ValueError("medarc-orchestrate run --kill-orphans requires --runtime unless --backend slurm is used.")
+        runtime = normalize_runtime(runtime_value)
     run_id = getattr(args, "run_id", None) or (plan.run_id if plan is not None else None)
     return LaunchCleanupTarget(runtime=runtime, run_id=run_id)
+
+
+def validate_slurm_plan_fields(plan: PlanConfig) -> None:
+    local_only = {
+        "runtime": plan.runtime,
+        "gpu_range": plan.gpu_range,
+        "port_range": plan.port_range,
+        "max_parallel": plan.max_parallel,
+    }
+    used = [field for field, value in local_only.items() if value is not None]
+    if "resume" in plan.model_fields_set:
+        used.append("resume")
+    if "rerun_failed" in plan.model_fields_set:
+        used.append("rerun_failed")
+    if "uv_run" in plan.model_fields_set:
+        used.append("uv_run")
+    if used:
+        raise ValueError("Slurm orchestration plans must not set local-only fields: " + ", ".join(used))
 
 
 def validate_local_schedule(
@@ -316,13 +342,6 @@ def _resolve_local_auto() -> Runtime:
     raise ValueError("No usable local orchestration runtime found. Tried " + "; ".join(attempts))
 
 
-def _normalize_runtime(value: str) -> Runtime:
-    runtime = str(value).strip().lower()
-    if runtime not in {"docker", "podman", "pyxis"}:
-        raise ValueError(f"Unsupported runtime {value!r}; expected 'docker', 'podman', or 'pyxis'.")
-    return runtime  # type: ignore[return-value]
-
-
 def _resolve_path(path: Path, *, base_dir: Path) -> Path:
     candidate = Path(path).expanduser()
     if not candidate.is_absolute():
@@ -388,5 +407,6 @@ __all__ = [
     "resolve_plan_source",
     "resolve_runtime",
     "resolve_status_target",
+    "validate_slurm_plan_fields",
     "validate_local_schedule",
 ]

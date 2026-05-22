@@ -55,14 +55,14 @@ async def test_scheduler_retries_blocked_task_on_release(tmp_path: Path) -> None
             job_config_path=tmp_path / "job-4gpu.yaml",
             model_key="foo",
             model_id="Foo/Bar",
-            orchestrate={"vllm": {"gpus": 4}},
+            orchestrate={"vllm": {"gpus": 4, "tensor_parallel_size": 4}},
         ),
         TaskSpec(
             task_id="task-1gpu",
             job_config_path=tmp_path / "job-1gpu.yaml",
             model_key="foo",
             model_id="Foo/Baz",
-            orchestrate={"vllm": {"gpus": 1}},
+            orchestrate={"vllm": {"gpus": 1, "tensor_parallel_size": 1}},
         ),
     ]
     scheduler = TaskScheduler(DummyResourceManager(allow_large), max_parallel=4)

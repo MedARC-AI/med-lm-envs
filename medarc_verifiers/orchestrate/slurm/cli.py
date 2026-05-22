@@ -13,47 +13,12 @@ from .render import render_bundle
 from .submit import mark_dry_run, submit_bundle
 
 
-def _add_arguments(parser: argparse.ArgumentParser) -> None:
-    source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--plan", type=Path, help="Path to orchestrator plan file.")
-    source.add_argument(
-        "--job-config",
-        action="append",
-        type=Path,
-        dest="job_configs",
-        help="Job config to orchestrate. Repeat to submit multiple jobs without a wrapper plan file.",
-    )
-    parser.add_argument("--name", default=None, help="Optional bundle name when using --job-config directly.")
-    parser.add_argument("--run-id", help="Submission bundle run identifier.")
-    parser.add_argument("--output-dir", type=Path, help="Override the Slurm bundle output directory.")
-    parser.add_argument(
-        "--env-file", type=Path, default=None, help="Dotenv file passed through to inner orchestrator runs."
-    )
-    parser.add_argument("--eval-images-config", type=Path, help="Path to eval auxiliary image registry TOML.")
-    parser.add_argument(
-        "--endpoints-path",
-        type=Path,
-        help="Path to endpoint registry TOML with [endpoint.orchestrate] blocks.",
-    )
-    parser.add_argument("--readiness-timeout-s", type=int, default=None, help="Inner readiness timeout in seconds.")
-    parser.add_argument(
-        "--prune-logs-on-success",
-        action="store_true",
-        help="Delete inner orchestrator logs after successful tasks.",
-    )
-    add_slurm_executor_arguments(parser)
-    parser.add_argument(
-        "--dry-run", action="store_true", help="Write scripts and print sbatch commands without submitting."
-    )
-    parser.set_defaults(command="slurm", handler=run_from_args)
-
-
 def add_slurm_executor_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--node-gpus", type=int, default=8, help="Outer Slurm GPU allocation per job.")
+    parser.add_argument("--node-gpus", type=int, default=None, help="Outer Slurm GPU allocation per job.")
     parser.add_argument(
         "--max-simultaneous-nodes",
         type=int,
-        default=1,
+        default=None,
         help="Maximum number of Slurm jobs to run concurrently.",
     )
     parser.add_argument(
@@ -80,7 +45,7 @@ def add_slurm_executor_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--source-dir",
         type=Path,
-        default=Path.cwd(),
+        default=None,
         help="Repository root containing the medarc-orchestrate checkout.",
     )
     parser.add_argument(
@@ -91,32 +56,15 @@ def add_slurm_executor_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def add_slurm_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> argparse.ArgumentParser:
-    parser = subparsers.add_parser(
-        "slurm",
-        description="Render and submit one sbatch job per orchestrator task.",
-        help="Submit one Slurm job per resolved task using pyxis at execution time.",
-    )
-    _add_arguments(parser)
-    return parser
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="medarc-orchestrate slurm",
-        description="Render and submit one sbatch job per orchestrator task.",
-    )
-    _add_arguments(parser)
-    return parser
-
-
 def run_from_args(args: argparse.Namespace) -> int:
     launch = resolve_launch_plan(args, backend="slurm", cwd=Path.cwd())
     plan = launch.plan
     tasks = launch.tasks
     run_id = launch.run_id
     output_root = launch.output_root.expanduser().resolve()
-    source_dir = args.source_dir.expanduser().resolve()
+    node_gpus = args.node_gpus if args.node_gpus is not None else 8
+    max_simultaneous_nodes = args.max_simultaneous_nodes if args.max_simultaneous_nodes is not None else 1
+    source_dir = (args.source_dir or Path.cwd()).expanduser().resolve()
     if args.activate_script is not None:
         activate_script = args.activate_script.expanduser()
         if not activate_script.is_absolute():
@@ -139,8 +87,8 @@ def run_from_args(args: argparse.Namespace) -> int:
     planned_tasks = build_submission_plan(
         tasks,
         run_id=run_id,
-        node_gpus=args.node_gpus,
-        max_simultaneous_nodes=args.max_simultaneous_nodes,
+        node_gpus=node_gpus,
+        max_simultaneous_nodes=max_simultaneous_nodes,
         run_simultaneously=bool(args.run_simultaneously),
         base_dependency=args.dependency,
         cli_overrides=cli_overrides,
@@ -152,7 +100,7 @@ def run_from_args(args: argparse.Namespace) -> int:
         planned_tasks=planned_tasks,
         bundle_root=output_root,
         run_id=run_id,
-        node_gpus=args.node_gpus,
+        node_gpus=node_gpus,
         source_dir=source_dir,
         activate_script=activate_script,
         env_file=plan.env_file,
@@ -171,12 +119,6 @@ def run_from_args(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    return run_from_args(args)
-
-
 def _load_existing_manifest(path: Path, *, run_id: str) -> SlurmBundleManifest | None:
     if not path.exists():
         return None
@@ -186,4 +128,4 @@ def _load_existing_manifest(path: Path, *, run_id: str) -> SlurmBundleManifest |
     return manifest
 
 
-__all__ = ["add_slurm_executor_arguments", "add_slurm_subparser", "build_parser", "main", "run_from_args"]
+__all__ = ["add_slurm_executor_arguments", "run_from_args"]

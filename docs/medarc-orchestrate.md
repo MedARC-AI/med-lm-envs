@@ -4,7 +4,7 @@
 
 ### Config Files
 
-A plan can be TOML, YAML, or JSON. Most users only need job configs plus the endpoint registry:
+A plan is a TOML file. Most users only need job configs plus the endpoint registry:
 
 ```toml
 name = "local-vllm"
@@ -101,7 +101,7 @@ uv run medarc-orchestrate run --backend slurm --plan plan-qwen-small-slurm.toml 
 
 Slurm options come from `[endpoint.orchestrate.slurm]`, with Slurm executor CLI overrides taking precedence.
 `slurm_resume = true` renders `#SBATCH --requeue`, so resubmitting the same task bundle reuses the same task-local
-bench output directory. The retained `medarc-orchestrate slurm` command is a thin alias for the same launch resolver.
+bench output directory.
 
 ### Task Bundles
 

@@ -17,13 +17,11 @@ _ALLOWED_SLURM_KEYS = {
     "partition",
     "account",
     "qos",
+    "nice",
     "mail_type",
     "mail_user",
     "slurm_resume",
 }
-DEFAULT_SLURM_ACCOUNT = "training"
-
-
 def slug_task_id(task_id: str, *, fallback: str = "task") -> str:
     cleaned = _TASK_ALLOWED.sub("-", task_id).strip("-.")
     return cleaned or fallback
@@ -36,6 +34,7 @@ class SlurmCliOverrides:
     partition: str | None = None
     account: str | None = None
     qos: str | None = None
+    nice: int | None = None
     mail_type: str | None = None
     mail_user: str | None = None
     slurm_resume: bool | None = None
@@ -49,6 +48,7 @@ class SlurmTaskOptions:
     partition: str | None = None
     account: str | None = None
     qos: str | None = None
+    nice: int | None = None
     mail_type: str | None = None
     mail_user: str | None = None
     slurm_resume: bool = False
@@ -65,7 +65,6 @@ class PlannedSlurmTask:
     tensor_parallel_size: int
     data_parallel_size: int
     vllm_world_size: int
-    inner_run_id: str
     predecessor_task_id: str | None
     base_dependency: str | None
     options: SlurmTaskOptions
@@ -110,7 +109,6 @@ def build_submission_plan(
             predecessor_task_id = last_task_in_chain.get(chain_index)
             task_base_dependency = base_dependency if predecessor_task_id is None else None
         task_slug = slug_task_id(task.task_id)
-        inner_run_id = f"{run_id}-{task_slug}"
         planned.append(
             PlannedSlurmTask(
                 task=task,
@@ -122,7 +120,6 @@ def build_submission_plan(
                 tensor_parallel_size=topology.tensor_parallel_size,
                 data_parallel_size=topology.data_parallel_size,
                 vllm_world_size=topology.vllm_world_size,
-                inner_run_id=inner_run_id,
                 predecessor_task_id=predecessor_task_id,
                 base_dependency=task_base_dependency,
                 options=options,
@@ -145,12 +142,9 @@ def merge_slurm_options(task: TaskSpec, *, cli_overrides: SlurmCliOverrides) -> 
         partition=cli_overrides.partition
         if cli_overrides.partition is not None
         else _optional_str(job_cfg.get("partition")),
-        account=(
-            cli_overrides.account
-            if cli_overrides.account is not None
-            else (_optional_str(job_cfg.get("account")) or DEFAULT_SLURM_ACCOUNT)
-        ),
+        account=cli_overrides.account if cli_overrides.account is not None else _optional_str(job_cfg.get("account")),
         qos=cli_overrides.qos if cli_overrides.qos is not None else _optional_str(job_cfg.get("qos")),
+        nice=cli_overrides.nice if cli_overrides.nice is not None else _optional_int(job_cfg.get("nice")),
         mail_type=cli_overrides.mail_type
         if cli_overrides.mail_type is not None
         else _optional_str(job_cfg.get("mail_type")),
@@ -199,7 +193,6 @@ def _optional_int(value: object) -> int | None:
 
 
 __all__ = [
-    "DEFAULT_SLURM_ACCOUNT",
     "PlannedSlurmTask",
     "SlurmCliOverrides",
     "SlurmTaskOptions",

@@ -15,7 +15,8 @@ from medarc_verifiers.orchestrate.worker import _load_runtime_env, main as worke
 def _write_job_config(path: Path) -> None:
     path.write_text(
         """
-model = "Foo/Bar"
+endpoint_id = "foo"
+endpoints_path = "endpoints.toml"
 
 [[eval]]
 env_id = "medqa"
@@ -26,7 +27,7 @@ rollouts_per_example = 1
     )
 
 
-def _write_orchestrate_config(
+def _write_endpoint_registry(
     path: Path,
     *,
     gpus: int = 1,
@@ -36,18 +37,17 @@ def _write_orchestrate_config(
     dp_line = f"data_parallel_size = {data_parallel_size}\n" if data_parallel_size is not None else ""
     path.write_text(
         f"""
-schema_version = 1
+[[endpoint]]
+endpoint_id = "foo"
+model = "Foo/Bar"
 
-[[model]]
-id = "Foo/Bar"
-
-[model.vllm]
+[endpoint.orchestrate.vllm]
 gpus = {gpus}
 tensor_parallel_size = {tensor_parallel_size}
 {dp_line}
-[model.vllm.serve]
+[endpoint.orchestrate.vllm.serve]
 
-[model.container]
+[endpoint.orchestrate.container]
 image = "fake"
 """.lstrip(),
         encoding="utf-8",
@@ -63,19 +63,16 @@ def _bundle(
     allocated_gpus: int = 1,
 ):
     job_cfg = tmp_path / "job.toml"
-    orchestrate_cfg = tmp_path / "orchestrate.toml"
-    plan_path = tmp_path / "plan.yaml"
+    endpoints = tmp_path / "endpoints.toml"
+    plan_path = tmp_path / "plan.toml"
     _write_job_config(job_cfg)
-    _write_orchestrate_config(
-        orchestrate_cfg,
+    _write_endpoint_registry(
+        endpoints,
         gpus=gpus,
         tensor_parallel_size=tensor_parallel_size,
         data_parallel_size=data_parallel_size,
     )
-    plan_path.write_text(
-        f"job_configs:\n  - {job_cfg.name}\norchestrate_config: {orchestrate_cfg.name}\n",
-        encoding="utf-8",
-    )
+    plan_path.write_text(f'job_configs = ["{job_cfg.name}"]\n', encoding="utf-8")
     tasks = expand_tasks(load_plan(plan_path))
     return tasks, ensure_run_bundle(
         tasks=tasks,
@@ -108,13 +105,11 @@ def test_ensure_run_bundle_rejects_output_root_from_different_run_id(tmp_path: P
 
 def test_ensure_run_bundle_rejects_orphaned_task_bundle_artifacts(tmp_path: Path) -> None:
     job_cfg = tmp_path / "job.toml"
-    orchestrate_cfg = tmp_path / "orchestrate.toml"
-    plan_path = tmp_path / "plan.yaml"
+    endpoints = tmp_path / "endpoints.toml"
+    plan_path = tmp_path / "plan.toml"
     _write_job_config(job_cfg)
-    _write_orchestrate_config(orchestrate_cfg)
-    plan_path.write_text(
-        f"job_configs:\n  - {job_cfg.name}\norchestrate_config: {orchestrate_cfg.name}\n", encoding="utf-8"
-    )
+    _write_endpoint_registry(endpoints)
+    plan_path.write_text(f'job_configs = ["{job_cfg.name}"]\n', encoding="utf-8")
     tasks = expand_tasks(load_plan(plan_path))
     orphan_root = tmp_path / "outputs" / "tasks" / "orphan-task"
     orphan_root.mkdir(parents=True)
@@ -153,7 +148,7 @@ def test_worker_cli_loads_task_and_allocation(tmp_path: Path, monkeypatch) -> No
             model_id=self._spec.model_id,
         )
 
-    monkeypatch.setattr("medarc_verifiers.orchestrate.worker._build_runtime_adapter", lambda runtime: object())
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.build_runtime_adapter", lambda runtime: object())
     monkeypatch.setattr("medarc_verifiers.orchestrate.worker.TaskWorker.run", fake_run)
 
     rc = worker_main(
@@ -164,8 +159,6 @@ def test_worker_cli_loads_task_and_allocation(tmp_path: Path, monkeypatch) -> No
             task_bundle.spec.output_paths.allocation_path,
             "--runtime",
             "pyxis",
-            "--run-id",
-            "bundle-job-foo",
             "--no-uv-run",
         ]
     )
@@ -181,7 +174,7 @@ def test_worker_cli_persists_failed_state(tmp_path: Path, monkeypatch) -> None:
     async def fake_run(self, *, manifest=None):
         raise RuntimeLaunchError("boom")
 
-    monkeypatch.setattr("medarc_verifiers.orchestrate.worker._build_runtime_adapter", lambda runtime: object())
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.build_runtime_adapter", lambda runtime: object())
     monkeypatch.setattr("medarc_verifiers.orchestrate.worker.TaskWorker.run", fake_run)
 
     rc = worker_main(
@@ -192,8 +185,6 @@ def test_worker_cli_persists_failed_state(tmp_path: Path, monkeypatch) -> None:
             task_bundle.spec.output_paths.allocation_path,
             "--runtime",
             "pyxis",
-            "--run-id",
-            "bundle-job-foo",
             "--no-uv-run",
         ]
     )
@@ -209,7 +200,7 @@ def test_worker_cli_rejects_allocation_incompatible_with_tp(tmp_path: Path, monk
     tasks, bundle = _bundle(tmp_path, gpus=3, tensor_parallel_size=3, data_parallel_size=None, allocated_gpus=4)
     task_bundle = bundle.tasks[tasks[0].task_id]
 
-    monkeypatch.setattr("medarc_verifiers.orchestrate.worker._build_runtime_adapter", lambda runtime: object())
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.build_runtime_adapter", lambda runtime: object())
 
     rc = worker_main(
         [
@@ -219,8 +210,6 @@ def test_worker_cli_rejects_allocation_incompatible_with_tp(tmp_path: Path, monk
             task_bundle.spec.output_paths.allocation_path,
             "--runtime",
             "pyxis",
-            "--run-id",
-            "bundle-job-foo",
             "--no-uv-run",
         ]
     )
@@ -252,7 +241,7 @@ def test_worker_cli_infers_allocated_gpus_from_visible_devices(tmp_path: Path, m
             model_id=self._spec.model_id,
         )
 
-    monkeypatch.setattr("medarc_verifiers.orchestrate.worker._build_runtime_adapter", lambda runtime: object())
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.build_runtime_adapter", lambda runtime: object())
     monkeypatch.setattr("medarc_verifiers.orchestrate.worker.TaskWorker.run", fake_run)
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,3,5")
 
@@ -264,8 +253,6 @@ def test_worker_cli_infers_allocated_gpus_from_visible_devices(tmp_path: Path, m
             task_bundle.spec.output_paths.allocation_path,
             "--runtime",
             "pyxis",
-            "--run-id",
-            "bundle-job-foo",
             "--no-uv-run",
         ]
     )

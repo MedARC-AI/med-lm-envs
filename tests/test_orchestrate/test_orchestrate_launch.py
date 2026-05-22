@@ -1,12 +1,15 @@
 from argparse import Namespace
 from pathlib import Path
 
+import pytest
+
 from medarc_verifiers.orchestrate.config import PlanConfig, expand_tasks, resolve_default_endpoints_path
 from medarc_verifiers.orchestrate.launch import (
     derive_local_max_parallel,
     resolve_launch_plan,
     resolve_runtime,
     resolve_status_target,
+    validate_slurm_plan_fields,
 )
 
 
@@ -140,6 +143,34 @@ def test_resolve_runtime_slurm_skips_local_probes(monkeypatch) -> None:
     )
 
     assert resolve_runtime(None, backend="slurm") == "pyxis"
+
+
+def test_slurm_plan_rejects_local_only_fields(tmp_path: Path) -> None:
+    plan = PlanConfig(job_configs=[tmp_path / "job.toml"], max_parallel=2)
+
+    with pytest.raises(ValueError, match="local-only fields: max_parallel"):
+        validate_slurm_plan_fields(plan)
+
+
+def test_slurm_plan_rejects_disabled_uv_run(tmp_path: Path) -> None:
+    plan = PlanConfig(job_configs=[tmp_path / "job.toml"], uv_run=False)
+
+    with pytest.raises(ValueError, match="local-only fields: uv_run"):
+        validate_slurm_plan_fields(plan)
+
+
+def test_slurm_plan_rejects_explicit_default_uv_run(tmp_path: Path) -> None:
+    plan = PlanConfig(job_configs=[tmp_path / "job.toml"], uv_run=True)
+
+    with pytest.raises(ValueError, match="local-only fields: uv_run"):
+        validate_slurm_plan_fields(plan)
+
+
+def test_slurm_plan_rejects_explicit_default_resume_flags(tmp_path: Path) -> None:
+    plan = PlanConfig(job_configs=[tmp_path / "job.toml"], resume=False, rerun_failed=False)
+
+    with pytest.raises(ValueError, match="local-only fields: resume, rerun_failed"):
+        validate_slurm_plan_fields(plan)
 
 
 def test_status_target_does_not_expand_tasks_or_probe(monkeypatch, tmp_path: Path) -> None:

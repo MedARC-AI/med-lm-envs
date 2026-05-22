@@ -3,10 +3,11 @@ from pathlib import Path
 import pytest
 
 from medarc_verifiers.orchestrate.cli import build_parser, main
-from medarc_verifiers.orchestrate.config import PlanConfig, TaskSpec
+from medarc_verifiers.orchestrate.config import TaskSpec
 from medarc_verifiers.orchestrate.launch import validate_local_schedule
 from medarc_verifiers.orchestrate.resources import GpuInfo, PortOnlyResourceManager, ResourceError
-from medarc_verifiers.orchestrate.run import OrchestratorOptions, OrchestratorRunner
+from medarc_verifiers.orchestrate.runtime import build_runtime_adapter
+from medarc_verifiers.orchestrate.run import OrchestratorRunner
 
 
 def _gpu(index: int) -> GpuInfo:
@@ -51,9 +52,9 @@ image = "fake"
 
 
 def _write_plan(tmp_path: Path, job_cfg: Path, *, runtime: str | None = None) -> Path:
-    plan = tmp_path / "plan.yaml"
-    runtime_line = f"runtime: {runtime}\n" if runtime else ""
-    plan.write_text(f"job_configs:\n  - {job_cfg.name}\n{runtime_line}", encoding="utf-8")
+    plan = tmp_path / "plan.toml"
+    runtime_line = f'runtime = "{runtime}"\n' if runtime else ""
+    plan.write_text(f'job_configs = ["{job_cfg.name}"]\n{runtime_line}', encoding="utf-8")
     return plan
 
 
@@ -65,6 +66,30 @@ def _task(tmp_path: Path, *, gpus: int) -> TaskSpec:
         model_id="Foo/Bar",
         orchestrate={"vllm": {"gpus": gpus, "tensor_parallel_size": gpus}, "container": {"image": "fake"}},
     )
+
+
+def _capture_runner_init(monkeypatch, captured: dict[str, object]) -> None:
+    def fake_init(
+        self,
+        plan,
+        tasks,
+        resource_manager,
+        *,
+        options,
+        runtime,
+        runtime_adapter=None,
+        uv_run=True,
+        use_dashboard=True,
+    ) -> None:
+        captured["plan"] = plan
+        captured["tasks"] = list(tasks)
+        captured["runner_resource_manager"] = resource_manager
+        captured["options"] = options
+        captured["runtime"] = runtime
+        captured["uv_run"] = uv_run
+
+    monkeypatch.setattr(OrchestratorRunner, "__init__", fake_init)
+    monkeypatch.setattr(OrchestratorRunner, "run", lambda self: None)
 
 
 @pytest.mark.parametrize("runtime", ["docker", "podman"])
@@ -124,17 +149,27 @@ def test_cli_validation_pyxis_requires_single_task_allocation_use(tmp_path: Path
 
 
 def test_root_parser_accepts_run_subcommand() -> None:
-    args = build_parser().parse_args(["run", "--plan", "plan.yaml", "--runtime", "podman"])
+    args = build_parser().parse_args(["run", "--plan", "plan.toml", "--runtime", "podman"])
     assert args.command == "run"
     assert args.runtime == "podman"
 
 
 def test_root_parser_rejects_removed_top_level_forms(capsys) -> None:
     with pytest.raises(SystemExit):
-        build_parser().parse_args(["--plan", "plan.yaml"])
+        build_parser().parse_args(["--plan", "plan.toml"])
     stderr = capsys.readouterr().err
     assert "usage: medarc-orchestrate" in stderr
-    assert "{run,local,slurm}" in stderr
+    assert "{run}" in stderr
+
+
+def test_cli_local_backend_rejects_slurm_flags() -> None:
+    with pytest.raises(SystemExit, match="does not accept Slurm flags"):
+        main(["run", "--job-config", "job.toml", "--node-gpus", "4", "--runtime", "pyxis"])
+
+
+def test_cli_slurm_backend_rejects_local_flags() -> None:
+    with pytest.raises(SystemExit, match="does not accept local launch flags"):
+        main(["run", "--backend", "slurm", "--job-config", "job.toml", "--no-uv-run"])
 
 
 def test_cli_runtime_precedence_cli_over_plan(monkeypatch, tmp_path: Path) -> None:
@@ -143,11 +178,8 @@ def test_cli_runtime_precedence_cli_over_plan(monkeypatch, tmp_path: Path) -> No
     plan_path = _write_plan(tmp_path, job_cfg, runtime="docker")
     captured: dict[str, object] = {}
 
-    def fake_run(self) -> None:
-        captured["runtime"] = self._runtime
-
     monkeypatch.setattr("medarc_verifiers.orchestrate.launch.discover_gpus", lambda: [_gpu(0)])
-    monkeypatch.setattr(OrchestratorRunner, "run", fake_run)
+    _capture_runner_init(monkeypatch, captured)
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2,3")
 
     assert main(["run", "--plan", str(plan_path), "--runtime", "pyxis"]) == 0
@@ -164,12 +196,8 @@ def test_cli_direct_job_configs_launch_without_plan(monkeypatch, tmp_path: Path)
     _write_endpoint_registry(tmp_path)
     captured: dict[str, object] = {}
 
-    def fake_run(self) -> None:
-        captured["runtime"] = self._runtime
-        captured["job_configs"] = list(self._plan.job_configs)
-
     monkeypatch.setattr("medarc_verifiers.orchestrate.launch.discover_gpus", lambda: [_gpu(0), _gpu(1)])
-    monkeypatch.setattr(OrchestratorRunner, "run", fake_run)
+    _capture_runner_init(monkeypatch, captured)
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2,3")
 
     rc = main(
@@ -188,7 +216,7 @@ def test_cli_direct_job_configs_launch_without_plan(monkeypatch, tmp_path: Path)
 
     assert rc == 0
     assert captured["runtime"] == "pyxis"
-    assert captured["job_configs"] == [(tmp_path / "job-a.toml").resolve(), (tmp_path / "job-b.toml").resolve()]
+    assert captured["plan"].job_configs == [(tmp_path / "job-a.toml").resolve(), (tmp_path / "job-b.toml").resolve()]
 
 
 def test_cli_default_run_id_uses_shared_generator(monkeypatch, tmp_path: Path) -> None:
@@ -196,13 +224,9 @@ def test_cli_default_run_id_uses_shared_generator(monkeypatch, tmp_path: Path) -
     _write_endpoint_registry(tmp_path)
     captured: dict[str, object] = {}
 
-    def fake_run(self) -> None:
-        captured["run_id"] = self._options.run_id
-        captured["output_root"] = self._options.output_root
-
     monkeypatch.setattr("medarc_verifiers.orchestrate.launch.discover_gpus", lambda: [_gpu(0)])
     monkeypatch.setattr("medarc_verifiers.orchestrate.launch.generate_run_id", lambda name: "shared-run-id")
-    monkeypatch.setattr(OrchestratorRunner, "run", fake_run)
+    _capture_runner_init(monkeypatch, captured)
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2,3")
 
     rc = main(
@@ -210,8 +234,8 @@ def test_cli_default_run_id_uses_shared_generator(monkeypatch, tmp_path: Path) -
     )
 
     assert rc == 0
-    assert captured["run_id"] == "shared-run-id"
-    assert captured["output_root"] == Path("outputs") / "orchestrate" / "shared-run-id"
+    assert captured["options"].run_id == "shared-run-id"
+    assert captured["options"].output_root == Path("outputs") / "orchestrate" / "shared-run-id"
 
 
 def test_cli_local_pyxis_derives_allocated_gpu_count_from_visible_devices(monkeypatch, tmp_path: Path) -> None:
@@ -219,10 +243,7 @@ def test_cli_local_pyxis_derives_allocated_gpu_count_from_visible_devices(monkey
     _write_endpoint_registry(tmp_path)
     captured: dict[str, object] = {}
 
-    def fake_run(self) -> None:
-        captured["allocated_gpu_count"] = self._options.allocated_gpu_count
-
-    monkeypatch.setattr(OrchestratorRunner, "run", fake_run)
+    _capture_runner_init(monkeypatch, captured)
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,2,4,6")
 
     rc = main(
@@ -230,7 +251,7 @@ def test_cli_local_pyxis_derives_allocated_gpu_count_from_visible_devices(monkey
     )
 
     assert rc == 0
-    assert captured["allocated_gpu_count"] == 4
+    assert captured["options"].allocated_gpu_count == 4
 
 
 def test_cli_prune_logs_override_reaches_runner(monkeypatch, tmp_path: Path) -> None:
@@ -238,10 +259,7 @@ def test_cli_prune_logs_override_reaches_runner(monkeypatch, tmp_path: Path) -> 
     _write_endpoint_registry(tmp_path)
     captured: dict[str, object] = {}
 
-    def fake_run(self) -> None:
-        captured["prune_logs_on_success"] = self._options.prune_logs_on_success
-
-    monkeypatch.setattr(OrchestratorRunner, "run", fake_run)
+    _capture_runner_init(monkeypatch, captured)
     monkeypatch.setenv("MEDARC_ALLOCATED_GPU_COUNT", "1")
 
     rc = main(
@@ -256,7 +274,7 @@ def test_cli_prune_logs_override_reaches_runner(monkeypatch, tmp_path: Path) -> 
     )
 
     assert rc == 0
-    assert captured["prune_logs_on_success"] is True
+    assert captured["options"].prune_logs_on_success is True
 
 
 def test_cli_local_pyxis_dry_run_does_not_require_allocation_env(monkeypatch, tmp_path: Path, capsys) -> None:
@@ -303,13 +321,10 @@ def test_cli_local_podman_uses_gpu_resource_manager(monkeypatch, tmp_path: Path)
             captured["resource_manager"] = "port-only"
             captured["port_range"] = port_range
 
-    def fake_run(self) -> None:
-        captured["runtime"] = self._runtime
-
     monkeypatch.setattr("medarc_verifiers.orchestrate.launch.discover_gpus", lambda: [_gpu(0)])
     monkeypatch.setattr("medarc_verifiers.orchestrate.cli.ResourceManager", FakeResourceManager)
     monkeypatch.setattr("medarc_verifiers.orchestrate.cli.PortOnlyResourceManager", FakePortOnlyResourceManager)
-    monkeypatch.setattr(OrchestratorRunner, "run", fake_run)
+    _capture_runner_init(monkeypatch, captured)
 
     rc = main(
         ["run", "--job-config", str(job_cfg), "--runtime", "podman"]
@@ -327,9 +342,6 @@ def test_cli_defaults_to_podman_when_docker_probe_fails(monkeypatch, tmp_path: P
     _write_endpoint_registry(tmp_path)
     captured: dict[str, object] = {}
 
-    def fake_run(self) -> None:
-        captured["runtime"] = self._runtime
-
     monkeypatch.setattr(
         "medarc_verifiers.orchestrate.runtime_probe.docker_available",
         lambda: (False, "docker unavailable"),
@@ -343,34 +355,16 @@ def test_cli_defaults_to_podman_when_docker_probe_fails(monkeypatch, tmp_path: P
         lambda: (_ for _ in ()).throw(AssertionError("pyxis probe should not run after podman")),
     )
     monkeypatch.setattr("medarc_verifiers.orchestrate.launch.discover_gpus", lambda: [_gpu(0)])
-    monkeypatch.setattr(OrchestratorRunner, "run", fake_run)
+    _capture_runner_init(monkeypatch, captured)
 
     assert main(["run", "--job-config", str(job_cfg)]) == 0
     assert captured["runtime"] == "podman"
 
 
-def test_runner_builds_podman_adapter_by_runtime(tmp_path: Path) -> None:
-    job_cfg = _write_eval_config(tmp_path)
-    task = TaskSpec(
-        task_id="task-1",
-        job_config_path=job_cfg,
-        model_key="Foo-Bar",
-        model_id="Foo/Bar",
-        orchestrate={"vllm": {"gpus": 1, "tensor_parallel_size": 1, "serve": {}}, "container": {"image": "fake"}},
-    )
-    runner = OrchestratorRunner(
-        PlanConfig(job_configs=[job_cfg]),
-        [task],
-        PortOnlyResourceManager(port_range=(9000, 9010)),
-        options=OrchestratorOptions(
-            run_id="run-1", output_root=tmp_path / "outputs", readiness_timeout_s=1, max_parallel=1
-        ),
-        runtime="podman",
-        use_dashboard=False,
-    )
+def test_runtime_builds_podman_adapter_by_runtime() -> None:
+    adapter = build_runtime_adapter("podman")
 
-    assert runner._runtime == "podman"
-    assert runner._runtime_adapter.__class__.__name__ == "PodmanRuntimeAdapter"
+    assert adapter.__class__.__name__ == "PodmanRuntimeAdapter"
 
 
 def test_cli_kill_orphans_uses_podman_cleanup_for_explicit_podman_runtime(monkeypatch, capsys) -> None:
@@ -400,8 +394,7 @@ def test_cli_kill_orphans_uses_podman_cleanup_for_explicit_podman_runtime(monkey
     assert capsys.readouterr().out.strip() == "podman-task"
 
 
-def test_cli_kill_orphans_defaults_to_docker_without_runtime_probes(monkeypatch, capsys) -> None:
-    calls: list[tuple[str, str | None]] = []
+def test_cli_kill_orphans_requires_runtime_without_slurm_backend(monkeypatch) -> None:
     monkeypatch.setattr(
         "medarc_verifiers.orchestrate.runtime_probe.docker_available",
         lambda: (_ for _ in ()).throw(AssertionError("docker probe should not run for cleanup")),
@@ -410,20 +403,46 @@ def test_cli_kill_orphans_defaults_to_docker_without_runtime_probes(monkeypatch,
         "medarc_verifiers.orchestrate.runtime_probe.podman_available",
         lambda: (_ for _ in ()).throw(AssertionError("podman probe should not run for cleanup")),
     )
+
+    with pytest.raises(ValueError, match="requires --runtime"):
+        main(["run", "--kill-orphans"])
+
+
+def test_cli_kill_orphans_ignores_plan_runtime_requirement(monkeypatch, tmp_path: Path) -> None:
+    job_cfg = _write_eval_config(tmp_path)
+    _write_endpoint_registry(tmp_path)
+    plan_path = _write_plan(tmp_path, job_cfg, runtime="podman")
     monkeypatch.setattr(
-        "medarc_verifiers.orchestrate.cli.cleanup_podman_orphans",
-        lambda run_id=None: calls.append(("podman", run_id)) or ["podman-task"],
+        "medarc_verifiers.orchestrate.runtime_probe.podman_available",
+        lambda: (_ for _ in ()).throw(AssertionError("cleanup should not probe")),
     )
+
+    with pytest.raises(ValueError, match="requires --runtime"):
+        main(["run", "--plan", str(plan_path), "--kill-orphans"])
+
+
+def test_cli_kill_orphans_slurm_backend_resolves_pyxis_without_cleanup(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         "medarc_verifiers.orchestrate.cli.cleanup_docker_orphans",
-        lambda run_id=None: calls.append(("docker", run_id)) or ["docker-task"],
+        lambda run_id=None: (_ for _ in ()).throw(AssertionError("docker cleanup should not run for slurm")),
+    )
+    monkeypatch.setattr(
+        "medarc_verifiers.orchestrate.cli.cleanup_podman_orphans",
+        lambda run_id=None: (_ for _ in ()).throw(AssertionError("podman cleanup should not run for slurm")),
     )
 
-    rc = main(["run", "--kill-orphans"])
+    assert main(["run", "--backend", "slurm", "--kill-orphans"]) == 0
+    assert capsys.readouterr().out.strip() == ""
 
-    assert rc == 0
-    assert calls == [("docker", None)]
-    assert capsys.readouterr().out.strip() == "docker-task"
+
+def test_cli_kill_orphans_slurm_backend_rejects_runtime(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "medarc_verifiers.orchestrate.cli.cleanup_docker_orphans",
+        lambda run_id=None: (_ for _ in ()).throw(AssertionError("cleanup should not run")),
+    )
+
+    with pytest.raises(SystemExit, match="does not accept local launch flags"):
+        main(["run", "--backend", "slurm", "--kill-orphans", "--runtime", "pyxis"])
 
 
 def test_port_only_resource_manager_skips_gpus() -> None:

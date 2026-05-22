@@ -167,30 +167,26 @@ class ResolvedTaskSpec:
     pyxis_srun_extra_args: list[str]
     serve_args: Mapping[str, Any]
     sidecars: list[SidecarSpec]
-    restart_source: str | None
-    restart_source_strategy: str
     output_paths: TaskOutputPaths
     endpoints_path: str | None = None
     orchestrate_registry_path: str | None = None
     orchestrate_registry_checksum: str | None = None
-    orchestrate_registry_schema_version: int | None = None
     matched_model: Mapping[str, Any] = field(default_factory=dict)
     eval_images_registry_path: str | None = None
     eval_images_registry_checksum: str | None = None
-    eval_images_registry_schema_version: int | None = None
     selected_eval_images: list[Mapping[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, payload: Mapping[str, Any], *, allow_missing_v2_fields: bool = False) -> "ResolvedTaskSpec":
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ResolvedTaskSpec":
         output_paths = payload.get("output_paths")
         if not isinstance(output_paths, Mapping):
             raise ValueError("Resolved task spec output_paths must be a mapping.")
-        if "sidecars" not in payload and not allow_missing_v2_fields:
+        if "sidecars" not in payload:
             raise ValueError("Resolved task spec is missing required sidecars field.")
-        if "sidecar_dir" not in output_paths and not allow_missing_v2_fields:
+        if "sidecar_dir" not in output_paths:
             raise ValueError("Resolved task spec output_paths is missing required sidecar_dir field.")
         sidecars = [_sidecar_from_dict(item) for item in payload.get("sidecars", [])]
         root = str(output_paths["root"])
@@ -212,7 +208,7 @@ class ResolvedTaskSpec:
                 int(payload["data_parallel_size"]) if payload.get("data_parallel_size") is not None else None
             ),
             container_image=str(payload["container_image"]),
-            container_port=int(payload.get("container_port") or 8000),
+            container_port=int(payload["container_port"]),
             container_ipc_mode=(
                 str(payload["container_ipc_mode"]) if payload.get("container_ipc_mode") is not None else None
             ),
@@ -223,8 +219,6 @@ class ResolvedTaskSpec:
             pyxis_srun_extra_args=[str(item) for item in payload.get("pyxis_srun_extra_args", [])],
             serve_args=dict(payload.get("serve_args") or {}),
             sidecars=sidecars,
-            restart_source=(str(payload["restart_source"]) if payload.get("restart_source") is not None else None),
-            restart_source_strategy=str(payload.get("restart_source_strategy") or "none"),
             output_paths=TaskOutputPaths(
                 root=root,
                 task_spec_path=str(output_paths["task_spec_path"]),
@@ -247,11 +241,6 @@ class ResolvedTaskSpec:
                 if payload.get("orchestrate_registry_checksum") is not None
                 else None
             ),
-            orchestrate_registry_schema_version=(
-                int(payload["orchestrate_registry_schema_version"])
-                if payload.get("orchestrate_registry_schema_version") is not None
-                else None
-            ),
             matched_model=dict(payload.get("matched_model") or {}),
             eval_images_registry_path=(
                 str(payload["eval_images_registry_path"])
@@ -261,11 +250,6 @@ class ResolvedTaskSpec:
             eval_images_registry_checksum=(
                 str(payload["eval_images_registry_checksum"])
                 if payload.get("eval_images_registry_checksum") is not None
-                else None
-            ),
-            eval_images_registry_schema_version=(
-                int(payload["eval_images_registry_schema_version"])
-                if payload.get("eval_images_registry_schema_version") is not None
                 else None
             ),
             selected_eval_images=[dict(item) for item in payload.get("selected_eval_images", [])],
@@ -295,10 +279,6 @@ class ExecutionAllocation:
 class RuntimeState:
     task_id: str
     state: str = "pending"
-    restart_source: str | None = None
-    restart_source_strategy: str = "none"
-    bench_run_id: str | None = None
-    bench_run_dir: str | None = None
     updated_at: str = field(default_factory=_now)
 
     def to_dict(self) -> dict[str, Any]:
@@ -321,9 +301,6 @@ class RunBundleEntry:
     task_spec_checksum: str
     allocation_path: str
     state_path: str
-    restart_source: str | None = None
-    restart_source_strategy: str = "none"
-
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -381,10 +358,6 @@ class BundlePlan:
     tasks: Mapping[str, PlannedTaskBundle]
 
 
-def default_output_root(run_id: str) -> Path:
-    return Path("outputs") / "orchestrate" / run_id
-
-
 def run_manifest_path(output_root: Path) -> Path:
     return output_root / "run_manifest.json"
 
@@ -411,10 +384,6 @@ def load_runtime_state(path: Path) -> RuntimeState | None:
     return RuntimeState(
         task_id=str(payload["task_id"]),
         state=str(payload.get("state") or "pending"),
-        restart_source=(str(payload["restart_source"]) if payload.get("restart_source") is not None else None),
-        restart_source_strategy=str(payload.get("restart_source_strategy") or "none"),
-        bench_run_id=(str(payload["bench_run_id"]) if payload.get("bench_run_id") is not None else None),
-        bench_run_dir=(str(payload["bench_run_dir"]) if payload.get("bench_run_dir") is not None else None),
         updated_at=str(payload.get("updated_at") or _now()),
     )
 
@@ -494,7 +463,6 @@ def ensure_run_bundle(
         run_id=run_id,
         existing_manifest=existing_manifest,
     )
-    existing_entries = existing.entry_map() if existing else {}
     bundles: dict[str, PlannedTaskBundle] = {}
     manifest_entries: list[RunBundleEntry] = []
 
@@ -505,7 +473,6 @@ def ensure_run_bundle(
             mode=mode,
             runtime=runtime,
             allocation_default=allocation_defaults.get(task.task_id) if allocation_defaults else None,
-            existing_entry=existing_entries.get(task.task_id),
         )
         bundles[task.task_id] = bundle
         manifest_entries.append(
@@ -524,8 +491,6 @@ def ensure_run_bundle(
                 task_spec_checksum=_sha256_file(Path(bundle.spec.output_paths.task_spec_path)),
                 allocation_path=bundle.spec.output_paths.allocation_path,
                 state_path=bundle.spec.output_paths.state_path,
-                restart_source=bundle.state.restart_source,
-                restart_source_strategy=bundle.state.restart_source_strategy,
             )
         )
 
@@ -572,7 +537,6 @@ def _ensure_task_bundle(
     mode: str,
     runtime: str,
     allocation_default: ExecutionAllocation | None,
-    existing_entry: RunBundleEntry | None,
 ) -> PlannedTaskBundle:
     paths = task_bundle_paths(output_root, task.task_id)
     paths.root.mkdir(parents=True, exist_ok=True)
@@ -603,18 +567,8 @@ def _ensure_task_bundle(
         spec = expected_spec
 
     state = load_runtime_state(paths.state_path)
-    resolved_restart_source, resolved_restart_strategy = _resolve_restart_source(
-        task=task,
-        spec=spec,
-        state=state,
-        existing_entry=existing_entry,
-    )
     if state is None:
-        state = RuntimeState(
-            task_id=task.task_id,
-            restart_source=resolved_restart_source,
-            restart_source_strategy=resolved_restart_strategy,
-        )
+        state = RuntimeState(task_id=task.task_id)
         write_runtime_state(paths.state_path, state)
     allocation = load_execution_allocation(paths.allocation_path)
     if allocation is None:
@@ -622,18 +576,6 @@ def _ensure_task_bundle(
         write_execution_allocation(paths.allocation_path, allocation)
     return PlannedTaskBundle(task=task, spec=spec, paths=paths, allocation=allocation, state=state)
 
-
-def _resolve_restart_source(
-    *,
-    task: TaskSpec,
-    spec: ResolvedTaskSpec,
-    state: RuntimeState | None,
-    existing_entry: RunBundleEntry | None,
-) -> tuple[str | None, str]:
-    del task, spec, existing_entry
-    if state is not None and state.restart_source:
-        return state.restart_source, state.restart_source_strategy or "runtime_state"
-    return None, "none"
 
 
 def _build_task_spec(
@@ -667,13 +609,17 @@ def _build_task_spec(
         original_job_config_checksum=source_checksum,
         bundled_eval_config_path=str(paths.eval_config_path),
         bundled_eval_config_checksum=bundled_checksum,
-        gpus=int(model_cfg.get("gpus", 1) or 1),
-        tensor_parallel_size=int(model_cfg.get("tensor_parallel_size", 1) or 1),
+        gpus=_required_int(model_cfg.get("gpus"), f"Task {task.task_id} orchestrate.vllm.gpus"),
+        tensor_parallel_size=_required_int(
+            model_cfg.get("tensor_parallel_size"), f"Task {task.task_id} orchestrate.vllm.tensor_parallel_size"
+        ),
         data_parallel_size=(
             int(model_cfg["data_parallel_size"]) if model_cfg.get("data_parallel_size") is not None else None
         ),
-        container_image=str(container_cfg.get("image", "")),
-        container_port=int(container_cfg.get("container_port", 8000) or 8000),
+        container_image=_required_string(container_cfg.get("image"), f"Task {task.task_id} orchestrate.container.image"),
+        container_port=_required_int(
+            container_cfg.get("container_port"), f"Task {task.task_id} orchestrate.container.container_port"
+        ),
         container_ipc_mode=str(container_cfg.get("ipc_mode")) if container_cfg.get("ipc_mode") is not None else None,
         container_env_file=(
             str(container_cfg["env_file"]).strip() if container_cfg.get("env_file") is not None else None
@@ -682,8 +628,6 @@ def _build_task_spec(
         pyxis_srun_extra_args=pyxis_srun_extra_args,
         serve_args=dict(model_cfg.get("serve") or {}),
         sidecars=sidecars,
-        restart_source=None,
-        restart_source_strategy="none",
         output_paths=TaskOutputPaths(
             root=str(paths.root),
             task_spec_path=str(paths.task_spec_path),
@@ -698,11 +642,9 @@ def _build_task_spec(
         endpoints_path=str(task.endpoints_path) if task.endpoints_path is not None else None,
         orchestrate_registry_path=task.orchestrate_registry.path,
         orchestrate_registry_checksum=task.orchestrate_registry.checksum,
-        orchestrate_registry_schema_version=task.orchestrate_registry.schema_version,
         matched_model=dict(task.matched_model),
         eval_images_registry_path=task.eval_images_registry.path,
         eval_images_registry_checksum=task.eval_images_registry.checksum,
-        eval_images_registry_schema_version=task.eval_images_registry.schema_version,
         selected_eval_images=[dict(item) for item in task.eval_images],
     )
     return bundled_bytes, spec
@@ -918,6 +860,12 @@ def _required_string(value: object, label: str) -> str:
     return value
 
 
+def _required_int(value: object, label: str) -> int:
+    if value is None:
+        raise ValueError(f"{label} is required.")
+    return int(value)
+
+
 def _required_string_list(value: object, label: str) -> list[str]:
     items = _optional_string_list(value, label)
     if not items:
@@ -991,7 +939,6 @@ def _write_task_bundle(*, paths: TaskBundlePaths, eval_payload: bytes, spec: Res
     _write_snapshot_toml(
         paths.orchestrate_snapshot_path,
         {
-            "schema_version": spec.orchestrate_registry_schema_version,
             "registry_path": spec.orchestrate_registry_path,
             "registry_checksum": spec.orchestrate_registry_checksum,
             "model": spec.matched_model,
@@ -1000,7 +947,6 @@ def _write_task_bundle(*, paths: TaskBundlePaths, eval_payload: bytes, spec: Res
     _write_snapshot_toml(
         paths.eval_images_snapshot_path,
         {
-            "schema_version": spec.eval_images_registry_schema_version,
             "registry_path": spec.eval_images_registry_path,
             "registry_checksum": spec.eval_images_registry_checksum,
             "eval_image": spec.selected_eval_images,
@@ -1031,7 +977,6 @@ __all__ = [
     "SidecarSpec",
     "SPEC_VERSION",
     "TaskBundlePaths",
-    "default_output_root",
     "ensure_run_bundle",
     "load_execution_allocation",
     "load_run_bundle_manifest",

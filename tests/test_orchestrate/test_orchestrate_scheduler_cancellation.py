@@ -37,7 +37,7 @@ async def test_scheduler_cancellation_cleans_waiters(tmp_path: Path) -> None:
             job_config_path=tmp_path / "job-1.yaml",
             model_key="foo",
             model_id="Foo/Bar",
-            orchestrate={"vllm": {"gpus": 1}},
+            orchestrate={"vllm": {"gpus": 1, "tensor_parallel_size": 1}},
         )
     ]
     scheduler = TaskScheduler(DummyResourceManager(), max_parallel=1)

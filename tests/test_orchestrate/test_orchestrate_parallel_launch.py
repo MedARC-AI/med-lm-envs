@@ -10,8 +10,6 @@ from medarc_verifiers.orchestrate.config import PlanConfig, TaskSpec
 from medarc_verifiers.orchestrate.resources import ResourceError, ResourceManager
 from medarc_verifiers.orchestrate.run import OrchestratorOptions, OrchestratorRunner
 from medarc_verifiers.orchestrate.runtime import RuntimeHandle
-from medarc_verifiers.orchestrate.slurm.plan import slug_task_id
-from medarc_verifiers.orchestrate.task_naming import task_root_for_id
 
 
 class DummyResourceManager:
@@ -134,7 +132,7 @@ rollouts_per_example = 1
         model_key=task_id.replace("/", "-"),
         model_id=f"Foo/{task_id}",
         orchestrate={
-            "container": {"image": "fake"},
+            "container": {"image": "fake", "container_port": 8000},
             "vllm": {
                 "gpus": gpus,
                 "tensor_parallel_size": tensor_parallel_size,
@@ -314,7 +312,6 @@ async def test_parallel_launch_records_gpu_accounting_and_dp_args(
     ]
 
     manifest = json.loads((options.output_root / "tasks" / "task-1" / "runtime" / "task_manifest.json").read_text())
-    assert manifest["bench_run_id"] is None
     assert manifest["allocated_gpus"] == 8
     assert manifest["gpus"] == 8
     assert manifest["tensor_parallel_size"] == 2
@@ -324,132 +321,6 @@ async def test_parallel_launch_records_gpu_accounting_and_dp_args(
     assert manifest["gpu_hours"] is not None
 
 
-@pytest.mark.asyncio
-async def test_parallel_launch_does_not_duplicate_task_slug_in_bench_run_id(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    task = _task(tmp_path, "task-1", gpus=1, tensor_parallel_size=1, data_parallel_size=1)
-    plan = PlanConfig(job_configs=[task.job_config_path])
-    options = OrchestratorOptions(
-        run_id="run-1-task-1",
-        output_root=tmp_path / "outputs",
-        readiness_timeout_s=1,
-        max_parallel=1,
-    )
-    adapter = FakeRuntimeAdapter()
-    runner = OrchestratorRunner(
-        plan,
-        [task],
-        DummyResourceManager(),
-        options=options,
-        runtime="docker",
-        runtime_adapter=adapter,
-        use_dashboard=False,
-    )
-
-    async def fake_wait_for_readiness_async(*args, **kwargs):
-        class Result:
-            ready = True
-            elapsed_s = 0.1
-            attempts = 1
-            last_error = None
-
-        return Result()
-
-    async def fake_start_benchmark(*args, **kwargs):
-        class Proc:
-            pass
-
-        return Proc()
-
-    async def fake_wait_benchmark(proc):
-        class Result:
-            exit_code = 0
-            duration_s = 0.0
-            terminated = False
-
-        return Result()
-
-    async def fake_to_thread(func, /, *args, **kwargs):
-        return func(*args, **kwargs)
-
-    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_for_readiness_async", fake_wait_for_readiness_async)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.start_benchmark", fake_start_benchmark)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_benchmark", fake_wait_benchmark)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.run._register_signal_handlers", lambda loop, handler: None)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.asyncio.to_thread", fake_to_thread)
-
-    await runner._run_async()
-
-    manifest = json.loads((options.output_root / "tasks" / "task-1" / "runtime" / "task_manifest.json").read_text())
-    assert manifest["bench_run_id"] is None
-
-
-@pytest.mark.asyncio
-async def test_parallel_launch_does_not_duplicate_hashed_slurm_task_slug_in_bench_run_id(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    task_id = "job-qwen-3.0_6b-thinking:qwen-3.0_6b-thinking"
-    task = _task(tmp_path, task_id, gpus=1, tensor_parallel_size=1, data_parallel_size=1)
-    slurm_style_run_id = f"qwen-small-test-20260315-171932-{slug_task_id(task_id)}"
-    plan = PlanConfig(job_configs=[task.job_config_path])
-    options = OrchestratorOptions(
-        run_id=slurm_style_run_id,
-        output_root=tmp_path / "outputs",
-        readiness_timeout_s=1,
-        max_parallel=1,
-    )
-    adapter = FakeRuntimeAdapter()
-    runner = OrchestratorRunner(
-        plan,
-        [task],
-        DummyResourceManager(),
-        options=options,
-        runtime="docker",
-        runtime_adapter=adapter,
-        use_dashboard=False,
-    )
-
-    async def fake_wait_for_readiness_async(*args, **kwargs):
-        class Result:
-            ready = True
-            elapsed_s = 0.1
-            attempts = 1
-            last_error = None
-
-        return Result()
-
-    async def fake_start_benchmark(*args, **kwargs):
-        class Proc:
-            pass
-
-        return Proc()
-
-    async def fake_wait_benchmark(proc):
-        class Result:
-            exit_code = 0
-            duration_s = 0.0
-            terminated = False
-
-        return Result()
-
-    async def fake_to_thread(func, /, *args, **kwargs):
-        return func(*args, **kwargs)
-
-    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_for_readiness_async", fake_wait_for_readiness_async)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.start_benchmark", fake_start_benchmark)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_benchmark", fake_wait_benchmark)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.run._register_signal_handlers", lambda loop, handler: None)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.asyncio.to_thread", fake_to_thread)
-
-    await runner._run_async()
-
-    manifest = json.loads(
-        (task_root_for_id(options.output_root, task.task_id) / "runtime" / "task_manifest.json").read_text()
-    )
-    assert manifest["bench_run_id"] is None
 
 
 @pytest.mark.asyncio
@@ -891,8 +762,7 @@ async def test_runner_uses_task_local_bench_output_without_restart_flags(tmp_pat
     bundled_payload = (options.output_root / "tasks" / "task-1" / "eval-config.toml").read_text(encoding="utf-8")
     assert "restart" not in bundled_payload
     manifest = json.loads((options.output_root / "tasks" / "task-1" / "runtime" / "task_manifest.json").read_text())
-    assert manifest["bench_run_dir"] is None
-    assert manifest["restart_source"] is None
+    assert "bench_run_dir" not in manifest
+    assert "restart_source" not in manifest
     state = load_runtime_state(options.output_root / "tasks" / "task-1" / "runtime" / "state.json")
     assert state is not None
-    assert state.restart_source is None

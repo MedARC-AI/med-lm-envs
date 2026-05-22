@@ -37,7 +37,15 @@ from medarc_verifiers.orchestrate.docker_vllm import (
     write_container_request,
 )
 from medarc_verifiers.orchestrate.resources import parse_index_range
-from medarc_verifiers.orchestrate.runtime import LogStreamer, RuntimeAdapter, RuntimeHandle, RuntimeLaunchError
+from medarc_verifiers.orchestrate.runtime import (
+    LogStreamer,
+    RuntimeAdapter,
+    RuntimeHandle,
+    RuntimeLaunchError,
+    RuntimeName,
+    build_runtime_adapter,
+    normalize_runtime,
+)
 from medarc_verifiers.orchestrate.state import (
     JobState,
     TaskManifest,
@@ -70,8 +78,7 @@ StreamerRemoval = Callable[[str], None]
 
 @dataclass(frozen=True)
 class WorkerOptions:
-    run_id: str
-    runtime: str
+    runtime: RuntimeName
     readiness_timeout_s: int
     command_template: str | None = None
     env_file: Path | None = None
@@ -104,8 +111,8 @@ class TaskWorker:
         self._spec = task_spec
         self._allocation = _normalize_allocation(allocation, task_spec=task_spec)
         self._options = options
-        self._runtime = _normalize_runtime(options.runtime or task_spec.runtime)
-        self._runtime_adapter = runtime_adapter or _build_runtime_adapter(self._runtime)
+        self._runtime = normalize_runtime(options.runtime)
+        self._runtime_adapter = runtime_adapter or build_runtime_adapter(self._runtime)
         self._command_template = options.command_template or (
             _COMMAND_TEMPLATE_UV if options.uv_run else _COMMAND_TEMPLATE_BARE
         )
@@ -187,8 +194,9 @@ class TaskWorker:
         )
         env = _load_runtime_env(self._spec, allocation=self._allocation, options=self._options)
         volume_mounts = normalize_volume_mounts(self._spec.volume_mounts)
-        labels = {"orchestrator.run_id": self._options.run_id, "orchestrator.task_id": self._spec.task_id}
-        container_name = sanitize_container_name(f"vllm-{self._options.run_id}-{self._spec.task_id}")
+        run_label = _run_label_from_task_root(self._spec)
+        labels = {"orchestrator.run_id": run_label, "orchestrator.task_id": self._spec.task_id}
+        container_name = sanitize_container_name(f"vllm-{run_label}-{self._spec.task_id}")
         manifest.container_name = container_name
 
         request_payload = {
@@ -274,7 +282,6 @@ class TaskWorker:
                 "model_key": _command_template_value(self._spec.model_key),
                 "model_id": _command_template_value(self._spec.model_id),
                 "output_dir": _command_template_value(paths.bench_dir),
-                "run_id": _command_template_value(self._options.run_id),
                 "task_id": _command_template_value(self._spec.task_id),
                 "job_config_path": _command_template_value(self._spec.bundled_eval_config_path),
                 "endpoints_arg": endpoints_arg,
@@ -284,7 +291,6 @@ class TaskWorker:
                 log(f"JOB bench-quarantine task={self._spec.task_id} old={old_path} archived={archived_path}")
 
             command = render_command(self._command_template, command_context)
-            manifest.bench_run_id = None
             manifest.bench_command = shlex.join(command)
             log(f"JOB bench-start task={self._spec.task_id} cmd={_shorten(manifest.bench_command)}")
             state_handler(manifest, paths, JobState.running)
@@ -344,7 +350,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--task", type=Path, required=True, help="Path to bundled task.yaml.")
     parser.add_argument("--allocation", type=Path, required=True, help="Path to execution allocation JSON.")
     parser.add_argument("--runtime", choices=("docker", "podman", "pyxis"), required=True)
-    parser.add_argument("--run-id", required=True, help="Run identifier used for the inner bench run.")
     parser.add_argument("--env-file", type=Path, default=None)
     parser.add_argument("--readiness-timeout-s", type=int, default=1800)
     parser.add_argument("--prune-logs-on-success", action="store_true")
@@ -360,8 +365,7 @@ def main(argv: list[str] | None = None) -> int:
     if allocation is None:
         raise FileNotFoundError(f"Execution allocation not found: {args.allocation}")
     options = WorkerOptions(
-        run_id=args.run_id,
-        runtime=args.runtime,
+        runtime=normalize_runtime(args.runtime),
         readiness_timeout_s=args.readiness_timeout_s,
         env_file=args.env_file.expanduser().resolve() if args.env_file is not None else None,
         prune_logs_on_success=bool(args.prune_logs_on_success),
@@ -392,6 +396,14 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _run_label_from_task_root(spec: ResolvedTaskSpec) -> str:
+    root = Path(spec.output_paths.root)
+    try:
+        return root.parents[1].name
+    except IndexError:
+        return root.parent.name or spec.task_slug
+
+
 def _default_state_handler(*, paths: TaskPaths) -> StateHandler:
     summary_path = paths.root.parents[1] / "summary.json"
 
@@ -409,10 +421,6 @@ def _default_state_handler(*, paths: TaskPaths) -> StateHandler:
             RuntimeState(
                 task_id=manifest.task_id,
                 state=manifest.state,
-                restart_source=manifest.restart_source,
-                restart_source_strategy="runtime_state" if manifest.restart_source else "none",
-                bench_run_id=manifest.bench_run_id,
-                bench_run_dir=manifest.bench_run_dir,
             ),
         )
         upsert_summary_entry(summary_path, manifest)
@@ -609,29 +617,6 @@ def _load_env_file(path: object, *, base_dir: Path) -> dict[str, str]:
         raise RuntimeLaunchError(f"env_file not found: {env_path}")
     values = dotenv_values(env_path)
     return {key: value for key, value in values.items() if value is not None}
-
-
-def _normalize_runtime(value: str) -> str:
-    runtime = str(value).strip().lower()
-    if runtime not in {"docker", "podman", "pyxis"}:
-        raise ValueError(f"Unsupported runtime {value!r}; expected 'docker', 'podman', or 'pyxis'.")
-    return runtime
-
-
-def _build_runtime_adapter(runtime: str) -> RuntimeAdapter:
-    if runtime == "docker":
-        from medarc_verifiers.orchestrate.docker_vllm import DockerRuntimeAdapter
-
-        return DockerRuntimeAdapter()
-    if runtime == "podman":
-        from medarc_verifiers.orchestrate.podman_vllm import PodmanRuntimeAdapter
-
-        return PodmanRuntimeAdapter()
-    if runtime == "pyxis":
-        from medarc_verifiers.orchestrate.pyxis_vllm import PyxisRuntimeAdapter
-
-        return PyxisRuntimeAdapter()
-    raise ValueError(f"Unsupported runtime {runtime!r}.")
 
 
 def _parse_time(value: str | None):

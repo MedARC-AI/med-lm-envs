@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Protocol
+from typing import Literal, Mapping, Protocol
+
+RuntimeName = Literal["docker", "podman", "pyxis"]
 
 
 class RuntimeLaunchError(RuntimeError):
@@ -50,4 +52,35 @@ class RuntimeAdapter(Protocol):
     def teardown(self, handle: RuntimeHandle) -> None: ...
 
 
-__all__ = ["LogStreamer", "RuntimeAdapter", "RuntimeHandle", "RuntimeLaunchError"]
+def normalize_runtime(value: str) -> RuntimeName:
+    runtime = str(value).strip().lower()
+    if runtime not in {"docker", "podman", "pyxis"}:
+        raise ValueError(f"Unsupported runtime {value!r}; expected 'docker', 'podman', or 'pyxis'.")
+    return runtime  # type: ignore[return-value]
+
+
+def build_runtime_adapter(runtime: RuntimeName) -> RuntimeAdapter:
+    if runtime == "docker":
+        from medarc_verifiers.orchestrate.docker_vllm import DockerRuntimeAdapter
+
+        return DockerRuntimeAdapter()
+    if runtime == "podman":
+        from medarc_verifiers.orchestrate.podman_vllm import PodmanRuntimeAdapter
+
+        return PodmanRuntimeAdapter()
+    if runtime == "pyxis":
+        from medarc_verifiers.orchestrate.pyxis_vllm import PyxisRuntimeAdapter
+
+        return PyxisRuntimeAdapter()
+    raise ValueError(f"Unsupported runtime {runtime!r}.")
+
+
+__all__ = [
+    "LogStreamer",
+    "RuntimeAdapter",
+    "RuntimeHandle",
+    "RuntimeLaunchError",
+    "RuntimeName",
+    "build_runtime_adapter",
+    "normalize_runtime",
+]
