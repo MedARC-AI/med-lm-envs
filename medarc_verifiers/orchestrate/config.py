@@ -15,11 +15,32 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from medarc_verifiers.cli.eval_identity import BASE_VARIANT_ID, plan_eval_paths, slug_component
 from medarc_verifiers.cli.upstream_eval import EvalConfigOverrides, build_eval_identity_payload, load_toml_eval_configs
 
+DEFAULT_CONTAINER_CONFIG: Mapping[str, Any] = {
+    "image": "vllm/vllm-openai:latest",
+    "container_port": 8000,
+    "ipc_mode": "host",
+}
+DEFAULT_SLURM_CONFIG: Mapping[str, Any] = {
+    "qos": "low",
+    "nice": 500,
+    "slurm_resume": True,
+}
+DEFAULT_PYXIS_CONFIG: Mapping[str, Any] = {
+    "srun_extra_args": ["--overlap"],
+}
+DEFAULT_VLLM_SERVE_CONFIG: Mapping[str, Any] = {
+    "gpu_memory_utilization": 0.90,
+    "max_model_len": 32768,
+    "async_scheduling": True,
+    "enable_prefix_caching": True,
+    "enable_auto_tool_choice": True,
+}
+
 
 class PlanConfig(BaseModel):
     """Schema for the orchestrator plan file."""
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     name: str | None = None
     job_configs: list[Path] = Field(..., min_length=1)
@@ -33,10 +54,8 @@ class PlanConfig(BaseModel):
     readiness_timeout_s: int | None = None
     resume: bool = False
     rerun_failed: bool = False
-    kill_orphans: bool = False
     prune_logs_on_success: bool = False
     uv_run: bool = True
-    orchestrate_config: Path | None = None
     eval_images_config: Path | None = None
     endpoints_path: Path | None = None
 
@@ -47,7 +66,6 @@ class RegistrySnapshot:
 
     path: str | None
     checksum: str | None
-    schema_version: int | None
     matched: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -90,14 +108,12 @@ def make_plan(
     job_configs: list[Path],
     base_dir: Path | None = None,
     name: str | None = None,
-    orchestrate_config: Path | None = None,
     eval_images_config: Path | None = None,
     endpoints_path: Path | None = None,
 ) -> PlanConfig:
     plan = PlanConfig(
         job_configs=job_configs,
         name=name,
-        orchestrate_config=orchestrate_config,
         eval_images_config=eval_images_config,
         endpoints_path=endpoints_path,
     )
@@ -114,49 +130,57 @@ def load_job_config(path: Path) -> Mapping[str, Any]:
     return _load_toml_mapping(resolved)
 
 
-def load_orchestrate_config(path: Path | None = None) -> Mapping[str, Any]:
-    resolved = _default_orchestrate_config_path() if path is None else path.expanduser().resolve()
+def load_endpoint_orchestration_registry(path: Path | None = None) -> Mapping[str, Any]:
+    if path is None:
+        raise ValueError(
+            "Orchestration requires an endpoint registry containing [endpoint.orchestrate]; "
+            "pass --endpoints-path or create configs/medmarks-endpoints.toml or configs/endpoints.toml."
+        )
+    resolved = path.expanduser().resolve()
     payload = _load_toml_mapping(resolved)
-    _validate_orchestrate_registry(payload, source=resolved)
-    return payload
+    registry = _extract_endpoint_orchestration_registry(payload)
+    registry = _apply_orchestrate_defaults(registry)
+    _validate_endpoint_orchestration_registry(registry, source=resolved)
+    return registry
 
 
 def load_eval_images_config(path: Path | None) -> Mapping[str, Any] | None:
-    resolved = _resolve_eval_images_config_path(path)
-    if resolved is None:
+    if path is None:
         return None
+    resolved = path.expanduser().resolve()
     payload = _load_toml_mapping(resolved)
     _validate_eval_images_registry(payload, source=resolved)
     return payload
 
 
-def _resolve_eval_images_config_path(path: Path | None) -> Path | None:
-    if path is not None:
-        return path.expanduser().resolve()
-    default = (Path("configs") / "eval_images.toml").resolve()
-    return default if default.exists() else None
-
-
-def expand_tasks(plan: PlanConfig) -> list[TaskSpec]:
-    orchestrate_path = plan.orchestrate_config or _default_orchestrate_config_path()
-    orchestrate_payload = load_orchestrate_config(orchestrate_path)
-    eval_images_path = _resolve_eval_images_config_path(plan.eval_images_config)
+def expand_tasks(plan: PlanConfig, *, default_endpoints_path: Path | None = None) -> list[TaskSpec]:
+    eval_images_path = plan.eval_images_config.expanduser().resolve() if plan.eval_images_config is not None else None
     eval_images_payload = load_eval_images_config(eval_images_path)
-    endpoints_path = plan.endpoints_path
     tasks: list[TaskSpec] = []
     seen_identities: set[tuple[str, str, str]] = set()
+    endpoint_registry_cache: dict[Path, Mapping[str, Any]] = {}
 
     for job_path in plan.job_configs:
         resolved_job_path = job_path.expanduser().resolve()
-        load_job_config(resolved_job_path)
+        job_payload = load_job_config(resolved_job_path)
         raw_eval_configs = load_toml_eval_configs(resolved_job_path)
         if not raw_eval_configs:
             raise ValueError(f"Job config {resolved_job_path} did not produce any evals.")
         raw_eval_configs = [
             _absolutize_eval_config_paths(raw, base_dir=resolved_job_path.parent) for raw in raw_eval_configs
         ]
+        endpoints_path = _resolve_task_endpoints_path(
+            plan,
+            job_payload=job_payload,
+            base_dir=resolved_job_path.parent,
+            default_endpoints_path=default_endpoints_path,
+        )
+        orchestrate_payload = endpoint_registry_cache.get(endpoints_path)
+        if orchestrate_payload is None:
+            orchestrate_payload = load_endpoint_orchestration_registry(endpoints_path)
+            endpoint_registry_cache[endpoints_path] = orchestrate_payload
         _reject_model_ablation(raw_eval_configs, source=resolved_job_path)
-        overrides = EvalConfigOverrides(endpoints_path=endpoints_path) if endpoints_path is not None else None
+        overrides = EvalConfigOverrides(endpoints_path=endpoints_path)
         identity_payloads = [build_eval_identity_payload(raw, overrides=overrides) for raw in raw_eval_configs]
         path_plans = plan_eval_paths(identity_payloads, output_root=".")
         model_ids = {plan.identity.model_id for plan in path_plans}
@@ -166,8 +190,29 @@ def expand_tasks(plan: PlanConfig) -> list[TaskSpec]:
                 "orchestration requires exactly one model per task."
             )
         effective_model_id = next(iter(model_ids))
-        matched_model, matched_by = _match_model_entry(orchestrate_payload, effective_model_id, source=orchestrate_path)
-        model_id = str(matched_model["id"])
+        endpoint_ids = {
+            endpoint_id
+            for payload in identity_payloads
+            if isinstance((endpoint_id := payload.get("endpoint_id")), str) and endpoint_id
+        }
+        if not endpoint_ids:
+            raise ValueError(
+                f"Job config {resolved_job_path} must resolve to an endpoint_id; model-only orchestration configs "
+                "are not supported."
+            )
+        if len(endpoint_ids) > 1:
+            raise ValueError(
+                f"Job config {resolved_job_path} resolves to multiple endpoint ids {sorted(endpoint_ids)}; "
+                "orchestration requires exactly one model endpoint per task."
+            )
+        effective_endpoint_id = next(iter(endpoint_ids))
+        matched_model = _match_endpoint_orchestration_entry(
+            orchestrate_payload,
+            effective_model_id,
+            endpoint_id=effective_endpoint_id,
+            source=endpoints_path,
+        )
+        model_id = _orchestrate_model_id(matched_model)
         model_key = slug_component(model_id)
         task_id = f"{resolved_job_path.stem}:{model_key}"
         eval_ids = _resolved_eval_ids(path_plans)
@@ -186,15 +231,13 @@ def expand_tasks(plan: PlanConfig) -> list[TaskSpec]:
             seen_identities.add(identity)
         selected_eval_images = _select_eval_images(eval_images_payload, eval_ids=eval_ids, env_ids=env_ids)
         orchestrate_snapshot = RegistrySnapshot(
-            path=str(orchestrate_path.expanduser().resolve()),
-            checksum=_sha256_file(orchestrate_path.expanduser().resolve()),
-            schema_version=int(orchestrate_payload["schema_version"]),
+            path=str(endpoints_path),
+            checksum=_sha256_file(endpoints_path),
             matched=dict(matched_model),
         )
         eval_images_snapshot = RegistrySnapshot(
             path=str(eval_images_path) if eval_images_path is not None else None,
             checksum=_sha256_file(eval_images_path) if eval_images_path is not None else None,
-            schema_version=int(eval_images_payload["schema_version"]) if eval_images_payload is not None else None,
             matched={"eval_image": selected_eval_images},
         )
         vllm = dict(_required_mapping(matched_model.get("vllm"), f"model {model_id} vllm"))
@@ -218,7 +261,6 @@ def expand_tasks(plan: PlanConfig) -> list[TaskSpec]:
                 endpoints_path=endpoints_path,
                 matched_model={
                     **dict(matched_model),
-                    "matched_by": matched_by,
                     "effective_model_id": effective_model_id,
                 },
                 orchestrate_registry=orchestrate_snapshot,
@@ -230,7 +272,7 @@ def expand_tasks(plan: PlanConfig) -> list[TaskSpec]:
 
 def _resolve_plan_paths(plan: PlanConfig, *, base_dir: Path) -> None:
     plan.job_configs = [_resolve_path(path, base_dir=base_dir) for path in plan.job_configs]
-    for field_name in ("env_file", "output_dir", "orchestrate_config", "eval_images_config", "endpoints_path"):
+    for field_name in ("env_file", "output_dir", "eval_images_config", "endpoints_path"):
         value = getattr(plan, field_name)
         if value is not None:
             setattr(plan, field_name, _resolve_path(value, base_dir=base_dir))
@@ -243,8 +285,15 @@ def _resolve_path(path: Path, *, base_dir: Path) -> Path:
     return candidate.resolve()
 
 
-def _default_orchestrate_config_path() -> Path:
-    return (Path("configs") / "orchestrate.toml").resolve()
+def resolve_default_endpoints_path(cwd: Path | None = None) -> Path | None:
+    root = (cwd or Path.cwd()).expanduser().resolve()
+    medmarks = (root / "configs" / "medmarks-endpoints.toml").resolve()
+    if medmarks.exists():
+        return medmarks
+    endpoints = (root / "configs" / "endpoints.toml").resolve()
+    if endpoints.exists():
+        return endpoints
+    return None
 
 
 def _load_mapping_any(path: Path) -> Mapping[str, Any]:
@@ -275,62 +324,54 @@ def _load_toml_mapping(path: Path) -> Mapping[str, Any]:
     return data
 
 
-def _validate_orchestrate_registry(payload: Mapping[str, Any], *, source: Path) -> None:
-    _reject_unknown_keys(payload, {"schema_version", "model"}, label=str(source))
-    if payload.get("schema_version") != 1:
-        raise ValueError(f"Orchestrate registry {source} must set schema_version = 1.")
+def _validate_endpoint_orchestration_registry(payload: Mapping[str, Any], *, source: Path) -> None:
+    _reject_unknown_keys(payload, {"model"}, label=str(source))
     entries = payload.get("model")
     if not isinstance(entries, list) or not entries:
-        raise ValueError(f"Orchestrate registry {source} must define one or more [[model]] entries.")
-    ids: set[str] = set()
-    aliases: set[str] = set()
+        raise ValueError(
+            f"Endpoint registry {source} must define one or more [[endpoint]] entries with [endpoint.orchestrate]."
+        )
+    endpoint_ids: set[str] = set()
+    model_ids: set[str] = set()
     slugs: dict[str, str] = {}
     for entry in entries:
         if not isinstance(entry, Mapping):
-            raise ValueError(f"Each [[model]] entry in {source} must be a table.")
+            raise ValueError(f"Each orchestratable endpoint entry in {source} must be a table.")
         _reject_unknown_keys(
-            entry, {"id", "aliases", "vllm", "container", "pyxis", "slurm"}, label=f"{source} [[model]]"
+            entry,
+            {"endpoint_id", "model", "vllm", "container", "pyxis", "slurm"},
+            label=f"{source} [[endpoint]].orchestrate",
         )
-        model_id = entry.get("id")
-        if not isinstance(model_id, str) or not model_id.strip():
-            raise ValueError(f"Each [[model]] entry in {source} must include non-empty id.")
-        if model_id in ids:
-            raise ValueError(f"Duplicate model id in {source}: {model_id}")
-        if model_id in aliases:
-            raise ValueError(f"Model id collides with an alias in {source}: {model_id}")
-        ids.add(model_id)
-        alias_values = entry.get("aliases", []) or []
-        if not isinstance(alias_values, list) or any(not isinstance(alias, str) or not alias for alias in alias_values):
-            raise ValueError(f"Model {model_id} aliases in {source} must be a list of non-empty strings.")
-        for alias in alias_values:
-            if alias in aliases or alias in ids:
-                raise ValueError(f"Duplicate or colliding model alias in {source}: {alias}")
-            aliases.add(alias)
+        model_id = _orchestrate_model_id(entry)
+        endpoint_id = _orchestrate_endpoint_id(entry)
+        if endpoint_id in endpoint_ids:
+            raise ValueError(f"Duplicate endpoint_id in {source}: {endpoint_id}")
+        endpoint_ids.add(endpoint_id)
+        model_ids.add(model_id)
         slug = slug_component(model_id)
         previous = slugs.get(slug)
-        if previous is not None:
-            raise ValueError(f"Model ids {previous!r} and {model_id!r} derive duplicate slug {slug!r} in {source}.")
+        if previous is not None and previous != model_id:
+            raise ValueError(f"Models {previous!r} and {model_id!r} derive duplicate slug {slug!r} in {source}.")
         slugs[slug] = model_id
         vllm = _required_mapping(entry.get("vllm"), f"model {model_id} vllm")
         container = _required_mapping(entry.get("container"), f"model {model_id} container")
-        for required_key in ("gpus", "tensor_parallel_size"):
-            if required_key not in vllm:
-                raise ValueError(f"Model {model_id} in {source} must set [model.vllm].{required_key}.")
+        if "gpus" not in vllm:
+            raise ValueError(f"Endpoint {endpoint_id} in {source} must set [endpoint.orchestrate.vllm].gpus.")
         if not str(container.get("image", "")).strip():
-            raise ValueError(f"Model {model_id} in {source} must set [model.container].image.")
+            raise ValueError(f"Endpoint {endpoint_id} in {source} must set [endpoint.orchestrate.container].image.")
         _reject_unknown_keys(
             vllm,
             {"gpus", "tensor_parallel_size", "data_parallel_size", "require_contiguous_gpus", "memory_min_gb", "serve"},
-            label=f"{source} {model_id}.vllm",
+            label=f"{source} {endpoint_id}.orchestrate.vllm",
         )
         _reject_unknown_keys(
             container,
             {"image", "container_port", "volumes", "ipc_mode", "env_file"},
-            label=f"{source} {model_id}.container",
+            label=f"{source} {endpoint_id}.orchestrate.container",
         )
         if "serve" in vllm:
             _reject_unknown_keys(
-                _required_mapping(vllm.get("serve"), f"model {model_id} vllm.serve"),
+                _required_mapping(vllm.get("serve"), f"endpoint {endpoint_id} vllm.serve"),
                 {
                     "dtype",
                     "max_model_len",
@@ -356,17 +397,17 @@ def _validate_orchestrate_registry(payload: Mapping[str, Any], *, source: Path) 
                     "language_model_only",
                     "limit_mm_per_prompt",
                 },
-                label=f"{source} {model_id}.vllm.serve",
+                label=f"{source} {endpoint_id}.orchestrate.vllm.serve",
             )
         if "pyxis" in entry:
             _reject_unknown_keys(
-                _required_mapping(entry.get("pyxis"), f"model {model_id} pyxis"),
+                _required_mapping(entry.get("pyxis"), f"endpoint {endpoint_id} pyxis"),
                 {"srun_extra_args"},
-                label=f"{source} {model_id}.pyxis",
+                label=f"{source} {endpoint_id}.orchestrate.pyxis",
             )
         if "slurm" in entry:
             _reject_unknown_keys(
-                _required_mapping(entry.get("slurm"), f"model {model_id} slurm"),
+                _required_mapping(entry.get("slurm"), f"endpoint {endpoint_id} slurm"),
                 {
                     "job_name",
                     "cpus_per_gpu",
@@ -374,18 +415,70 @@ def _validate_orchestrate_registry(payload: Mapping[str, Any], *, source: Path) 
                     "partition",
                     "account",
                     "qos",
+                    "nice",
                     "mail_type",
                     "mail_user",
                     "slurm_resume",
                 },
-                label=f"{source} {model_id}.slurm",
+                label=f"{source} {endpoint_id}.orchestrate.slurm",
             )
 
 
+def _extract_endpoint_orchestration_registry(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    entries = payload.get("endpoint", [])
+    if not isinstance(entries, list):
+        raise ValueError("Endpoint registry must use [[endpoint]] entries.")
+    models: list[dict[str, Any]] = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, Mapping):
+            raise ValueError(f"Each [[endpoint]] entry must be a table (index {index}).")
+        orchestrate = entry.get("orchestrate")
+        if orchestrate is None:
+            continue
+        orchestrate_mapping = dict(_required_mapping(orchestrate, f"[[endpoint]] index {index} orchestrate"))
+        endpoint_id = _endpoint_entry_id(entry, source=f"[[endpoint]] index {index}")
+        model_id = _endpoint_entry_model_id(entry, endpoint_id=endpoint_id)
+        models.append({"endpoint_id": endpoint_id, "model": model_id, **orchestrate_mapping})
+    return {"model": models}
+
+
+def _apply_orchestrate_defaults(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    normalized = deepcopy(payload)
+    models = normalized.get("model")
+    if not isinstance(models, list):
+        return normalized
+    for entry in models:
+        if not isinstance(entry, dict):
+            continue
+        for section_name, section_default in (
+            ("container", DEFAULT_CONTAINER_CONFIG),
+            ("pyxis", DEFAULT_PYXIS_CONFIG),
+            ("slurm", DEFAULT_SLURM_CONFIG),
+        ):
+            section = entry.get(section_name)
+            merged_section = dict(section_default)
+            if isinstance(section, Mapping):
+                merged_section.update(section)
+            elif section is not None:
+                entry[section_name] = section
+                continue
+            entry[section_name] = merged_section
+        vllm = entry.get("vllm")
+        if isinstance(vllm, dict):
+            if vllm.get("tensor_parallel_size") is None and vllm.get("gpus") is not None:
+                vllm["tensor_parallel_size"] = vllm["gpus"]
+            serve = vllm.get("serve")
+            merged_serve = dict(DEFAULT_VLLM_SERVE_CONFIG)
+            if isinstance(serve, Mapping):
+                merged_serve.update(serve)
+            elif serve is not None:
+                continue
+            vllm["serve"] = merged_serve
+    return normalized
+
+
 def _validate_eval_images_registry(payload: Mapping[str, Any], *, source: Path) -> None:
-    _reject_unknown_keys(payload, {"schema_version", "eval_image"}, label=str(source))
-    if payload.get("schema_version") != 1:
-        raise ValueError(f"Eval image registry {source} must set schema_version = 1.")
+    _reject_unknown_keys(payload, {"eval_image"}, label=str(source))
     entries = payload.get("eval_image", []) or []
     if not isinstance(entries, list):
         raise ValueError(f"Eval image registry {source} must use [[eval_image]] entries.")
@@ -434,19 +527,77 @@ def _validate_eval_images_registry(payload: Mapping[str, Any], *, source: Path) 
             raise ValueError(f"Eval image {image_id} in {source} must set non-empty command.")
 
 
-def _match_model_entry(payload: Mapping[str, Any], model_id: str, *, source: Path) -> tuple[Mapping[str, Any], str]:
-    matches: list[tuple[Mapping[str, Any], str]] = []
+def _orchestrate_model_id(entry: Mapping[str, Any]) -> str:
+    model_id = entry.get("model")
+    if not isinstance(model_id, str) or not model_id.strip():
+        raise ValueError("Each orchestratable endpoint entry must include non-empty model.")
+    return model_id
+
+
+def _orchestrate_endpoint_id(entry: Mapping[str, Any]) -> str:
+    endpoint_id = entry.get("endpoint_id")
+    if not isinstance(endpoint_id, str) or not endpoint_id.strip():
+        raise ValueError("Each orchestratable endpoint entry must include non-empty endpoint_id.")
+    return endpoint_id
+
+
+def _endpoint_entry_id(entry: Mapping[str, Any], *, source: str) -> str:
+    endpoint_id = entry.get("endpoint_id")
+    if not isinstance(endpoint_id, str) or not endpoint_id.strip():
+        raise ValueError(f"{source} with orchestration config must include non-empty endpoint_id.")
+    return endpoint_id
+
+
+def _endpoint_entry_model_id(entry: Mapping[str, Any], *, endpoint_id: str) -> str:
+    model_id = entry.get("model")
+    if not isinstance(model_id, str) or not model_id.strip():
+        raise ValueError(f"Endpoint {endpoint_id!r} with orchestration config must include non-empty model.")
+    return model_id
+
+
+def _match_endpoint_orchestration_entry(
+    payload: Mapping[str, Any],
+    model_id: str,
+    *,
+    endpoint_id: str,
+    source: Path,
+) -> Mapping[str, Any]:
     for entry in payload.get("model", []) or []:
-        entry_id = str(entry["id"])
-        if model_id == entry_id:
-            matches.append((entry, "id"))
-        elif model_id in {str(alias) for alias in entry.get("aliases", []) or []}:
-            matches.append((entry, "alias"))
-    if not matches:
-        raise ValueError(f"No [[model]] entry in {source} matches effective model {model_id!r}.")
-    if len(matches) > 1:
-        raise ValueError(f"Multiple [[model]] entries in {source} match effective model {model_id!r}.")
-    return matches[0]
+        if _orchestrate_endpoint_id(entry) == endpoint_id:
+            entry_model = _orchestrate_model_id(entry)
+            if entry_model != model_id:
+                raise ValueError(
+                    f"Endpoint {endpoint_id!r} in {source} resolves to model {entry_model!r}, "
+                    f"but eval config resolves to {model_id!r}."
+                )
+            return entry
+    raise ValueError(
+        f"No [[endpoint]] entry in {source} with [endpoint.orchestrate] matches endpoint_id {endpoint_id!r}."
+    )
+
+
+def _resolve_task_endpoints_path(
+    plan: PlanConfig,
+    *,
+    job_payload: Mapping[str, Any],
+    base_dir: Path,
+    default_endpoints_path: Path | None = None,
+) -> Path:
+    if plan.endpoints_path is not None:
+        return plan.endpoints_path
+    raw_path = job_payload.get("endpoints_path")
+    if isinstance(raw_path, str) and raw_path.strip():
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute():
+            path = base_dir / path
+        return path.resolve()
+    if default_endpoints_path is not None:
+        return default_endpoints_path.expanduser().resolve()
+    raise ValueError(
+        "Orchestration requires an endpoint registry containing [endpoint.orchestrate]; "
+        "set endpoints_path in the job config, pass --endpoints-path, or create "
+        "configs/medmarks-endpoints.toml or configs/endpoints.toml."
+    )
 
 
 def _absolutize_eval_config_paths(raw: Mapping[str, Any], *, base_dir: Path) -> dict[str, Any]:
@@ -527,8 +678,8 @@ __all__ = [
     "TaskSpec",
     "expand_tasks",
     "load_eval_images_config",
+    "load_endpoint_orchestration_registry",
     "load_job_config",
-    "load_orchestrate_config",
     "load_plan",
     "make_plan",
 ]

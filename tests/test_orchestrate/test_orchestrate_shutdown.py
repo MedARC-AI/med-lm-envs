@@ -179,7 +179,14 @@ async def test_runner_shutdown_state_machine(tmp_path: Path) -> None:
         readiness_timeout_s=1,
         max_parallel=1,
     )
-    runner = OrchestratorRunner(plan, tasks, DummyResourceManager(), options=options, use_dashboard=False)
+    runner = OrchestratorRunner(
+        plan,
+        tasks,
+        DummyResourceManager(),
+        options=options,
+        runtime="docker",
+        use_dashboard=False,
+    )
     loop = asyncio.get_running_loop()
     runner_task = asyncio.create_task(asyncio.sleep(999))
 

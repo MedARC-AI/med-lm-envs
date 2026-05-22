@@ -8,7 +8,6 @@ from medarc_verifiers.orchestrate.bundle import (
     ensure_run_bundle,
     load_execution_allocation,
     load_run_bundle_manifest,
-    load_runtime_state,
     load_task_spec,
 )
 from medarc_verifiers.orchestrate.cli import main as orchestrate_main
@@ -32,15 +31,15 @@ def _write_job_config(
     gpus: int = 1,
     tensor_parallel_size: int | None = None,
     data_parallel_size: int | None = None,
-    restart: str | None = None,
     slurm: dict[str, object] | None = None,
 ) -> None:
-    del restart
     toml_path = path.with_suffix(".toml")
     resolved_model = model_id or f"Foo/{toml_path.stem}"
+    endpoint_id = toml_path.stem
     toml_path.write_text(
         f"""
-model = "{resolved_model}"
+endpoint_id = "{endpoint_id}"
+endpoints_path = "endpoints.toml"
 
 [[eval]]
 env_id = "{toml_path.stem}"
@@ -50,6 +49,7 @@ rollouts_per_example = 1
         encoding="utf-8",
     )
     _JOB_META[toml_path.resolve()] = {
+        "endpoint_id": endpoint_id,
         "model_id": resolved_model,
         "gpus": gpus,
         "tensor_parallel_size": tensor_parallel_size or gpus,
@@ -104,10 +104,9 @@ def _task(
 def _write_plan(tmp_path: Path, job_configs: list[Path]) -> Path:
     toml_paths = [path.with_suffix(".toml").resolve() for path in job_configs]
     plan_path = tmp_path / "plan.yaml"
-    orchestrate_path = tmp_path / "orchestrate.toml"
     eval_images_path = tmp_path / "eval_images.toml"
     config_lines = "\n".join(f"  - {path}" for path in toml_paths)
-    plan_lines = ["job_configs:", config_lines, f"orchestrate_config: {orchestrate_path}"]
+    plan_lines = ["job_configs:", config_lines]
     sidecar_entries = [
         (entry, path)
         for path in toml_paths
@@ -119,52 +118,53 @@ def _write_plan(tmp_path: Path, job_configs: list[Path]) -> Path:
         plan_lines.append(f"eval_images_config: {eval_images_path}")
     plan_path.write_text("\n".join(plan_lines) + "\n", encoding="utf-8")
 
-    model_lines = ["schema_version = 1", ""]
-    seen: set[str] = set()
+    endpoint_lines = []
+    seen_endpoints: set[str] = set()
     for path in toml_paths:
         meta = _JOB_META[path]
-        model_id = str(meta["model_id"])
-        if model_id in seen:
+        endpoint_id = str(meta["endpoint_id"])
+        if endpoint_id in seen_endpoints:
             continue
-        seen.add(model_id)
-        model_lines.extend(
+        seen_endpoints.add(endpoint_id)
+        endpoint_lines.extend(
             [
-                "[[model]]",
-                f'id = "{model_id}"',
+                "[[endpoint]]",
+                f'endpoint_id = "{endpoint_id}"',
+                f'model = "{meta["model_id"]}"',
                 "",
-                "[model.vllm]",
+                "[endpoint.orchestrate.vllm]",
                 f"gpus = {meta['gpus']}",
                 f"tensor_parallel_size = {meta['tensor_parallel_size']}",
             ]
         )
         if meta.get("data_parallel_size") is not None:
-            model_lines.append(f"data_parallel_size = {meta['data_parallel_size']}")
-        model_lines.extend(["", "[model.vllm.serve]"])
+            endpoint_lines.append(f"data_parallel_size = {meta['data_parallel_size']}")
+        endpoint_lines.extend(["", "[endpoint.orchestrate.vllm.serve]"])
         for key, value in dict(meta.get("serve") or {}).items():
             rendered = "true" if value is True else ("false" if value is False else str(value))
             if isinstance(value, str):
                 rendered = f'"{value}"'
-            model_lines.append(f"{key} = {rendered}")
-        model_lines.extend(
+            endpoint_lines.append(f"{key} = {rendered}")
+        endpoint_lines.extend(
             [
                 "",
-                "[model.container]",
+                "[endpoint.orchestrate.container]",
                 'image = "fake"',
                 "",
-                "[model.pyxis]",
+                "[endpoint.orchestrate.pyxis]",
                 "srun_extra_args = []",
                 "",
-                "[model.slurm]",
+                "[endpoint.orchestrate.slurm]",
             ]
         )
         for key, value in dict(meta.get("slurm") or {}).items():
             rendered = "true" if value is True else ("false" if value is False else f'"{value}"')
-            model_lines.append(f"{key} = {rendered}")
-        model_lines.append("")
-    orchestrate_path.write_text("\n".join(model_lines), encoding="utf-8")
+            endpoint_lines.append(f"{key} = {rendered}")
+        endpoint_lines.append("")
+    (tmp_path / "endpoints.toml").write_text("\n".join(endpoint_lines), encoding="utf-8")
 
     if sidecar_entries:
-        lines = ["schema_version = 1", ""]
+        lines = []
         for entry, _path in sidecar_entries:
             lines.extend(
                 [
@@ -338,12 +338,17 @@ def test_build_submission_plan_rejects_node_allocation_incompatible_with_tp(tmp_
 
 def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
     job_cfg = tmp_path / "job.yaml"
-    _write_job_config(job_cfg, gpus=2, tensor_parallel_size=2, slurm={"partition": "gpu", "slurm_resume": True})
+    _write_job_config(
+        job_cfg,
+        gpus=2,
+        tensor_parallel_size=2,
+        slurm={"partition": "gpu", "qos": "low", "nice": 500, "slurm_resume": True},
+    )
     toml_cfg = job_cfg.with_suffix(".toml")
     toml_cfg.write_text(
         toml_cfg.read_text(encoding="utf-8").replace(
             "[[eval]]",
-            'endpoints_path = "endpoints.toml"\nenv_dir_path = "envs"\n\n[[eval]]',
+            'env_dir_path = "envs"\n\n[[eval]]',
             1,
         ),
         encoding="utf-8",
@@ -388,6 +393,8 @@ def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
     assert "#SBATCH --cpus-per-gpu=12" in script
     assert "#SBATCH --time=04:00:00" in script
     assert "#SBATCH --partition=gpu" in script
+    assert "#SBATCH --qos=low" in script
+    assert "#SBATCH --nice=500" in script
     assert "#SBATCH --requeue" in script
     assert "--runtime pyxis" in script
     assert "medarc-orchestrate worker" in script
@@ -402,7 +409,7 @@ def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
     assert str(job_cfg) not in script
 
     bundled_payload = load_job_config(Path(entry.effective_job_config_path))
-    assert bundled_payload["model"].startswith("Foo/")
+    assert bundled_payload["endpoint_id"] == "job"
     assert bundled_payload["endpoints_path"] == str((tmp_path / "endpoints.toml").resolve())
     assert bundled_payload["env_dir_path"] == str((tmp_path / "envs").resolve())
     assert "orchestrate" not in bundled_payload
@@ -413,10 +420,9 @@ def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
     orchestrate_snapshot = tomllib.loads(
         (Path(task_spec.output_paths.root) / "orchestrate-snapshot.toml").read_text(encoding="utf-8")
     )
-    assert orchestrate_snapshot["schema_version"] == 1
-    assert orchestrate_snapshot["registry_path"] == str(tmp_path / "orchestrate.toml")
+    assert orchestrate_snapshot["registry_path"] == str((tmp_path / "endpoints.toml").resolve())
     assert orchestrate_snapshot["registry_checksum"]
-    assert orchestrate_snapshot["model"]["id"].startswith("Foo/")
+    assert orchestrate_snapshot["model"]["model"].startswith("Foo/")
     allocation = load_execution_allocation(Path(entry.allocation_path))
     assert allocation is not None
     assert allocation.allocated_gpus == 8
@@ -457,7 +463,6 @@ def test_bundle_parses_sidecars(tmp_path: Path) -> None:
     eval_images_snapshot = tomllib.loads(
         (Path(spec.output_paths.root) / "eval_images-snapshot.toml").read_text(encoding="utf-8")
     )
-    assert eval_images_snapshot["schema_version"] == 1
     assert eval_images_snapshot["registry_path"] == str(tmp_path / "eval_images.toml")
     assert eval_images_snapshot["registry_checksum"]
     assert eval_images_snapshot["eval_image"][0]["id"] == "medagentbench-fhir"
@@ -827,6 +832,7 @@ def test_render_bundle_assigns_unique_ports_per_task(tmp_path: Path) -> None:
 def test_render_bundle_refreshes_stale_task_bundle_when_source_changes(tmp_path: Path) -> None:
     job_cfg = tmp_path / "job.yaml"
     _write_job_config(job_cfg, gpus=1)
+    _write_plan(tmp_path, [job_cfg])
     tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
     planned = build_submission_plan(
         tasks,
@@ -879,59 +885,6 @@ def test_render_bundle_refreshes_stale_task_bundle_when_source_changes(tmp_path:
     assert first_payload != second_payload
 
 
-def test_render_bundle_prefers_runtime_state_restart_on_rerender(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
-    _write_job_config(job_cfg, gpus=1, restart="runs/raw/source-run")
-    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
-    planned = build_submission_plan(
-        tasks,
-        run_id="bundle",
-        node_gpus=8,
-        max_simultaneous_nodes=1,
-        run_simultaneously=False,
-        base_dependency=None,
-        cli_overrides=SlurmCliOverrides(),
-    )
-
-    first_manifest = render_bundle(
-        planned_tasks=planned,
-        bundle_root=tmp_path / "outputs",
-        run_id="bundle",
-        node_gpus=8,
-        source_dir=tmp_path,
-        activate_script=tmp_path / ".venv" / "bin" / "activate",
-        env_file=None,
-        readiness_timeout_s=None,
-        prune_logs_on_success=False,
-    )
-    first_entry = first_manifest.entries[0]
-    state_path = Path(first_entry.state_path)
-    state_payload = json.loads(state_path.read_text(encoding="utf-8"))
-    state_payload["restart_source"] = "runs/raw/runtime-run"
-    state_payload["restart_source_strategy"] = "runtime_state"
-    state_path.write_text(json.dumps(state_payload, indent=2), encoding="utf-8")
-
-    second_manifest = render_bundle(
-        planned_tasks=planned,
-        bundle_root=tmp_path / "outputs",
-        run_id="bundle",
-        node_gpus=8,
-        source_dir=tmp_path,
-        activate_script=tmp_path / ".venv" / "bin" / "activate",
-        env_file=None,
-        readiness_timeout_s=None,
-        prune_logs_on_success=False,
-        existing_manifest=first_manifest,
-    )
-    second_entry = second_manifest.entries[0]
-    second_payload = load_job_config(Path(second_entry.effective_job_config_path))
-    runtime_state = load_runtime_state(Path(second_entry.state_path))
-
-    assert "orchestrate" not in second_payload
-    assert runtime_state is not None
-    assert runtime_state.restart_source == "runs/raw/runtime-run"
-    assert second_entry.restart_source == "runs/raw/runtime-run"
-
 
 def test_rendered_task_local_config_is_loadable_by_orchestrator(tmp_path: Path) -> None:
     job_cfg = tmp_path / "job.yaml"
@@ -961,9 +914,7 @@ def test_rendered_task_local_config_is_loadable_by_orchestrator(tmp_path: Path) 
 
     patched_path = Path(manifest.entries[0].effective_job_config_path)
     patched_plan = tmp_path / "patched-plan.yaml"
-    patched_plan.write_text(
-        f"job_configs:\n  - {patched_path}\norchestrate_config: {tmp_path / 'orchestrate.toml'}\n", encoding="utf-8"
-    )
+    patched_plan.write_text(f"job_configs:\n  - {patched_path}\n", encoding="utf-8")
     patched_tasks = expand_tasks(load_plan(patched_plan))
 
     assert len(patched_tasks) == 1
@@ -988,8 +939,6 @@ def test_slurm_dry_run_writes_manifest_and_prints_commands(tmp_path: Path, capsy
             "bundle",
             "--output-dir",
             str(tmp_path / "bundle"),
-            "--orchestrate-config",
-            str(tmp_path / "orchestrate.toml"),
             "--dry-run",
         ]
     )
@@ -1025,8 +974,6 @@ def test_slurm_rerender_loads_pre_phase3_submission_manifest(tmp_path: Path, cap
             "bundle",
             "--output-dir",
             str(output_root),
-            "--orchestrate-config",
-            str(tmp_path / "orchestrate.toml"),
             "--dry-run",
         ]
     )
@@ -1063,8 +1010,6 @@ def test_slurm_rerender_loads_pre_phase3_submission_manifest(tmp_path: Path, cap
             "bundle",
             "--output-dir",
             str(output_root),
-            "--orchestrate-config",
-            str(tmp_path / "orchestrate.toml"),
             "--dry-run",
         ]
     )
@@ -1099,7 +1044,7 @@ def test_slurm_cli_default_run_id_uses_shared_generator(tmp_path: Path, monkeypa
             run_id=kwargs["run_id"], bundle_root=str(kwargs["bundle_root"]), node_gpus=8, entries=[]
         )
 
-    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.cli.generate_run_id", lambda name: "shared-run-id")
+    monkeypatch.setattr("medarc_verifiers.orchestrate.launch.generate_run_id", lambda name: "shared-run-id")
     monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.cli.render_bundle", fake_render_bundle)
     monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.cli.write_bundle_manifest", lambda path, manifest: None)
     monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.cli.mark_dry_run", lambda path, manifest: [])
@@ -1109,8 +1054,6 @@ def test_slurm_cli_default_run_id_uses_shared_generator(tmp_path: Path, monkeypa
             "slurm",
             "--job-config",
             str(job_cfg.with_suffix(".toml")),
-            "--orchestrate-config",
-            str(tmp_path / "orchestrate.toml"),
             "--dry-run",
         ]
     )
@@ -1118,6 +1061,59 @@ def test_slurm_cli_default_run_id_uses_shared_generator(tmp_path: Path, monkeypa
     assert rc == 0
     assert captured["run_id"] == "shared-run-id"
     assert captured["bundle_root"] == (Path("outputs") / "orchestrate" / "shared-run-id").resolve()
+
+
+def test_run_backend_slurm_matches_slurm_alias_and_skips_local_probes(tmp_path: Path, monkeypatch) -> None:
+    job_cfg = tmp_path / "job.yaml"
+    _write_job_config(job_cfg, gpus=1)
+    _write_plan(tmp_path, [job_cfg])
+    output_root = tmp_path / "bundle"
+    captured: list[dict[str, object]] = []
+
+    def fake_render_bundle(**kwargs):
+        captured.append(
+            {
+                "run_id": kwargs["run_id"],
+                "bundle_root": kwargs["bundle_root"],
+                "tasks": [task.task.task_id for task in kwargs["planned_tasks"]],
+                "readiness_timeout_s": kwargs["readiness_timeout_s"],
+            }
+        )
+        return SlurmBundleManifest(
+            run_id=kwargs["run_id"], bundle_root=str(kwargs["bundle_root"]), node_gpus=8, entries=[]
+        )
+
+    monkeypatch.setattr(
+        "medarc_verifiers.orchestrate.runtime_probe.docker_available",
+        lambda: (_ for _ in ()).throw(AssertionError("docker probe should not run for slurm")),
+    )
+    monkeypatch.setattr(
+        "medarc_verifiers.orchestrate.runtime_probe.podman_available",
+        lambda: (_ for _ in ()).throw(AssertionError("podman probe should not run for slurm")),
+    )
+    monkeypatch.setattr(
+        "medarc_verifiers.orchestrate.launch.discover_gpus",
+        lambda: (_ for _ in ()).throw(AssertionError("GPU discovery should not run for slurm")),
+    )
+    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.cli.render_bundle", fake_render_bundle)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.cli.write_bundle_manifest", lambda path, manifest: None)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.cli.mark_dry_run", lambda path, manifest: [])
+
+    common = [
+        "--job-config",
+        str(job_cfg.with_suffix(".toml")),
+        "--run-id",
+        "bundle",
+        "--output-dir",
+        str(output_root),
+        "--readiness-timeout-s",
+        "111",
+        "--dry-run",
+    ]
+
+    assert orchestrate_main(["slurm", *common]) == 0
+    assert orchestrate_main(["run", "--backend", "slurm", *common]) == 0
+    assert captured[0] == captured[1]
 
 
 def test_submit_bundle_resumes_from_existing_job_ids(tmp_path: Path, monkeypatch) -> None:

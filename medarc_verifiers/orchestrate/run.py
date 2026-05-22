@@ -78,12 +78,12 @@ class OrchestratorRunner:
         resource_manager: ResourceManager,
         *,
         options: OrchestratorOptions,
-        runtime: str = "docker",
+        runtime: str,
         runtime_adapter: RuntimeAdapter | None = None,
         uv_run: bool = True,
         use_dashboard: bool = True,
     ) -> None:
-        self._runtime = _normalize_runtime(runtime or plan.runtime or "docker")
+        self._runtime = _normalize_runtime(runtime)
         self._plan = plan
         self._tasks = sorted(list(tasks), key=task_sort_key)
         self._resource_manager = resource_manager
@@ -223,7 +223,6 @@ class OrchestratorRunner:
                 ),
             ),
             options=WorkerOptions(
-                run_id=self._options.run_id,
                 runtime=self._runtime,
                 readiness_timeout_s=self._options.readiness_timeout_s,
                 command_template=self._command_template,
@@ -265,10 +264,6 @@ class OrchestratorRunner:
             RuntimeState(
                 task_id=manifest.task_id,
                 state=manifest.state,
-                restart_source=manifest.restart_source,
-                restart_source_strategy="runtime_state" if manifest.restart_source else "none",
-                bench_run_id=manifest.bench_run_id,
-                bench_run_dir=manifest.bench_run_dir,
             ),
         )
         write_summary(self._options.output_root / "summary.json", list(self._manifests.values()))
