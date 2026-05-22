@@ -36,7 +36,7 @@ from medarc_verifiers.orchestrate.docker_vllm import (
     wait_for_readiness_async,
     write_container_request,
 )
-from medarc_verifiers.orchestrate.resources import parse_index_range
+from medarc_verifiers.orchestrate.ranges import parse_index_range
 from medarc_verifiers.orchestrate.runtime import (
     LogStreamer,
     RuntimeAdapter,
@@ -353,7 +353,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--env-file", type=Path, default=None)
     parser.add_argument("--readiness-timeout-s", type=int, default=1800)
     parser.add_argument("--prune-logs-on-success", action="store_true")
-    parser.add_argument("--no-uv-run", action="store_true")
     return parser
 
 
@@ -369,7 +368,7 @@ def main(argv: list[str] | None = None) -> int:
         readiness_timeout_s=args.readiness_timeout_s,
         env_file=args.env_file.expanduser().resolve() if args.env_file is not None else None,
         prune_logs_on_success=bool(args.prune_logs_on_success),
-        uv_run=not args.no_uv_run,
+        uv_run=False,
     )
     worker = TaskWorker(task_spec, allocation, options=options)
     paths = TaskPaths(Path(task_spec.output_paths.root))

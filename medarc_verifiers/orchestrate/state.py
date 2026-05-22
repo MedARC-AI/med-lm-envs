@@ -58,11 +58,8 @@ class TaskManifest:
     image: str | None = None
     readiness: Mapping[str, Any] | None = None
     bench_command: str | None = None
-    bench_run_id: str | None = None
-    bench_run_dir: str | None = None
     bench_exit_code: int | None = None
     bench_duration_s: float | None = None
-    restart_source: str | None = None
     gpus: int | None = None
     tensor_parallel_size: int | None = None
     data_parallel_size: int | None = None
@@ -196,33 +193,10 @@ def load_summary(path: Path) -> Mapping[str, Any]:
     return payload
 
 
-def filter_tasks_for_resume(
-    tasks: list["TaskSpec"], summary: Mapping[str, Any], *, rerun_failed: bool
-) -> list["TaskSpec"]:
-    entries = summary.get("tasks")
-    if not isinstance(entries, list):
-        return tasks
-    completed = {entry.get("task_id") for entry in entries if entry.get("state") == JobState.completed}
-    failed = {entry.get("task_id") for entry in entries if entry.get("state") == JobState.failed}
-    filtered: list["TaskSpec"] = []
-    for task in tasks:
-        if task.task_id in completed:
-            continue
-        if not rerun_failed and task.task_id in failed:
-            continue
-        filtered.append(task)
-    return filtered
-
-
-class TaskSpec:  # pragma: no cover - imported from config at runtime
-    task_id: str
-
-
 __all__ = [
     "JobState",
     "TaskManifest",
     "TaskPaths",
-    "filter_tasks_for_resume",
     "load_summary",
     "upsert_summary_entry",
     "write_summary",

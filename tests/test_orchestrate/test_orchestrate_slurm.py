@@ -14,9 +14,9 @@ from medarc_verifiers.orchestrate.cli import main as orchestrate_main
 from medarc_verifiers.orchestrate.config import TaskSpec, expand_tasks, load_job_config, load_plan
 from medarc_verifiers.orchestrate.internal_io import load_internal_mapping
 from medarc_verifiers.orchestrate.slurm.manifest import SlurmBundleManifest
-from medarc_verifiers.orchestrate.slurm.plan import SlurmCliOverrides, build_submission_plan
+from medarc_verifiers.orchestrate.slurm.plan import build_submission_plan
 from medarc_verifiers.orchestrate.slurm.render import render_bundle
-from medarc_verifiers.orchestrate.slurm.submit import submit_bundle
+from medarc_verifiers.orchestrate.slurm.submit import SlurmSubmissionOptions, submit_bundle
 
 
 _JOB_META: dict[Path, dict[str, object]] = {}
@@ -193,6 +193,7 @@ def _write_plan(tmp_path: Path, job_configs: list[Path]) -> Path:
         eval_images_path.write_text("\n".join(lines), encoding="utf-8")
     return plan_path
 
+
 def test_build_submission_plan_derives_dp_and_sorts(tmp_path: Path) -> None:
     tasks = [
         _task(tmp_path, "small", gpus=1),
@@ -208,7 +209,7 @@ def test_build_submission_plan_derives_dp_and_sorts(tmp_path: Path) -> None:
         max_simultaneous_nodes=1,
         run_simultaneously=False,
         base_dependency=None,
-        cli_overrides=SlurmCliOverrides(),
+        submission_options=SlurmSubmissionOptions(),
     )
 
     assert [task.task.task_id for task in planned] == ["large:foo", "medium:foo", "medium-low-tp:foo", "small:foo"]
@@ -240,7 +241,7 @@ def test_build_submission_plan_round_robins_two_chains(tmp_path: Path) -> None:
         max_simultaneous_nodes=2,
         run_simultaneously=False,
         base_dependency="afterok:555",
-        cli_overrides=SlurmCliOverrides(),
+        submission_options=SlurmSubmissionOptions(),
     )
 
     assert [
@@ -266,7 +267,7 @@ def test_build_submission_plan_run_simultaneously_uses_no_generated_dependencies
         max_simultaneous_nodes=1,
         run_simultaneously=True,
         base_dependency="afterok:555",
-        cli_overrides=SlurmCliOverrides(),
+        submission_options=SlurmSubmissionOptions(),
     )
 
     assert [
@@ -288,7 +289,7 @@ def test_build_submission_plan_rejects_tp_larger_than_node_gpus(tmp_path: Path) 
             max_simultaneous_nodes=1,
             run_simultaneously=False,
             base_dependency=None,
-            cli_overrides=SlurmCliOverrides(),
+            submission_options=SlurmSubmissionOptions(),
         )
 
 
@@ -305,7 +306,7 @@ def test_build_submission_plan_rejects_mismatched_explicit_data_parallel_size(tm
             max_simultaneous_nodes=1,
             run_simultaneously=False,
             base_dependency=None,
-            cli_overrides=SlurmCliOverrides(),
+            submission_options=SlurmSubmissionOptions(),
         )
 
 
@@ -320,7 +321,7 @@ def test_build_submission_plan_rejects_node_allocation_incompatible_with_tp(tmp_
             max_simultaneous_nodes=1,
             run_simultaneously=False,
             base_dependency=None,
-            cli_overrides=SlurmCliOverrides(),
+            submission_options=SlurmSubmissionOptions(),
         )
 
 
@@ -349,7 +350,7 @@ def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
         max_simultaneous_nodes=1,
         run_simultaneously=False,
         base_dependency=None,
-        cli_overrides=SlurmCliOverrides(time="04:00:00", cpus_per_gpu=12),
+        submission_options=SlurmSubmissionOptions(time="04:00:00", cpus_per_gpu=12),
     )
 
     manifest = render_bundle(
@@ -388,6 +389,7 @@ def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
     assert "medarc-orchestrate worker" in script
     assert "--task" in script
     assert "--allocation" in script
+    assert "--no-uv-run" not in script
     assert "--resume" not in script
     assert f'ACTIVATE_SCRIPT="${{ACTIVATE_SCRIPT:-{tmp_path / ".venv" / "bin" / "activate"}}}"' in script
     assert 'source "$ACTIVATE_SCRIPT"' in script
@@ -467,7 +469,7 @@ def test_slurm_render_starts_sidecar_before_worker(tmp_path: Path) -> None:
         max_simultaneous_nodes=1,
         run_simultaneously=False,
         base_dependency=None,
-        cli_overrides=SlurmCliOverrides(),
+        submission_options=SlurmSubmissionOptions(),
     )
 
     manifest = render_bundle(
@@ -500,7 +502,7 @@ def test_slurm_render_sidecar_has_exit_trap(tmp_path: Path) -> None:
         max_simultaneous_nodes=1,
         run_simultaneously=False,
         base_dependency=None,
-        cli_overrides=SlurmCliOverrides(),
+        submission_options=SlurmSubmissionOptions(),
     )
 
     manifest = render_bundle(
@@ -532,7 +534,7 @@ def test_slurm_render_sidecar_readiness_failure_tails_log(tmp_path: Path) -> Non
         max_simultaneous_nodes=1,
         run_simultaneously=False,
         base_dependency=None,
-        cli_overrides=SlurmCliOverrides(),
+        submission_options=SlurmSubmissionOptions(),
     )
 
     manifest = render_bundle(
@@ -622,7 +624,7 @@ def test_slurm_render_uses_single_cleanup_trap_for_multiple_sidecars(tmp_path: P
         max_simultaneous_nodes=1,
         run_simultaneously=False,
         base_dependency=None,
-        cli_overrides=SlurmCliOverrides(),
+        submission_options=SlurmSubmissionOptions(),
     )
 
     manifest = render_bundle(
@@ -657,7 +659,7 @@ def test_slurm_render_shell_quotes_sidecar_values(tmp_path: Path) -> None:
         max_simultaneous_nodes=1,
         run_simultaneously=False,
         base_dependency=None,
-        cli_overrides=SlurmCliOverrides(),
+        submission_options=SlurmSubmissionOptions(),
     )
 
     manifest = render_bundle(
@@ -691,7 +693,7 @@ def test_record_failure_writes_pre_worker_failure_artifacts(tmp_path: Path) -> N
         max_simultaneous_nodes=1,
         run_simultaneously=False,
         base_dependency=None,
-        cli_overrides=SlurmCliOverrides(),
+        submission_options=SlurmSubmissionOptions(),
     )
     manifest = render_bundle(
         planned_tasks=planned,
@@ -793,7 +795,7 @@ def test_render_bundle_assigns_unique_ports_per_task(tmp_path: Path) -> None:
         max_simultaneous_nodes=2,
         run_simultaneously=True,
         base_dependency=None,
-        cli_overrides=SlurmCliOverrides(),
+        submission_options=SlurmSubmissionOptions(),
     )
 
     manifest = render_bundle(
@@ -829,7 +831,7 @@ def test_render_bundle_refreshes_stale_task_bundle_when_source_changes(tmp_path:
         max_simultaneous_nodes=1,
         run_simultaneously=False,
         base_dependency=None,
-        cli_overrides=SlurmCliOverrides(),
+        submission_options=SlurmSubmissionOptions(),
     )
 
     first_manifest = render_bundle(
@@ -873,7 +875,6 @@ def test_render_bundle_refreshes_stale_task_bundle_when_source_changes(tmp_path:
     assert first_payload != second_payload
 
 
-
 def test_rendered_task_local_config_is_loadable_by_orchestrator(tmp_path: Path) -> None:
     job_cfg = tmp_path / "job.yaml"
     _write_job_config(job_cfg, gpus=2, tensor_parallel_size=2)
@@ -885,7 +886,7 @@ def test_rendered_task_local_config_is_loadable_by_orchestrator(tmp_path: Path) 
         max_simultaneous_nodes=1,
         run_simultaneously=False,
         base_dependency=None,
-        cli_overrides=SlurmCliOverrides(),
+        submission_options=SlurmSubmissionOptions(),
     )
 
     manifest = render_bundle(
@@ -919,8 +920,6 @@ def test_slurm_dry_run_writes_manifest_and_prints_commands(tmp_path: Path, capsy
     rc = orchestrate_main(
         [
             "run",
-            "--backend",
-            "slurm",
             "--job-config",
             str(job_a.with_suffix(".toml")),
             "--job-config",
@@ -964,15 +963,13 @@ def test_slurm_cli_default_run_id_uses_shared_generator(tmp_path: Path, monkeypa
         )
 
     monkeypatch.setattr("medarc_verifiers.orchestrate.launch.generate_run_id", lambda name: "shared-run-id")
-    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.cli.render_bundle", fake_render_bundle)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.cli.write_bundle_manifest", lambda path, manifest: None)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.cli.mark_dry_run", lambda path, manifest: [])
+    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.submit.render_bundle", fake_render_bundle)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.submit.write_bundle_manifest", lambda path, manifest: None)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.submit.mark_dry_run", lambda path, manifest: [])
 
     rc = orchestrate_main(
         [
             "run",
-            "--backend",
-            "slurm",
             "--job-config",
             str(job_cfg.with_suffix(".toml")),
             "--dry-run",
@@ -1004,21 +1001,9 @@ def test_run_backend_slurm_skips_local_probes(tmp_path: Path, monkeypatch) -> No
             run_id=kwargs["run_id"], bundle_root=str(kwargs["bundle_root"]), node_gpus=8, entries=[]
         )
 
-    monkeypatch.setattr(
-        "medarc_verifiers.orchestrate.runtime_probe.docker_available",
-        lambda: (_ for _ in ()).throw(AssertionError("docker probe should not run for slurm")),
-    )
-    monkeypatch.setattr(
-        "medarc_verifiers.orchestrate.runtime_probe.podman_available",
-        lambda: (_ for _ in ()).throw(AssertionError("podman probe should not run for slurm")),
-    )
-    monkeypatch.setattr(
-        "medarc_verifiers.orchestrate.launch.discover_gpus",
-        lambda: (_ for _ in ()).throw(AssertionError("GPU discovery should not run for slurm")),
-    )
-    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.cli.render_bundle", fake_render_bundle)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.cli.write_bundle_manifest", lambda path, manifest: None)
-    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.cli.mark_dry_run", lambda path, manifest: [])
+    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.submit.render_bundle", fake_render_bundle)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.submit.write_bundle_manifest", lambda path, manifest: None)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.submit.mark_dry_run", lambda path, manifest: [])
 
     common = [
         "--job-config",
@@ -1032,8 +1017,8 @@ def test_run_backend_slurm_skips_local_probes(tmp_path: Path, monkeypatch) -> No
         "--dry-run",
     ]
 
-    assert orchestrate_main(["run", "--backend", "slurm", *common]) == 0
-    assert orchestrate_main(["run", "--backend", "slurm", *common]) == 0
+    assert orchestrate_main(["run", *common]) == 0
+    assert orchestrate_main(["run", *common]) == 0
     assert captured[0] == captured[1]
 
 
@@ -1052,7 +1037,7 @@ def test_submit_bundle_resumes_from_existing_job_ids(tmp_path: Path, monkeypatch
         max_simultaneous_nodes=1,
         run_simultaneously=False,
         base_dependency=None,
-        cli_overrides=SlurmCliOverrides(),
+        submission_options=SlurmSubmissionOptions(),
     )
     manifest = render_bundle(
         planned_tasks=planned,

@@ -25,9 +25,11 @@ medarc-eval bench \
 ```
 
 `medmarks-endpoints.toml` is a portable alias registry. It maps endpoint IDs to
-model IDs, client types, and sampling defaults, but intentionally omits `url`,
-`key`, and `max_concurrent` because those are deployment-specific. Supply those
-settings with `--provider` or with `--api-base-url` and `--api-key-var`.
+model IDs, client types, sampling defaults, and optional `[endpoint.orchestrate]`
+settings used by `medarc-orchestrate`. It intentionally omits `url`, `key`,
+`max_concurrent`, and cluster-specific volume mounts because those are
+deployment-specific. Supply API settings with `--provider` or with
+`--api-base-url` and `--api-key-var`.
 The gpt-oss aliases use the Verifiers `openai_responses` client type.
 
 For a local vLLM server exposing an OpenAI-compatible API, keep using the same

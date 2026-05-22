@@ -301,6 +301,7 @@ class RunBundleEntry:
     task_spec_checksum: str
     allocation_path: str
     state_path: str
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -454,6 +455,10 @@ def ensure_run_bundle(
     allocation_defaults: Mapping[str, ExecutionAllocation] | None = None,
     existing_manifest: RunBundleManifest | None = None,
 ) -> BundlePlan:
+    if mode != "slurm":
+        raise ValueError("Task bundles are only supported in slurm mode.")
+    if runtime != "pyxis":
+        raise ValueError("Slurm task bundles require pyxis runtime.")
     output_root = output_root.expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
     manifest_path = run_manifest_path(output_root)
@@ -577,7 +582,6 @@ def _ensure_task_bundle(
     return PlannedTaskBundle(task=task, spec=spec, paths=paths, allocation=allocation, state=state)
 
 
-
 def _build_task_spec(
     *,
     task: TaskSpec,
@@ -616,7 +620,9 @@ def _build_task_spec(
         data_parallel_size=(
             int(model_cfg["data_parallel_size"]) if model_cfg.get("data_parallel_size") is not None else None
         ),
-        container_image=_required_string(container_cfg.get("image"), f"Task {task.task_id} orchestrate.container.image"),
+        container_image=_required_string(
+            container_cfg.get("image"), f"Task {task.task_id} orchestrate.container.image"
+        ),
         container_port=_required_int(
             container_cfg.get("container_port"), f"Task {task.task_id} orchestrate.container.container_port"
         ),

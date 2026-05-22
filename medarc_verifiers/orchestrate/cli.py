@@ -3,22 +3,19 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
 from medarc_verifiers.orchestrate.docker_vllm import cleanup_orphan_containers as cleanup_docker_orphans
 from medarc_verifiers.orchestrate.launch import (
-    LaunchPlan,
-    infer_pyxis_allocated_gpu_count,
+    LaunchRequest,
     resolve_cleanup_target,
     resolve_launch_plan,
     resolve_status_target,
-    validate_local_schedule,
 )
 from medarc_verifiers.orchestrate.podman_vllm import cleanup_orphan_containers as cleanup_podman_orphans
-from medarc_verifiers.orchestrate.resources import PortOnlyResourceManager, ResourceManager
-from medarc_verifiers.orchestrate.run import OrchestratorOptions, OrchestratorRunner
-from medarc_verifiers.orchestrate.state import filter_tasks_for_resume, load_summary
+from medarc_verifiers.orchestrate.slurm.submit import SlurmSubmissionOptions, submit_slurm_launch_plan
 
 
 def build_record_failure_parser(*, prog: str = "medarc-orchestrate record-failure") -> argparse.ArgumentParser:
@@ -32,7 +29,40 @@ def build_record_failure_parser(*, prog: str = "medarc-orchestrate record-failur
     return parser
 
 
-def _add_local_arguments(parser: argparse.ArgumentParser) -> None:
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="medarc-orchestrate",
+        description="Run Slurm/Pyxis vLLM orchestration.",
+    )
+    subparsers = parser.add_subparsers(dest="command", metavar="{run,status,cleanup}")
+    subparsers.required = True
+
+    run_parser = subparsers.add_parser("run", description="Submit Slurm orchestration jobs.")
+    _add_source_arguments(run_parser)
+    run_parser.add_argument("--dry-run", action="store_true", help="Render bundle and print sbatch commands.")
+    run_parser.add_argument("--run-id", help="Run identifier.")
+    run_parser.add_argument("--output-dir", type=Path, help="Override output directory root.")
+    run_parser.add_argument("--readiness-timeout-s", type=int, default=None, help="Readiness timeout in seconds.")
+    run_parser.add_argument("--prune-logs-on-success", action="store_true")
+    run_parser.add_argument("--eval-images-config", type=Path, help="Path to eval auxiliary image registry TOML.")
+    run_parser.add_argument("--endpoints-path", type=Path, help="Path to endpoint registry TOML.")
+    _add_slurm_arguments(run_parser)
+    run_parser.set_defaults(handler=_run_launch)
+
+    status_parser = subparsers.add_parser("status", description="Print orchestrator status artifacts.")
+    status_parser.add_argument("--run-id", help="Run identifier under outputs/orchestrate.")
+    status_parser.add_argument("--output-dir", type=Path, help="Run output directory.")
+    status_parser.add_argument("--json", action="store_true", help="Print combined status JSON.")
+    status_parser.set_defaults(handler=_run_status)
+
+    cleanup_parser = subparsers.add_parser("cleanup", description="Clean local runtime leftovers from tests/dev.")
+    cleanup_parser.add_argument("--runtime", choices=("docker", "podman"), required=True)
+    cleanup_parser.add_argument("--run-id", help="Only clean containers for this run id.")
+    cleanup_parser.set_defaults(handler=_run_cleanup)
+    return parser
+
+
+def _add_source_arguments(parser: argparse.ArgumentParser) -> None:
     source = parser.add_mutually_exclusive_group(required=False)
     source.add_argument("--plan", type=Path, help="Path to orchestrator plan file.")
     source.add_argument(
@@ -42,212 +72,160 @@ def _add_local_arguments(parser: argparse.ArgumentParser) -> None:
         dest="job_configs",
         help="Job config to orchestrate. Repeat to launch multiple job configs without a wrapper plan file.",
     )
-    parser.add_argument(
-        "--name",
-        default=None,
-        help="Optional bundle name when using --job-config directly (used for run-id prefix when --run-id is unset).",
-    )
-    parser.add_argument(
-        "--env-file",
-        type=Path,
-        default=None,
-        help="Dotenv file shared by runtime launches (overrides plan env_file; defaults to repo .env when present).",
-    )
-    parser.add_argument("--runtime", choices=("docker", "podman", "pyxis"), default=None, help="Serve runtime backend.")
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print resolved tasks and exit without running.",
-    )
-    parser.add_argument("--gpu-range", help="Restrict GPU indices (e.g. 0-3 or 0,2,3).")
-    parser.add_argument("--port-range", help="Restrict ports (e.g. 8000-8999).")
-    parser.add_argument("--run-id", help="Run identifier (default: timestamp).")
-    parser.add_argument("--output-dir", type=Path, help="Override output directory root.")
-    parser.add_argument(
-        "--max-parallel",
-        type=int,
-        default=None,
-        help="Maximum concurrent tasks (defaults to GPU count when unset).",
-    )
-    parser.add_argument("--readiness-timeout-s", type=int, default=None, help="Readiness timeout in seconds.")
-    parser.add_argument("--resume", action="store_true", help="Skip tasks already marked completed.")
-    parser.add_argument("--rerun-failed", action="store_true", help="Rerun failed tasks when resuming.")
-    parser.add_argument("--status", action="store_true", help="Print current status from summary and exit.")
-    parser.add_argument(
-        "--kill-orphans",
-        action="store_true",
-        help="Clean up containers labeled as orchestrator-managed.",
-    )
-    parser.add_argument(
-        "--prune-logs-on-success",
-        action="store_true",
-        help="Delete per-task serve/bench logs for completed tasks (kept for failures).",
-    )
-    parser.add_argument(
-        "--no-uv-run",
-        action="store_true",
-        help="Run 'medarc-eval bench' directly instead of via 'uv run' (use when venv is pre-activated).",
-    )
-    parser.add_argument("--eval-images-config", type=Path, help="Path to eval auxiliary image registry TOML.")
-    parser.add_argument(
-        "--endpoints-path",
-        type=Path,
-        help="Path to endpoint registry TOML with [endpoint.orchestrate] blocks.",
-    )
-    parser.set_defaults(command="run", handler=_run_launch, backend="local")
+    parser.add_argument("--name", default=None, help="Optional bundle name when using --job-config directly.")
+    parser.add_argument("--env-file", type=Path, default=None, help="Dotenv file shared by runtime launches.")
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="medarc-orchestrate",
-        description="Run vLLM orchestration with explicit execution modes.",
-    )
-    subparsers = parser.add_subparsers(dest="command", metavar="{run}")
-    subparsers.required = True
-
-    from medarc_verifiers.orchestrate.slurm.cli import add_slurm_executor_arguments
-
-    run_parser = subparsers.add_parser(
-        "run",
-        description="Run vLLM orchestration locally or submit via Slurm.",
-        help="Canonical orchestration launcher.",
-    )
-    _add_local_arguments(run_parser)
-    run_parser.add_argument("--backend", choices=("local", "slurm"), default="local")
-    add_slurm_executor_arguments(run_parser)
-    run_parser.set_defaults(command="run", handler=_run_launch)
-    return parser
+def _add_slurm_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--node-gpus", type=int, default=8, help="Outer Slurm GPU allocation per job.")
+    parser.add_argument("--max-simultaneous-nodes", type=int, default=1)
+    parser.add_argument("--run-simultaneously", action="store_true")
+    parser.add_argument("--cpus-per-gpu", type=int, default=None)
+    parser.add_argument("--time", default=None)
+    parser.add_argument("--partition", default=None)
+    parser.add_argument("--account", default=None)
+    parser.add_argument("--qos", default=None)
+    parser.add_argument("--nice", type=int, default=None)
+    parser.add_argument("--dependency", default=None, help="Base sbatch dependency applied to each chain head.")
+    parser.add_argument("--mail-type", default=None)
+    parser.add_argument("--mail-user", default=None)
+    parser.add_argument("--test-only", action="store_true")
+    parser.add_argument("--slurm-resume", action="store_true", default=None)
+    parser.add_argument("--source-dir", type=Path, default=None)
+    parser.add_argument("--activate-script", type=Path, default=None)
 
 
 def _run_launch(args: argparse.Namespace) -> int:
-    backend = getattr(args, "backend", "local")
-    if backend == "slurm":
-        _reject_local_only_slurm_args(args)
-    else:
-        _reject_slurm_only_local_args(args)
-    if args.status:
-        target = resolve_status_target(args, cwd=Path.cwd())
-        summary = load_summary(target.output_root / "summary.json")
-        for entry in summary.get("tasks", []):
-            print(f"{entry.get('task_id')}\t{entry.get('state')}\t{entry.get('model_id')}")
-        return 0
-    if args.kill_orphans:
-        target = resolve_cleanup_target(args, cwd=Path.cwd())
-        removed = _cleanup_orphans(runtime=target.runtime, run_id=target.run_id)
-        if removed:
-            print("\n".join(removed))
-        return 0
     _require_source(args)
-    if backend == "slurm":
-        from medarc_verifiers.orchestrate.slurm.cli import run_from_args
+    request = LaunchRequest(
+        plan=args.plan,
+        job_configs=tuple(args.job_configs or ()),
+        name=args.name,
+        env_file=args.env_file,
+        run_id=args.run_id,
+        output_dir=args.output_dir,
+        readiness_timeout_s=args.readiness_timeout_s,
+        prune_logs_on_success=bool(args.prune_logs_on_success),
+        eval_images_config=args.eval_images_config,
+        endpoints_path=args.endpoints_path,
+    )
+    launch = resolve_launch_plan(request, cwd=Path.cwd())
+    source_dir = (args.source_dir or Path.cwd()).expanduser().resolve()
+    activate_script = (
+        args.activate_script.expanduser() if args.activate_script is not None else source_dir / ".venv/bin/activate"
+    )
+    if not activate_script.is_absolute():
+        activate_script = source_dir / activate_script
+    options = SlurmSubmissionOptions(
+        node_gpus=args.node_gpus,
+        max_simultaneous_nodes=args.max_simultaneous_nodes,
+        run_simultaneously=bool(args.run_simultaneously),
+        base_dependency=args.dependency,
+        test_only=bool(args.test_only),
+        dry_run=bool(args.dry_run),
+        source_dir=source_dir,
+        activate_script=activate_script.resolve(),
+        cpus_per_gpu=args.cpus_per_gpu,
+        time=args.time,
+        partition=args.partition,
+        account=args.account,
+        qos=args.qos,
+        nice=args.nice,
+        mail_type=args.mail_type,
+        mail_user=args.mail_user,
+        slurm_resume=args.slurm_resume,
+    )
+    return submit_slurm_launch_plan(launch, options)
 
-        return run_from_args(args)
-    launch = resolve_launch_plan(args, backend="local", cwd=Path.cwd())
-    return run_local_launch_plan(launch, dry_run=bool(args.dry_run), resume=bool(args.resume), rerun_failed=bool(args.rerun_failed))
 
-
-def run_local_launch_plan(
-    launch: LaunchPlan,
-    *,
-    dry_run: bool = False,
-    resume: bool = False,
-    rerun_failed: bool = False,
-) -> int:
-    tasks = list(launch.tasks)
-    resume = resume or launch.plan.resume
-    rerun_failed = rerun_failed or launch.plan.rerun_failed
-    summary_path = launch.output_root / "summary.json"
-    if resume and summary_path.exists():
-        summary = load_summary(summary_path)
-        tasks = filter_tasks_for_resume(tasks, summary, rerun_failed=rerun_failed)
-    if tasks:
-        validate_local_schedule(
-            tasks,
-            runtime=launch.runtime,
-            gpu_indices=launch.gpu_indices,
-            port_range=launch.port_range,
-            max_parallel=launch.max_parallel,
-        )
-    if dry_run:
-        for task in tasks:
-            print(f"{task.task_id}\t{task.model_id}\t{task.job_config_path}")
+def _run_status(args: argparse.Namespace) -> int:
+    target = resolve_status_target(run_id=args.run_id, output_dir=args.output_dir, cwd=Path.cwd())
+    payload = _load_combined_status(target.output_root)
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
-    allocated_gpu_count = infer_pyxis_allocated_gpu_count() if launch.runtime == "pyxis" else None
-    prune_logs_on_success = launch.plan.prune_logs_on_success
-    options = OrchestratorOptions(
-        run_id=launch.run_id,
-        output_root=launch.output_root,
-        readiness_timeout_s=launch.readiness_timeout_s,
-        max_parallel=launch.max_parallel,
-        prune_logs_on_success=prune_logs_on_success,
-        allocated_gpu_count=allocated_gpu_count,
-    )
-    if launch.runtime in {"docker", "podman"}:
-        resource_manager = ResourceManager(gpu_indices=launch.gpu_indices, port_range=launch.port_range)
-    else:
-        resource_manager = PortOnlyResourceManager(port_range=launch.port_range)
-    runner = OrchestratorRunner(
-        launch.plan,
-        tasks,
-        resource_manager,
-        options=options,
-        runtime=launch.runtime,
-        uv_run=launch.uv_run,
-    )
-    runner.run()
+    for row in payload["tasks"]:
+        print(
+            "\t".join(
+                str(row.get(field) or "")
+                for field in (
+                    "task_id",
+                    "submit_state",
+                    "worker_state",
+                    "slurm_job_id",
+                    "dependency",
+                    "model_id",
+                    "failure_reason",
+                    "error",
+                )
+            )
+        )
     return 0
+
+
+def _run_cleanup(args: argparse.Namespace) -> int:
+    target = resolve_cleanup_target(runtime=args.runtime, run_id=args.run_id)
+    removed = _cleanup_orphans(runtime=target.runtime, run_id=target.run_id)
+    if removed:
+        print("\n".join(removed))
+    return 0
+
+
+def _load_combined_status(output_root: Path) -> dict[str, object]:
+    manifest_path = output_root / "submission_manifest.json"
+    summary_path = output_root / "summary.json"
+    manifest = _load_json_artifact(manifest_path) if manifest_path.exists() else None
+    summary = _load_json_artifact(summary_path) if summary_path.exists() else None
+    if manifest is None and summary is None:
+        raise SystemExit(
+            f"No orchestrator status found at {output_root}: missing submission_manifest.json and summary.json."
+        )
+    rows: dict[str, dict[str, object]] = {}
+    if isinstance(manifest, dict):
+        for entry in manifest.get("entries", []) or []:
+            if not isinstance(entry, dict):
+                continue
+            task_id = str(entry.get("task_id") or "")
+            row = rows.setdefault(task_id, {"task_id": task_id})
+            row.update(
+                {
+                    "submit_state": entry.get("state"),
+                    "slurm_job_id": entry.get("slurm_job_id"),
+                    "dependency": entry.get("generated_dependency") or entry.get("base_dependency"),
+                }
+            )
+    if isinstance(summary, dict):
+        for entry in summary.get("tasks", []) or []:
+            if not isinstance(entry, dict):
+                continue
+            task_id = str(entry.get("task_id") or "")
+            row = rows.setdefault(task_id, {"task_id": task_id})
+            row.update(
+                {
+                    "worker_state": entry.get("state"),
+                    "model_id": entry.get("model_id"),
+                    "failure_reason": entry.get("failure_reason"),
+                    "error": entry.get("error"),
+                }
+            )
+    return {
+        "output_root": str(output_root),
+        "submission_manifest": manifest,
+        "summary": summary,
+        "tasks": [rows[key] for key in sorted(rows)],
+    }
+
+
+def _load_json_artifact(path: Path) -> object:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        raise SystemExit(f"Malformed orchestrator status artifact: {path}") from exc
 
 
 def _require_source(args: argparse.Namespace) -> None:
     if args.plan is None and not args.job_configs:
         raise SystemExit("medarc-orchestrate run requires --plan or at least one --job-config.")
-
-
-def _reject_local_only_slurm_args(args: argparse.Namespace) -> None:
-    local_only = {
-        "--runtime": getattr(args, "runtime", None),
-        "--gpu-range": getattr(args, "gpu_range", None),
-        "--port-range": getattr(args, "port_range", None),
-        "--max-parallel": getattr(args, "max_parallel", None),
-    }
-    used = [flag for flag, value in local_only.items() if value is not None]
-    if bool(getattr(args, "resume", False)):
-        used.append("--resume")
-    if bool(getattr(args, "rerun_failed", False)):
-        used.append("--rerun-failed")
-    if bool(getattr(args, "no_uv_run", False)):
-        used.append("--no-uv-run")
-    if used:
-        raise SystemExit(
-            "medarc-orchestrate run --backend slurm does not accept local launch flags: " + ", ".join(used)
-        )
-
-
-def _reject_slurm_only_local_args(args: argparse.Namespace) -> None:
-    slurm_only = {
-        "--node-gpus": getattr(args, "node_gpus", None),
-        "--max-simultaneous-nodes": getattr(args, "max_simultaneous_nodes", None),
-        "--cpus-per-gpu": getattr(args, "cpus_per_gpu", None),
-        "--time": getattr(args, "time", None),
-        "--partition": getattr(args, "partition", None),
-        "--account": getattr(args, "account", None),
-        "--qos": getattr(args, "qos", None),
-        "--nice": getattr(args, "nice", None),
-        "--dependency": getattr(args, "dependency", None),
-        "--mail-type": getattr(args, "mail_type", None),
-        "--mail-user": getattr(args, "mail_user", None),
-        "--source-dir": getattr(args, "source_dir", None),
-        "--activate-script": getattr(args, "activate_script", None),
-    }
-    used = [flag for flag, value in slurm_only.items() if value is not None]
-    if bool(getattr(args, "run_simultaneously", False)):
-        used.append("--run-simultaneously")
-    if bool(getattr(args, "test_only", False)):
-        used.append("--test-only")
-    if getattr(args, "slurm_resume", None) is not None:
-        used.append("--slurm-resume")
-    if used:
-        raise SystemExit("medarc-orchestrate run does not accept Slurm flags without --backend slurm: " + ", ".join(used))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -321,4 +299,4 @@ def _cleanup_orphans(*, runtime: str, run_id: str | None) -> list[str]:
         return cleanup_podman_orphans(run_id=run_id)
     if runtime == "docker":
         return cleanup_docker_orphans(run_id=run_id)
-    return []
+    raise ValueError(f"cleanup --runtime {runtime!r} is not supported.")

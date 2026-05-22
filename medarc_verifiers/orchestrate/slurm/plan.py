@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 from typing import Any
 import re
 
@@ -22,22 +23,23 @@ _ALLOWED_SLURM_KEYS = {
     "mail_user",
     "slurm_resume",
 }
+
+
 def slug_task_id(task_id: str, *, fallback: str = "task") -> str:
     cleaned = _TASK_ALLOWED.sub("-", task_id).strip("-.")
     return cleaned or fallback
 
 
-@dataclass(frozen=True)
-class SlurmCliOverrides:
-    cpus_per_gpu: int | None = None
-    time: str | None = None
-    partition: str | None = None
-    account: str | None = None
-    qos: str | None = None
-    nice: int | None = None
-    mail_type: str | None = None
-    mail_user: str | None = None
-    slurm_resume: bool | None = None
+class SlurmSubmissionOverrides(Protocol):
+    cpus_per_gpu: int | None
+    time: str | None
+    partition: str | None
+    account: str | None
+    qos: str | None
+    nice: int | None
+    mail_type: str | None
+    mail_user: str | None
+    slurm_resume: bool | None
 
 
 @dataclass(frozen=True)
@@ -78,7 +80,7 @@ def build_submission_plan(
     max_simultaneous_nodes: int,
     run_simultaneously: bool,
     base_dependency: str | None,
-    cli_overrides: SlurmCliOverrides,
+    submission_options: SlurmSubmissionOverrides,
 ) -> list[PlannedSlurmTask]:
     if max_simultaneous_nodes < 1:
         raise ValueError("--max-simultaneous-nodes must be >= 1.")
@@ -92,7 +94,7 @@ def build_submission_plan(
                 original_index,
                 task,
                 topology,
-                merge_slurm_options(task, cli_overrides=cli_overrides),
+                merge_slurm_options(task, submission_options=submission_options),
             )
         )
     prepared.sort(key=lambda item: (item[0], item[1]))
@@ -129,30 +131,32 @@ def build_submission_plan(
     return planned
 
 
-def merge_slurm_options(task: TaskSpec, *, cli_overrides: SlurmCliOverrides) -> SlurmTaskOptions:
+def merge_slurm_options(task: TaskSpec, *, submission_options: SlurmSubmissionOverrides) -> SlurmTaskOptions:
     job_cfg = _validate_slurm_mapping(task.slurm, task_id=task.task_id)
     task_slug = slug_task_id(task.task_id)
     job_name = _slug_job_name(str(job_cfg.get("job_name") or task_slug))
     return SlurmTaskOptions(
         job_name=job_name,
-        cpus_per_gpu=cli_overrides.cpus_per_gpu
-        if cli_overrides.cpus_per_gpu is not None
+        cpus_per_gpu=submission_options.cpus_per_gpu
+        if submission_options.cpus_per_gpu is not None
         else _optional_int(job_cfg.get("cpus_per_gpu")),
-        time=cli_overrides.time if cli_overrides.time is not None else _optional_str(job_cfg.get("time")),
-        partition=cli_overrides.partition
-        if cli_overrides.partition is not None
+        time=submission_options.time if submission_options.time is not None else _optional_str(job_cfg.get("time")),
+        partition=submission_options.partition
+        if submission_options.partition is not None
         else _optional_str(job_cfg.get("partition")),
-        account=cli_overrides.account if cli_overrides.account is not None else _optional_str(job_cfg.get("account")),
-        qos=cli_overrides.qos if cli_overrides.qos is not None else _optional_str(job_cfg.get("qos")),
-        nice=cli_overrides.nice if cli_overrides.nice is not None else _optional_int(job_cfg.get("nice")),
-        mail_type=cli_overrides.mail_type
-        if cli_overrides.mail_type is not None
+        account=submission_options.account
+        if submission_options.account is not None
+        else _optional_str(job_cfg.get("account")),
+        qos=submission_options.qos if submission_options.qos is not None else _optional_str(job_cfg.get("qos")),
+        nice=submission_options.nice if submission_options.nice is not None else _optional_int(job_cfg.get("nice")),
+        mail_type=submission_options.mail_type
+        if submission_options.mail_type is not None
         else _optional_str(job_cfg.get("mail_type")),
-        mail_user=cli_overrides.mail_user
-        if cli_overrides.mail_user is not None
+        mail_user=submission_options.mail_user
+        if submission_options.mail_user is not None
         else _optional_str(job_cfg.get("mail_user")),
-        slurm_resume=cli_overrides.slurm_resume
-        if cli_overrides.slurm_resume is not None
+        slurm_resume=submission_options.slurm_resume
+        if submission_options.slurm_resume is not None
         else bool(job_cfg.get("slurm_resume", False)),
     )
 
@@ -194,7 +198,7 @@ def _optional_int(value: object) -> int | None:
 
 __all__ = [
     "PlannedSlurmTask",
-    "SlurmCliOverrides",
+    "SlurmSubmissionOverrides",
     "SlurmTaskOptions",
     "build_submission_plan",
     "merge_slurm_options",

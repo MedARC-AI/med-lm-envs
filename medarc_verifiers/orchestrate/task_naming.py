@@ -35,8 +35,4 @@ def task_root_for_id(output_root: Path, task_id: str) -> Path:
     return task_dir
 
 
-def bench_run_id(run_id: str, task_id: str) -> str:
-    return f"{run_id}-{sanitize_task_dirname(task_id, max_len=80)}"
-
-
-__all__ = ["bench_run_id", "sanitize_task_dirname", "task_root_for_id"]
+__all__ = ["sanitize_task_dirname", "task_root_for_id"]

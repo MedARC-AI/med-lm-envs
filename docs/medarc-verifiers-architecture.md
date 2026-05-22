@@ -257,18 +257,23 @@ Some environments use LLM-as-judge scoring. `medarc_verifiers` provides:
 
 Docs: `docs/medarc-orchestrate.md`.
 
-`medarc-orchestrate` runs TOML bench configs against locally hosted vLLM
-containers with GPU/port scheduling across Docker or Slurm+Pyxis runtimes.
+`medarc-orchestrate` submits TOML bench configs to Slurm/Pyxis vLLM
+workers. Docker and Podman runtime adapters are retained only for local
+test/development paths and cleanup of local leftovers; they are not public
+orchestration backends.
 
 - CLI entry: `medarc_verifiers/orchestrate/cli.py`
-- Runtime loop: `medarc_verifiers/orchestrate/run.py`
+- Launch resolver: `medarc_verifiers/orchestrate/launch.py`
+- Slurm submission: `medarc_verifiers/orchestrate/slurm/submit.py`
+- Worker entry: `medarc_verifiers/orchestrate/worker.py`
 
 It:
 
-1. Launches vLLM containers.
-2. Waits for readiness.
-3. Runs `uv run medarc-eval bench --config <job.toml> --api-base-url <allocated> --provider local`.
-4. Tracks orchestration state under `outputs/orchestrate/<run_id>/`.
+1. Resolves TOML jobs into task bundles.
+2. Renders and submits Slurm jobs.
+3. Runs each task with `medarc-orchestrate worker --runtime pyxis`.
+4. Runs `medarc-eval bench --config <task>/eval-config.toml --api-base-url <local> --provider local`.
+5. Tracks submission and worker state under `outputs/orchestrate/<run_id>/`.
 
 ## Where To Change Things
 

@@ -5,11 +5,88 @@ from __future__ import annotations
 import re
 import shlex
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
+from medarc_verifiers.orchestrate.launch import LaunchPlan
+
 from .manifest import SlurmBundleManifest, SlurmTaskEntry, write_bundle_manifest
+from .manifest import load_bundle_manifest
+from .plan import build_submission_plan
+from .render import render_bundle
 
 _JOB_ID_RE = re.compile(r"(\d+)")
+
+
+@dataclass(frozen=True)
+class SlurmSubmissionOptions:
+    node_gpus: int = 8
+    max_simultaneous_nodes: int = 1
+    run_simultaneously: bool = False
+    base_dependency: str | None = None
+    test_only: bool = False
+    dry_run: bool = False
+    source_dir: Path | None = None
+    activate_script: Path | None = None
+    cpus_per_gpu: int | None = None
+    time: str | None = None
+    partition: str | None = None
+    account: str | None = None
+    qos: str | None = None
+    nice: int | None = None
+    mail_type: str | None = None
+    mail_user: str | None = None
+    slurm_resume: bool | None = None
+
+
+def submit_slurm_launch_plan(launch: LaunchPlan, options: SlurmSubmissionOptions) -> int:
+    output_root = launch.output_root.expanduser().resolve()
+    source_dir = (options.source_dir or Path.cwd()).expanduser().resolve()
+    activate_script = options.activate_script or (source_dir / ".venv" / "bin" / "activate")
+    activate_script = activate_script.expanduser()
+    if not activate_script.is_absolute():
+        activate_script = source_dir / activate_script
+    planned_tasks = build_submission_plan(
+        launch.tasks,
+        run_id=launch.run_id,
+        node_gpus=options.node_gpus,
+        max_simultaneous_nodes=options.max_simultaneous_nodes,
+        run_simultaneously=options.run_simultaneously,
+        base_dependency=options.base_dependency,
+        submission_options=options,
+    )
+    manifest_path = output_root / "submission_manifest.json"
+    existing_manifest = _load_existing_manifest(manifest_path, run_id=launch.run_id)
+    manifest = render_bundle(
+        planned_tasks=planned_tasks,
+        bundle_root=output_root,
+        run_id=launch.run_id,
+        node_gpus=options.node_gpus,
+        source_dir=source_dir,
+        activate_script=activate_script.resolve(),
+        env_file=launch.env_file,
+        readiness_timeout_s=launch.readiness_timeout_s,
+        prune_logs_on_success=launch.prune_logs_on_success,
+        existing_manifest=existing_manifest,
+    )
+    write_bundle_manifest(manifest_path, manifest)
+
+    if options.dry_run:
+        for command in mark_dry_run(manifest_path, manifest):
+            print(command)
+        return 0
+
+    submit_bundle(manifest_path, manifest, test_only=options.test_only)
+    return 0
+
+
+def _load_existing_manifest(path: Path, *, run_id: str) -> SlurmBundleManifest | None:
+    if not path.exists():
+        return None
+    manifest = load_bundle_manifest(path)
+    if manifest.run_id != run_id:
+        raise ValueError(f"Existing Slurm manifest at {path} belongs to run_id={manifest.run_id}, not {run_id}.")
+    return manifest
 
 
 def mark_dry_run(path: Path, manifest: SlurmBundleManifest) -> list[str]:
@@ -96,4 +173,4 @@ def _parse_job_id(output: str) -> str:
     return match.group(1)
 
 
-__all__ = ["mark_dry_run", "submit_bundle"]
+__all__ = ["SlurmSubmissionOptions", "mark_dry_run", "submit_bundle", "submit_slurm_launch_plan"]

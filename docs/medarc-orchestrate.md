@@ -1,20 +1,17 @@
 ## vLLM Orchestrator
 
-`medarc-orchestrate` runs TOML `medarc-eval bench` configs against locally served vLLM instances. It keeps benchmark semantics in upstream eval TOML files and resolves runtime infrastructure from endpoint registry entries.
+`medarc-orchestrate` submits TOML `medarc-eval bench` configs to Slurm/Pyxis vLLM workers. It keeps benchmark semantics in upstream eval TOML files and resolves runtime infrastructure from endpoint registry entries.
 
 ### Config Files
 
 A plan is a TOML file. Most users only need job configs plus the endpoint registry:
 
 ```toml
-name = "local-vllm"
+name = "slurm-vllm"
 job_configs = ["configs/qwen-30b-a3b-medqa.toml"]
 eval_images_config = "configs/eval_images.toml"
 endpoints_path = "configs/medmarks-endpoints.toml"
 env_file = ".env"
-gpu_range = "0-3"
-port_range = "8000-8999"
-max_parallel = 2
 readiness_timeout_s = 1800
 prune_logs_on_success = true
 ```
@@ -76,32 +73,38 @@ url = "http://127.0.0.1:8080/health"
 timeout_s = 240
 ```
 
-### Local Usage
-
-```bash
-uv run medarc-orchestrate run --plan plans/local-vllm.toml --runtime podman
-uv run medarc-orchestrate run --job-config configs/qwen-30b-a3b-medqa.toml --endpoints-path configs/medmarks-endpoints.toml --runtime pyxis
-```
-
-Common flags:
-
-- `--runtime {docker,podman,pyxis}` selects the serve backend.
-- `--eval-images-config` overrides the eval image registry.
-- `--endpoints-path` selects the endpoint registry used for endpoint/model resolution, orchestration settings, and bench.
-- `--output-dir` sets the orchestrator output root.
-- `--max-parallel`, `--gpu-range`, and `--port-range` control local scheduling.
-- `--prune-logs-on-success` removes per-task serve and bench logs after successful tasks.
-
 ### Slurm Usage
 
 ```bash
-uv run medarc-orchestrate run --backend slurm --plan plan-qwen-small-slurm.toml --dry-run
-uv run medarc-orchestrate run --backend slurm --plan plan-qwen-small-slurm.toml --output-dir outputs/orchestrate/qwen-run
+uv run medarc-orchestrate run --plan plan-qwen-small-slurm.toml --dry-run
+uv run medarc-orchestrate run --plan plan-qwen-small-slurm.toml --output-dir outputs/orchestrate/qwen-run
 ```
 
 Slurm options come from `[endpoint.orchestrate.slurm]`, with Slurm executor CLI overrides taking precedence.
 `slurm_resume = true` renders `#SBATCH --requeue`, so resubmitting the same task bundle reuses the same task-local
 bench output directory.
+
+Common flags:
+
+- `--eval-images-config` overrides the eval image registry.
+- `--endpoints-path` selects the endpoint registry used for endpoint/model resolution, orchestration settings, and bench.
+- `--output-dir` sets the orchestrator output root.
+- `--node-gpus`, `--max-simultaneous-nodes`, `--run-simultaneously`, and Slurm account/partition/time flags control submission.
+- `--prune-logs-on-success` removes per-task serve and bench logs after successful tasks.
+
+Docker and Podman are retained only for worker/runtime adapter development and cleanup of local test leftovers:
+
+```bash
+uv run medarc-orchestrate cleanup --runtime docker --run-id qwen-run
+uv run medarc-orchestrate cleanup --runtime podman --run-id qwen-run
+```
+
+Status reads the Slurm submission manifest and worker summary when present:
+
+```bash
+uv run medarc-orchestrate status --run-id qwen-run
+uv run medarc-orchestrate status --output-dir outputs/orchestrate/qwen-run --json
+```
 
 ### Task Bundles
 
@@ -115,7 +118,7 @@ Before launching a task, the orchestrator creates a task bundle under `outputs/o
 - `bench/`: deterministic `medarc-eval bench --output-dir` root.
 - `serve/` and `runtime/`: runtime logs, state, and task manifest files.
 
-The worker always runs bench against bundled `eval-config.toml`, not the original source path:
+The Slurm script activates the chosen environment, starts the worker with `--runtime pyxis`, and the worker runs bench against bundled `eval-config.toml`, not the original source path:
 
 ```bash
 medarc-eval bench --config <task>/eval-config.toml --api-base-url <local-url> --provider local --output-dir <task>/bench

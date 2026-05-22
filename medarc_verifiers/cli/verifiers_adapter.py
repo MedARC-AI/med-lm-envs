@@ -262,7 +262,7 @@ def build_eval_identity_payload(
     merged_raw = _apply_overrides(dict(raw), overrides)
     endpoints_path = str(merged_raw.get("endpoints_path", DEFAULT_ENDPOINTS_PATH))
     endpoints = _load_endpoint_registry(endpoints_path)
-    model, _resolved_endpoint_id, _client_config = _build_client_config(merged_raw, endpoints, endpoints_path)
+    model, resolved_endpoint_id, _client_config = _build_client_config(merged_raw, endpoints, endpoints_path)
 
     payload = {
         "env_args": dict(merged_raw.get("env_args", {})),
@@ -273,6 +273,8 @@ def build_eval_identity_payload(
         "max_concurrent": merged_raw.get("max_concurrent", DEFAULT_MAX_CONCURRENT),
         "sampling_args": dict(merged_raw.get("sampling_args", {})),
     }
+    if resolved_endpoint_id is not None:
+        payload["endpoint_id"] = resolved_endpoint_id
     if "variant_id" in raw:
         payload["variant_id"] = raw["variant_id"]
     if "name" in raw:

@@ -95,14 +95,9 @@ url = "http://127.0.0.1:8080/health"
 name = "test"
 job_configs = ["configs/job-foo.toml"]
 eval_images_config = "configs/eval_images.toml"
-gpu_range = "0-3"
-port_range = "8100-8199"
 run_id = "hello"
 output_dir = "outputs/orchestrate/test-run"
-max_parallel = 2
 readiness_timeout_s = 123
-resume = true
-rerun_failed = true
 """.lstrip(),
         encoding="utf-8",
     )
@@ -111,7 +106,6 @@ rerun_failed = true
     assert plan.job_configs == [job_cfg.resolve()]
     assert plan.eval_images_config == eval_images_cfg.resolve()
     assert plan.output_dir == (tmp_path / "outputs" / "orchestrate" / "test-run").resolve()
-    assert plan.resume is True
 
     task = expand_tasks(plan)[0]
     assert task.job_config_path == job_cfg.resolve()
@@ -182,8 +176,19 @@ model = "openai/gpt-oss-120b"
     plan_path = tmp_path / "plan.toml"
     plan_path.write_text(f'job_configs = ["{job_cfg.name}"]\n', encoding="utf-8")
 
-    with pytest.raises(ValueError, match="with \\[endpoint.orchestrate\\] matches endpoint_id 'gpt-oss-120b-high'"):
+    with pytest.raises(ValueError, match="Known IDs: \\['gpt-oss-120b'\\]"):
         expand_tasks(load_plan(plan_path))
+
+
+@pytest.mark.parametrize(
+    "field", ["runtime", "gpu_range", "port_range", "max_parallel", "resume", "rerun_failed", "uv_run"]
+)
+def test_plan_rejects_deleted_local_only_fields(tmp_path: Path, field: str) -> None:
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text(f'job_configs = ["job.toml"]\n{field} = "legacy"\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Invalid plan file"):
+        load_plan(plan_path)
 
 
 def test_endpoint_orchestration_registry_applies_defaults_and_default_tensor_parallel(tmp_path: Path) -> None:

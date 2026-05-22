@@ -141,6 +141,7 @@ def test_worker_cli_loads_task_and_allocation(tmp_path: Path, monkeypatch) -> No
     async def fake_run(self, *, manifest=None):
         captured["task_id"] = self._spec.task_id
         captured["server_port"] = self._allocation.server_port
+        captured["command_template"] = self._command_template
         return manifest or TaskManifest(
             task_id=self._spec.task_id,
             config_path=self._spec.bundled_eval_config_path,
@@ -159,12 +160,14 @@ def test_worker_cli_loads_task_and_allocation(tmp_path: Path, monkeypatch) -> No
             task_bundle.spec.output_paths.allocation_path,
             "--runtime",
             "pyxis",
-            "--no-uv-run",
         ]
     )
 
     assert rc == 0
-    assert captured == {"task_id": tasks[0].task_id, "server_port": 8000}
+    assert captured["task_id"] == tasks[0].task_id
+    assert captured["server_port"] == 8000
+    assert str(captured["command_template"]).startswith("medarc-eval bench ")
+    assert "uv run medarc-eval" not in str(captured["command_template"])
 
 
 def test_worker_cli_persists_failed_state(tmp_path: Path, monkeypatch) -> None:
@@ -185,7 +188,6 @@ def test_worker_cli_persists_failed_state(tmp_path: Path, monkeypatch) -> None:
             task_bundle.spec.output_paths.allocation_path,
             "--runtime",
             "pyxis",
-            "--no-uv-run",
         ]
     )
 
@@ -210,7 +212,6 @@ def test_worker_cli_rejects_allocation_incompatible_with_tp(tmp_path: Path, monk
             task_bundle.spec.output_paths.allocation_path,
             "--runtime",
             "pyxis",
-            "--no-uv-run",
         ]
     )
 
@@ -253,7 +254,6 @@ def test_worker_cli_infers_allocated_gpus_from_visible_devices(tmp_path: Path, m
             task_bundle.spec.output_paths.allocation_path,
             "--runtime",
             "pyxis",
-            "--no-uv-run",
         ]
     )
 

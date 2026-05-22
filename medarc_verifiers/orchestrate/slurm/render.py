@@ -99,9 +99,6 @@ def render_bundle(
                 tensor_parallel_size=planned_task.tensor_parallel_size,
                 data_parallel_size=planned_task.data_parallel_size,
                 vllm_world_size=planned_task.vllm_world_size,
-                inner_run_id=planned_task.inner_run_id,
-                restart_source=bundle.state.restart_source,
-                restart_strategy=bundle.state.restart_source_strategy,
                 script_path=str(rendered["script_path"]),
                 generated_dependency=generated_dependency,
                 base_dependency=planned_task.base_dependency,
@@ -180,6 +177,7 @@ def write_script(
         _sbatch_line("--partition", planned_task.options.partition),
         _sbatch_line("--account", planned_task.options.account),
         _sbatch_line("--qos", planned_task.options.qos),
+        _sbatch_line("--nice", planned_task.options.nice),
         _sbatch_line("--mail-type", planned_task.options.mail_type),
         _sbatch_line("--mail-user", planned_task.options.mail_user),
     ]
@@ -196,9 +194,6 @@ def write_script(
         task_bundle.spec.output_paths.allocation_path,
         "--runtime",
         "pyxis",
-        "--run-id",
-        planned_task.inner_run_id,
-        "--no-uv-run",
     ]
     if env_file is not None:
         command.extend(["--env-file", str(env_file)])

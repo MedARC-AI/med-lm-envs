@@ -44,17 +44,10 @@ class PlanConfig(BaseModel):
     name: str | None = None
     job_configs: list[Path] = Field(..., min_length=1)
     env_file: Path | None = None
-    runtime: str | None = None
-    gpu_range: str | None = None
-    port_range: str | None = None
     run_id: str | None = None
     output_dir: Path | None = None
-    max_parallel: int | None = None
     readiness_timeout_s: int | None = None
-    resume: bool = False
-    rerun_failed: bool = False
     prune_logs_on_success: bool = False
-    uv_run: bool = True
     eval_images_config: Path | None = None
     endpoints_path: Path | None = None
 
@@ -100,8 +93,7 @@ def load_plan(path: Path) -> PlanConfig:
         plan = PlanConfig(**payload)
     except ValidationError as exc:
         raise ValueError(f"Invalid plan file: {resolved}") from exc
-    _resolve_plan_paths(plan, base_dir=resolved.parent)
-    return plan
+    return _resolve_plan_paths(plan, base_dir=resolved.parent)
 
 
 def make_plan(
@@ -118,8 +110,7 @@ def make_plan(
         eval_images_config=eval_images_config,
         endpoints_path=endpoints_path,
     )
-    _resolve_plan_paths(plan, base_dir=(base_dir or Path.cwd()).resolve())
-    return plan
+    return _resolve_plan_paths(plan, base_dir=(base_dir or Path.cwd()).resolve())
 
 
 def load_job_config(path: Path) -> Mapping[str, Any]:
@@ -271,12 +262,13 @@ def expand_tasks(plan: PlanConfig, *, default_endpoints_path: Path | None = None
     return tasks
 
 
-def _resolve_plan_paths(plan: PlanConfig, *, base_dir: Path) -> None:
-    plan.job_configs = [_resolve_path(path, base_dir=base_dir) for path in plan.job_configs]
+def _resolve_plan_paths(plan: PlanConfig, *, base_dir: Path) -> PlanConfig:
+    updates: dict[str, object] = {"job_configs": [_resolve_path(path, base_dir=base_dir) for path in plan.job_configs]}
     for field_name in ("env_file", "output_dir", "eval_images_config", "endpoints_path"):
         value = getattr(plan, field_name)
         if value is not None:
-            setattr(plan, field_name, _resolve_path(value, base_dir=base_dir))
+            updates[field_name] = _resolve_path(value, base_dir=base_dir)
+    return plan.model_copy(update=updates)
 
 
 def _resolve_path(path: Path, *, base_dir: Path) -> Path:
@@ -556,9 +548,8 @@ def _match_endpoint_orchestration_entry(
                     f"but eval config resolves to {model_id!r}."
                 )
             return entry
-    raise ValueError(
-        f"No [[endpoint]] entry in {source} with [endpoint.orchestrate] matches endpoint_id {endpoint_id!r}."
-    )
+    known = sorted(_orchestrate_endpoint_id(entry) for entry in payload.get("model", []) or [])
+    raise ValueError(f"No [[endpoint]] entry in {source} matches endpoint_id {endpoint_id!r}. Known IDs: {known}.")
 
 
 def _resolve_task_endpoints_path(
