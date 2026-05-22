@@ -1,0 +1,27 @@
+[project]
+name = "casereportbench"
+description = "CaseReportBench: Benchmarking LLMs for Dense Information Extraction in Clinical Case Reports - 138 expert-annotated case reports"
+tags = ["medical", "information-extraction", "iem"]
+version = "0.1.0"
+requires-python = ">=3.10"
+authors = [
+    { name = "Shamus Sim Zi Yang", email = "shamus.sim@gmail.com" },
+]
+dependencies = [
+    "verifiers>=0.1.5",
+    "medarc_verifiers>=0.1.0",
+    "fuzzywuzzy",
+    "python-Levenshtein",
+    "evaluate",
+    "rouge_score",
+    "numpy"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.prime.environment]
+loader = "casereportbench:load_environment"
+display_name = "CaseReportBench"
+visibility = "PUBLIC"
