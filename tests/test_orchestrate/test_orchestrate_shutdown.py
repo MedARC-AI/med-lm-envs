@@ -74,14 +74,14 @@ async def test_scheduler_shutdown_stops_new_tasks(tmp_path: Path) -> None:
             job_config_path=tmp_path / "job-1.yaml",
             model_key="foo",
             model_id="Foo/Bar",
-            orchestrate={"foo": {"gpus": 1}},
+            orchestrate={"vllm": {"gpus": 1}},
         ),
         TaskSpec(
             task_id="task-2",
             job_config_path=tmp_path / "job-2.yaml",
             model_key="foo",
             model_id="Foo/Bar",
-            orchestrate={"foo": {"gpus": 1}},
+            orchestrate={"vllm": {"gpus": 1}},
         ),
     ]
     shutdown_event = asyncio.Event()
@@ -113,7 +113,7 @@ async def test_scheduler_shutdown_during_allocation(tmp_path: Path) -> None:
             job_config_path=tmp_path / "job-1.yaml",
             model_key="foo",
             model_id="Foo/Bar",
-            orchestrate={"foo": {"gpus": 1}},
+            orchestrate={"vllm": {"gpus": 1}},
         )
     ]
     shutdown_event = asyncio.Event()

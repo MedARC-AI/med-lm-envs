@@ -50,21 +50,21 @@ async def test_scheduler_backfill_prefers_large_then_small(tmp_path: Path) -> No
             job_config_path=tmp_path / "job-2gpu.yaml",
             model_key="foo",
             model_id="Foo/Bar",
-            orchestrate={"foo": {"gpus": 2}},
+            orchestrate={"vllm": {"gpus": 2}},
         ),
         TaskSpec(
             task_id="task-1gpu-a",
             job_config_path=tmp_path / "job-1gpu-a.yaml",
             model_key="foo",
             model_id="Foo/Baz",
-            orchestrate={"foo": {"gpus": 1}},
+            orchestrate={"vllm": {"gpus": 1}},
         ),
         TaskSpec(
             task_id="task-1gpu-b",
             job_config_path=tmp_path / "job-1gpu-b.yaml",
             model_key="foo",
             model_id="Foo/Qux",
-            orchestrate={"foo": {"gpus": 1}},
+            orchestrate={"vllm": {"gpus": 1}},
         ),
     ]
     scheduler = TaskScheduler(DummyResourceManager(), max_parallel=4)
@@ -97,14 +97,14 @@ async def test_scheduler_backfill_breaks_gpu_ties_by_tensor_parallel_size(tmp_pa
             job_config_path=tmp_path / "job-tp1.yaml",
             model_key="foo",
             model_id="Foo/Tp1",
-            orchestrate={"foo": {"gpus": 2, "tensor_parallel_size": 1}},
+            orchestrate={"vllm": {"gpus": 2, "tensor_parallel_size": 1}},
         ),
         TaskSpec(
             task_id="task-tp2",
             job_config_path=tmp_path / "job-tp2.yaml",
             model_key="foo",
             model_id="Foo/Tp2",
-            orchestrate={"foo": {"gpus": 2, "tensor_parallel_size": 2}},
+            orchestrate={"vllm": {"gpus": 2, "tensor_parallel_size": 2}},
         ),
     ]
     scheduler = TaskScheduler(DummyResourceManager(), max_parallel=2)
