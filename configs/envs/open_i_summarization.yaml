@@ -1,0 +1,28 @@
+# Open-I Summarization environment configuration
+# Radiology findings to impression summarization benchmark
+
+- id: open_i_summarization
+  module: open_i_summarization
+  num_examples: -1
+  verbose: false
+  env_args:
+    split: test
+    compute_auto_metrics: true
+
+# Validation split variant
+- id: open_i_summarization_val
+  module: open_i_summarization
+  num_examples: -1
+  verbose: false
+  env_args:
+    split: validation
+    compute_auto_metrics: true
+
+# Fast evaluation (no automatic metrics)
+- id: open_i_summarization_fast
+  module: open_i_summarization
+  num_examples: -1
+  verbose: false
+  env_args:
+    split: test
+    compute_auto_metrics: false

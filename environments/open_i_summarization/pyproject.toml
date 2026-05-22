@@ -1,0 +1,30 @@
+[project]
+name = "open_i_summarization"
+description = "Radiology findings to impression summarization benchmark using Open-I dataset"
+tags = ["medical", "radiology", "summarization", "single-turn", "llm-judge", "nlg-metrics"]
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "verifiers>=0.1.4",
+    "datasets>=2.13.0",
+    "medarc_verifiers>=0.1.0",
+    "evaluate>=0.4.0",
+    "bert_score>=0.3.13",
+    "rouge_score>=0.1.2",
+    "sacrebleu>=2.3.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["open_i_summarization.py"]
+
+[tool.uv.sources]
+medarc_verifiers = { git = "https://github.com/MedARC-AI/med-lm-envs" }
+
+[tool.prime.environment]
+loader = "open_i_summarization:load_environment"
+display_name = "Open-I Summarization"
+visibility = "PUBLIC"
