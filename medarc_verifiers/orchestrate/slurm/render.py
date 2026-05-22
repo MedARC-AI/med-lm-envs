@@ -16,15 +16,14 @@ from medarc_verifiers.orchestrate.bundle import (
 )
 
 from .manifest import SlurmBundleManifest, SlurmTaskEntry
-from .plan import PlannedSlurmTask, placeholder_dependency
+from .plan import PlannedSlurmTask
 
 
 def render_bundle(
     *,
     planned_tasks: list[PlannedSlurmTask],
     bundle_root: Path,
-    run_id: str,
-    node_gpus: int,
+    run_id: str = "bundle",
     source_dir: Path,
     activate_script: Path,
     env_file: Path | None,
@@ -34,19 +33,18 @@ def render_bundle(
 ) -> SlurmBundleManifest:
     bundle_root.mkdir(parents=True, exist_ok=True)
     existing_entries = existing_manifest.entry_map() if existing_manifest else {}
-    task_order = {task.task.task_id: task.submission_order for task in planned_tasks}
     allocation_defaults = {
         task.task.task_id: ExecutionAllocation(
             task_id=task.task.task_id,
             allocated_gpus=task.allocated_gpus,
             server_port=_default_server_port(run_id, task.submission_order),
-            require_contiguous_gpus=node_gpus > 1,
+            require_contiguous_gpus=task.allocated_gpus > 1,
             slurm_job_id=(
                 existing_entries.get(task.task.task_id).slurm_job_id
                 if existing_entries.get(task.task.task_id)
                 else None
             ),
-            constraints={"scheduler": "slurm", "node_gpus": node_gpus},
+            constraints={"scheduler": "slurm", "allocated_gpus": task.allocated_gpus},
         )
         for task in planned_tasks
     }
@@ -74,9 +72,7 @@ def render_bundle(
             env_file=env_file,
             readiness_timeout_s=readiness_timeout_s,
             prune_logs_on_success=prune_logs_on_success,
-            node_gpus=node_gpus,
         )
-        generated_dependency = placeholder_dependency(planned_task, task_order=task_order)
         state = existing_entry.state if existing_entry else "pending"
         slurm_job_id = existing_entry.slurm_job_id if existing_entry else None
         if state == "submitted" and not slurm_job_id:
@@ -86,9 +82,10 @@ def render_bundle(
                 run_id=run_id,
                 task_id=planned_task.task.task_id,
                 task_slug=planned_task.task_slug,
-                original_job_config_path=str(planned_task.task.job_config_path),
-                original_job_config_checksum=bundle.spec.original_job_config_checksum,
-                effective_job_config_path=bundle.spec.bundled_eval_config_path,
+                suite_path=str(planned_task.task.suite_path),
+                suite_checksum=bundle.spec.suite_checksum,
+                target_endpoint_id=planned_task.task.target_endpoint_id,
+                generated_eval_config_path=bundle.spec.bundled_eval_config_path,
                 bundled_eval_config_checksum=bundle.spec.bundled_eval_config_checksum,
                 task_spec_path=bundle.spec.output_paths.task_spec_path,
                 task_spec_checksum=bundle_entry.task_spec_checksum,
@@ -100,10 +97,8 @@ def render_bundle(
                 data_parallel_size=planned_task.data_parallel_size,
                 vllm_world_size=planned_task.vllm_world_size,
                 script_path=str(rendered["script_path"]),
-                generated_dependency=generated_dependency,
+                generated_dependency=None,
                 base_dependency=planned_task.base_dependency,
-                predecessor_task_id=planned_task.predecessor_task_id,
-                chain_index=planned_task.chain_index,
                 submission_order=planned_task.submission_order,
                 job_name=planned_task.options.job_name,
                 account=planned_task.options.account,
@@ -115,7 +110,6 @@ def render_bundle(
     manifest = SlurmBundleManifest(
         run_id=run_id,
         bundle_root=str(bundle_root),
-        node_gpus=node_gpus,
         entries=entries,
     )
     if existing_manifest is not None:
@@ -132,7 +126,6 @@ def render_task_artifacts(
     env_file: Path | None,
     readiness_timeout_s: int | None,
     prune_logs_on_success: bool,
-    node_gpus: int,
 ) -> dict[str, Path | str | None]:
     script_path = task_bundle.paths.submit_script_path
     write_script(
@@ -144,7 +137,6 @@ def render_task_artifacts(
         env_file=env_file,
         readiness_timeout_s=readiness_timeout_s,
         prune_logs_on_success=prune_logs_on_success,
-        node_gpus=node_gpus,
     )
     return {"script_path": script_path}
 
@@ -159,7 +151,6 @@ def write_script(
     env_file: Path | None,
     readiness_timeout_s: int | None,
     prune_logs_on_success: bool,
-    node_gpus: int,
 ) -> None:
     log_path = Path(task_bundle.spec.output_paths.root) / "slurm" / "job_%j.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -168,7 +159,7 @@ def write_script(
         f"#SBATCH --job-name={planned_task.options.job_name}",
         "#SBATCH --nodes=1",
         "#SBATCH --ntasks=1",
-        f"#SBATCH --gpus-per-task={node_gpus}",
+        f"#SBATCH --gpus-per-task={planned_task.allocated_gpus}",
         f"#SBATCH --output={log_path}",
     ]
     option_lines = [
@@ -217,7 +208,7 @@ def write_script(
         "fi",
         "",
         'source "$ACTIVATE_SCRIPT"',
-        f"export MEDARC_ALLOCATED_GPU_COUNT={node_gpus}",
+        f"export MEDARC_ALLOCATED_GPU_COUNT={planned_task.allocated_gpus}",
         "",
         *_render_sidecars(task_bundle.spec.sidecars, task_bundle=task_bundle),
         " ".join(shlex.quote(arg) for arg in command),

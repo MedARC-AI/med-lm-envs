@@ -61,13 +61,11 @@ class PlannedSlurmTask:
     task: TaskSpec
     task_slug: str
     submission_order: int
-    chain_index: int
     gpus: int
     allocated_gpus: int
     tensor_parallel_size: int
     data_parallel_size: int
     vllm_world_size: int
-    predecessor_task_id: str | None
     base_dependency: str | None
     options: SlurmTaskOptions
 
@@ -75,19 +73,12 @@ class PlannedSlurmTask:
 def build_submission_plan(
     tasks: list[TaskSpec],
     *,
-    run_id: str,
-    node_gpus: int,
-    max_simultaneous_nodes: int,
-    run_simultaneously: bool,
     base_dependency: str | None,
     submission_options: SlurmSubmissionOverrides,
 ) -> list[PlannedSlurmTask]:
-    if max_simultaneous_nodes < 1:
-        raise ValueError("--max-simultaneous-nodes must be >= 1.")
-
     prepared: list[tuple[tuple[int, int, str], int, TaskSpec, ResolvedTopology, SlurmTaskOptions]] = []
     for original_index, task in enumerate(tasks):
-        topology = resolve_topology(task, allocated_gpus=node_gpus)
+        topology = resolve_topology(task, allocated_gpus=_allocated_gpus_for_task(task))
         prepared.append(
             (
                 task_sort_key(task),
@@ -99,35 +90,23 @@ def build_submission_plan(
         )
     prepared.sort(key=lambda item: (item[0], item[1]))
 
-    last_task_in_chain: dict[int, str] = {}
     planned: list[PlannedSlurmTask] = []
     for submission_order, (_, _, task, topology, options) in enumerate(prepared):
-        if run_simultaneously:
-            chain_index = submission_order
-            predecessor_task_id = None
-            task_base_dependency = base_dependency
-        else:
-            chain_index = submission_order % max_simultaneous_nodes
-            predecessor_task_id = last_task_in_chain.get(chain_index)
-            task_base_dependency = base_dependency if predecessor_task_id is None else None
         task_slug = slug_task_id(task.task_id)
         planned.append(
             PlannedSlurmTask(
                 task=task,
                 task_slug=task_slug,
                 submission_order=submission_order,
-                chain_index=chain_index,
                 gpus=topology.gpus,
                 allocated_gpus=topology.allocated_gpus,
                 tensor_parallel_size=topology.tensor_parallel_size,
                 data_parallel_size=topology.data_parallel_size,
                 vllm_world_size=topology.vllm_world_size,
-                predecessor_task_id=predecessor_task_id,
-                base_dependency=task_base_dependency,
+                base_dependency=base_dependency,
                 options=options,
             )
         )
-        last_task_in_chain[chain_index] = task.task_id
     return planned
 
 
@@ -161,11 +140,14 @@ def merge_slurm_options(task: TaskSpec, *, submission_options: SlurmSubmissionOv
     )
 
 
-def placeholder_dependency(task: PlannedSlurmTask, *, task_order: dict[str, int]) -> str | None:
-    if task.predecessor_task_id is None:
-        return None
-    predecessor_order = task_order[task.predecessor_task_id] + 1
-    return f"afterany:$JOBID_{predecessor_order}"
+def _allocated_gpus_for_task(task: TaskSpec) -> int:
+    model_cfg = task.orchestrate.get("vllm", {}) or {}
+    if not isinstance(model_cfg, dict):
+        raise ValueError(f"Task {task.task_id} orchestrate.vllm must be a mapping.")
+    gpus = int(model_cfg.get("gpus") or 0)
+    if gpus < 1:
+        raise ValueError(f"Task {task.task_id} orchestrate.vllm.gpus must be >= 1.")
+    return gpus
 
 
 def _validate_slurm_mapping(mapping: Any, *, task_id: str) -> dict[str, Any]:
@@ -202,6 +184,5 @@ __all__ = [
     "SlurmTaskOptions",
     "build_submission_plan",
     "merge_slurm_options",
-    "placeholder_dependency",
     "slug_task_id",
 ]

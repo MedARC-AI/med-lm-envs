@@ -64,21 +64,13 @@ def build_parser() -> argparse.ArgumentParser:
 def _add_source_arguments(parser: argparse.ArgumentParser) -> None:
     source = parser.add_mutually_exclusive_group(required=False)
     source.add_argument("--plan", type=Path, help="Path to orchestrator plan file.")
-    source.add_argument(
-        "--job-config",
-        action="append",
-        type=Path,
-        dest="job_configs",
-        help="Job config to orchestrate. Repeat to launch multiple job configs without a wrapper plan file.",
-    )
-    parser.add_argument("--name", default=None, help="Optional bundle name when using --job-config directly.")
+    source.add_argument("--suite", type=Path, help="Eval suite TOML accepted by medarc-eval bench.")
+    parser.add_argument("--endpoint", action="append", default=[], help="Endpoint id target for --suite shorthand.")
+    parser.add_argument("--name", default=None, help="Optional bundle name when using --suite directly.")
     parser.add_argument("--env-file", type=Path, default=None, help="Dotenv file shared by runtime launches.")
 
 
 def _add_slurm_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--node-gpus", type=int, default=8, help="Outer Slurm GPU allocation per job.")
-    parser.add_argument("--max-simultaneous-nodes", type=int, default=1)
-    parser.add_argument("--run-simultaneously", action="store_true")
     parser.add_argument("--cpus-per-gpu", type=int, default=None)
     parser.add_argument("--time", default=None)
     parser.add_argument("--partition", default=None)
@@ -98,7 +90,8 @@ def _run_launch(args: argparse.Namespace) -> int:
     _require_source(args)
     request = LaunchRequest(
         plan=args.plan,
-        job_configs=tuple(args.job_configs or ()),
+        suite=args.suite,
+        endpoints=tuple(args.endpoint or ()),
         name=args.name,
         env_file=args.env_file,
         run_id=args.run_id,
@@ -116,9 +109,6 @@ def _run_launch(args: argparse.Namespace) -> int:
     if not activate_script.is_absolute():
         activate_script = source_dir / activate_script
     options = SlurmSubmissionOptions(
-        node_gpus=args.node_gpus,
-        max_simultaneous_nodes=args.max_simultaneous_nodes,
-        run_simultaneously=bool(args.run_simultaneously),
         base_dependency=args.dependency,
         test_only=bool(args.test_only),
         dry_run=bool(args.dry_run),
@@ -152,8 +142,9 @@ def _run_status(args: argparse.Namespace) -> int:
                     "submit_state",
                     "worker_state",
                     "slurm_job_id",
-                    "dependency",
+                    "endpoint_id",
                     "model_id",
+                    "suite",
                     "failure_reason",
                     "error",
                 )
@@ -190,6 +181,8 @@ def _load_combined_status(output_root: Path) -> dict[str, object]:
                     "submit_state": entry.get("state"),
                     "slurm_job_id": entry.get("slurm_job_id"),
                     "dependency": entry.get("generated_dependency") or entry.get("base_dependency"),
+                    "suite": entry.get("suite_path"),
+                    "endpoint_id": entry.get("target_endpoint_id"),
                 }
             )
     if isinstance(summary, dict):
@@ -222,8 +215,12 @@ def _load_json_artifact(path: Path) -> object:
 
 
 def _require_source(args: argparse.Namespace) -> None:
-    if args.plan is None and not args.job_configs:
-        raise SystemExit("medarc-orchestrate run requires --plan or at least one --job-config.")
+    if args.plan is None and args.suite is None:
+        raise SystemExit("medarc-orchestrate run requires --plan or --suite with at least one --endpoint.")
+    if args.plan is not None and args.endpoint:
+        raise SystemExit("medarc-orchestrate run --endpoint is only valid with --suite shorthand, not --plan.")
+    if args.suite is not None and not args.endpoint:
+        raise SystemExit("medarc-orchestrate run --suite requires at least one --endpoint.")
 
 
 def main(argv: list[str] | None = None) -> int:

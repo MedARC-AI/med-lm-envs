@@ -19,7 +19,8 @@ from medarc_verifiers.utils.run_naming import generate_run_id
 @dataclass(frozen=True)
 class LaunchRequest:
     plan: Path | None = None
-    job_configs: tuple[Path, ...] = ()
+    suite: Path | None = None
+    endpoints: tuple[str, ...] = ()
     name: str | None = None
     env_file: Path | None = None
     run_id: str | None = None
@@ -104,12 +105,14 @@ def _resolve_plan_config(request: LaunchRequest, *, cwd: Path) -> tuple[PlanConf
             updates["endpoints_path"] = _resolve_path(request.endpoints_path, base_dir=base_dir)
         return (plan.model_copy(update=updates) if updates else plan), base_dir
 
-    job_configs = list(request.job_configs)
+    if request.suite is None or not request.endpoints:
+        raise ValueError("medarc-orchestrate run requires --plan or --suite with at least one --endpoint.")
     name = request.name
-    if name is None and len(job_configs) == 1:
-        name = job_configs[0].expanduser().stem
+    if name is None:
+        name = request.suite.expanduser().stem
     plan = make_plan(
-        job_configs=job_configs,
+        suite=request.suite,
+        targets=list(request.endpoints),
         base_dir=base_dir,
         name=name,
         eval_images_config=request.eval_images_config or _resolve_eval_images_config_path(None, cwd=cwd),

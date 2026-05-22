@@ -5,8 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import tomllib
 import uuid
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,11 +14,10 @@ from typing import Any, Mapping
 
 from omegaconf import OmegaConf
 
-from medarc_verifiers.orchestrate.config import TaskSpec
+from medarc_verifiers.orchestrate.config import TaskSpec, render_toml_mapping
 from medarc_verifiers.orchestrate.internal_io import load_internal_mapping
 from medarc_verifiers.orchestrate.task_naming import sanitize_task_dirname
 
-SPEC_VERSION = 2
 _SIDECAR_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _RESERVED_SIDECAR_SRUN_FLAGS = {
@@ -145,15 +144,15 @@ class SidecarSpec:
 
 @dataclass(frozen=True)
 class ResolvedTaskSpec:
-    spec_version: int
     task_id: str
     task_slug: str
     model_key: str
     model_id: str
     mode: str
     runtime: str
-    original_job_config_path: str
-    original_job_config_checksum: str
+    suite_path: str
+    suite_checksum: str
+    target_endpoint_id: str
     bundled_eval_config_path: str
     bundled_eval_config_checksum: str
     gpus: int
@@ -191,15 +190,15 @@ class ResolvedTaskSpec:
         sidecars = [_sidecar_from_dict(item) for item in payload.get("sidecars", [])]
         root = str(output_paths["root"])
         return cls(
-            spec_version=int(payload["spec_version"]),
             task_id=str(payload["task_id"]),
             task_slug=str(payload["task_slug"]),
             model_key=str(payload["model_key"]),
             model_id=str(payload["model_id"]),
             mode=str(payload["mode"]),
             runtime=str(payload["runtime"]),
-            original_job_config_path=str(payload["original_job_config_path"]),
-            original_job_config_checksum=str(payload["original_job_config_checksum"]),
+            suite_path=str(payload["suite_path"]),
+            suite_checksum=str(payload["suite_checksum"]),
+            target_endpoint_id=str(payload["target_endpoint_id"]),
             bundled_eval_config_path=str(payload["bundled_eval_config_path"]),
             bundled_eval_config_checksum=str(payload["bundled_eval_config_checksum"]),
             gpus=int(payload["gpus"]),
@@ -256,10 +255,6 @@ class ResolvedTaskSpec:
         )
 
 
-class UnsupportedTaskSpecVersionError(ValueError):
-    """Raised when a persisted task bundle uses a spec version this code cannot execute."""
-
-
 @dataclass(frozen=True)
 class ExecutionAllocation:
     task_id: str
@@ -293,8 +288,9 @@ class RunBundleEntry:
     model_id: str
     mode: str
     runtime: str
-    original_job_config_path: str
-    original_job_config_checksum: str
+    suite_path: str
+    suite_checksum: str
+    target_endpoint_id: str
     bundled_eval_config_path: str
     bundled_eval_config_checksum: str
     task_spec_path: str
@@ -423,15 +419,6 @@ def write_run_bundle_manifest(path: Path, manifest: RunBundleManifest) -> None:
 
 def load_task_spec(path: Path) -> ResolvedTaskSpec:
     payload = dict(load_internal_mapping(path, label="task spec"))
-    raw_version = payload.get("spec_version")
-    try:
-        spec_version = int(raw_version)
-    except (TypeError, ValueError) as exc:
-        raise UnsupportedTaskSpecVersionError(
-            f"Unsupported task spec_version={raw_version!r}; expected {SPEC_VERSION}."
-        ) from exc
-    if spec_version != SPEC_VERSION:
-        raise UnsupportedTaskSpecVersionError(f"Unsupported task spec_version={spec_version}; expected {SPEC_VERSION}.")
     spec = ResolvedTaskSpec.from_dict(payload)
     bundled_eval_path = Path(spec.bundled_eval_config_path)
     if not bundled_eval_path.exists():
@@ -448,7 +435,7 @@ def load_task_spec(path: Path) -> ResolvedTaskSpec:
 def ensure_run_bundle(
     *,
     tasks: list[TaskSpec],
-    run_id: str,
+    run_id: str = "bundle",
     output_root: Path,
     mode: str,
     runtime: str,
@@ -488,8 +475,9 @@ def ensure_run_bundle(
                 model_id=task.model_id,
                 mode=mode,
                 runtime=runtime,
-                original_job_config_path=str(task.job_config_path),
-                original_job_config_checksum=bundle.spec.original_job_config_checksum,
+                suite_path=str(task.suite_path),
+                suite_checksum=bundle.spec.suite_checksum,
+                target_endpoint_id=task.target_endpoint_id,
                 bundled_eval_config_path=bundle.spec.bundled_eval_config_path,
                 bundled_eval_config_checksum=bundle.spec.bundled_eval_config_checksum,
                 task_spec_path=bundle.spec.output_paths.task_spec_path,
@@ -556,17 +544,12 @@ def _ensure_task_bundle(
     )
 
     if paths.task_spec_path.exists() and paths.eval_config_path.exists():
-        try:
-            loaded_spec = load_task_spec(paths.task_spec_path)
-        except UnsupportedTaskSpecVersionError:
+        loaded_spec = load_task_spec(paths.task_spec_path)
+        if loaded_spec.to_dict() == expected_spec.to_dict():
+            spec = loaded_spec
+        else:
             _write_task_bundle(paths=paths, eval_payload=expected_payload, spec=expected_spec)
             spec = expected_spec
-        else:
-            if loaded_spec.to_dict() == expected_spec.to_dict():
-                spec = loaded_spec
-            else:
-                _write_task_bundle(paths=paths, eval_payload=expected_payload, spec=expected_spec)
-                spec = expected_spec
     else:
         _write_task_bundle(paths=paths, eval_payload=expected_payload, spec=expected_spec)
         spec = expected_spec
@@ -589,9 +572,13 @@ def _build_task_spec(
     mode: str,
     runtime: str,
 ) -> tuple[bytes, ResolvedTaskSpec]:
-    source_bytes = task.job_config_path.read_bytes()
-    source_checksum = _sha256_file(task.job_config_path)
-    bundled_bytes = _rewrite_eval_toml_paths(source_bytes, base_dir=task.job_config_path.parent)
+    source_checksum = _sha256_file(task.suite_path)
+    eval_payload = deepcopy(dict(task.generated_eval_config))
+    eval_payload["endpoint_id"] = task.target_endpoint_id
+    if task.endpoints_path is not None:
+        eval_payload["endpoints_path"] = str(task.endpoints_path)
+    eval_payload["output_dir"] = str(paths.bench_dir)
+    bundled_bytes = render_toml_mapping(eval_payload).encode("utf-8")
     bundled_checksum = _sha256_bytes(bundled_bytes)
 
     model_cfg = dict(_mapping_section(task.orchestrate, "vllm", task_id=task.task_id))
@@ -602,15 +589,15 @@ def _build_task_spec(
     if sidecars and not _srun_args_include_flag(pyxis_srun_extra_args, "--overlap"):
         pyxis_srun_extra_args.append("--overlap")
     spec = ResolvedTaskSpec(
-        spec_version=SPEC_VERSION,
         task_id=task.task_id,
         task_slug=paths.root.name,
         model_key=task.model_key,
         model_id=task.model_id,
         mode=mode,
         runtime=runtime,
-        original_job_config_path=str(task.job_config_path.resolve()),
-        original_job_config_checksum=source_checksum,
+        suite_path=str(task.suite_path.resolve()),
+        suite_checksum=source_checksum,
+        target_endpoint_id=task.target_endpoint_id,
         bundled_eval_config_path=str(paths.eval_config_path),
         bundled_eval_config_checksum=bundled_checksum,
         gpus=_required_int(model_cfg.get("gpus"), f"Task {task.task_id} orchestrate.vllm.gpus"),
@@ -674,79 +661,6 @@ def _sidecar_from_dict(payload: Mapping[str, Any]) -> SidecarSpec:
             interval_s=int(readiness_payload.get("interval_s", 2) or 2),
         ),
     )
-
-
-def _rewrite_eval_toml_paths(source_bytes: bytes, *, base_dir: Path) -> bytes:
-    text = source_bytes.decode("utf-8")
-    required_rewrites = _relative_root_path_keys(source_bytes)
-    lines = text.splitlines(keepends=True)
-    changed = False
-    rewritten: list[str] = []
-    in_root = True
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
-            in_root = False
-        if in_root:
-            updated = _rewrite_top_level_path_line(line, key="endpoints_path", base_dir=base_dir)
-            if updated is not None:
-                rewritten.append(updated)
-                changed = True
-                continue
-            updated = _rewrite_top_level_path_line(line, key="env_dir_path", base_dir=base_dir)
-            if updated is not None:
-                rewritten.append(updated)
-                changed = True
-                continue
-        rewritten.append(line)
-    rewritten_bytes = "".join(rewritten).encode("utf-8") if changed else source_bytes
-    _validate_root_paths_rewritten(rewritten_bytes, required_rewrites=required_rewrites)
-    return rewritten_bytes
-
-
-def _relative_root_path_keys(source_bytes: bytes) -> set[str]:
-    try:
-        payload = tomllib.loads(source_bytes.decode("utf-8"))
-    except tomllib.TOMLDecodeError:
-        return set()
-    keys: set[str] = set()
-    for key in ("endpoints_path", "env_dir_path"):
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip() and not Path(value).expanduser().is_absolute():
-            keys.add(key)
-    return keys
-
-
-def _validate_root_paths_rewritten(source_bytes: bytes, *, required_rewrites: set[str]) -> None:
-    if not required_rewrites:
-        return
-    payload = tomllib.loads(source_bytes.decode("utf-8"))
-    missed = [
-        key
-        for key in sorted(required_rewrites)
-        if isinstance(payload.get(key), str) and not Path(str(payload[key])).expanduser().is_absolute()
-    ]
-    if missed:
-        rendered = ", ".join(missed)
-        raise ValueError(f"Failed to absolutize top-level eval TOML path field(s): {rendered}.")
-
-
-def _rewrite_top_level_path_line(line: str, *, key: str, base_dir: Path) -> str | None:
-    import json as _json
-    import re as _re
-
-    match = _re.match(
-        rf"^(?P<prefix>\s*{_re.escape(key)}\s*=\s*)(?P<quote>['\"])(?P<value>.*?)(?P=quote)(?P<suffix>\s*(?:#.*)?\n?)$",
-        line,
-    )
-    if match is None:
-        return None
-    value = match.group("value").strip()
-    path = Path(value).expanduser()
-    if path.is_absolute():
-        return line
-    resolved = (base_dir / path).resolve()
-    return f"{match.group('prefix')}{_json.dumps(str(resolved))}{match.group('suffix')}"
 
 
 def _write_snapshot_toml(path: Path, payload: Mapping[str, Any]) -> None:
@@ -981,7 +895,6 @@ __all__ = [
     "RuntimeState",
     "SidecarReadinessSpec",
     "SidecarSpec",
-    "SPEC_VERSION",
     "TaskBundlePaths",
     "ensure_run_bundle",
     "load_execution_allocation",

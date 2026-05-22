@@ -12,12 +12,9 @@ from medarc_verifiers.orchestrate.podman_vllm import PodmanRuntimeAdapter
 from medarc_verifiers.orchestrate.worker import _load_runtime_env, main as worker_main
 
 
-def _write_job_config(path: Path) -> None:
+def _write_suite_config(path: Path) -> None:
     path.write_text(
         """
-endpoint_id = "foo"
-endpoints_path = "endpoints.toml"
-
 [[eval]]
 env_id = "medqa"
 num_examples = 1
@@ -62,17 +59,20 @@ def _bundle(
     data_parallel_size: int | None = 1,
     allocated_gpus: int = 1,
 ):
-    job_cfg = tmp_path / "job.toml"
+    suite_cfg = tmp_path / "job.toml"
     endpoints = tmp_path / "endpoints.toml"
     plan_path = tmp_path / "plan.toml"
-    _write_job_config(job_cfg)
+    _write_suite_config(suite_cfg)
     _write_endpoint_registry(
         endpoints,
         gpus=gpus,
         tensor_parallel_size=tensor_parallel_size,
         data_parallel_size=data_parallel_size,
     )
-    plan_path.write_text(f'job_configs = ["{job_cfg.name}"]\n', encoding="utf-8")
+    plan_path.write_text(
+        f'suite = "{suite_cfg.name}"\nendpoints_path = "{endpoints.name}"\n[[target]]\nendpoint_id = "foo"\n',
+        encoding="utf-8",
+    )
     tasks = expand_tasks(load_plan(plan_path))
     return tasks, ensure_run_bundle(
         tasks=tasks,
@@ -104,12 +104,15 @@ def test_ensure_run_bundle_rejects_output_root_from_different_run_id(tmp_path: P
 
 
 def test_ensure_run_bundle_rejects_orphaned_task_bundle_artifacts(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.toml"
+    suite_cfg = tmp_path / "job.toml"
     endpoints = tmp_path / "endpoints.toml"
     plan_path = tmp_path / "plan.toml"
-    _write_job_config(job_cfg)
+    _write_suite_config(suite_cfg)
     _write_endpoint_registry(endpoints)
-    plan_path.write_text(f'job_configs = ["{job_cfg.name}"]\n', encoding="utf-8")
+    plan_path.write_text(
+        f'suite = "{suite_cfg.name}"\nendpoints_path = "{endpoints.name}"\n[[target]]\nendpoint_id = "foo"\n',
+        encoding="utf-8",
+    )
     tasks = expand_tasks(load_plan(plan_path))
     orphan_root = tmp_path / "outputs" / "tasks" / "orphan-task"
     orphan_root.mkdir(parents=True)

@@ -1,7 +1,0 @@
-model = "Qwen/Qwen3-30B-A3B"
-output_dir = "runs/evals"
-
-[[eval]]
-env_id = "medqa"
-num_examples = 5
-rollouts_per_example = 1

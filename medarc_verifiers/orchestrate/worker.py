@@ -59,7 +59,7 @@ from medarc_verifiers.orchestrate.topology import ResolvedTopology, resolve_task
 from medarc_verifiers.orchestrate.vllm_args import build_container_args, normalize_volume_mounts
 
 _COMMAND_TEMPLATE = (
-    "medarc-eval bench --config {job_config_path} --api-base-url {base_url} "
+    "medarc-eval bench --config {eval_config_path} --api-base-url {base_url} "
     "--provider local --output-dir {output_dir} {endpoints_arg}"
 )
 StateHandler = Callable[[TaskManifest, TaskPaths, str], None]
@@ -276,7 +276,7 @@ class TaskWorker:
                 "model_id": _command_template_value(self._spec.model_id),
                 "output_dir": _command_template_value(paths.bench_dir),
                 "task_id": _command_template_value(self._spec.task_id),
-                "job_config_path": _command_template_value(self._spec.bundled_eval_config_path),
+                "eval_config_path": _command_template_value(self._spec.bundled_eval_config_path),
                 "endpoints_arg": endpoints_arg,
             }
             quarantined_outputs = _quarantine_malformed_bench_outputs(paths.bench_dir)
@@ -434,7 +434,8 @@ def _load_runtime_env(
         if default_env.exists():
             env.update(_load_env_file(default_env, base_dir=repo_root))
     if spec.container_env_file:
-        env.update(_load_env_file(spec.container_env_file, base_dir=Path(spec.original_job_config_path).parent))
+        base_dir = Path(spec.orchestrate_registry_path).parent if spec.orchestrate_registry_path else repo_root
+        env.update(_load_env_file(spec.container_env_file, base_dir=base_dir))
     env.update(dict(allocation.runtime_env))
     if not env.get("HF_TOKEN"):
         token = _load_hf_token_from_login()

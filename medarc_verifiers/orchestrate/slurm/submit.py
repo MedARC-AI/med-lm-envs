@@ -10,7 +10,7 @@ from pathlib import Path
 
 from medarc_verifiers.orchestrate.launch import LaunchPlan
 
-from .manifest import SlurmBundleManifest, SlurmTaskEntry, write_bundle_manifest
+from .manifest import SlurmBundleManifest, write_bundle_manifest
 from .manifest import load_bundle_manifest
 from .plan import build_submission_plan
 from .render import render_bundle
@@ -20,9 +20,6 @@ _JOB_ID_RE = re.compile(r"(\d+)")
 
 @dataclass(frozen=True)
 class SlurmSubmissionOptions:
-    node_gpus: int = 8
-    max_simultaneous_nodes: int = 1
-    run_simultaneously: bool = False
     base_dependency: str | None = None
     test_only: bool = False
     dry_run: bool = False
@@ -48,10 +45,6 @@ def submit_slurm_launch_plan(launch: LaunchPlan, options: SlurmSubmissionOptions
         activate_script = source_dir / activate_script
     planned_tasks = build_submission_plan(
         launch.tasks,
-        run_id=launch.run_id,
-        node_gpus=options.node_gpus,
-        max_simultaneous_nodes=options.max_simultaneous_nodes,
-        run_simultaneously=options.run_simultaneously,
         base_dependency=options.base_dependency,
         submission_options=options,
     )
@@ -61,7 +54,6 @@ def submit_slurm_launch_plan(launch: LaunchPlan, options: SlurmSubmissionOptions
         planned_tasks=planned_tasks,
         bundle_root=output_root,
         run_id=launch.run_id,
-        node_gpus=options.node_gpus,
         source_dir=source_dir,
         activate_script=activate_script.resolve(),
         env_file=launch.env_file,
@@ -105,13 +97,10 @@ def mark_dry_run(path: Path, manifest: SlurmBundleManifest) -> list[str]:
 
 
 def submit_bundle(path: Path, manifest: SlurmBundleManifest, *, test_only: bool = False) -> SlurmBundleManifest:
-    entry_map = manifest.entry_map()
     for entry in manifest.entries:
         if entry.state == "submitted" and entry.slurm_job_id:
             continue
-        generated_dependency = _actual_generated_dependency(entry, entry_map=entry_map)
-        entry.generated_dependency = generated_dependency
-        dependency = _combine_dependency(entry.base_dependency, generated_dependency)
+        dependency = _combine_dependency(entry.base_dependency, entry.generated_dependency)
         command = _sbatch_command(entry.script_path, dependency=dependency, account=entry.account, test_only=test_only)
         completed = subprocess.run(command, check=False, capture_output=True, text=True)
         if completed.returncode != 0:
@@ -125,15 +114,6 @@ def submit_bundle(path: Path, manifest: SlurmBundleManifest, *, test_only: bool 
             entry.state = "submitted"
         write_bundle_manifest(path, manifest)
     return manifest
-
-
-def _actual_generated_dependency(entry: SlurmTaskEntry, *, entry_map: dict[str, SlurmTaskEntry]) -> str | None:
-    if entry.predecessor_task_id is None:
-        return None
-    predecessor = entry_map[entry.predecessor_task_id]
-    if not predecessor.slurm_job_id:
-        raise RuntimeError(f"Missing Slurm job id for predecessor task {entry.predecessor_task_id}.")
-    return f"afterany:{predecessor.slurm_job_id}"
 
 
 def _combine_dependency(base_dependency: str | None, generated_dependency: str | None) -> str | None:

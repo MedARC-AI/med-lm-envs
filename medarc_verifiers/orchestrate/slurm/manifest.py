@@ -27,9 +27,10 @@ class SlurmTaskEntry:
     run_id: str
     task_id: str
     task_slug: str
-    original_job_config_path: str
-    original_job_config_checksum: str
-    effective_job_config_path: str
+    suite_path: str
+    suite_checksum: str
+    target_endpoint_id: str
+    generated_eval_config_path: str
     bundled_eval_config_checksum: str
     task_spec_path: str
     task_spec_checksum: str
@@ -43,8 +44,6 @@ class SlurmTaskEntry:
     script_path: str
     generated_dependency: str | None
     base_dependency: str | None
-    predecessor_task_id: str | None
-    chain_index: int
     submission_order: int
     job_name: str
     account: str | None = None
@@ -60,9 +59,10 @@ class SlurmTaskEntry:
             run_id=str(payload["run_id"]),
             task_id=str(payload["task_id"]),
             task_slug=str(payload["task_slug"]),
-            original_job_config_path=str(payload["original_job_config_path"]),
-            original_job_config_checksum=str(payload["original_job_config_checksum"]),
-            effective_job_config_path=str(payload["effective_job_config_path"]),
+            suite_path=str(payload["suite_path"]),
+            suite_checksum=str(payload["suite_checksum"]),
+            target_endpoint_id=str(payload["target_endpoint_id"]),
+            generated_eval_config_path=str(payload["generated_eval_config_path"]),
             bundled_eval_config_checksum=str(payload["bundled_eval_config_checksum"]),
             task_spec_path=str(payload["task_spec_path"]),
             task_spec_checksum=str(payload["task_spec_checksum"]),
@@ -78,10 +78,6 @@ class SlurmTaskEntry:
                 str(payload["generated_dependency"]) if payload.get("generated_dependency") is not None else None
             ),
             base_dependency=str(payload["base_dependency"]) if payload.get("base_dependency") is not None else None,
-            predecessor_task_id=(
-                str(payload["predecessor_task_id"]) if payload.get("predecessor_task_id") is not None else None
-            ),
-            chain_index=int(payload["chain_index"]),
             submission_order=int(payload["submission_order"]),
             job_name=str(payload["job_name"]),
             account=str(payload["account"]) if payload.get("account") is not None else None,
@@ -94,7 +90,6 @@ class SlurmTaskEntry:
 class SlurmBundleManifest:
     run_id: str
     bundle_root: str
-    node_gpus: int
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
     entries: list[SlurmTaskEntry] = field(default_factory=list)
@@ -109,7 +104,6 @@ class SlurmBundleManifest:
         return {
             "run_id": self.run_id,
             "bundle_root": self.bundle_root,
-            "node_gpus": self.node_gpus,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "entries": [entry.to_dict() for entry in self.entries],
@@ -120,7 +114,6 @@ class SlurmBundleManifest:
         return cls(
             run_id=str(payload["run_id"]),
             bundle_root=str(payload["bundle_root"]),
-            node_gpus=int(payload["node_gpus"]),
             created_at=str(payload.get("created_at") or _now()),
             updated_at=str(payload.get("updated_at") or _now()),
             entries=[SlurmTaskEntry.from_dict(dict(entry)) for entry in payload.get("entries", [])],

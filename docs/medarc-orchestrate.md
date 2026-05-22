@@ -1,103 +1,93 @@
 ## vLLM Orchestrator
 
-`medarc-orchestrate` submits TOML `medarc-eval bench` configs to Slurm/Pyxis vLLM workers. It keeps benchmark semantics in upstream eval TOML files and resolves runtime infrastructure from endpoint registry entries.
+`medarc-orchestrate` submits eval suites to Slurm/Pyxis vLLM workers. The suite is ordinary `medarc-eval bench` TOML without a model selection; the launch plan chooses endpoint targets and the orchestrator generates task-local bench configs.
 
-### Config Files
+### Concepts
 
-A plan is a TOML file. Most users only need job configs plus the endpoint registry:
+- Suite: benchmark definitions such as `configs/medmarks-verified.toml`.
+- Target: one endpoint id to run against a suite.
+- Endpoint registry: model/runtime metadata under `[[endpoint]]` and `[endpoint.orchestrate]`.
+- Plan: launch recipe tying suites, targets, registries, and deployment overrides together.
+
+### Plan Example
 
 ```toml
-name = "slurm-vllm"
-job_configs = ["configs/qwen-30b-a3b-medqa.toml"]
-eval_images_config = "configs/eval_images.toml"
+name = "qwen3_5-4b-medmarks-verified"
+suite = "configs/medmarks-verified.toml"
 endpoints_path = "configs/medmarks-endpoints.toml"
-env_file = ".env"
+eval_images_config = "configs/eval_images.toml"
+output_dir = "outputs/orchestrate/qwen3_5-4b-medmarks-verified"
 readiness_timeout_s = 1800
 prune_logs_on_success = true
+
+[container]
+volumes = ["/data/medlm_cache:/root/.cache/huggingface"]
+
+[bench]
+max_concurrent = 768
+
+[[target]]
+endpoint_id = "qwen3_5-4b-instruct"
+
+[[target]]
+endpoint_id = "qwen3_5-4b-thinking"
 ```
 
-Each `job_configs` entry must be an upstream eval TOML config accepted by `medarc-eval bench`:
+Small experiments can use shorthand:
 
-```toml
-model = "Qwen/Qwen3-30B-A3B"
-output_dir = "runs/evals"
-
-[[eval]]
-env_id = "medqa"
-num_examples = 5
-rollouts_per_example = 1
+```bash
+uv run medarc-orchestrate run --suite configs/longhealth-smoke.toml --endpoint qwen3_5-4b-instruct
 ```
 
-Runtime settings live on the matching `[[endpoint]]` entry under `endpoint.orchestrate`. The orchestrator matches by exact
-`endpoint_id`; fuzzy matching against a separate model registry is not supported.
+The canonical launch path is:
+
+```bash
+uv run medarc-orchestrate run --plan configs/qwen3_5-4b-medmarks-verified-plan.toml --dry-run
+uv run medarc-orchestrate run --plan configs/qwen3_5-4b-medmarks-verified-plan.toml
+```
+
+### Generated Eval Configs
+
+Each task bundle gets `<task>/eval-config.toml`. It contains the suite's `[[eval]]` and `[[ablation]]` entries plus orchestrator-owned top-level values:
+
+- `endpoint_id`
+- `endpoints_path`
+- `output_dir = "<task>/bench"`
+- typed `[bench]` defaults from the plan/target
+
+Suites may set normal bench defaults, but must not set `endpoint_id`, `model`, or `endpoints_path`.
+
+### Runtime Metadata
+
+Runtime settings live on endpoint registry entries:
 
 ```toml
 [[endpoint]]
-endpoint_id = "qwen-30b-a3b-thinking"
-model = "Qwen/Qwen3-30B-A3B-Thinking-2507"
+endpoint_id = "qwen3_5-4b-instruct"
+model = "Qwen/Qwen3.5-4B-Instruct"
 api_client_type = "openai_chat_completions"
 
-[endpoint.sampling_args]
-temperature = 0.6
-top_p = 0.95
-
 [endpoint.orchestrate.vllm]
-gpus = 2
+gpus = 1
 
-[endpoint.orchestrate.vllm.serve]
-max_model_len = 40960
-
-[endpoint.orchestrate.slurm]
-account = "training"
-time = "04:00:00"
+[endpoint.orchestrate.container]
+image = "vllm/vllm-openai:latest"
 ```
 
-The orchestrator defaults `tensor_parallel_size` to `gpus`. It also supplies default container values for `image`,
-`container_port`, and `ipc_mode`, plus default Slurm values for `qos`, `nice`, and `slurm_resume`. It supplies default Pyxis
-`srun_extra_args` and default vLLM
-serve values for `gpu_memory_utilization`, `max_model_len`, `async_scheduling`, `enable_prefix_caching`, and
-`enable_auto_tool_choice`. Set those keys only when a model needs to override the built-in defaults.
-
-Eval auxiliary images, such as benchmark services, live in `eval_images.toml` and are selected by eval or env id:
-
-```toml
-[[eval_image]]
-id = "medagentbench-fhir"
-evals = ["medagentbenchv2_patient", "medagentbenchv2_test"]
-runtime = "pyxis"
-image = "/path/to/medagentbench_withsh.sqsh"
-command = ["bash", "-lc", "serve-fhir"]
-
-[eval_image.readiness]
-url = "http://127.0.0.1:8080/health"
-timeout_s = 240
-```
+Container mounts that are specific to a launch belong in plan `[container]`, not endpoint metadata. Slurm policy such as account, partition, qos, and nice comes from explicit CLI flags or `[endpoint.orchestrate.slurm]`.
 
 ### Slurm Usage
 
-```bash
-uv run medarc-orchestrate run --plan plan-qwen-small-slurm.toml --dry-run
-uv run medarc-orchestrate run --plan plan-qwen-small-slurm.toml --output-dir outputs/orchestrate/qwen-run
-```
-
-Slurm options come from `[endpoint.orchestrate.slurm]`, with Slurm executor CLI overrides taking precedence.
-`slurm_resume = true` renders `#SBATCH --requeue`, so resubmitting the same task bundle reuses the same task-local
-bench output directory.
+Slurm options come from CLI overrides first, then `[endpoint.orchestrate.slurm]`, then built-in defaults. GPU allocation is derived per task from `[endpoint.orchestrate.vllm].gpus`; there is no Python-side concurrency throttle.
 
 Common flags:
 
 - `--eval-images-config` overrides the eval image registry.
-- `--endpoints-path` selects the endpoint registry used for endpoint/model resolution, orchestration settings, and bench.
+- `--endpoints-path` selects the endpoint registry used for target resolution and bench.
 - `--output-dir` sets the orchestrator output root.
-- `--node-gpus`, `--max-simultaneous-nodes`, `--run-simultaneously`, and Slurm account/partition/time flags control submission.
+- `--account`, `--partition`, `--qos`, `--nice`, and `--time` explicitly override Slurm submission settings.
+- `--dependency` applies an sbatch dependency to submitted tasks.
 - `--prune-logs-on-success` removes per-task serve and bench logs after successful tasks.
-
-Docker and Podman are retained only for worker/runtime adapter development and cleanup of local test leftovers:
-
-```bash
-uv run medarc-orchestrate cleanup --runtime docker --run-id qwen-run
-uv run medarc-orchestrate cleanup --runtime podman --run-id qwen-run
-```
 
 Status reads the Slurm submission manifest and worker summary when present:
 
@@ -108,30 +98,26 @@ uv run medarc-orchestrate status --output-dir outputs/orchestrate/qwen-run --jso
 
 ### Task Bundles
 
-Before launching a task, the orchestrator creates a task bundle under `outputs/orchestrate/<run_id>/tasks/<task-slug>/`:
+Before launching a task, the orchestrator creates a bundle under `outputs/orchestrate/<run_id>/tasks/<task-slug>/`:
 
-- `eval-config.toml`: copied eval TOML used by the worker.
-- `task.yaml`: resolved task spec and registry snapshots for worker execution.
-- `orchestrate-snapshot.toml`: matched model runtime entry and registry provenance.
+- `eval-config.toml`: generated task-local bench config.
+- `task.yaml`: resolved worker spec.
+- `orchestrate-snapshot.toml`: matched endpoint runtime entry and registry provenance.
 - `eval_images-snapshot.toml`: selected eval images and registry provenance.
 - `allocation.json`: GPU/port allocation for the worker.
-- `bench/`: deterministic `medarc-eval bench --output-dir` root.
+- `bench/`: task-local `medarc-eval bench --output-dir` root.
 - `serve/` and `runtime/`: runtime logs, state, and task manifest files.
 
-The Slurm script activates the chosen environment, starts the worker with `--runtime pyxis`, and the worker runs bench against bundled `eval-config.toml`, not the original source path:
+Workers run:
 
 ```bash
 medarc-eval bench --config <task>/eval-config.toml --api-base-url <local-url> --provider local --output-dir <task>/bench
 ```
 
-Removed YAML-runner flags such as `--run-id`, `--restart`, and `--on-complete` are not passed to bench. Requeue and retry behavior relies on TOML bench deterministic output paths.
-
 ### Processing Outputs
 
-Process orchestrated task outputs by pointing `medarc-eval process` at the orchestrator run root or a parent directory. Discovery recursively finds nested `results.jsonl` and `metadata.json` files under task-local `bench/` directories:
+Process orchestrated outputs by pointing `medarc-eval process` at the orchestrator run root or a parent directory. Discovery recursively finds nested `results.jsonl` and `metadata.json` files under task-local `bench/` directories:
 
 ```bash
 uv run medarc-eval process --runs-dir outputs/orchestrate/<run_id> --output-dir runs/processed
 ```
-
-Metadata remains authoritative for model and environment identity. The orchestrator does not add a separate manifest-based processing path.

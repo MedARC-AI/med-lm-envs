@@ -173,8 +173,9 @@ Historical raw-run manifest schemas are not part of the runtime package. Use
 
 Docs: `docs/medarc-orchestrate.md`.
 
-`medarc-orchestrate` accepts the same upstream eval TOML job configs that
-`medarc-eval bench` accepts. Runtime infrastructure is resolved from endpoint registry entries:
+`medarc-orchestrate` accepts eval suite TOML plus target endpoints, then
+generates task-local `medarc-eval bench` configs. Runtime infrastructure is
+resolved from endpoint registry entries:
 
 - `endpoints.toml` or `medmarks-endpoints.toml` stores aliases under `[[endpoint]]`; entries with
   `[endpoint.orchestrate]` are orchestratable.
@@ -182,8 +183,8 @@ Docs: `docs/medarc-orchestrate.md`.
 - The same endpoint registry is used for exact `endpoint_id` matching and passed through to the worker bench command.
 
 Task bundles live under `outputs/orchestrate/<run_id>/tasks/<task-slug>/` and
-contain bundled `eval-config.toml`, internal `task.yaml`, registry snapshot TOML
-files, allocation state, runtime logs, and a task-local `bench/` output root.
+contain generated `eval-config.toml`, internal `task.yaml`, registry snapshot
+TOML files, allocation state, runtime logs, and a task-local `bench/` output root.
 Workers always run `medarc-eval bench --config <task>/eval-config.toml --provider local --output-dir <task>/bench`; removed YAML-runner flags such as `--run-id`, `--restart`, and `--on-complete` are not used. Processing can scan these nested task-local bench outputs recursively from the orchestrator run root.
 
 ## Eval Outputs

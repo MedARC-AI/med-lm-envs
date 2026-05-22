@@ -13,7 +13,12 @@ def test_run_rejects_missing_source() -> None:
 
 def test_run_parser_rejects_deleted_backend_flag() -> None:
     with pytest.raises(SystemExit):
-        main(["run", "--backend", "local", "--job-config", "job.toml"])
+        main(["run", "--backend", "local", "--suite", "suite.toml", "--endpoint", "foo"])
+
+
+def test_run_rejects_endpoint_with_plan() -> None:
+    with pytest.raises(SystemExit, match="--endpoint is only valid with --suite"):
+        main(["run", "--plan", "plan.toml", "--endpoint", "foo"])
 
 
 def test_cleanup_rejects_pyxis() -> None:
@@ -53,7 +58,7 @@ def test_status_combines_submission_manifest_and_summary(tmp_path: Path, capsys)
     )
 
     assert main(["status", "--output-dir", str(tmp_path)]) == 0
-    assert "task-a\tsubmitted\tcompleted\t123\tafterany:122\tFoo/Bar" in capsys.readouterr().out
+    assert "task-a\tsubmitted\tcompleted\t123" in capsys.readouterr().out
 
 
 def test_status_fails_when_artifacts_missing(tmp_path: Path) -> None:

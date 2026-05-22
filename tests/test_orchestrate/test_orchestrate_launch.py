@@ -22,12 +22,9 @@ image = "fake"
     return path
 
 
-def _write_eval_config(path: Path, *, endpoint_id: str = "foo", endpoints_path: str | None = None) -> Path:
-    endpoint_line = f'endpoints_path = "{endpoints_path}"\n' if endpoints_path is not None else ""
+def _write_eval_config(path: Path) -> Path:
     path.write_text(
-        f"""
-endpoint_id = "{endpoint_id}"
-{endpoint_line}
+        """
 [[eval]]
 env_id = "medqa"
 num_examples = 1
@@ -49,35 +46,40 @@ def test_default_endpoint_path_prefers_medmarks_then_endpoints(tmp_path: Path) -
     assert resolve_default_endpoints_path(tmp_path) == medmarks.resolve()
 
 
-def test_expand_tasks_honors_job_endpoint_before_default(tmp_path: Path) -> None:
-    job_endpoints = _write_endpoint_registry(tmp_path / "job-endpoints.toml", model="Foo/Job")
+def test_expand_tasks_uses_plan_endpoint_registry(tmp_path: Path) -> None:
+    plan_endpoints = _write_endpoint_registry(tmp_path / "plan-endpoints.toml", model="Foo/Plan")
     default_endpoints = _write_endpoint_registry(tmp_path / "default-endpoints.toml", model="Foo/Default")
-    job = _write_eval_config(tmp_path / "job.toml", endpoints_path=job_endpoints.name)
+    suite = _write_eval_config(tmp_path / "suite.toml")
 
-    task = expand_tasks(PlanConfig(job_configs=[job]), default_endpoints_path=default_endpoints)[0]
+    task = expand_tasks(
+        PlanConfig(suite=suite, targets=[{"endpoint_id": "foo"}], endpoints_path=plan_endpoints),
+        default_endpoints_path=default_endpoints,
+    )[0]
 
-    assert task.model_id == "Foo/Job"
-    assert task.endpoints_path == job_endpoints.resolve()
+    assert task.model_id == "Foo/Plan"
+    assert task.endpoints_path == plan_endpoints.resolve()
 
 
 def test_launch_resolver_uses_default_endpoint_when_job_has_none(tmp_path: Path) -> None:
     configs = tmp_path / "configs"
     configs.mkdir()
     endpoints = _write_endpoint_registry(configs / "endpoints.toml")
-    job = _write_eval_config(tmp_path / "job.toml")
+    suite = _write_eval_config(tmp_path / "suite.toml")
 
-    plan = resolve_launch_plan(LaunchRequest(job_configs=(job,)), cwd=tmp_path)
+    plan = resolve_launch_plan(LaunchRequest(suite=suite, endpoints=("foo",)), cwd=tmp_path)
 
     assert plan.tasks[0].endpoints_path == endpoints.resolve()
     assert plan.tasks[0].model_id == "Foo/Bar"
 
 
-def test_launch_resolver_explicit_endpoint_overrides_job_endpoint(tmp_path: Path) -> None:
-    job_endpoints = _write_endpoint_registry(tmp_path / "job-endpoints.toml", model="Foo/Job")
+def test_launch_resolver_explicit_endpoint_overrides_default_endpoint(tmp_path: Path) -> None:
+    configs = tmp_path / "configs"
+    configs.mkdir()
+    _write_endpoint_registry(configs / "endpoints.toml", model="Foo/Default")
     explicit = _write_endpoint_registry(tmp_path / "explicit.toml", model="Foo/Explicit")
-    job = _write_eval_config(tmp_path / "job.toml", endpoints_path=job_endpoints.name)
+    suite = _write_eval_config(tmp_path / "suite.toml")
 
-    plan = resolve_launch_plan(LaunchRequest(job_configs=(job,), endpoints_path=explicit), cwd=tmp_path)
+    plan = resolve_launch_plan(LaunchRequest(suite=suite, endpoints=("foo",), endpoints_path=explicit), cwd=tmp_path)
 
     assert plan.tasks[0].endpoints_path == explicit.resolve()
     assert plan.tasks[0].model_id == "Foo/Explicit"

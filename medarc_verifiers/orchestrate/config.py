@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import tempfile
 import tomllib
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -13,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from medarc_verifiers.cli.eval_identity import BASE_VARIANT_ID, plan_eval_paths, slug_component
 from medarc_verifiers.cli.upstream_eval import EvalConfigOverrides, build_eval_identity_payload, load_toml_eval_configs
+from medarc_verifiers.orchestrate.vllm_args import normalize_volume_mounts
 
 DEFAULT_CONTAINER_CONFIG: Mapping[str, Any] = {
     "image": "vllm/vllm-openai:latest",
@@ -36,13 +38,46 @@ DEFAULT_VLLM_SERVE_CONFIG: Mapping[str, Any] = {
 }
 
 
+class ContainerOverrideConfig(BaseModel):
+    """Launch-scoped container overrides."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    volumes: list[str] = Field(default_factory=list)
+
+
+class BenchOverrideConfig(BaseModel):
+    """Top-level ``medarc-eval bench`` defaults that plans may set."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    save_results: bool | None = None
+    max_concurrent: int | None = None
+    timeout: int | None = None
+    max_retries: int | None = None
+    sampling_args: dict[str, object] | None = None
+
+
+class TargetConfig(BaseModel):
+    """One endpoint target in an orchestration plan."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid", populate_by_name=True)
+
+    endpoint_id: str
+    name: str | None = None
+    suite: Path | None = None
+    container: ContainerOverrideConfig = Field(default_factory=ContainerOverrideConfig)
+    bench: BenchOverrideConfig = Field(default_factory=BenchOverrideConfig)
+
+
 class PlanConfig(BaseModel):
     """Schema for the orchestrator plan file."""
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid", populate_by_name=True)
 
     name: str | None = None
-    job_configs: list[Path] = Field(..., min_length=1)
+    suite: Path
+    targets: list[TargetConfig] = Field(..., min_length=1, alias="target")
     env_file: Path | None = None
     run_id: str | None = None
     output_dir: Path | None = None
@@ -50,6 +85,8 @@ class PlanConfig(BaseModel):
     prune_logs_on_success: bool = False
     eval_images_config: Path | None = None
     endpoints_path: Path | None = None
+    container: ContainerOverrideConfig = Field(default_factory=ContainerOverrideConfig)
+    bench: BenchOverrideConfig = Field(default_factory=BenchOverrideConfig)
 
 
 @dataclass(frozen=True)
@@ -63,13 +100,15 @@ class RegistrySnapshot:
 
 @dataclass(frozen=True)
 class TaskSpec:
-    """Resolved task tuple for one TOML job config."""
+    """Resolved task tuple for one suite/target pair."""
 
     task_id: str
-    job_config_path: Path
     model_key: str
     model_id: str
     orchestrate: Mapping[str, Any]
+    suite_path: Path = Path()
+    target_endpoint_id: str = ""
+    generated_eval_config: Mapping[str, Any] = field(default_factory=dict)
     slurm: Mapping[str, Any] = field(default_factory=dict)
     eval_images: list[Mapping[str, Any]] = field(default_factory=list)
     eval_ids: list[str] = field(default_factory=list)
@@ -98,14 +137,16 @@ def load_plan(path: Path) -> PlanConfig:
 
 def make_plan(
     *,
-    job_configs: list[Path],
+    suite: Path,
+    targets: list[str],
     base_dir: Path | None = None,
     name: str | None = None,
     eval_images_config: Path | None = None,
     endpoints_path: Path | None = None,
 ) -> PlanConfig:
     plan = PlanConfig(
-        job_configs=job_configs,
+        suite=suite,
+        target=[TargetConfig(endpoint_id=endpoint_id) for endpoint_id in targets],
         name=name,
         eval_images_config=eval_images_config,
         endpoints_path=endpoints_path,
@@ -113,12 +154,12 @@ def make_plan(
     return _resolve_plan_paths(plan, base_dir=(base_dir or Path.cwd()).resolve())
 
 
-def load_job_config(path: Path) -> Mapping[str, Any]:
-    """Load a public orchestrated eval config. Public job configs are TOML-only."""
+def load_suite_config(path: Path) -> Mapping[str, Any]:
+    """Load a public eval suite config. Suites are upstream bench TOML files."""
 
     resolved = path.expanduser().resolve()
     if resolved.suffix != ".toml":
-        raise ValueError(f"Unsupported job config format: {resolved} (expected .toml)")
+        raise ValueError(f"Unsupported suite config format: {resolved} (expected .toml)")
     return _load_toml_mapping(resolved)
 
 
@@ -149,36 +190,34 @@ def expand_tasks(plan: PlanConfig, *, default_endpoints_path: Path | None = None
     eval_images_path = plan.eval_images_config.expanduser().resolve() if plan.eval_images_config is not None else None
     eval_images_payload = load_eval_images_config(eval_images_path)
     tasks: list[TaskSpec] = []
-    seen_identities: set[tuple[str, str, str]] = set()
-    endpoint_registry_cache: dict[Path, Mapping[str, Any]] = {}
+    seen_eval_identities: set[tuple[str, str, str]] = set()
+    seen_task_ids: set[str] = set()
 
-    for job_path in plan.job_configs:
-        resolved_job_path = job_path.expanduser().resolve()
-        job_payload = load_job_config(resolved_job_path)
-        raw_eval_configs = load_toml_eval_configs(resolved_job_path)
-        if not raw_eval_configs:
-            raise ValueError(f"Job config {resolved_job_path} did not produce any evals.")
-        raw_eval_configs = [
-            _absolutize_eval_config_paths(raw, base_dir=resolved_job_path.parent) for raw in raw_eval_configs
-        ]
-        endpoints_path = _resolve_task_endpoints_path(
-            plan,
-            job_payload=job_payload,
-            base_dir=resolved_job_path.parent,
-            default_endpoints_path=default_endpoints_path,
+    endpoints_path = _resolve_plan_endpoints_path(plan, default_endpoints_path=default_endpoints_path)
+    orchestrate_payload = load_endpoint_orchestration_registry(endpoints_path)
+
+    for target in plan.targets:
+        suite_path = (target.suite or plan.suite).expanduser().resolve()
+        bench_overrides = _merge_bench_overrides(plan.bench, target.bench)
+        generated_eval_config = materialize_task_eval_config(
+            suite_path=suite_path,
+            endpoint_id=target.endpoint_id,
+            endpoints_path=endpoints_path,
+            bench_overrides=bench_overrides,
+            output_dir=Path("."),
         )
-        orchestrate_payload = endpoint_registry_cache.get(endpoints_path)
-        if orchestrate_payload is None:
-            orchestrate_payload = load_endpoint_orchestration_registry(endpoints_path)
-            endpoint_registry_cache[endpoints_path] = orchestrate_payload
-        _reject_model_ablation(raw_eval_configs, source=resolved_job_path)
+        raw_eval_configs = _load_materialized_eval_configs(generated_eval_config, source=suite_path)
+        if not raw_eval_configs:
+            raise ValueError(f"Suite {suite_path} did not produce any evals.")
+        _reject_model_ablation(raw_eval_configs, source=suite_path)
         overrides = EvalConfigOverrides(endpoints_path=endpoints_path)
         identity_payloads = [build_eval_identity_payload(raw, overrides=overrides) for raw in raw_eval_configs]
         path_plans = plan_eval_paths(identity_payloads, output_root=".")
         model_ids = {plan.identity.model_id for plan in path_plans}
         if len(model_ids) != 1:
             raise ValueError(
-                f"Job config {resolved_job_path} resolves to multiple effective models {sorted(model_ids)}; "
+                f"Suite {suite_path} with endpoint {target.endpoint_id!r} resolves to multiple effective models "
+                f"{sorted(model_ids)}; "
                 "orchestration requires exactly one model per task."
             )
         effective_model_id = next(iter(model_ids))
@@ -188,13 +227,10 @@ def expand_tasks(plan: PlanConfig, *, default_endpoints_path: Path | None = None
             if isinstance((endpoint_id := payload.get("endpoint_id")), str) and endpoint_id
         }
         if not endpoint_ids:
-            raise ValueError(
-                f"Job config {resolved_job_path} must resolve to an endpoint_id; model-only orchestration configs "
-                "are not supported."
-            )
+            raise ValueError(f"Suite {suite_path} with target {target.endpoint_id!r} did not resolve to endpoint_id.")
         if len(endpoint_ids) > 1:
             raise ValueError(
-                f"Job config {resolved_job_path} resolves to multiple endpoint ids {sorted(endpoint_ids)}; "
+                f"Suite {suite_path} resolves to multiple endpoint ids {sorted(endpoint_ids)}; "
                 "orchestration requires exactly one model endpoint per task."
             )
         effective_endpoint_id = next(iter(endpoint_ids))
@@ -206,7 +242,11 @@ def expand_tasks(plan: PlanConfig, *, default_endpoints_path: Path | None = None
         )
         model_id = _orchestrate_model_id(matched_model)
         model_key = slug_component(model_id)
-        task_id = f"{resolved_job_path.stem}:{model_key}"
+        task_name = target.name or target.endpoint_id
+        task_id = f"{slug_component(task_name)}:{slug_component(suite_path.stem)}"
+        if task_id in seen_task_ids:
+            raise ValueError(f"Duplicate orchestrated task id {task_id!r}; set unique target names or suite stems.")
+        seen_task_ids.add(task_id)
         eval_ids = _resolved_eval_ids(path_plans)
         env_ids = sorted({plan.identity.env_id for plan in path_plans})
         for plan_item in path_plans:
@@ -215,12 +255,12 @@ def expand_tasks(plan: PlanConfig, *, default_endpoints_path: Path | None = None
                 plan_item.identity.env_id,
                 plan_item.identity.variant_id,
             )
-            if identity in seen_identities:
+            if identity in seen_eval_identities:
                 raise ValueError(
                     "Duplicate orchestrated eval identity across tasks: "
                     f"model={identity[0]!r}, env_id={identity[1]!r}, variant_id={identity[2]!r}."
                 )
-            seen_identities.add(identity)
+            seen_eval_identities.add(identity)
         selected_eval_images = _select_eval_images(eval_images_payload, eval_ids=eval_ids, env_ids=env_ids)
         orchestrate_snapshot = RegistrySnapshot(
             path=str(endpoints_path),
@@ -234,6 +274,9 @@ def expand_tasks(plan: PlanConfig, *, default_endpoints_path: Path | None = None
         )
         vllm = dict(_required_mapping(matched_model.get("vllm"), f"model {model_id} vllm"))
         container = dict(_required_mapping(matched_model.get("container"), f"model {model_id} container"))
+        container["volumes"] = normalize_volume_mounts(
+            list(container.get("volumes") or []) + plan.container.volumes + target.container.volumes
+        )
         orchestrate = {
             "vllm": vllm,
             "container": container,
@@ -242,7 +285,9 @@ def expand_tasks(plan: PlanConfig, *, default_endpoints_path: Path | None = None
         tasks.append(
             TaskSpec(
                 task_id=task_id,
-                job_config_path=resolved_job_path,
+                suite_path=suite_path,
+                target_endpoint_id=target.endpoint_id,
+                generated_eval_config=generated_eval_config,
                 model_key=model_key,
                 model_id=model_id,
                 orchestrate=orchestrate,
@@ -263,7 +308,14 @@ def expand_tasks(plan: PlanConfig, *, default_endpoints_path: Path | None = None
 
 
 def _resolve_plan_paths(plan: PlanConfig, *, base_dir: Path) -> PlanConfig:
-    updates: dict[str, object] = {"job_configs": [_resolve_path(path, base_dir=base_dir) for path in plan.job_configs]}
+    updates: dict[str, object] = {"suite": _resolve_path(plan.suite, base_dir=base_dir)}
+    targets: list[TargetConfig] = []
+    for target in plan.targets:
+        target_updates: dict[str, object] = {}
+        if target.suite is not None:
+            target_updates["suite"] = _resolve_path(target.suite, base_dir=base_dir)
+        targets.append(target.model_copy(update=target_updates) if target_updates else target)
+    updates["targets"] = targets
     for field_name in ("env_file", "output_dir", "eval_images_config", "endpoints_path"):
         value = getattr(plan, field_name)
         if value is not None:
@@ -271,11 +323,141 @@ def _resolve_plan_paths(plan: PlanConfig, *, base_dir: Path) -> PlanConfig:
     return plan.model_copy(update=updates)
 
 
+def materialize_task_eval_config(
+    *,
+    suite_path: Path,
+    endpoint_id: str,
+    endpoints_path: Path,
+    bench_overrides: BenchOverrideConfig,
+    output_dir: Path,
+) -> Mapping[str, Any]:
+    suite_path = suite_path.expanduser().resolve()
+    suite_payload = dict(load_suite_config(suite_path))
+    _reject_suite_owned_keys(suite_payload, suite_path=suite_path)
+    payload = deepcopy(suite_payload)
+    _absolutize_suite_path_fields(payload, base_dir=suite_path.parent)
+    payload.update(_bench_override_payload(bench_overrides))
+    payload["endpoint_id"] = endpoint_id
+    payload["endpoints_path"] = str(endpoints_path.expanduser().resolve())
+    payload["output_dir"] = str(output_dir.expanduser())
+    return payload
+
+
+def render_toml_mapping(payload: Mapping[str, Any]) -> str:
+    lines: list[str] = []
+    arrays: list[tuple[str, list[Mapping[str, Any]]]] = []
+    tables: list[tuple[str, Mapping[str, Any]]] = []
+    for key, value in payload.items():
+        if value is None:
+            continue
+        if isinstance(value, list) and all(isinstance(item, Mapping) for item in value):
+            arrays.append((str(key), [dict(item) for item in value]))
+        elif isinstance(value, Mapping):
+            tables.append((str(key), value))
+        else:
+            lines.append(f"{key} = {_toml_value(value)}")
+    for name, table in tables:
+        lines.append("")
+        lines.append(f"[{name}]")
+        _append_toml_table(lines, table)
+    for name, items in arrays:
+        for item in items:
+            lines.append("")
+            lines.append(f"[[{name}]]")
+            _append_toml_table(lines, item)
+    return "\n".join(lines).strip() + "\n"
+
+
 def _resolve_path(path: Path, *, base_dir: Path) -> Path:
     candidate = Path(path).expanduser()
     if not candidate.is_absolute():
         candidate = base_dir / candidate
     return candidate.resolve()
+
+
+def _reject_suite_owned_keys(payload: Mapping[str, Any], *, suite_path: Path) -> None:
+    reserved = {"endpoint_id", "model", "endpoints_path"}
+    present = sorted(key for key in reserved if key in payload)
+    if present:
+        raise ValueError(f"Suite {suite_path} must not set orchestrator-owned key(s): {present}.")
+    orchestration_only = {"job_configs", "target", "targets", "suite", "container"}
+    present = sorted(key for key in orchestration_only if key in payload)
+    if present:
+        raise ValueError(f"Suite {suite_path} contains orchestration-only key(s): {present}.")
+
+
+def _absolutize_suite_path_fields(payload: dict[str, Any], *, base_dir: Path) -> None:
+    for key in ("env_dir_path",):
+        value = payload.get(key)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            payload[key] = str((base_dir / path).resolve())
+
+
+def _bench_override_payload(bench: BenchOverrideConfig) -> dict[str, Any]:
+    return {key: value for key, value in bench.model_dump(exclude_none=True).items()}
+
+
+def _merge_bench_overrides(plan: BenchOverrideConfig, target: BenchOverrideConfig) -> BenchOverrideConfig:
+    values = plan.model_dump(exclude_none=True)
+    values.update(target.model_dump(exclude_none=True))
+    return BenchOverrideConfig(**values)
+
+
+def _load_materialized_eval_configs(payload: Mapping[str, Any], *, source: Path) -> list[dict[str, Any]]:
+    rendered = render_toml_mapping(payload)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=f"-{source.stem}.toml") as handle:
+        handle.write(rendered)
+        handle.flush()
+        return load_toml_eval_configs(Path(handle.name), extra_valid_fields={"name", "variant_id"})
+
+
+def _append_toml_table(lines: list[str], table: Mapping[str, Any], *, prefix: str = "") -> None:
+    nested: list[tuple[str, Mapping[str, Any]]] = []
+    arrays: list[tuple[str, list[Mapping[str, Any]]]] = []
+    for key, value in table.items():
+        if value is None:
+            continue
+        full_key = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, Mapping):
+            nested.append((full_key, value))
+        elif isinstance(value, list) and all(isinstance(item, Mapping) for item in value):
+            arrays.append((full_key, [dict(item) for item in value]))
+        else:
+            lines.append(f"{full_key} = {_toml_value(value)}")
+    for full_key, value in nested:
+        _append_toml_table(lines, value, prefix=full_key)
+    for full_key, values in arrays:
+        for item in values:
+            lines.append("")
+            lines.append(f"[[{full_key}]]")
+            _append_toml_table(lines, item)
+
+
+def _toml_value(value: Any) -> str:
+    import json as _json
+
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int | float):
+        return str(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
+    return _json.dumps(str(value))
+
+
+def _resolve_plan_endpoints_path(plan: PlanConfig, *, default_endpoints_path: Path | None) -> Path:
+    if plan.endpoints_path is not None:
+        return plan.endpoints_path.expanduser().resolve()
+    if default_endpoints_path is not None:
+        return default_endpoints_path.expanduser().resolve()
+    raise ValueError(
+        "Orchestration requires an endpoint registry containing [endpoint.orchestrate]; "
+        "set endpoints_path in the plan, pass --endpoints-path, or create "
+        "configs/medmarks-endpoints.toml or configs/endpoints.toml."
+    )
 
 
 def resolve_default_endpoints_path(cwd: Path | None = None) -> Path | None:
@@ -552,51 +734,15 @@ def _match_endpoint_orchestration_entry(
     raise ValueError(f"No [[endpoint]] entry in {source} matches endpoint_id {endpoint_id!r}. Known IDs: {known}.")
 
 
-def _resolve_task_endpoints_path(
-    plan: PlanConfig,
-    *,
-    job_payload: Mapping[str, Any],
-    base_dir: Path,
-    default_endpoints_path: Path | None = None,
-) -> Path:
-    if plan.endpoints_path is not None:
-        return plan.endpoints_path
-    raw_path = job_payload.get("endpoints_path")
-    if isinstance(raw_path, str) and raw_path.strip():
-        path = Path(raw_path).expanduser()
-        if not path.is_absolute():
-            path = base_dir / path
-        return path.resolve()
-    if default_endpoints_path is not None:
-        return default_endpoints_path.expanduser().resolve()
-    raise ValueError(
-        "Orchestration requires an endpoint registry containing [endpoint.orchestrate]; "
-        "set endpoints_path in the job config, pass --endpoints-path, or create "
-        "configs/medmarks-endpoints.toml or configs/endpoints.toml."
-    )
-
-
-def _absolutize_eval_config_paths(raw: Mapping[str, Any], *, base_dir: Path) -> dict[str, Any]:
-    normalized = dict(raw)
-    for key in ("endpoints_path", "env_dir_path"):
-        value = normalized.get(key)
-        if not isinstance(value, str) or not value.strip():
-            continue
-        path = Path(value).expanduser()
-        if not path.is_absolute():
-            normalized[key] = str((base_dir / path).resolve())
-    return normalized
-
-
 def _reject_model_ablation(raw_eval_configs: list[Mapping[str, Any]], *, source: Path) -> None:
     raw_models = {str(raw["model"]) for raw in raw_eval_configs if raw.get("model") is not None}
     raw_endpoints = {str(raw["endpoint_id"]) for raw in raw_eval_configs if raw.get("endpoint_id") is not None}
     if len(raw_models) > 1:
-        raise ValueError(f"Job config {source} ablates model, which is not supported by orchestration.")
+        raise ValueError(f"Suite {source} ablates model, which is not supported by orchestration.")
     if len(raw_endpoints) > 1:
-        raise ValueError(f"Job config {source} ablates endpoint_id, which is not supported by orchestration.")
+        raise ValueError(f"Suite {source} ablates endpoint_id, which is not supported by orchestration.")
     if raw_models and raw_endpoints:
-        raise ValueError(f"Job config {source} mixes model and endpoint_id across evals, which is not supported.")
+        raise ValueError(f"Suite {source} mixes model and endpoint_id across evals, which is not supported.")
 
 
 def _resolved_eval_ids(path_plans: list[Any]) -> list[str]:
@@ -648,14 +794,19 @@ def snapshot_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
 
 
 __all__ = [
+    "BenchOverrideConfig",
+    "ContainerOverrideConfig",
     "ConfigFormatError",
     "PlanConfig",
     "RegistrySnapshot",
     "TaskSpec",
+    "TargetConfig",
     "expand_tasks",
     "load_eval_images_config",
     "load_endpoint_orchestration_registry",
-    "load_job_config",
     "load_plan",
+    "load_suite_config",
     "make_plan",
+    "materialize_task_eval_config",
+    "render_toml_mapping",
 ]

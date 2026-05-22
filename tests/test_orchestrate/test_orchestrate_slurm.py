@@ -11,7 +11,7 @@ from medarc_verifiers.orchestrate.bundle import (
     load_task_spec,
 )
 from medarc_verifiers.orchestrate.cli import main as orchestrate_main
-from medarc_verifiers.orchestrate.config import TaskSpec, expand_tasks, load_job_config, load_plan
+from medarc_verifiers.orchestrate.config import TaskSpec, expand_tasks, load_plan, load_suite_config
 from medarc_verifiers.orchestrate.internal_io import load_internal_mapping
 from medarc_verifiers.orchestrate.slurm.manifest import SlurmBundleManifest
 from medarc_verifiers.orchestrate.slurm.plan import build_submission_plan
@@ -23,7 +23,7 @@ _JOB_META: dict[Path, dict[str, object]] = {}
 _SIDECAR_META: dict[Path, dict[str, object]] = {}
 
 
-def _write_job_config(
+def _write_suite_config(
     path: Path,
     *,
     model_id: str | None = None,
@@ -37,9 +37,6 @@ def _write_job_config(
     endpoint_id = toml_path.stem
     toml_path.write_text(
         f"""
-endpoint_id = "{endpoint_id}"
-endpoints_path = "endpoints.toml"
-
 [[eval]]
 env_id = "{toml_path.stem}"
 num_examples = 1
@@ -58,10 +55,10 @@ rollouts_per_example = 1
     }
 
 
-def _write_sidecar_job_config(
+def _write_sidecar_suite_config(
     path: Path, *, name: str = "medagentbench-fhir", image: str = "/tmp/image with space.sqsh"
 ) -> None:
-    _write_job_config(path, model_id="Foo/Bar", gpus=1)
+    _write_suite_config(path, model_id="Foo/Bar", gpus=1)
     toml_path = path.with_suffix(".toml").resolve()
     _SIDECAR_META[toml_path] = [
         {
@@ -84,11 +81,10 @@ def _write_sidecar_job_config(
 def _task(
     tmp_path: Path, name: str, *, gpus: int, tp: int | None = None, slurm: dict[str, object] | None = None
 ) -> TaskSpec:
-    job_cfg = tmp_path / f"{name}.toml"
-    _write_job_config(job_cfg, model_id="foo", gpus=gpus, tensor_parallel_size=tp, slurm=slurm)
+    suite_cfg = tmp_path / f"{name}.toml"
+    _write_suite_config(suite_cfg, model_id="foo", gpus=gpus, tensor_parallel_size=tp, slurm=slurm)
     return TaskSpec(
         task_id=f"{name}:foo",
-        job_config_path=job_cfg.resolve(),
         model_key="foo",
         model_id="foo",
         orchestrate={
@@ -96,16 +92,23 @@ def _task(
             "container": {"image": "fake"},
             "pyxis": {},
         },
+        suite_path=suite_cfg.resolve(),
+        target_endpoint_id=suite_cfg.stem,
+        generated_eval_config={
+            "endpoint_id": suite_cfg.stem,
+            "endpoints_path": str(tmp_path / "endpoints.toml"),
+            "output_dir": ".",
+            "eval": [{"env_id": suite_cfg.stem, "num_examples": 1, "rollouts_per_example": 1}],
+        },
         slurm=dict(slurm or {}),
     )
 
 
-def _write_plan(tmp_path: Path, job_configs: list[Path]) -> Path:
-    toml_paths = [path.with_suffix(".toml").resolve() for path in job_configs]
+def _write_plan(tmp_path: Path, suites: list[Path]) -> Path:
+    toml_paths = [path.with_suffix(".toml").resolve() for path in suites]
     plan_path = tmp_path / "plan.toml"
     eval_images_path = tmp_path / "eval_images.toml"
-    config_list = ", ".join(f'"{path}"' for path in toml_paths)
-    plan_lines = [f"job_configs = [{config_list}]"]
+    plan_lines = [f'suite = "{toml_paths[0]}"', 'endpoints_path = "endpoints.toml"']
     sidecar_entries = [
         (entry, path)
         for path in toml_paths
@@ -115,6 +118,8 @@ def _write_plan(tmp_path: Path, job_configs: list[Path]) -> Path:
     ]
     if sidecar_entries:
         plan_lines.append(f'eval_images_config = "{eval_images_path}"')
+    for path in toml_paths:
+        plan_lines.extend(["", "[[target]]", f'endpoint_id = "{path.stem}"', f'suite = "{path}"'])
     plan_path.write_text("\n".join(plan_lines) + "\n", encoding="utf-8")
 
     endpoint_lines = []
@@ -204,10 +209,6 @@ def test_build_submission_plan_derives_dp_and_sorts(tmp_path: Path) -> None:
 
     planned = build_submission_plan(
         tasks,
-        run_id="bundle",
-        node_gpus=8,
-        max_simultaneous_nodes=1,
-        run_simultaneously=False,
         base_dependency=None,
         submission_options=SlurmSubmissionOptions(),
     )
@@ -218,15 +219,15 @@ def test_build_submission_plan_derives_dp_and_sorts(tmp_path: Path) -> None:
         for task in planned
     ] == [
         (8, 8, 1, 8, 8),
-        (2, 2, 4, 8, 8),
-        (2, 1, 8, 8, 8),
-        (1, 1, 8, 8, 8),
+        (2, 2, 1, 2, 2),
+        (2, 1, 2, 2, 2),
+        (1, 1, 1, 1, 1),
     ]
-    assert planned[1].predecessor_task_id == "large:foo"
+    assert all(task.base_dependency is None for task in planned)
     assert all(task.options.account is None for task in planned)
 
 
-def test_build_submission_plan_round_robins_two_chains(tmp_path: Path) -> None:
+def test_build_submission_plan_applies_base_dependency_to_each_task(tmp_path: Path) -> None:
     tasks = [
         _task(tmp_path, "a", gpus=4, tp=4),
         _task(tmp_path, "b", gpus=2, tp=2),
@@ -236,25 +237,19 @@ def test_build_submission_plan_round_robins_two_chains(tmp_path: Path) -> None:
 
     planned = build_submission_plan(
         tasks,
-        run_id="bundle",
-        node_gpus=8,
-        max_simultaneous_nodes=2,
-        run_simultaneously=False,
         base_dependency="afterok:555",
         submission_options=SlurmSubmissionOptions(),
     )
 
-    assert [
-        (task.task.task_id, task.chain_index, task.predecessor_task_id, task.base_dependency) for task in planned
-    ] == [
-        ("a:foo", 0, None, "afterok:555"),
-        ("b:foo", 1, None, "afterok:555"),
-        ("c:foo", 0, "a:foo", None),
-        ("d:foo", 1, "b:foo", None),
+    assert [(task.task.task_id, task.base_dependency) for task in planned] == [
+        ("a:foo", "afterok:555"),
+        ("b:foo", "afterok:555"),
+        ("c:foo", "afterok:555"),
+        ("d:foo", "afterok:555"),
     ]
 
 
-def test_build_submission_plan_run_simultaneously_uses_no_generated_dependencies(tmp_path: Path) -> None:
+def test_build_submission_plan_does_not_generate_dependencies(tmp_path: Path) -> None:
     tasks = [
         _task(tmp_path, "a", gpus=4, tp=4),
         _task(tmp_path, "b", gpus=1),
@@ -262,49 +257,35 @@ def test_build_submission_plan_run_simultaneously_uses_no_generated_dependencies
 
     planned = build_submission_plan(
         tasks,
-        run_id="bundle",
-        node_gpus=8,
-        max_simultaneous_nodes=1,
-        run_simultaneously=True,
         base_dependency="afterok:555",
         submission_options=SlurmSubmissionOptions(),
     )
 
-    assert [
-        (task.task.task_id, task.chain_index, task.predecessor_task_id, task.base_dependency) for task in planned
-    ] == [
-        ("a:foo", 0, None, "afterok:555"),
-        ("b:foo", 1, None, "afterok:555"),
+    assert [(task.task.task_id, task.base_dependency) for task in planned] == [
+        ("a:foo", "afterok:555"),
+        ("b:foo", "afterok:555"),
     ]
 
 
-def test_build_submission_plan_rejects_tp_larger_than_node_gpus(tmp_path: Path) -> None:
+def test_build_submission_plan_rejects_invalid_endpoint_gpu_shape(tmp_path: Path) -> None:
     tasks = [_task(tmp_path, "too-wide", gpus=16, tp=16)]
 
-    with pytest.raises(ValueError, match=r"requires gpus=16 minimum outer allocation, but allocated_gpus=8"):
+    with pytest.raises(ValueError, match=r"allocated_gpus=16 is invalid"):
         build_submission_plan(
             tasks,
-            run_id="bundle",
-            node_gpus=8,
-            max_simultaneous_nodes=1,
-            run_simultaneously=False,
             base_dependency=None,
             submission_options=SlurmSubmissionOptions(),
         )
 
 
 def test_build_submission_plan_rejects_mismatched_explicit_data_parallel_size(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
-    _write_job_config(job_cfg, gpus=2, tensor_parallel_size=2, data_parallel_size=1)
-    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    suite_cfg = tmp_path / "job.yaml"
+    _write_suite_config(suite_cfg, gpus=2, tensor_parallel_size=2, data_parallel_size=2)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [suite_cfg])))
 
-    with pytest.raises(ValueError, match=r"explicit data_parallel_size=1 does not match derived value 4"):
+    with pytest.raises(ValueError, match=r"explicit data_parallel_size=2 does not match derived value 1"):
         build_submission_plan(
             tasks,
-            run_id="bundle",
-            node_gpus=8,
-            max_simultaneous_nodes=1,
-            run_simultaneously=False,
             base_dependency=None,
             submission_options=SlurmSubmissionOptions(),
         )
@@ -313,27 +294,23 @@ def test_build_submission_plan_rejects_mismatched_explicit_data_parallel_size(tm
 def test_build_submission_plan_rejects_node_allocation_incompatible_with_tp(tmp_path: Path) -> None:
     tasks = [_task(tmp_path, "bad-shape", gpus=3, tp=3)]
 
-    with pytest.raises(ValueError, match=r"allocated_gpus=4 must be divisible by tensor_parallel_size=3"):
+    with pytest.raises(ValueError, match=r"allocated_gpus=3 is invalid"):
         build_submission_plan(
             tasks,
-            run_id="bundle",
-            node_gpus=4,
-            max_simultaneous_nodes=1,
-            run_simultaneously=False,
             base_dependency=None,
             submission_options=SlurmSubmissionOptions(),
         )
 
 
 def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
-    _write_job_config(
-        job_cfg,
+    suite_cfg = tmp_path / "job.yaml"
+    _write_suite_config(
+        suite_cfg,
         gpus=2,
         tensor_parallel_size=2,
         slurm={"partition": "gpu", "qos": "low", "nice": 500, "slurm_resume": True},
     )
-    toml_cfg = job_cfg.with_suffix(".toml")
+    toml_cfg = suite_cfg.with_suffix(".toml")
     toml_cfg.write_text(
         toml_cfg.read_text(encoding="utf-8").replace(
             "[[eval]]",
@@ -342,13 +319,9 @@ def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [suite_cfg])))
     planned = build_submission_plan(
         tasks,
-        run_id="bundle",
-        node_gpus=8,
-        max_simultaneous_nodes=1,
-        run_simultaneously=False,
         base_dependency=None,
         submission_options=SlurmSubmissionOptions(time="04:00:00", cpus_per_gpu=12),
     )
@@ -356,8 +329,6 @@ def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
     manifest = render_bundle(
         planned_tasks=planned,
         bundle_root=tmp_path / "outputs",
-        run_id="bundle",
-        node_gpus=8,
         source_dir=tmp_path,
         activate_script=tmp_path / ".venv" / "bin" / "activate",
         env_file=tmp_path / ".env",
@@ -369,14 +340,14 @@ def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
     script = Path(entry.script_path).read_text(encoding="utf-8")
 
     assert entry.gpus == 2
-    assert entry.allocated_gpus == 8
+    assert entry.allocated_gpus == 2
     assert entry.tensor_parallel_size == 2
-    assert entry.data_parallel_size == 4
-    assert entry.vllm_world_size == 8
-    assert entry.original_job_config_checksum
+    assert entry.data_parallel_size == 1
+    assert entry.vllm_world_size == 2
+    assert entry.suite_checksum
     assert entry.bundled_eval_config_checksum
     assert entry.task_spec_checksum
-    assert "#SBATCH --gpus-per-task=8" in script
+    assert "#SBATCH --gpus-per-task=2" in script
     assert "#SBATCH --nodes=1" in script
     assert "#SBATCH --ntasks=1" in script
     assert "#SBATCH --cpus-per-gpu=12" in script
@@ -394,11 +365,11 @@ def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
     assert f'ACTIVATE_SCRIPT="${{ACTIVATE_SCRIPT:-{tmp_path / ".venv" / "bin" / "activate"}}}"' in script
     assert 'source "$ACTIVATE_SCRIPT"' in script
     assert "Missing activation script:" in script
-    assert "MEDARC_ALLOCATED_GPU_COUNT=8" in script
+    assert "MEDARC_ALLOCATED_GPU_COUNT=2" in script
     assert "--mem" not in script
-    assert str(job_cfg) not in script
+    assert str(suite_cfg) not in script
 
-    bundled_payload = load_job_config(Path(entry.effective_job_config_path))
+    bundled_payload = load_suite_config(Path(entry.generated_eval_config_path))
     assert bundled_payload["endpoint_id"] == "job"
     assert bundled_payload["endpoints_path"] == str((tmp_path / "endpoints.toml").resolve())
     assert bundled_payload["env_dir_path"] == str((tmp_path / "envs").resolve())
@@ -415,22 +386,21 @@ def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
     assert orchestrate_snapshot["model"]["model"].startswith("Foo/")
     allocation = load_execution_allocation(Path(entry.allocation_path))
     assert allocation is not None
-    assert allocation.allocated_gpus == 8
+    assert allocation.allocated_gpus == 2
     assert Path(entry.task_spec_path).name == "task.yaml"
     assert Path(entry.script_path).name == "submit.sh"
 
     run_manifest = load_run_bundle_manifest(tmp_path / "outputs" / "run_manifest.json")
-    assert run_manifest.tasks[0].bundled_eval_config_path == entry.effective_job_config_path
+    assert run_manifest.tasks[0].bundled_eval_config_path == entry.generated_eval_config_path
 
 
 def test_bundle_parses_sidecars(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
-    _write_sidecar_job_config(job_cfg)
-    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    suite_cfg = tmp_path / "job.yaml"
+    _write_sidecar_suite_config(suite_cfg)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [suite_cfg])))
 
     plan = ensure_run_bundle(
         tasks=tasks,
-        run_id="bundle",
         output_root=tmp_path / "outputs",
         mode="slurm",
         runtime="pyxis",
@@ -459,15 +429,11 @@ def test_bundle_parses_sidecars(tmp_path: Path) -> None:
 
 
 def test_slurm_render_starts_sidecar_before_worker(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
-    _write_sidecar_job_config(job_cfg)
-    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    suite_cfg = tmp_path / "job.yaml"
+    _write_sidecar_suite_config(suite_cfg)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [suite_cfg])))
     planned = build_submission_plan(
         tasks,
-        run_id="bundle",
-        node_gpus=1,
-        max_simultaneous_nodes=1,
-        run_simultaneously=False,
         base_dependency=None,
         submission_options=SlurmSubmissionOptions(),
     )
@@ -475,8 +441,6 @@ def test_slurm_render_starts_sidecar_before_worker(tmp_path: Path) -> None:
     manifest = render_bundle(
         planned_tasks=planned,
         bundle_root=tmp_path / "outputs",
-        run_id="bundle",
-        node_gpus=1,
         source_dir=tmp_path,
         activate_script=tmp_path / ".venv" / "bin" / "activate",
         env_file=None,
@@ -492,15 +456,11 @@ def test_slurm_render_starts_sidecar_before_worker(tmp_path: Path) -> None:
 
 
 def test_slurm_render_sidecar_has_exit_trap(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
-    _write_sidecar_job_config(job_cfg)
-    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    suite_cfg = tmp_path / "job.yaml"
+    _write_sidecar_suite_config(suite_cfg)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [suite_cfg])))
     planned = build_submission_plan(
         tasks,
-        run_id="bundle",
-        node_gpus=1,
-        max_simultaneous_nodes=1,
-        run_simultaneously=False,
         base_dependency=None,
         submission_options=SlurmSubmissionOptions(),
     )
@@ -508,8 +468,6 @@ def test_slurm_render_sidecar_has_exit_trap(tmp_path: Path) -> None:
     manifest = render_bundle(
         planned_tasks=planned,
         bundle_root=tmp_path / "outputs",
-        run_id="bundle",
-        node_gpus=1,
         source_dir=tmp_path,
         activate_script=tmp_path / ".venv" / "bin" / "activate",
         env_file=None,
@@ -524,15 +482,11 @@ def test_slurm_render_sidecar_has_exit_trap(tmp_path: Path) -> None:
 
 
 def test_slurm_render_sidecar_readiness_failure_tails_log(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
-    _write_sidecar_job_config(job_cfg)
-    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    suite_cfg = tmp_path / "job.yaml"
+    _write_sidecar_suite_config(suite_cfg)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [suite_cfg])))
     planned = build_submission_plan(
         tasks,
-        run_id="bundle",
-        node_gpus=1,
-        max_simultaneous_nodes=1,
-        run_simultaneously=False,
         base_dependency=None,
         submission_options=SlurmSubmissionOptions(),
     )
@@ -540,8 +494,6 @@ def test_slurm_render_sidecar_readiness_failure_tails_log(tmp_path: Path) -> Non
     manifest = render_bundle(
         planned_tasks=planned,
         bundle_root=tmp_path / "outputs",
-        run_id="bundle",
-        node_gpus=1,
         source_dir=tmp_path,
         activate_script=tmp_path / ".venv" / "bin" / "activate",
         env_file=None,
@@ -556,36 +508,36 @@ def test_slurm_render_sidecar_readiness_failure_tails_log(tmp_path: Path) -> Non
 
 
 def test_sidecar_validation_rejects_missing_image_or_command(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
-    _write_sidecar_job_config(job_cfg, image="")
+    suite_cfg = tmp_path / "job.yaml"
+    _write_sidecar_suite_config(suite_cfg, image="")
 
     with pytest.raises(ValueError, match="non-empty image"):
-        expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+        expand_tasks(load_plan(_write_plan(tmp_path, [suite_cfg])))
 
 
 def test_sidecar_validation_rejects_non_slurm_mode(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
-    _write_sidecar_job_config(job_cfg)
-    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    suite_cfg = tmp_path / "job.yaml"
+    _write_sidecar_suite_config(suite_cfg)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [suite_cfg])))
 
     with pytest.raises(ValueError, match="only supported in slurm mode"):
         ensure_run_bundle(tasks=tasks, run_id="bundle", output_root=tmp_path / "outputs", mode="local", runtime="pyxis")
 
 
 def test_sidecar_validation_rejects_reserved_srun_args(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
-    _write_sidecar_job_config(job_cfg)
-    _SIDECAR_META[job_cfg.with_suffix(".toml").resolve()][0]["srun_args"].extend(["--nodes", "1"])
-    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    suite_cfg = tmp_path / "job.yaml"
+    _write_sidecar_suite_config(suite_cfg)
+    _SIDECAR_META[suite_cfg.with_suffix(".toml").resolve()][0]["srun_args"].extend(["--nodes", "1"])
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [suite_cfg])))
 
     with pytest.raises(ValueError, match="renderer-owned flag --nodes"):
         ensure_run_bundle(tasks=tasks, run_id="bundle", output_root=tmp_path / "outputs", mode="slurm", runtime="pyxis")
 
 
 def test_sidecar_validation_rejects_shell_suffix_collision(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
-    _write_sidecar_job_config(job_cfg, name="fhir-v2")
-    first = dict(_SIDECAR_META[job_cfg.with_suffix(".toml").resolve()][0])
+    suite_cfg = tmp_path / "job.yaml"
+    _write_sidecar_suite_config(suite_cfg, name="fhir-v2")
+    first = dict(_SIDECAR_META[suite_cfg.with_suffix(".toml").resolve()][0])
     second = dict(first)
     second.update(
         {
@@ -595,17 +547,17 @@ def test_sidecar_validation_rejects_shell_suffix_collision(tmp_path: Path) -> No
             "readiness": {"enabled": False},
         }
     )
-    _SIDECAR_META[job_cfg.with_suffix(".toml").resolve()].append(second)
-    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    _SIDECAR_META[suite_cfg.with_suffix(".toml").resolve()].append(second)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [suite_cfg])))
 
     with pytest.raises(ValueError, match="same shell variable suffix"):
         ensure_run_bundle(tasks=tasks, run_id="bundle", output_root=tmp_path / "outputs", mode="slurm", runtime="pyxis")
 
 
 def test_slurm_render_uses_single_cleanup_trap_for_multiple_sidecars(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
-    _write_sidecar_job_config(job_cfg)
-    first = dict(_SIDECAR_META[job_cfg.with_suffix(".toml").resolve()][0])
+    suite_cfg = tmp_path / "job.yaml"
+    _write_sidecar_suite_config(suite_cfg)
+    first = dict(_SIDECAR_META[suite_cfg.with_suffix(".toml").resolve()][0])
     audit = dict(first)
     audit.update(
         {
@@ -615,14 +567,10 @@ def test_slurm_render_uses_single_cleanup_trap_for_multiple_sidecars(tmp_path: P
             "readiness": {"enabled": False},
         }
     )
-    _SIDECAR_META[job_cfg.with_suffix(".toml").resolve()].append(audit)
-    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    _SIDECAR_META[suite_cfg.with_suffix(".toml").resolve()].append(audit)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [suite_cfg])))
     planned = build_submission_plan(
         tasks,
-        run_id="bundle",
-        node_gpus=1,
-        max_simultaneous_nodes=1,
-        run_simultaneously=False,
         base_dependency=None,
         submission_options=SlurmSubmissionOptions(),
     )
@@ -630,8 +578,6 @@ def test_slurm_render_uses_single_cleanup_trap_for_multiple_sidecars(tmp_path: P
     manifest = render_bundle(
         planned_tasks=planned,
         bundle_root=tmp_path / "outputs",
-        run_id="bundle",
-        node_gpus=1,
         source_dir=tmp_path,
         activate_script=tmp_path / ".venv" / "bin" / "activate",
         env_file=None,
@@ -649,15 +595,11 @@ def test_slurm_render_uses_single_cleanup_trap_for_multiple_sidecars(tmp_path: P
 
 
 def test_slurm_render_shell_quotes_sidecar_values(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
-    _write_sidecar_job_config(job_cfg)
-    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    suite_cfg = tmp_path / "job.yaml"
+    _write_sidecar_suite_config(suite_cfg)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [suite_cfg])))
     planned = build_submission_plan(
         tasks,
-        run_id="bundle",
-        node_gpus=1,
-        max_simultaneous_nodes=1,
-        run_simultaneously=False,
         base_dependency=None,
         submission_options=SlurmSubmissionOptions(),
     )
@@ -665,8 +607,6 @@ def test_slurm_render_shell_quotes_sidecar_values(tmp_path: Path) -> None:
     manifest = render_bundle(
         planned_tasks=planned,
         bundle_root=tmp_path / "outputs with space",
-        run_id="bundle",
-        node_gpus=1,
         source_dir=tmp_path,
         activate_script=tmp_path / ".venv" / "bin" / "activate",
         env_file=None,
@@ -683,23 +623,17 @@ def test_slurm_render_shell_quotes_sidecar_values(tmp_path: Path) -> None:
 
 
 def test_record_failure_writes_pre_worker_failure_artifacts(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
-    _write_sidecar_job_config(job_cfg)
-    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    suite_cfg = tmp_path / "job.yaml"
+    _write_sidecar_suite_config(suite_cfg)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [suite_cfg])))
     planned = build_submission_plan(
         tasks,
-        run_id="bundle",
-        node_gpus=1,
-        max_simultaneous_nodes=1,
-        run_simultaneously=False,
         base_dependency=None,
         submission_options=SlurmSubmissionOptions(),
     )
     manifest = render_bundle(
         planned_tasks=planned,
         bundle_root=tmp_path / "outputs",
-        run_id="bundle",
-        node_gpus=1,
         source_dir=tmp_path,
         activate_script=tmp_path / ".venv" / "bin" / "activate",
         env_file=None,
@@ -736,37 +670,12 @@ def test_record_failure_writes_pre_worker_failure_artifacts(tmp_path: Path) -> N
     assert summary["tasks"][0]["failure_reason"] == "sidecar_readiness_timeout"
 
 
-def test_old_task_spec_version_fails_before_missing_field_parsing(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
-    _write_job_config(job_cfg)
-    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+def test_task_spec_requires_sidecar_fields(tmp_path: Path) -> None:
+    suite_cfg = tmp_path / "job.yaml"
+    _write_suite_config(suite_cfg)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [suite_cfg])))
     plan = ensure_run_bundle(
         tasks=tasks,
-        run_id="bundle",
-        output_root=tmp_path / "outputs",
-        mode="slurm",
-        runtime="pyxis",
-    )
-    task_spec_path = plan.tasks[tasks[0].task_id].paths.task_spec_path
-    payload = dict(load_internal_mapping(task_spec_path, label="task spec"))
-    payload["spec_version"] = 1
-    payload.pop("sidecars", None)
-    payload["output_paths"].pop("sidecar_dir", None)
-    from omegaconf import OmegaConf
-
-    OmegaConf.save(config=OmegaConf.create(payload), f=str(task_spec_path))
-
-    with pytest.raises(ValueError, match="Unsupported task spec_version=1"):
-        load_task_spec(task_spec_path)
-
-
-def test_v2_task_spec_requires_sidecar_fields(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
-    _write_job_config(job_cfg)
-    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
-    plan = ensure_run_bundle(
-        tasks=tasks,
-        run_id="bundle",
         output_root=tmp_path / "outputs",
         mode="slurm",
         runtime="pyxis",
@@ -785,15 +694,11 @@ def test_v2_task_spec_requires_sidecar_fields(tmp_path: Path) -> None:
 def test_render_bundle_assigns_unique_ports_per_task(tmp_path: Path) -> None:
     job_a = tmp_path / "job-a.yaml"
     job_b = tmp_path / "job-b.yaml"
-    _write_job_config(job_a, gpus=1)
-    _write_job_config(job_b, gpus=1)
+    _write_suite_config(job_a, gpus=1)
+    _write_suite_config(job_b, gpus=1)
     tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_a, job_b])))
     planned = build_submission_plan(
         tasks,
-        run_id="bundle",
-        node_gpus=1,
-        max_simultaneous_nodes=2,
-        run_simultaneously=True,
         base_dependency=None,
         submission_options=SlurmSubmissionOptions(),
     )
@@ -801,8 +706,6 @@ def test_render_bundle_assigns_unique_ports_per_task(tmp_path: Path) -> None:
     manifest = render_bundle(
         planned_tasks=planned,
         bundle_root=tmp_path / "outputs",
-        run_id="bundle",
-        node_gpus=1,
         source_dir=tmp_path,
         activate_script=tmp_path / ".venv" / "bin" / "activate",
         env_file=None,
@@ -820,16 +723,12 @@ def test_render_bundle_assigns_unique_ports_per_task(tmp_path: Path) -> None:
 
 
 def test_render_bundle_refreshes_stale_task_bundle_when_source_changes(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
-    _write_job_config(job_cfg, gpus=1)
-    _write_plan(tmp_path, [job_cfg])
-    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    suite_cfg = tmp_path / "job.yaml"
+    _write_suite_config(suite_cfg, gpus=1)
+    _write_plan(tmp_path, [suite_cfg])
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [suite_cfg])))
     planned = build_submission_plan(
         tasks,
-        run_id="bundle",
-        node_gpus=8,
-        max_simultaneous_nodes=1,
-        run_simultaneously=False,
         base_dependency=None,
         submission_options=SlurmSubmissionOptions(),
     )
@@ -837,8 +736,6 @@ def test_render_bundle_refreshes_stale_task_bundle_when_source_changes(tmp_path:
     first_manifest = render_bundle(
         planned_tasks=planned,
         bundle_root=tmp_path / "outputs",
-        run_id="bundle",
-        node_gpus=8,
         source_dir=tmp_path,
         activate_script=tmp_path / ".venv" / "bin" / "activate",
         env_file=None,
@@ -846,20 +743,24 @@ def test_render_bundle_refreshes_stale_task_bundle_when_source_changes(tmp_path:
         prune_logs_on_success=False,
     )
     first_entry = first_manifest.entries[0]
-    first_config_path = Path(first_entry.effective_job_config_path)
-    first_payload = load_job_config(first_config_path)
+    first_config_path = Path(first_entry.generated_eval_config_path)
+    first_payload = load_suite_config(first_config_path)
 
     assert "orchestrate" not in first_payload
 
-    job_cfg.with_suffix(".toml").write_text(
-        job_cfg.with_suffix(".toml").read_text(encoding="utf-8") + '\nvariant_id = "changed"\n', encoding="utf-8"
+    suite_cfg.with_suffix(".toml").write_text(
+        suite_cfg.with_suffix(".toml").read_text(encoding="utf-8") + '\nvariant_id = "changed"\n', encoding="utf-8"
     )
 
+    updated_tasks = expand_tasks(load_plan(_write_plan(tmp_path, [suite_cfg])))
+    updated_planned = build_submission_plan(
+        updated_tasks,
+        base_dependency=None,
+        submission_options=SlurmSubmissionOptions(),
+    )
     second_manifest = render_bundle(
-        planned_tasks=planned,
+        planned_tasks=updated_planned,
         bundle_root=tmp_path / "outputs",
-        run_id="bundle",
-        node_gpus=8,
         source_dir=tmp_path,
         activate_script=tmp_path / ".venv" / "bin" / "activate",
         env_file=None,
@@ -868,23 +769,19 @@ def test_render_bundle_refreshes_stale_task_bundle_when_source_changes(tmp_path:
         existing_manifest=first_manifest,
     )
     second_entry = second_manifest.entries[0]
-    second_payload = load_job_config(Path(second_entry.effective_job_config_path))
+    second_payload = load_suite_config(Path(second_entry.generated_eval_config_path))
 
-    assert second_entry.effective_job_config_path == first_entry.effective_job_config_path
+    assert second_entry.generated_eval_config_path == first_entry.generated_eval_config_path
     assert "orchestrate" not in second_payload
     assert first_payload != second_payload
 
 
 def test_rendered_task_local_config_is_loadable_by_orchestrator(tmp_path: Path) -> None:
-    job_cfg = tmp_path / "job.yaml"
-    _write_job_config(job_cfg, gpus=2, tensor_parallel_size=2)
-    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_cfg])))
+    suite_cfg = tmp_path / "job.yaml"
+    _write_suite_config(suite_cfg, gpus=2, tensor_parallel_size=2)
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [suite_cfg])))
     planned = build_submission_plan(
         tasks,
-        run_id="bundle",
-        node_gpus=8,
-        max_simultaneous_nodes=1,
-        run_simultaneously=False,
         base_dependency=None,
         submission_options=SlurmSubmissionOptions(),
     )
@@ -892,8 +789,6 @@ def test_rendered_task_local_config_is_loadable_by_orchestrator(tmp_path: Path) 
     manifest = render_bundle(
         planned_tasks=planned,
         bundle_root=tmp_path / "outputs",
-        run_id="bundle",
-        node_gpus=8,
         source_dir=tmp_path,
         activate_script=tmp_path / ".venv" / "bin" / "activate",
         env_file=None,
@@ -901,29 +796,24 @@ def test_rendered_task_local_config_is_loadable_by_orchestrator(tmp_path: Path) 
         prune_logs_on_success=False,
     )
 
-    patched_path = Path(manifest.entries[0].effective_job_config_path)
-    patched_plan = tmp_path / "patched-plan.toml"
-    patched_plan.write_text(f'job_configs = ["{patched_path}"]\n', encoding="utf-8")
-    patched_tasks = expand_tasks(load_plan(patched_plan))
+    patched_payload = load_suite_config(Path(manifest.entries[0].generated_eval_config_path))
 
-    assert len(patched_tasks) == 1
-    assert patched_tasks[0].orchestrate["vllm"]["gpus"] == 2
+    assert patched_payload["endpoint_id"] == "job"
+    assert patched_payload["output_dir"].endswith("/bench")
 
 
 def test_slurm_dry_run_writes_manifest_and_prints_commands(tmp_path: Path, capsys) -> None:
     job_a = tmp_path / "job-a.yaml"
     job_b = tmp_path / "job-b.yaml"
-    _write_job_config(job_a, gpus=4, tensor_parallel_size=4)
-    _write_job_config(job_b, gpus=1)
-    _write_plan(tmp_path, [job_a, job_b])
+    _write_suite_config(job_a, gpus=4, tensor_parallel_size=4)
+    _write_suite_config(job_b, gpus=1)
+    plan_path = _write_plan(tmp_path, [job_a, job_b])
 
     rc = orchestrate_main(
         [
             "run",
-            "--job-config",
-            str(job_a.with_suffix(".toml")),
-            "--job-config",
-            str(job_b.with_suffix(".toml")),
+            "--plan",
+            str(plan_path),
             "--run-id",
             "bundle",
             "--output-dir",
@@ -937,7 +827,7 @@ def test_slurm_dry_run_writes_manifest_and_prints_commands(tmp_path: Path, capsy
     assert len(stdout_lines) == 2
     assert stdout_lines[0].startswith("sbatch --parsable ")
     assert stdout_lines[1].startswith("sbatch --parsable ")
-    assert "--dependency=afterany:$JOBID_1" in stdout_lines[1]
+    assert all("--dependency=afterany:$JOBID_" not in line for line in stdout_lines)
 
     manifest = json.loads((tmp_path / "bundle" / "submission_manifest.json").read_text())
     assert [entry["state"] for entry in manifest["entries"]] == ["dry-run", "dry-run"]
@@ -949,18 +839,16 @@ def test_slurm_dry_run_writes_manifest_and_prints_commands(tmp_path: Path, capsy
 
 
 def test_slurm_cli_default_run_id_uses_shared_generator(tmp_path: Path, monkeypatch) -> None:
-    job_cfg = tmp_path / "job.yaml"
-    _write_job_config(job_cfg, gpus=1)
-    _write_plan(tmp_path, [job_cfg])
+    suite_cfg = tmp_path / "job.yaml"
+    _write_suite_config(suite_cfg, gpus=1)
+    plan_path = _write_plan(tmp_path, [suite_cfg])
 
     captured: dict[str, object] = {}
 
     def fake_render_bundle(**kwargs):
         captured["run_id"] = kwargs["run_id"]
         captured["bundle_root"] = kwargs["bundle_root"]
-        return SlurmBundleManifest(
-            run_id=kwargs["run_id"], bundle_root=str(kwargs["bundle_root"]), node_gpus=8, entries=[]
-        )
+        return SlurmBundleManifest(run_id=kwargs["run_id"], bundle_root=str(kwargs["bundle_root"]), entries=[])
 
     monkeypatch.setattr("medarc_verifiers.orchestrate.launch.generate_run_id", lambda name: "shared-run-id")
     monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.submit.render_bundle", fake_render_bundle)
@@ -970,8 +858,8 @@ def test_slurm_cli_default_run_id_uses_shared_generator(tmp_path: Path, monkeypa
     rc = orchestrate_main(
         [
             "run",
-            "--job-config",
-            str(job_cfg.with_suffix(".toml")),
+            "--plan",
+            str(plan_path),
             "--dry-run",
         ]
     )
@@ -985,24 +873,18 @@ def test_submit_bundle_resumes_from_existing_job_ids(tmp_path: Path, monkeypatch
     job_a = tmp_path / "job-a.yaml"
     job_b = tmp_path / "job-b.yaml"
     job_c = tmp_path / "job-c.yaml"
-    _write_job_config(job_a, gpus=4, tensor_parallel_size=4)
-    _write_job_config(job_b, gpus=2, tensor_parallel_size=2)
-    _write_job_config(job_c, gpus=1)
+    _write_suite_config(job_a, gpus=4, tensor_parallel_size=4)
+    _write_suite_config(job_b, gpus=2, tensor_parallel_size=2)
+    _write_suite_config(job_c, gpus=1)
     tasks = expand_tasks(load_plan(_write_plan(tmp_path, [job_a, job_b, job_c])))
     planned = build_submission_plan(
         tasks,
-        run_id="bundle",
-        node_gpus=8,
-        max_simultaneous_nodes=1,
-        run_simultaneously=False,
         base_dependency=None,
         submission_options=SlurmSubmissionOptions(),
     )
     manifest = render_bundle(
         planned_tasks=planned,
         bundle_root=tmp_path / "bundle",
-        run_id="bundle",
-        node_gpus=8,
         source_dir=tmp_path,
         activate_script=tmp_path / ".venv" / "bin" / "activate",
         env_file=None,
@@ -1031,6 +913,5 @@ def test_submit_bundle_resumes_from_existing_job_ids(tmp_path: Path, monkeypatch
     submit_bundle(tmp_path / "bundle" / "submission_manifest.json", manifest)
 
     assert calls[0][0:2] == ["sbatch", "--parsable"]
-    assert "--dependency=afterany:101" in calls[0]
-    assert "--dependency=afterany:202" in calls[1]
+    assert all(not any(arg.startswith("--dependency=afterany:") for arg in call) for call in calls)
     assert [entry.slurm_job_id for entry in manifest.entries] == ["101", "202", "303"]
