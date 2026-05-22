@@ -1,24 +1,22 @@
 ## vLLM Orchestrator
 
-`medarc-orchestrate` runs TOML `medarc-eval bench` configs against locally served vLLM instances. It keeps benchmark semantics in upstream eval TOML files and resolves runtime infrastructure from separate registries.
+`medarc-orchestrate` runs TOML `medarc-eval bench` configs against locally served vLLM instances. It keeps benchmark semantics in upstream eval TOML files and resolves runtime infrastructure from endpoint registry entries.
 
 ### Config Files
 
-A plan is still YAML because it is an orchestrator control file, not a bench config:
+A plan can be TOML, YAML, or JSON. Most users only need job configs plus the endpoint registry:
 
-```yaml
-name: local-vllm
-job_configs:
-  - configs/qwen-30b-a3b-medqa.toml
-orchestrate_config: configs/orchestrate.toml
-eval_images_config: configs/eval_images.toml
-endpoints_path: configs/endpoints.toml
-env_file: .env
-gpu_range: "0-3"
-port_range: "8000-8999"
-max_parallel: 2
-readiness_timeout_s: 1800
-prune_logs_on_success: true
+```toml
+name = "local-vllm"
+job_configs = ["configs/qwen-30b-a3b-medqa.toml"]
+eval_images_config = "configs/eval_images.toml"
+endpoints_path = "configs/medmarks-endpoints.toml"
+env_file = ".env"
+gpu_range = "0-3"
+port_range = "8000-8999"
+max_parallel = 2
+readiness_timeout_s = 1800
+prune_logs_on_success = true
 ```
 
 Each `job_configs` entry must be an upstream eval TOML config accepted by `medarc-eval bench`:
@@ -33,42 +31,39 @@ num_examples = 5
 rollouts_per_example = 1
 ```
 
-Runtime settings live in `orchestrate.toml`:
+Runtime settings live on the matching `[[endpoint]]` entry under `endpoint.orchestrate`. The orchestrator matches by exact
+`endpoint_id`; fuzzy matching against a separate model registry is not supported.
 
 ```toml
-schema_version = 1
+[[endpoint]]
+endpoint_id = "qwen-30b-a3b-thinking"
+model = "Qwen/Qwen3-30B-A3B-Thinking-2507"
+api_client_type = "openai_chat_completions"
 
-[[model]]
-id = "Qwen/Qwen3-30B-A3B"
-aliases = ["qwen-30b-a3b"]
+[endpoint.sampling_args]
+temperature = 0.6
+top_p = 0.95
 
-[model.vllm]
+[endpoint.orchestrate.vllm]
 gpus = 2
-tensor_parallel_size = 2
 
-[model.vllm.serve]
+[endpoint.orchestrate.vllm.serve]
 max_model_len = 40960
 
-[model.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-volumes = ["/data/huggingface:/root/.cache/huggingface:rw"]
-ipc_mode = "host"
-
-[model.pyxis]
-srun_extra_args = ["--overlap"]
-
-[model.slurm]
+[endpoint.orchestrate.slurm]
 account = "training"
 time = "04:00:00"
-slurm_resume = true
 ```
+
+The orchestrator defaults `tensor_parallel_size` to `gpus`. It also supplies default container values for `image`,
+`container_port`, and `ipc_mode`, plus default Slurm values for `qos`, `nice`, and `slurm_resume`. It supplies default Pyxis
+`srun_extra_args` and default vLLM
+serve values for `gpu_memory_utilization`, `max_model_len`, `async_scheduling`, `enable_prefix_caching`, and
+`enable_auto_tool_choice`. Set those keys only when a model needs to override the built-in defaults.
 
 Eval auxiliary images, such as benchmark services, live in `eval_images.toml` and are selected by eval or env id:
 
 ```toml
-schema_version = 1
-
 [[eval_image]]
 id = "medagentbench-fhir"
 evals = ["medagentbenchv2_patient", "medagentbenchv2_test"]
@@ -84,16 +79,15 @@ timeout_s = 240
 ### Local Usage
 
 ```bash
-uv run medarc-orchestrate local --plan plans/local-vllm.yaml --runtime podman
-uv run medarc-orchestrate local --job-config configs/qwen-30b-a3b-medqa.toml --orchestrate-config configs/orchestrate.toml --runtime pyxis
+uv run medarc-orchestrate run --plan plans/local-vllm.toml --runtime podman
+uv run medarc-orchestrate run --job-config configs/qwen-30b-a3b-medqa.toml --endpoints-path configs/medmarks-endpoints.toml --runtime pyxis
 ```
 
 Common flags:
 
 - `--runtime {docker,podman,pyxis}` selects the serve backend.
-- `--orchestrate-config` overrides the model runtime registry.
 - `--eval-images-config` overrides the eval image registry.
-- `--endpoints-path` is used for endpoint/model resolution and is passed through to `medarc-eval bench`.
+- `--endpoints-path` selects the endpoint registry used for endpoint/model resolution, orchestration settings, and bench.
 - `--output-dir` sets the orchestrator output root.
 - `--max-parallel`, `--gpu-range`, and `--port-range` control local scheduling.
 - `--prune-logs-on-success` removes per-task serve and bench logs after successful tasks.
@@ -101,11 +95,13 @@ Common flags:
 ### Slurm Usage
 
 ```bash
-uv run medarc-orchestrate slurm --plan plan-qwen-small-slurm.yaml --dry-run
-uv run medarc-orchestrate slurm --plan plan-qwen-small-slurm.yaml --output-dir outputs/orchestrate/qwen-run
+uv run medarc-orchestrate run --backend slurm --plan plan-qwen-small-slurm.toml --dry-run
+uv run medarc-orchestrate run --backend slurm --plan plan-qwen-small-slurm.toml --output-dir outputs/orchestrate/qwen-run
 ```
 
-Slurm options come from `[model.slurm]` in `orchestrate.toml`, with CLI overrides taking precedence. `slurm_resume = true` renders `#SBATCH --requeue`, so resubmitting the same task bundle reuses the same task-local bench output directory.
+Slurm options come from `[endpoint.orchestrate.slurm]`, with Slurm executor CLI overrides taking precedence.
+`slurm_resume = true` renders `#SBATCH --requeue`, so resubmitting the same task bundle reuses the same task-local
+bench output directory. The retained `medarc-orchestrate slurm` command is a thin alias for the same launch resolver.
 
 ### Task Bundles
 

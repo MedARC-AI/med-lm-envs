@@ -1,0 +1,5 @@
+name = "qwen-slurm-smoke"
+job_configs = ["configs/qwen-30b-a3b-medqa.toml"]
+endpoints_path = "configs/endpoints.toml"
+readiness_timeout_s = 1800
+prune_logs_on_success = true

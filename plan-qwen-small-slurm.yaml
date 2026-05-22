@@ -1,8 +1,0 @@
-name: qwen-slurm-smoke
-job_configs:
-  - configs/qwen-30b-a3b-medqa.toml
-orchestrate_config: configs/orchestrate.toml
-eval_images_config: configs/eval_images.toml
-endpoints_path: configs/endpoints.toml
-readiness_timeout_s: 1800
-prune_logs_on_success: true

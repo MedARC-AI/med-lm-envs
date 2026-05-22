@@ -102,15 +102,6 @@ def _add_local_arguments(parser: argparse.ArgumentParser) -> None:
     parser.set_defaults(command="run", handler=_run_local, backend="local")
 
 
-def build_local_parser(*, prog: str = "medarc-orchestrate local") -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog=prog,
-        description="Run vLLM orchestration locally or inside an existing allocation.",
-    )
-    _add_local_arguments(parser)
-    return parser
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="medarc-orchestrate",
@@ -260,7 +251,7 @@ def main(argv: list[str] | None = None) -> int:
     return args.handler(args)
 
 
-__all__ = ["build_local_parser", "build_parser", "build_record_failure_parser", "main"]
+__all__ = ["build_parser", "build_record_failure_parser", "main"]
 
 
 def _run_record_failure(args: argparse.Namespace) -> int:

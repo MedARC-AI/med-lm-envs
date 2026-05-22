@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from medarc_verifiers.orchestrate.cli import build_local_parser, build_parser, main
+from medarc_verifiers.orchestrate.cli import build_parser, main
 from medarc_verifiers.orchestrate.config import PlanConfig, TaskSpec
 from medarc_verifiers.orchestrate.launch import validate_local_schedule
 from medarc_verifiers.orchestrate.resources import GpuInfo, PortOnlyResourceManager, ResourceError
@@ -127,11 +127,6 @@ def test_root_parser_accepts_run_subcommand() -> None:
     args = build_parser().parse_args(["run", "--plan", "plan.yaml", "--runtime", "podman"])
     assert args.command == "run"
     assert args.runtime == "podman"
-
-
-def test_local_parser_accepts_runtime_choices() -> None:
-    args = build_local_parser().parse_args(["--plan", "plan.yaml", "--runtime", "pyxis"])
-    assert args.runtime == "pyxis"
 
 
 def test_root_parser_rejects_removed_top_level_forms(capsys) -> None:
