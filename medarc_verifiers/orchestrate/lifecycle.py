@@ -15,6 +15,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+import httpx
+
 from medarc_verifiers.orchestrate.bundle import ExecutionAllocation, load_execution_allocation, load_task_spec
 from medarc_verifiers.orchestrate.config import ConstructConfig
 from medarc_verifiers.orchestrate.env import apply_env, load_runtime_env
@@ -107,7 +109,8 @@ def materialized_image_path(source: str, image_dir: str | Path) -> Path:
     source = str(source).strip()
     if is_absolute_sqsh_image(source):
         return Path(source)
-    _reject_latest_image(source)
+    if _is_latest_image(source):
+        return Path(image_dir).expanduser() / "latest.sqsh"
     normalized = _normalize_image_ref(source)
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:12]
     return Path(image_dir).expanduser() / f"{normalized}--{digest}.sqsh"
@@ -119,16 +122,24 @@ def is_absolute_sqsh_image(source: str) -> bool:
 
 
 def materialize_image(*, source: str, final_path: Path, latest_link: bool = True) -> dict[str, Any]:
-    if final_path.exists() and os.access(final_path, os.R_OK):
+    source = str(source).strip()
+    latest_source = _is_latest_image(source)
+    if not latest_source and final_path.exists() and os.access(final_path, os.R_OK):
         return {"source": source, "image_path": str(final_path), "skipped": True}
-    if str(source).startswith("/") and str(source).endswith(".sqsh"):
+    if is_absolute_sqsh_image(source):
         raise RuntimeError(f"Configured Pyxis image does not exist or is unreadable: {source}")
     if shutil.which("enroot") is None:
         raise RuntimeError("enroot not found; construct image materialization requires the Enroot CLI on CPU nodes.")
     final_path.parent.mkdir(parents=True, exist_ok=True)
     lock_dir = final_path.parent / ".locks" / f"{final_path.stem}.lock"
-    _with_lock_dir(lock_dir, lambda: _import_image_locked(source=source, final_path=final_path, latest_link=latest_link))
-    return {"source": source, "image_path": str(final_path), "skipped": False}
+    result: dict[str, Any] = {}
+    _with_lock_dir(
+        lock_dir,
+        lambda: result.update(
+            _import_image_locked(source=source, final_path=final_path, latest_link=latest_link)
+        ),
+    )
+    return {"source": source, **result}
 
 
 def prefetch_model(*, model_id: str, hub_cache: str) -> dict[str, Any]:
@@ -241,12 +252,87 @@ def _find_hf_mount(volumes: list[str]) -> tuple[str, str] | None:
     return None
 
 
-def _reject_latest_image(source: str) -> None:
+def _is_latest_image(source: str) -> bool:
     tail = source.rsplit("/", maxsplit=1)[-1]
     if "@" in tail:
-        return
-    if ":" not in tail or tail.rsplit(":", maxsplit=1)[-1] == "latest":
-        raise ValueError(f"Construct image materialization requires a non-latest image tag or digest: {source}")
+        return False
+    return ":" not in tail or tail.rsplit(":", maxsplit=1)[-1] == "latest"
+
+
+def resolve_image_digest(source: str) -> str:
+    registry, repository, tag = _parse_image_tag(source)
+    manifest_url = f"https://{registry}/v2/{repository}/manifests/{tag}"
+    headers = {
+        "Accept": ", ".join(
+            (
+                "application/vnd.oci.image.index.v1+json",
+                "application/vnd.oci.image.manifest.v1+json",
+                "application/vnd.docker.distribution.manifest.list.v2+json",
+                "application/vnd.docker.distribution.manifest.v2+json",
+            )
+        )
+    }
+    with httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+        response = client.get(manifest_url, headers=headers)
+        if response.status_code == 401:
+            auth_header = response.headers.get("www-authenticate")
+            if not auth_header:
+                response.raise_for_status()
+            token = _registry_bearer_token(client, auth_header)
+            response = client.get(manifest_url, headers={**headers, "Authorization": f"Bearer {token}"})
+        response.raise_for_status()
+    digest = response.headers.get("docker-content-digest")
+    if not digest:
+        raise RuntimeError(f"Registry did not return Docker-Content-Digest for image tag: {source}")
+    import_registry = "docker.io" if registry == "registry-1.docker.io" else registry
+    return f"{import_registry}/{repository}@{digest}"
+
+
+def _parse_image_tag(source: str) -> tuple[str, str, str]:
+    source = source.removeprefix("docker://").strip()
+    if "@" in source:
+        raise ValueError(f"Image is already digest-pinned: {source}")
+    name, tag = source.rsplit(":", maxsplit=1) if ":" in source.rsplit("/", maxsplit=1)[-1] else (source, "latest")
+    parts = name.split("/")
+    if len(parts) == 1:
+        return "registry-1.docker.io", f"library/{parts[0]}", tag
+    first = parts[0]
+    if "." in first or ":" in first or first == "localhost":
+        registry = "registry-1.docker.io" if first == "docker.io" else first
+        repository = "/".join(parts[1:])
+    else:
+        registry = "registry-1.docker.io"
+        repository = "/".join(parts)
+    if not repository:
+        raise ValueError(f"Invalid image reference: {source}")
+    return registry, repository, tag
+
+
+def _registry_bearer_token(client: httpx.Client, auth_header: str) -> str:
+    scheme, _, params = auth_header.partition(" ")
+    if scheme.lower() != "bearer":
+        raise RuntimeError(f"Unsupported registry authentication challenge: {auth_header}")
+    parsed = _parse_auth_params(params)
+    realm = parsed.get("realm")
+    if not realm:
+        raise RuntimeError(f"Registry authentication challenge is missing realm: {auth_header}")
+    response = client.get(
+        realm,
+        params={key: value for key, value in parsed.items() if key != "realm"},
+    )
+    response.raise_for_status()
+    payload = response.json()
+    token = payload.get("token") or payload.get("access_token")
+    if not token:
+        raise RuntimeError("Registry token response did not include a token.")
+    return str(token)
+
+
+def _parse_auth_params(value: str) -> dict[str, str]:
+    params: dict[str, str] = {}
+    for match in re.finditer(r'(\w+)="([^"]*)"', value):
+        params[match.group(1)] = match.group(2)
+    return params
 
 
 def _normalize_image_ref(source: str) -> str:
@@ -272,22 +358,50 @@ def _with_lock_dir(lock_dir: Path, func) -> None:
             pass
 
 
-def _import_image_locked(*, source: str, final_path: Path, latest_link: bool) -> None:
-    if final_path.exists() and os.access(final_path, os.R_OK):
-        return
-    tmp_prefix = final_path.parent / f".{final_path.stem}.{uuid.uuid4().hex}"
-    command = ["enroot", "import", "--output", str(tmp_prefix), f"docker://{source}"]
+def _import_image_locked(*, source: str, final_path: Path, latest_link: bool) -> dict[str, Any]:
+    source = str(source).strip()
+    resolved_source = resolve_image_digest(source) if _is_latest_image(source) else source
+    import_path = final_path
+    if resolved_source != source:
+        import_path = materialized_image_path(resolved_source, final_path.parent)
+    if import_path.exists() and os.access(import_path, os.R_OK):
+        if resolved_source != source:
+            _update_symlink(final_path, target=import_path)
+            if latest_link and final_path.name != "latest":
+                _update_symlink(final_path.parent / "latest", target=import_path)
+        return {
+            "resolved_source": resolved_source,
+            "image_path": str(final_path),
+            "resolved_image_path": str(import_path),
+            "skipped": True,
+        }
+    tmp_prefix = import_path.parent / f".{import_path.stem}.{uuid.uuid4().hex}"
+    command = ["enroot", "import", "--output", str(tmp_prefix), f"docker://{resolved_source}"]
     completed = subprocess.run(command, check=False, capture_output=True, text=True)
     if completed.returncode != 0:
         raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or "enroot import failed")
     tmp_sqsh = tmp_prefix.with_suffix(".sqsh")
     if not tmp_sqsh.exists():
         raise RuntimeError(f"enroot import did not produce expected image: {tmp_sqsh}")
-    tmp_sqsh.replace(final_path)
-    if latest_link:
-        tmp_link = final_path.parent / f".latest_tmp_{uuid.uuid4().hex}"
-        tmp_link.symlink_to(final_path.name)
-        tmp_link.replace(final_path.parent / "latest")
+    tmp_sqsh.replace(import_path)
+    if resolved_source != source:
+        _update_symlink(final_path, target=import_path)
+        if latest_link and final_path.name != "latest":
+            _update_symlink(final_path.parent / "latest", target=import_path)
+    elif latest_link:
+        _update_symlink(final_path.parent / "latest", target=import_path)
+    return {
+        "resolved_source": resolved_source,
+        "image_path": str(final_path),
+        "resolved_image_path": str(import_path),
+        "skipped": False,
+    }
+
+
+def _update_symlink(path: Path, *, target: Path) -> None:
+    tmp_link = path.parent / f".{path.name}_tmp_{uuid.uuid4().hex}"
+    tmp_link.symlink_to(target.name)
+    tmp_link.replace(path)
 
 
 def _safe_delete(path: Path, *, root: Path) -> None:
@@ -329,6 +443,7 @@ __all__ = [
     "materialize_image",
     "materialized_image_path",
     "prefetch_model",
+    "resolve_image_digest",
     "resolve_construct_cache",
     "run_construct",
     "run_teardown",

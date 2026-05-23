@@ -236,13 +236,12 @@ def test_construct_cache_requires_roots_for_enabled_operations(tmp_path: Path) -
         resolve_construct_cache(config=plan.construct, volume_mounts=[])
 
 
-def test_materialized_image_path_preserves_namespace_and_rejects_latest(tmp_path: Path) -> None:
+def test_materialized_image_path_preserves_namespace_and_uses_latest_link_path(tmp_path: Path) -> None:
     path = materialized_image_path("vllm/vllm-openai:v0.12.0", tmp_path)
 
     assert path.name.startswith("docker.io__vllm__vllm-openai--v0.12.0--")
     assert path.name.endswith(".sqsh")
-    with pytest.raises(ValueError, match="non-latest"):
-        materialized_image_path("vllm/vllm-openai:latest", tmp_path)
+    assert materialized_image_path("vllm/vllm-openai:latest", tmp_path) == tmp_path / "latest.sqsh"
 
 
 def test_materialize_task_eval_config_forces_orchestrator_owned_fields(tmp_path: Path) -> None:

@@ -74,7 +74,7 @@ gpus = 1
 image = "vllm/vllm-openai:latest"
 ```
 
-Container mounts that are specific to a launch belong in plan `[container]`, not endpoint metadata. Slurm policy such as account, partition, qos, and nice comes from explicit CLI flags or `[endpoint.orchestrate.slurm]`. If construct image materialization is enabled, the container image must use a pinned non-`latest` tag or digest, or an existing absolute `.sqsh` path.
+Container mounts that are specific to a launch belong in plan `[container]`, not endpoint metadata. Slurm policy such as account, partition, qos, and nice comes from explicit CLI flags or `[endpoint.orchestrate.slurm]`. If construct image materialization is enabled, mutable image tags such as `:latest` are resolved to immutable registry digests before import.
 
 ### Slurm Usage
 
@@ -124,7 +124,7 @@ remove_images = false
 
 When `[container].volumes` includes `/path/to/hf-cache:/root/.cache/huggingface`, construct infers `hf_home = "/path/to/hf-cache"` and `hub_cache = "/path/to/hf-cache/hub"`. The Pyxis worker receives the matching container-side cache env vars: `HF_HOME=/root/.cache/huggingface` and `HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub`.
 
-Image materialization uses direct `enroot import` and writes the configured deterministic `.sqsh` path before the GPU job starts. It requires `[construct.cache].image_dir` for OCI images and rejects mutable `:latest` images. Existing absolute `.sqsh` image paths are treated as already materialized and are left unchanged.
+Image materialization uses direct `enroot import` before the GPU job starts. For regular tags or digest-pinned images, construct writes a deterministic `.sqsh` path under `[construct.cache].image_dir`. For mutable tags such as `:latest`, construct first queries the registry, resolves the tag to a digest, imports the digest-specific image if needed, and atomically updates `latest.sqsh` and `latest` symlinks to that image. Existing absolute `.sqsh` image paths are treated as already materialized and are left unchanged.
 
 Teardown deletion is intentionally conservative. Model-weight deletion is only for isolated per-run cache roots; shared production caches should leave teardown disabled and rely on a separate retention policy. For preemptible idle-capacity jobs, use Slurm requeue for the eval job. The teardown `afterany` dependency is expected to release only after the same requeued eval job id reaches final completion.
 

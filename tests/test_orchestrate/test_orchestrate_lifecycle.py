@@ -7,7 +7,7 @@ import pytest
 
 from medarc_verifiers.orchestrate.bundle import ExecutionAllocation, ensure_run_bundle, load_task_spec, write_execution_allocation
 from medarc_verifiers.orchestrate.config import TaskSpec
-from medarc_verifiers.orchestrate.lifecycle import materialize_image, run_construct, run_teardown
+from medarc_verifiers.orchestrate.lifecycle import materialize_image, resolve_image_digest, run_construct, run_teardown
 
 
 def _task(tmp_path: Path) -> TaskSpec:
@@ -89,6 +89,98 @@ def test_materialize_image_rejects_missing_absolute_sqsh(tmp_path: Path) -> None
 
     with pytest.raises(RuntimeError, match="does not exist"):
         materialize_image(source=str(missing), final_path=missing)
+
+
+def test_resolve_image_digest_uses_registry_bearer_challenge(monkeypatch) -> None:
+    calls: list[tuple[str, dict[str, str] | None, dict[str, str] | None]] = []
+
+    class Response:
+        def __init__(self, status_code: int, *, headers=None, payload=None) -> None:
+            self.status_code = status_code
+            self.headers = headers or {}
+            self._payload = payload or {}
+
+        def raise_for_status(self) -> None:
+            if self.status_code >= 400:
+                raise RuntimeError(f"HTTP {self.status_code}")
+
+        def json(self):
+            return self._payload
+
+    class Client:
+        def __init__(self, timeout) -> None:
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def get(self, url, *, headers=None, params=None):
+            calls.append((url, headers, params))
+            if url.endswith("/v2/vllm/vllm-openai/manifests/latest") and headers.get("Authorization") is None:
+                return Response(
+                    401,
+                    headers={
+                        "www-authenticate": (
+                            'Bearer realm="https://auth.docker.io/token",'
+                            'service="registry.docker.io",scope="repository:vllm/vllm-openai:pull"'
+                        )
+                    },
+                )
+            if url == "https://auth.docker.io/token":
+                return Response(200, payload={"token": "registry-token"})
+            return Response(200, headers={"docker-content-digest": "sha256:abc123"})
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.lifecycle.httpx.Client", Client)
+
+    resolved = resolve_image_digest("vllm/vllm-openai:latest")
+
+    assert resolved == "docker.io/vllm/vllm-openai@sha256:abc123"
+    assert calls[1][2] == {
+        "service": "registry.docker.io",
+        "scope": "repository:vllm/vllm-openai:pull",
+    }
+    assert calls[2][1]["Authorization"] == "Bearer registry-token"
+
+
+def test_materialize_latest_resolves_digest_imports_digest_path_and_updates_symlink(tmp_path: Path, monkeypatch) -> None:
+    final = tmp_path / "latest.sqsh"
+    imported_paths: list[Path] = []
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.lifecycle.shutil.which", lambda name: "/usr/bin/enroot")
+    monkeypatch.setattr(
+        "medarc_verifiers.orchestrate.lifecycle.resolve_image_digest",
+        lambda source: "docker.io/vllm/vllm-openai@sha256:abc123",
+    )
+
+    class Completed:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(command, check, capture_output, text):
+        del check, capture_output, text
+        tmp_prefix = Path(command[command.index("--output") + 1])
+        produced = tmp_prefix.with_suffix(".sqsh")
+        produced.write_text("sqsh", encoding="utf-8")
+        imported_paths.append(produced)
+        assert command[-1] == "docker://docker.io/vllm/vllm-openai@sha256:abc123"
+        return Completed()
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.lifecycle.subprocess.run", fake_run)
+
+    result = materialize_image(source="vllm/vllm-openai:latest", final_path=final)
+
+    assert result["resolved_source"] == "docker.io/vllm/vllm-openai@sha256:abc123"
+    assert result["image_path"] == str(final)
+    assert result["resolved_image_path"].endswith(".sqsh")
+    assert Path(result["resolved_image_path"]).is_file()
+    assert final.is_symlink()
+    assert final.resolve() == Path(result["resolved_image_path"])
+    assert (tmp_path / "latest").is_symlink()
+    assert imported_paths
 
 
 def test_construct_prefetch_loads_env_and_writes_snapshot_result(tmp_path: Path, monkeypatch) -> None:
