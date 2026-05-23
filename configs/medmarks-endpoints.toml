@@ -145,7 +145,6 @@ top_p = 1.0
 gpus = 2
 
 [endpoint.orchestrate.vllm.serve]
-max_model_len = 40960
 max_num_batched_tokens = 16384
 max_num_seqs = 256
 tool_call_parser = "hermes"
@@ -170,7 +169,6 @@ top_p = 1.0
 gpus = 1
 
 [endpoint.orchestrate.vllm.serve]
-max_model_len = 40960
 max_num_batched_tokens = 32768
 max_num_seqs = 768
 tool_call_parser = "hermes"
@@ -1533,7 +1531,6 @@ min_p = 0
 gpus = 1
 
 [endpoint.orchestrate.vllm.serve]
-max_model_len = 40960
 gpu_memory_utilization = 0.92
 max_num_batched_tokens = 32768
 max_num_seqs = 768
@@ -1641,7 +1638,6 @@ min_p = 0
 gpus = 2
 
 [endpoint.orchestrate.vllm.serve]
-max_model_len = 40960
 max_num_batched_tokens = 16384
 max_num_seqs = 256
 tool_call_parser = "hermes"
@@ -1668,7 +1664,6 @@ min_p = 0
 gpus = 2
 
 [endpoint.orchestrate.vllm.serve]
-max_model_len = 40960
 gpu_memory_utilization = 0.92
 max_num_batched_tokens = 16384
 max_num_seqs = 256
@@ -1696,7 +1691,6 @@ min_p = 0
 gpus = 2
 
 [endpoint.orchestrate.vllm.serve]
-max_model_len = 40960
 max_num_batched_tokens = 16384
 max_num_seqs = 256
 tool_call_parser = "hermes"
@@ -1723,7 +1717,6 @@ min_p = 0
 gpus = 2
 
 [endpoint.orchestrate.vllm.serve]
-max_model_len = 40960
 max_num_batched_tokens = 16384
 max_num_seqs = 256
 tool_call_parser = "hermes"
@@ -1750,7 +1743,6 @@ min_p = 0
 gpus = 2
 
 [endpoint.orchestrate.vllm.serve]
-max_model_len = 40960
 max_num_batched_tokens = 16384
 max_num_seqs = 256
 reasoning_parser = "deepseek_r1"
@@ -1782,7 +1774,6 @@ gpus = 2
 
 [endpoint.orchestrate.vllm.serve]
 enable_expert_parallel = true
-max_model_len = 40960
 gpu_memory_utilization = 0.92
 reasoning_parser = "deepseek_r1"
 max_num_batched_tokens = 16384
@@ -1811,7 +1802,6 @@ gpus = 2
 
 [endpoint.orchestrate.vllm.serve]
 enable_expert_parallel = true
-max_model_len = 40960
 reasoning_parser = "deepseek_r1"
 max_num_batched_tokens = 16384
 max_num_seqs = 256
@@ -1839,7 +1829,6 @@ gpus = 2
 
 [endpoint.orchestrate.vllm.serve]
 enable_expert_parallel = true
-max_model_len = 40960
 gpu_memory_utilization = 0.92
 reasoning_parser = "deepseek_r1"
 max_num_batched_tokens = 16384
@@ -1867,7 +1856,6 @@ min_p = 0
 gpus = 1
 
 [endpoint.orchestrate.vllm.serve]
-max_model_len = 40960
 max_num_batched_tokens = 32768
 max_num_seqs = 768
 tool_call_parser = "hermes"
@@ -1991,7 +1979,6 @@ min_p = 0
 gpus = 2
 
 [endpoint.orchestrate.vllm.serve]
-max_model_len = 40960
 max_num_batched_tokens = 16384
 max_num_seqs = 256
 reasoning_parser = "deepseek_r1"
@@ -2142,11 +2129,11 @@ model = "Qwen/Qwen3.5-4B"
 api_client_type = "openai_chat_completions"
 
 [endpoint.sampling_args]
-temperature = 1.0
-top_p = 1.0
+temperature = 0.7
+top_p = 0.8
 top_k = 20
 min_p = 0.0
-presence_penalty = 2.0
+presence_penalty = 1.5
 
 [endpoint.sampling_args.chat_template_kwargs]
 enable_thinking = false
@@ -2206,11 +2193,11 @@ model = "Qwen/Qwen3.5-9B"
 api_client_type = "openai_chat_completions"
 
 [endpoint.sampling_args]
-temperature = 1.0
-top_p = 1.0
+temperature = 0.7
+top_p = 0.8
 top_k = 20
 min_p = 0.0
-presence_penalty = 2.0
+presence_penalty = 1.5
 
 [endpoint.sampling_args.chat_template_kwargs]
 enable_thinking = false
