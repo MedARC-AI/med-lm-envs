@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import time
 import uuid
@@ -150,6 +151,20 @@ def prefetch_model(*, model_id: str, hub_cache: str) -> dict[str, Any]:
     return {"repo_id": model_id, "hub_cache": hub_cache, "snapshot_path": str(snapshot_path), "commit_hash": commit}
 
 
+def configure_enroot_paths(image_dir: Path) -> dict[str, str]:
+    uid = os.getuid()
+    root = image_dir.expanduser() / ".enroot"
+    paths = {
+        "ENROOT_CACHE_PATH": root / f"cache-{uid}",
+        "ENROOT_DATA_PATH": root / f"data-{uid}",
+        "ENROOT_RUNTIME_PATH": root / f"run-{uid}-{os.environ.get('SLURM_JOB_ID', 'local')}",
+    }
+    for key, path in paths.items():
+        path.mkdir(parents=True, exist_ok=True)
+        os.environ[key] = str(path)
+    return {key: str(path) for key, path in paths.items()}
+
+
 def run_construct(
     *,
     task_path: Path,
@@ -176,6 +191,8 @@ def run_construct(
         if materialize_image_flag:
             if not spec.container_image_source:
                 raise RuntimeError("construct image materialization requested but container_image_source is missing.")
+            if cache.image_dir:
+                result["enroot"] = configure_enroot_paths(Path(cache.image_dir))
             image_path = Path(spec.container_image)
             if cache.image_dir and not _is_relative_to(image_path, Path(cache.image_dir)):
                 raise RuntimeError(f"Materialized image path {image_path} is not under image cache {cache.image_dir}.")
@@ -346,16 +363,56 @@ def _with_lock_dir(lock_dir: Path, func) -> None:
     while True:
         try:
             lock_dir.mkdir(parents=True)
+            _write_json(
+                lock_dir / "owner.json",
+                {
+                    "host": socket.gethostname(),
+                    "pid": os.getpid(),
+                    "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+                    "created_at": time.time(),
+                },
+            )
             break
         except FileExistsError:
+            if _lock_dir_is_stale(lock_dir):
+                try:
+                    shutil.rmtree(lock_dir)
+                    continue
+                except OSError:
+                    pass
             time.sleep(1)
     try:
         func()
     finally:
         try:
-            lock_dir.rmdir()
+            shutil.rmtree(lock_dir)
         except OSError:
             pass
+
+
+def _lock_dir_is_stale(lock_dir: Path) -> bool:
+    try:
+        owner = json.loads((lock_dir / "owner.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return time.time() - lock_dir.stat().st_mtime > 3600
+    slurm_job_id = str(owner.get("slurm_job_id") or "")
+    if slurm_job_id and shutil.which("squeue") is not None:
+        completed = subprocess.run(
+            ["squeue", "-h", "-j", slurm_job_id, "-t", "PENDING,RUNNING,CONFIGURING,COMPLETING"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode == 0 and not completed.stdout.strip():
+            return True
+    if owner.get("host") == socket.gethostname():
+        try:
+            os.kill(int(owner["pid"]), 0)
+        except (KeyError, TypeError, ValueError, ProcessLookupError):
+            return True
+        except PermissionError:
+            return False
+    return False
 
 
 def _import_image_locked(*, source: str, final_path: Path, latest_link: bool) -> dict[str, Any]:
@@ -376,13 +433,14 @@ def _import_image_locked(*, source: str, final_path: Path, latest_link: bool) ->
             "skipped": True,
         }
     tmp_prefix = import_path.parent / f".{import_path.stem}.{uuid.uuid4().hex}"
-    command = ["enroot", "import", "--output", str(tmp_prefix), f"docker://{resolved_source}"]
+    import_source = source if resolved_source != source else resolved_source
+    command = ["enroot", "import", "--output", str(tmp_prefix), f"docker://{import_source}"]
     completed = subprocess.run(command, check=False, capture_output=True, text=True)
     if completed.returncode != 0:
         raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or "enroot import failed")
-    tmp_sqsh = tmp_prefix.with_suffix(".sqsh")
+    tmp_sqsh = tmp_prefix.with_suffix(".sqsh") if tmp_prefix.with_suffix(".sqsh").exists() else tmp_prefix
     if not tmp_sqsh.exists():
-        raise RuntimeError(f"enroot import did not produce expected image: {tmp_sqsh}")
+        raise RuntimeError(f"enroot import did not produce expected image: {tmp_prefix} or {tmp_prefix.with_suffix('.sqsh')}")
     tmp_sqsh.replace(import_path)
     if resolved_source != source:
         _update_symlink(final_path, target=import_path)
@@ -439,6 +497,7 @@ __all__ = [
     "ConstructCache",
     "build_construct_parser",
     "build_teardown_parser",
+    "configure_enroot_paths",
     "is_absolute_sqsh_image",
     "materialize_image",
     "materialized_image_path",

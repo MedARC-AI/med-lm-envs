@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -7,6 +8,7 @@ import pytest
 
 from medarc_verifiers.orchestrate.bundle import ExecutionAllocation, ensure_run_bundle, load_task_spec, write_execution_allocation
 from medarc_verifiers.orchestrate.config import TaskSpec
+from medarc_verifiers.orchestrate import lifecycle as lifecycle_module
 from medarc_verifiers.orchestrate.lifecycle import materialize_image, resolve_image_digest, run_construct, run_teardown
 
 
@@ -163,10 +165,10 @@ def test_materialize_latest_resolves_digest_imports_digest_path_and_updates_syml
     def fake_run(command, check, capture_output, text):
         del check, capture_output, text
         tmp_prefix = Path(command[command.index("--output") + 1])
-        produced = tmp_prefix.with_suffix(".sqsh")
+        produced = tmp_prefix
         produced.write_text("sqsh", encoding="utf-8")
         imported_paths.append(produced)
-        assert command[-1] == "docker://docker.io/vllm/vllm-openai@sha256:abc123"
+        assert command[-1] == "docker://vllm/vllm-openai:latest"
         return Completed()
 
     monkeypatch.setattr("medarc_verifiers.orchestrate.lifecycle.subprocess.run", fake_run)
@@ -181,6 +183,31 @@ def test_materialize_latest_resolves_digest_imports_digest_path_and_updates_syml
     assert final.resolve() == Path(result["resolved_image_path"])
     assert (tmp_path / "latest").is_symlink()
     assert imported_paths
+
+
+def test_lock_dir_recovers_stale_slurm_owner(tmp_path: Path, monkeypatch) -> None:
+    lock_dir = tmp_path / ".locks" / "latest.lock"
+    lock_dir.mkdir(parents=True)
+    (lock_dir / "owner.json").write_text(json.dumps({"slurm_job_id": "123", "host": "other"}), encoding="utf-8")
+    called = False
+
+    class Completed:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.lifecycle.shutil.which", lambda name: "/usr/bin/squeue")
+    monkeypatch.setattr("medarc_verifiers.orchestrate.lifecycle.subprocess.run", lambda *args, **kwargs: Completed())
+
+    def work() -> None:
+        nonlocal called
+        called = True
+        assert (lock_dir / "owner.json").is_file()
+
+    lifecycle_module._with_lock_dir(lock_dir, work)
+
+    assert called is True
+    assert not lock_dir.exists()
 
 
 def test_construct_prefetch_loads_env_and_writes_snapshot_result(tmp_path: Path, monkeypatch) -> None:
@@ -226,6 +253,46 @@ def test_construct_prefetch_loads_env_and_writes_snapshot_result(tmp_path: Path,
     assert captured["hf_home"] == spec.construct_cache["hf_home"]
     assert result["model"]["snapshot_path"].endswith("/models--Foo--Bar/snapshots/abc123")
     assert result["model"]["commit_hash"] == "abc123"
+
+
+def test_construct_materialize_configures_enroot_paths_under_image_cache(tmp_path: Path, monkeypatch) -> None:
+    task_bundle = _bundle_with_lifecycle(tmp_path)
+    spec = load_task_spec(task_bundle.paths.task_spec_path)
+    captured: dict[str, object] = {}
+
+    def fake_materialize_image(*, source, final_path, latest_link):
+        captured.update(
+            {
+                "source": source,
+                "final_path": final_path,
+                "latest_link": latest_link,
+                "enroot_cache": os.environ.get("ENROOT_CACHE_PATH"),
+                "enroot_data": os.environ.get("ENROOT_DATA_PATH"),
+                "enroot_runtime": os.environ.get("ENROOT_RUNTIME_PATH"),
+            }
+        )
+        return {"source": source, "image_path": str(final_path), "skipped": True}
+
+    monkeypatch.setenv("SLURM_JOB_ID", "123")
+    monkeypatch.setattr("medarc_verifiers.orchestrate.lifecycle.materialize_image", fake_materialize_image)
+
+    rc = run_construct(
+        task_path=task_bundle.paths.task_spec_path,
+        allocation_path=task_bundle.paths.construct_allocation_path,
+        env_file=None,
+        prefetch_model_flag=False,
+        materialize_image_flag=True,
+    )
+
+    result = json.loads(task_bundle.paths.construct_result_path.read_text(encoding="utf-8"))
+    image_dir = Path(str(spec.construct_cache["image_dir"]))
+    assert rc == 0
+    assert captured["source"] == "vllm/vllm-openai:v0.12.0"
+    assert str(captured["enroot_cache"]).startswith(str(image_dir / ".enroot" / "cache-"))
+    assert str(captured["enroot_data"]).startswith(str(image_dir / ".enroot" / "data-"))
+    assert str(captured["enroot_runtime"]).endswith("-123")
+    assert Path(str(captured["enroot_cache"])).is_dir()
+    assert result["enroot"]["ENROOT_CACHE_PATH"] == captured["enroot_cache"]
 
 
 def test_teardown_deletes_only_isolated_repo_cache(tmp_path: Path) -> None:
