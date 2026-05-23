@@ -147,6 +147,12 @@ def _run_status(args: argparse.Namespace) -> int:
                     "suite",
                     "failure_reason",
                     "error",
+                    "construct_state",
+                    "construct_slurm_job_id",
+                    "eval_state",
+                    "eval_slurm_job_id",
+                    "teardown_state",
+                    "teardown_slurm_job_id",
                 )
             )
         )
@@ -179,12 +185,25 @@ def _load_combined_status(output_root: Path) -> dict[str, object]:
             row.update(
                 {
                     "submit_state": entry.get("state"),
+                    "eval_state": entry.get("state"),
                     "slurm_job_id": entry.get("slurm_job_id"),
+                    "eval_slurm_job_id": entry.get("slurm_job_id"),
                     "dependency": entry.get("generated_dependency") or entry.get("base_dependency"),
                     "suite": entry.get("suite_path"),
                     "endpoint_id": entry.get("target_endpoint_id"),
                 }
             )
+        for entry in manifest.get("lifecycle_entries", []) or []:
+            if not isinstance(entry, dict):
+                continue
+            task_id = str(entry.get("task_id") or "")
+            phase = str(entry.get("phase") or "")
+            if phase not in {"construct", "teardown"}:
+                continue
+            row = rows.setdefault(task_id, {"task_id": task_id})
+            row[f"{phase}_state"] = entry.get("state")
+            row[f"{phase}_slurm_job_id"] = entry.get("slurm_job_id")
+            row[f"{phase}_dependency"] = entry.get("generated_dependency") or entry.get("base_dependency")
     if isinstance(summary, dict):
         for entry in summary.get("tasks", []) or []:
             if not isinstance(entry, dict):
@@ -230,6 +249,26 @@ def main(argv: list[str] | None = None) -> int:
         from medarc_verifiers.orchestrate.worker import main as worker_main
 
         return worker_main(argv[1:])
+    if argv and argv[0] == "construct":
+        from medarc_verifiers.orchestrate.lifecycle import build_construct_parser, run_construct
+
+        args = build_construct_parser().parse_args(argv[1:])
+        return run_construct(
+            task_path=args.task.expanduser().resolve(),
+            allocation_path=args.allocation.expanduser().resolve(),
+            env_file=args.env_file.expanduser().resolve() if args.env_file is not None else None,
+            prefetch_model_flag=bool(args.prefetch_model),
+            materialize_image_flag=bool(args.materialize_image),
+        )
+    if argv and argv[0] == "teardown":
+        from medarc_verifiers.orchestrate.lifecycle import build_teardown_parser, run_teardown
+
+        args = build_teardown_parser().parse_args(argv[1:])
+        return run_teardown(
+            task_path=args.task.expanduser().resolve(),
+            allocation_path=args.allocation.expanduser().resolve(),
+            env_file=args.env_file.expanduser().resolve() if args.env_file is not None else None,
+        )
     if argv and argv[0] == "record-failure":
         return _run_record_failure(build_record_failure_parser().parse_args(argv[1:]))
     parser = build_parser()

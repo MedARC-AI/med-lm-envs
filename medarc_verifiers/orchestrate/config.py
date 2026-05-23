@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from medarc_verifiers.cli.eval_identity import BASE_VARIANT_ID, plan_eval_paths, slug_component
 from medarc_verifiers.cli.upstream_eval import EvalConfigOverrides, build_eval_identity_payload, load_toml_eval_configs
@@ -58,6 +58,68 @@ class BenchOverrideConfig(BaseModel):
     sampling_args: dict[str, object] | None = None
 
 
+class ConstructCacheConfig(BaseModel):
+    """Shared cache locations used by construct lifecycle jobs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    hf_home: Path | None = None
+    hub_cache: Path | None = None
+    image_dir: Path | None = None
+    latest_link: bool = True
+
+
+class ConstructConfig(BaseModel):
+    """CPU-only construct phase configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    cpus: int = 8
+    time: str = "02:00:00"
+    partition: str | None = "cpu"
+    account: str | None = None
+    qos: str | None = None
+    nice: int | None = None
+    mail_type: str | None = None
+    mail_user: str | None = None
+    prefetch_model_weights: bool | None = None
+    materialize_images: bool | None = None
+    cache: ConstructCacheConfig = Field(default_factory=ConstructCacheConfig)
+
+    @model_validator(mode="after")
+    def _enable_when_operation_enabled(self) -> "ConstructConfig":
+        if not self.enabled and (self.prefetch_model_weights is True or self.materialize_images is True):
+            self.enabled = True
+        return self
+
+    @property
+    def prefetch_enabled(self) -> bool:
+        return self.enabled and (True if self.prefetch_model_weights is None else bool(self.prefetch_model_weights))
+
+    @property
+    def image_materialization_enabled(self) -> bool:
+        return self.enabled and (True if self.materialize_images is None else bool(self.materialize_images))
+
+
+class TeardownConfig(BaseModel):
+    """CPU-only teardown phase configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    cpus: int = 2
+    time: str = "00:30:00"
+    partition: str | None = "cpu"
+    account: str | None = None
+    qos: str | None = None
+    nice: int | None = None
+    mail_type: str | None = None
+    mail_user: str | None = None
+    remove_model_weights: bool = False
+    remove_images: bool = False
+
+
 class TargetConfig(BaseModel):
     """One endpoint target in an orchestration plan."""
 
@@ -87,6 +149,12 @@ class PlanConfig(BaseModel):
     endpoints_path: Path | None = None
     container: ContainerOverrideConfig = Field(default_factory=ContainerOverrideConfig)
     bench: BenchOverrideConfig = Field(default_factory=BenchOverrideConfig)
+    construct_config: ConstructConfig = Field(default_factory=ConstructConfig, alias="construct")
+    teardown: TeardownConfig = Field(default_factory=TeardownConfig)
+
+    @property
+    def construct(self) -> ConstructConfig:
+        return self.construct_config
 
 
 @dataclass(frozen=True)
@@ -311,6 +379,14 @@ def _resolve_plan_paths(plan: PlanConfig, *, base_dir: Path) -> PlanConfig:
         value = getattr(plan, field_name)
         if value is not None:
             updates[field_name] = _resolve_path(value, base_dir=base_dir)
+    cache_updates: dict[str, object] = {}
+    for field_name in ("hf_home", "hub_cache", "image_dir"):
+        value = getattr(plan.construct.cache, field_name)
+        if value is not None:
+            cache_updates[field_name] = _resolve_path(value, base_dir=base_dir)
+    if cache_updates:
+        cache = plan.construct.cache.model_copy(update=cache_updates)
+        updates["construct_config"] = plan.construct.model_copy(update={"cache": cache})
     return plan.model_copy(update=updates)
 
 

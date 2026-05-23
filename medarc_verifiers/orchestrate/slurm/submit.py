@@ -59,6 +59,8 @@ def submit_slurm_launch_plan(launch: LaunchPlan, options: SlurmSubmissionOptions
         env_file=launch.env_file,
         readiness_timeout_s=launch.readiness_timeout_s,
         prune_logs_on_success=launch.prune_logs_on_success,
+        construct=launch.construct,
+        teardown=launch.teardown,
         existing_manifest=existing_manifest,
     )
     write_bundle_manifest(manifest_path, manifest)
@@ -68,7 +70,10 @@ def submit_slurm_launch_plan(launch: LaunchPlan, options: SlurmSubmissionOptions
             print(command)
         return 0
 
-    submit_bundle(manifest_path, manifest, test_only=options.test_only)
+    if manifest.lifecycle_entries:
+        submit_lifecycle_bundle(manifest_path, manifest, test_only=options.test_only)
+    else:
+        submit_bundle(manifest_path, manifest, test_only=options.test_only)
     return 0
 
 
@@ -83,15 +88,44 @@ def _load_existing_manifest(path: Path, *, run_id: str) -> SlurmBundleManifest |
 
 def mark_dry_run(path: Path, manifest: SlurmBundleManifest) -> list[str]:
     commands: list[str] = []
+    lifecycle = manifest.lifecycle_entry_map()
     for entry in manifest.entries:
+        construct = lifecycle.get((entry.task_id, "construct"))
+        teardown = lifecycle.get((entry.task_id, "teardown"))
+        if construct is not None and not (construct.state == "submitted" and construct.slurm_job_id):
+            if construct.state != "submitted":
+                construct.state = "dry-run"
+            commands.append(
+                _render_sbatch_command(
+                    construct.script_path,
+                    dependency=construct.base_dependency,
+                    account=construct.account,
+                    test_only=False,
+                )
+            )
+            entry.generated_dependency = f"afterok:${{{entry.task_id}:construct}}"
         if entry.state == "submitted" and entry.slurm_job_id:
-            continue
-        if entry.state != "submitted":
-            entry.state = "dry-run"
-        dependency = _combine_dependency(entry.base_dependency, entry.generated_dependency)
-        commands.append(
-            _render_sbatch_command(entry.script_path, dependency=dependency, account=entry.account, test_only=False)
-        )
+            eval_dependency = None
+        else:
+            if entry.state != "submitted":
+                entry.state = "dry-run"
+            dependency = _combine_dependency(entry.base_dependency, entry.generated_dependency)
+            commands.append(
+                _render_sbatch_command(entry.script_path, dependency=dependency, account=entry.account, test_only=False)
+            )
+            eval_dependency = f"afterany:${{{entry.task_id}:eval}}"
+        if teardown is not None and not (teardown.state == "submitted" and teardown.slurm_job_id):
+            if teardown.state != "submitted":
+                teardown.state = "dry-run"
+            teardown.generated_dependency = eval_dependency or teardown.generated_dependency
+            commands.append(
+                _render_sbatch_command(
+                    teardown.script_path,
+                    dependency=teardown.generated_dependency,
+                    account=teardown.account,
+                    test_only=False,
+                )
+            )
     write_bundle_manifest(path, manifest)
     return commands
 
@@ -114,6 +148,81 @@ def submit_bundle(path: Path, manifest: SlurmBundleManifest, *, test_only: bool 
             entry.state = "submitted"
         write_bundle_manifest(path, manifest)
     return manifest
+
+
+def submit_lifecycle_bundle(path: Path, manifest: SlurmBundleManifest, *, test_only: bool = False) -> SlurmBundleManifest:
+    lifecycle = manifest.lifecycle_entry_map()
+    for entry in manifest.entries:
+        construct = lifecycle.get((entry.task_id, "construct"))
+        teardown = lifecycle.get((entry.task_id, "teardown"))
+        construct_job_id: str | None = None
+        if construct is not None:
+            if not (construct.state == "submitted" and construct.slurm_job_id):
+                construct_job_id = _submit_entry(
+                    construct,
+                    dependency=construct.base_dependency,
+                    account=construct.account,
+                    test_only=test_only,
+                    task_id=entry.task_id,
+                    path=path,
+                    manifest=manifest,
+                )
+            else:
+                construct_job_id = construct.slurm_job_id
+            entry.generated_dependency = f"afterok:{construct_job_id}" if construct_job_id else entry.generated_dependency
+            entry.base_dependency = None
+            write_bundle_manifest(path, manifest)
+        if not (entry.state == "submitted" and entry.slurm_job_id):
+            eval_dependency = _combine_dependency(entry.base_dependency, entry.generated_dependency)
+            eval_job_id = _submit_entry(
+                entry,
+                dependency=eval_dependency,
+                account=entry.account,
+                test_only=test_only,
+                task_id=entry.task_id,
+                path=path,
+                manifest=manifest,
+            )
+        else:
+            eval_job_id = entry.slurm_job_id
+        if teardown is not None and not (teardown.state == "submitted" and teardown.slurm_job_id):
+            teardown.generated_dependency = f"afterany:{eval_job_id}" if eval_job_id else teardown.generated_dependency
+            write_bundle_manifest(path, manifest)
+            _submit_entry(
+                teardown,
+                dependency=teardown.generated_dependency,
+                account=teardown.account,
+                test_only=test_only,
+                task_id=entry.task_id,
+                path=path,
+                manifest=manifest,
+            )
+    return manifest
+
+
+def _submit_entry(
+    entry,
+    *,
+    dependency: str | None,
+    account: str | None,
+    test_only: bool,
+    task_id: str,
+    path: Path,
+    manifest: SlurmBundleManifest,
+) -> str | None:
+    command = _sbatch_command(entry.script_path, dependency=dependency, account=account, test_only=test_only)
+    completed = subprocess.run(command, check=False, capture_output=True, text=True)
+    if completed.returncode != 0:
+        raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or f"sbatch failed for {task_id}")
+    if test_only:
+        entry.state = "dry-run"
+        job_id = None
+    else:
+        job_id = _parse_job_id(completed.stdout)
+        entry.slurm_job_id = job_id
+        entry.state = "submitted"
+    write_bundle_manifest(path, manifest)
+    return job_id
 
 
 def _combine_dependency(base_dependency: str | None, generated_dependency: str | None) -> str | None:
@@ -153,4 +262,4 @@ def _parse_job_id(output: str) -> str:
     return match.group(1)
 
 
-__all__ = ["SlurmSubmissionOptions", "mark_dry_run", "submit_bundle", "submit_slurm_launch_plan"]
+__all__ = ["SlurmSubmissionOptions", "mark_dry_run", "submit_bundle", "submit_lifecycle_bundle", "submit_slurm_launch_plan"]

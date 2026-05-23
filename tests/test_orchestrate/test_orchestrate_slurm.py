@@ -11,12 +11,13 @@ from medarc_verifiers.orchestrate.bundle import (
     load_task_spec,
 )
 from medarc_verifiers.orchestrate.cli import main as orchestrate_main
+from medarc_verifiers.orchestrate.cli import _load_combined_status
 from medarc_verifiers.orchestrate.config import TaskSpec, expand_tasks, load_plan, load_suite_config
 from medarc_verifiers.orchestrate.internal_io import load_internal_mapping
 from medarc_verifiers.orchestrate.slurm.manifest import SlurmBundleManifest
 from medarc_verifiers.orchestrate.slurm.plan import build_submission_plan
 from medarc_verifiers.orchestrate.slurm.render import render_bundle
-from medarc_verifiers.orchestrate.slurm.submit import SlurmSubmissionOptions, submit_bundle
+from medarc_verifiers.orchestrate.slurm.submit import SlurmSubmissionOptions, mark_dry_run, submit_bundle, submit_lifecycle_bundle
 
 
 _JOB_META: dict[Path, dict[str, object]] = {}
@@ -53,6 +54,69 @@ rollouts_per_example = 1
         "slurm": dict(slurm or {}),
         "serve": {},
     }
+
+
+def _write_lifecycle_plan(tmp_path: Path, suite_cfg: Path) -> Path:
+    _write_plan(tmp_path, [suite_cfg])
+    endpoints = tmp_path / "endpoints.toml"
+    endpoints.write_text(
+        endpoints.read_text(encoding="utf-8").replace('image = "fake"', 'image = "vllm/vllm-openai:v0.12.0"'),
+        encoding="utf-8",
+    )
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text(
+        plan_path.read_text(encoding="utf-8")
+        + f"""
+
+[container]
+volumes = ["{tmp_path / 'hf'}:/root/.cache/huggingface"]
+
+[construct]
+enabled = true
+cpus = 4
+time = "01:00:00"
+partition = "cpu"
+
+[construct.cache]
+image_dir = "{tmp_path / 'images'}"
+
+[teardown]
+enabled = true
+cpus = 2
+time = "00:15:00"
+partition = "cpu"
+""",
+        encoding="utf-8",
+    )
+    return plan_path
+
+
+def _write_lifecycle_sqsh_plan(tmp_path: Path, suite_cfg: Path, image_path: Path) -> Path:
+    _write_plan(tmp_path, [suite_cfg])
+    endpoints = tmp_path / "endpoints.toml"
+    endpoints.write_text(
+        endpoints.read_text(encoding="utf-8").replace('image = "fake"', f'image = "{image_path}"'),
+        encoding="utf-8",
+    )
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text(
+        plan_path.read_text(encoding="utf-8")
+        + f"""
+
+[container]
+volumes = ["{tmp_path / 'hf'}:/root/.cache/huggingface"]
+
+[construct]
+enabled = true
+materialize_images = true
+prefetch_model_weights = true
+cpus = 4
+time = "01:00:00"
+partition = "cpu"
+""",
+        encoding="utf-8",
+    )
+    return plan_path
 
 
 def _write_sidecar_suite_config(
@@ -392,6 +456,198 @@ def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
 
     run_manifest = load_run_bundle_manifest(tmp_path / "outputs" / "run_manifest.json")
     assert run_manifest.tasks[0].bundled_eval_config_path == entry.generated_eval_config_path
+
+
+def test_lifecycle_render_writes_cpu_scripts_manifest_and_symbolic_dependencies(tmp_path: Path) -> None:
+    suite_cfg = tmp_path / "job.yaml"
+    _write_suite_config(suite_cfg, gpus=2, tensor_parallel_size=2)
+    plan = load_plan(_write_lifecycle_plan(tmp_path, suite_cfg))
+    tasks = expand_tasks(plan)
+    planned = build_submission_plan(tasks, base_dependency="afterok:99", submission_options=SlurmSubmissionOptions())
+
+    manifest = render_bundle(
+        planned_tasks=planned,
+        bundle_root=tmp_path / "outputs",
+        source_dir=tmp_path,
+        activate_script=tmp_path / ".venv" / "bin" / "activate",
+        env_file=tmp_path / ".env",
+        readiness_timeout_s=None,
+        prune_logs_on_success=False,
+        construct=plan.construct,
+        teardown=plan.teardown,
+    )
+
+    assert len(manifest.entries) == 1
+    assert len(manifest.lifecycle_entries) == 2
+    entry = manifest.entries[0]
+    construct = manifest.lifecycle_entry_map()[(entry.task_id, "construct")]
+    teardown = manifest.lifecycle_entry_map()[(entry.task_id, "teardown")]
+    assert construct.cpus == 4
+    assert construct.base_dependency == "afterok:99"
+    assert entry.base_dependency is None
+    assert entry.generated_dependency == f"afterok:${{{entry.task_id}:construct}}"
+    assert teardown.generated_dependency == f"afterany:${{{entry.task_id}:eval}}"
+
+    construct_script = Path(construct.script_path).read_text(encoding="utf-8")
+    teardown_script = Path(teardown.script_path).read_text(encoding="utf-8")
+    assert "#SBATCH --cpus-per-task=4" in construct_script
+    assert "#SBATCH --gpus-per-task" not in construct_script
+    assert "MEDARC_ALLOCATED_GPU_COUNT" not in construct_script
+    assert "medarc-orchestrate construct" in construct_script
+    assert "--prefetch-model" in construct_script
+    assert "--materialize-image" in construct_script
+    assert "#SBATCH --cpus-per-task=2" in teardown_script
+    assert "medarc-orchestrate teardown" in teardown_script
+
+    task_spec = load_task_spec(Path(entry.task_spec_path))
+    assert task_spec.container_image_source == "vllm/vllm-openai:v0.12.0"
+    assert task_spec.container_image.startswith(str(tmp_path / "images"))
+    assert task_spec.container_image.endswith(".sqsh")
+    assert task_spec.construct_cache["hf_home"] == str(tmp_path / "hf")
+    assert task_spec.construct_cache["container_hf_home"] == "/root/.cache/huggingface"
+
+
+def test_lifecycle_render_treats_absolute_sqsh_as_already_materialized(tmp_path: Path) -> None:
+    suite_cfg = tmp_path / "job.yaml"
+    image_path = tmp_path / "prebuilt.sqsh"
+    _write_suite_config(suite_cfg, gpus=1)
+    plan = load_plan(_write_lifecycle_sqsh_plan(tmp_path, suite_cfg, image_path))
+    tasks = expand_tasks(plan)
+    planned = build_submission_plan(tasks, base_dependency=None, submission_options=SlurmSubmissionOptions())
+
+    manifest = render_bundle(
+        planned_tasks=planned,
+        bundle_root=tmp_path / "outputs",
+        source_dir=tmp_path,
+        activate_script=tmp_path / ".venv" / "bin" / "activate",
+        env_file=None,
+        readiness_timeout_s=None,
+        prune_logs_on_success=False,
+        construct=plan.construct,
+        teardown=plan.teardown,
+    )
+
+    entry = manifest.entries[0]
+    construct = manifest.lifecycle_entry_map()[(entry.task_id, "construct")]
+    construct_script = Path(construct.script_path).read_text(encoding="utf-8")
+    task_spec = load_task_spec(Path(entry.task_spec_path))
+
+    assert "--prefetch-model" in construct_script
+    assert "--materialize-image" not in construct_script
+    assert task_spec.container_image == str(image_path)
+    assert task_spec.container_image_source is None
+    assert task_spec.construct_cache["image_dir"] is None
+
+
+def test_lifecycle_dry_run_prints_phase_commands_in_dependency_order(tmp_path: Path) -> None:
+    suite_cfg = tmp_path / "job.yaml"
+    _write_suite_config(suite_cfg)
+    plan = load_plan(_write_lifecycle_plan(tmp_path, suite_cfg))
+    planned = build_submission_plan(expand_tasks(plan), base_dependency=None, submission_options=SlurmSubmissionOptions())
+    manifest = render_bundle(
+        planned_tasks=planned,
+        bundle_root=tmp_path / "outputs",
+        source_dir=tmp_path,
+        activate_script=tmp_path / ".venv" / "bin" / "activate",
+        env_file=None,
+        readiness_timeout_s=None,
+        prune_logs_on_success=False,
+        construct=plan.construct,
+        teardown=plan.teardown,
+    )
+
+    commands = mark_dry_run(tmp_path / "outputs" / "submission_manifest.json", manifest)
+
+    assert [Path(command.split()[-1]).name for command in commands] == ["construct.sh", "submit.sh", "teardown.sh"]
+    assert "--dependency=afterok:" in commands[1]
+    assert "--dependency=afterany:" in commands[2]
+
+
+def test_lifecycle_fake_sbatch_threads_job_ids_into_dependencies(tmp_path: Path, monkeypatch) -> None:
+    suite_cfg = tmp_path / "job.yaml"
+    _write_suite_config(suite_cfg)
+    plan = load_plan(_write_lifecycle_plan(tmp_path, suite_cfg))
+    planned = build_submission_plan(expand_tasks(plan), base_dependency="afterok:base", submission_options=SlurmSubmissionOptions())
+    manifest_path = tmp_path / "outputs" / "submission_manifest.json"
+    manifest = render_bundle(
+        planned_tasks=planned,
+        bundle_root=tmp_path / "outputs",
+        source_dir=tmp_path,
+        activate_script=tmp_path / ".venv" / "bin" / "activate",
+        env_file=None,
+        readiness_timeout_s=None,
+        prune_logs_on_success=False,
+        construct=plan.construct,
+        teardown=plan.teardown,
+    )
+    calls: list[list[str]] = []
+    job_ids = iter(["101", "102", "103"])
+
+    class Completed:
+        returncode = 0
+        stderr = ""
+
+        def __init__(self, stdout: str) -> None:
+            self.stdout = stdout
+
+    def fake_run(command, check, capture_output, text):
+        del check, capture_output, text
+        calls.append(list(command))
+        return Completed(f"{next(job_ids)}\n")
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.submit.subprocess.run", fake_run)
+
+    submit_lifecycle_bundle(manifest_path, manifest)
+
+    assert calls[0][-1].endswith("construct.sh")
+    assert "--dependency=afterok:base" in calls[0]
+    assert calls[1][-1].endswith("submit.sh")
+    assert "--dependency=afterok:101" in calls[1]
+    assert calls[2][-1].endswith("teardown.sh")
+    assert "--dependency=afterany:102" in calls[2]
+    persisted = SlurmBundleManifest.from_dict(json.loads(manifest_path.read_text(encoding="utf-8")))
+    entry = persisted.entries[0]
+    assert persisted.lifecycle_entry_map()[(entry.task_id, "construct")].slurm_job_id == "101"
+    assert entry.slurm_job_id == "102"
+    assert persisted.lifecycle_entry_map()[(entry.task_id, "teardown")].slurm_job_id == "103"
+
+
+def test_lifecycle_status_groups_phase_fields(tmp_path: Path) -> None:
+    suite_cfg = tmp_path / "job.yaml"
+    _write_suite_config(suite_cfg)
+    plan = load_plan(_write_lifecycle_plan(tmp_path, suite_cfg))
+    planned = build_submission_plan(expand_tasks(plan), base_dependency=None, submission_options=SlurmSubmissionOptions())
+    manifest_path = tmp_path / "outputs" / "submission_manifest.json"
+    manifest = render_bundle(
+        planned_tasks=planned,
+        bundle_root=tmp_path / "outputs",
+        source_dir=tmp_path,
+        activate_script=tmp_path / ".venv" / "bin" / "activate",
+        env_file=None,
+        readiness_timeout_s=None,
+        prune_logs_on_success=False,
+        construct=plan.construct,
+        teardown=plan.teardown,
+    )
+    entry = manifest.entries[0]
+    lifecycle = manifest.lifecycle_entry_map()
+    lifecycle[(entry.task_id, "construct")].state = "submitted"
+    lifecycle[(entry.task_id, "construct")].slurm_job_id = "201"
+    entry.state = "submitted"
+    entry.slurm_job_id = "202"
+    lifecycle[(entry.task_id, "teardown")].state = "submitted"
+    lifecycle[(entry.task_id, "teardown")].slurm_job_id = "203"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest.to_dict()), encoding="utf-8")
+
+    row = _load_combined_status(tmp_path / "outputs")["tasks"][0]
+
+    assert row["construct_state"] == "submitted"
+    assert row["construct_slurm_job_id"] == "201"
+    assert row["eval_state"] == "submitted"
+    assert row["eval_slurm_job_id"] == "202"
+    assert row["teardown_state"] == "submitted"
+    assert row["teardown_slurm_job_id"] == "203"
 
 
 def test_bundle_parses_sidecars(tmp_path: Path) -> None:

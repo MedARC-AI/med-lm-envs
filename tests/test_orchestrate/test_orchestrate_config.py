@@ -12,6 +12,7 @@ from medarc_verifiers.orchestrate.config import (
     make_plan,
     materialize_task_eval_config,
 )
+from medarc_verifiers.orchestrate.lifecycle import materialized_image_path, resolve_construct_cache
 
 
 def _write_endpoint_registry(
@@ -138,6 +139,110 @@ endpoint_id = "foo"
     assert task.orchestrate["container"]["volumes"] == ["/host/cache:/root/.cache/huggingface:rw"]
     assert task.eval_images[0]["id"] == "fhir"
     assert task.orchestrate_registry.path == str(endpoints.resolve())
+
+
+def test_lifecycle_config_parses_and_resolves_cache_paths(tmp_path: Path) -> None:
+    configs_dir = tmp_path / "configs"
+    configs_dir.mkdir()
+    suite = _write_suite(configs_dir / "suite.toml")
+    endpoints = _write_endpoint_registry(configs_dir / "endpoints.toml")
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text(
+        """
+suite = "configs/suite.toml"
+endpoints_path = "configs/endpoints.toml"
+
+[construct]
+enabled = true
+cpus = 4
+time = "01:00:00"
+partition = "cpu-short"
+
+[construct.cache]
+hf_home = "cache/hf"
+hub_cache = "cache/hf/hub"
+image_dir = "cache/images"
+latest_link = false
+
+[teardown]
+enabled = true
+cpus = 1
+remove_model_weights = false
+
+[[target]]
+endpoint_id = "foo"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    plan = load_plan(plan_path)
+
+    assert plan.construct.enabled is True
+    assert plan.construct.prefetch_enabled is True
+    assert plan.construct.image_materialization_enabled is True
+    assert plan.construct.cpus == 4
+    assert plan.construct.cache.hf_home == (tmp_path / "cache" / "hf").resolve()
+    assert plan.construct.cache.image_dir == (tmp_path / "cache" / "images").resolve()
+    assert plan.construct.cache.latest_link is False
+    assert plan.teardown.enabled is True
+    assert plan.teardown.cpus == 1
+    assert endpoints.exists() and suite.exists()
+
+
+def test_construct_operation_flags_enable_construct(tmp_path: Path) -> None:
+    plan = PlanConfig(
+        suite=tmp_path / "suite.toml",
+        endpoints_path=tmp_path / "endpoints.toml",
+        construct={"materialize_images": True, "prefetch_model_weights": False},
+        targets=[{"endpoint_id": "foo"}],
+    )
+
+    assert plan.construct.enabled is True
+    assert plan.construct.prefetch_enabled is False
+    assert plan.construct.image_materialization_enabled is True
+
+
+def test_construct_cache_resolves_hf_home_from_container_volume(tmp_path: Path) -> None:
+    plan = PlanConfig(
+        suite=tmp_path / "suite.toml",
+        endpoints_path=tmp_path / "endpoints.toml",
+        construct={
+            "enabled": True,
+            "cache": {"image_dir": str(tmp_path / "images")},
+        },
+        targets=[{"endpoint_id": "foo"}],
+    )
+
+    cache = resolve_construct_cache(
+        config=plan.construct,
+        volume_mounts=[f"{tmp_path / 'hf'}:/root/.cache/huggingface:rw"],
+    )
+
+    assert cache.hf_home == str(tmp_path / "hf")
+    assert cache.hub_cache == str(tmp_path / "hf" / "hub")
+    assert cache.container_hf_home == "/root/.cache/huggingface"
+    assert cache.container_hub_cache == "/root/.cache/huggingface/hub"
+
+
+def test_construct_cache_requires_roots_for_enabled_operations(tmp_path: Path) -> None:
+    plan = PlanConfig(
+        suite=tmp_path / "suite.toml",
+        endpoints_path=tmp_path / "endpoints.toml",
+        construct={"enabled": True, "cache": {"hf_home": str(tmp_path / "hf")}},
+        targets=[{"endpoint_id": "foo"}],
+    )
+
+    with pytest.raises(ValueError, match="image_dir"):
+        resolve_construct_cache(config=plan.construct, volume_mounts=[])
+
+
+def test_materialized_image_path_preserves_namespace_and_rejects_latest(tmp_path: Path) -> None:
+    path = materialized_image_path("vllm/vllm-openai:v0.12.0", tmp_path)
+
+    assert path.name.startswith("docker.io__vllm__vllm-openai--v0.12.0--")
+    assert path.name.endswith(".sqsh")
+    with pytest.raises(ValueError, match="non-latest"):
+        materialized_image_path("vllm/vllm-openai:latest", tmp_path)
 
 
 def test_materialize_task_eval_config_forces_orchestrator_owned_fields(tmp_path: Path) -> None:

@@ -6,8 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from medarc_verifiers.orchestrate.config import (
+    ConstructConfig,
     PlanConfig,
     TaskSpec,
+    TeardownConfig,
     expand_tasks,
     load_plan,
     make_plan,
@@ -39,6 +41,8 @@ class LaunchPlan:
     env_file: Path | None
     readiness_timeout_s: int
     prune_logs_on_success: bool
+    construct: ConstructConfig
+    teardown: TeardownConfig
 
 
 @dataclass(frozen=True)
@@ -67,6 +71,8 @@ def resolve_launch_plan(request: LaunchRequest, *, cwd: Path) -> LaunchPlan:
         env_file=plan.env_file,
         readiness_timeout_s=int(readiness_timeout_s or 1800),
         prune_logs_on_success=plan.prune_logs_on_success,
+        construct=plan.construct,
+        teardown=plan.teardown,
     )
 
 

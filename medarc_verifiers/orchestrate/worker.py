@@ -14,8 +14,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
 
-from dotenv import dotenv_values
-
 from medarc_verifiers.orchestrate.bench import (
     BenchProcess,
     render_command,
@@ -36,6 +34,7 @@ from medarc_verifiers.orchestrate.docker_vllm import (
     wait_for_readiness_async,
     write_container_request,
 )
+from medarc_verifiers.orchestrate.env import load_env_file, load_runtime_env
 from medarc_verifiers.orchestrate.ranges import parse_index_range
 from medarc_verifiers.orchestrate.runtime import (
     LogStreamer,
@@ -185,7 +184,13 @@ class TaskWorker:
             data_parallel_size=topology.data_parallel_size if topology.data_parallel_size > 1 else None,
             serve=serve_args,
         )
-        env = _load_runtime_env(self._spec, allocation=self._allocation, options=self._options)
+        _verify_materialized_image(self._spec, image=image, runtime=self._runtime)
+        env = load_runtime_env(self._spec, allocation=self._allocation, env_file=self._options.env_file)
+        cache = dict(self._spec.construct_cache or {})
+        if cache.get("container_hf_home"):
+            env.setdefault("HF_HOME", str(cache["container_hf_home"]))
+        if cache.get("container_hub_cache"):
+            env.setdefault("HUGGINGFACE_HUB_CACHE", str(cache["container_hub_cache"]))
         volume_mounts = normalize_volume_mounts(self._spec.volume_mounts)
         run_label = _run_label_from_task_root(self._spec)
         labels = {"orchestrator.run_id": run_label, "orchestrator.task_id": self._spec.task_id}
@@ -419,6 +424,22 @@ def _default_state_handler(*, paths: TaskPaths) -> StateHandler:
     return handler
 
 
+def _verify_materialized_image(spec: ResolvedTaskSpec, *, image: str, runtime: RuntimeName) -> None:
+    if runtime != "pyxis" or not spec.container_image_source:
+        return
+    path = Path(image)
+    cache = dict(spec.construct_cache or {})
+    image_dir = cache.get("image_dir")
+    if image_dir is None:
+        raise RuntimeLaunchError(f"Task {spec.task_id} uses a materialized image but no image cache root is recorded.")
+    try:
+        path.expanduser().resolve().relative_to(Path(str(image_dir)).expanduser().resolve())
+    except ValueError as exc:
+        raise RuntimeLaunchError(f"Materialized image {path} is outside configured image cache {image_dir}.") from exc
+    if not path.is_file():
+        raise RuntimeLaunchError(f"Materialized Pyxis image not found for task {spec.task_id}: {path}")
+
+
 def _load_runtime_env(
     spec: ResolvedTaskSpec,
     *,
@@ -428,14 +449,14 @@ def _load_runtime_env(
     env: dict[str, str] = {}
     repo_root = Path(__file__).resolve().parents[2]
     if options.env_file is not None:
-        env.update(_load_env_file(options.env_file, base_dir=repo_root))
+        env.update(load_env_file(options.env_file, base_dir=repo_root))
     else:
         default_env = repo_root / ".env"
         if default_env.exists():
-            env.update(_load_env_file(default_env, base_dir=repo_root))
+            env.update(load_env_file(default_env, base_dir=repo_root))
     if spec.container_env_file:
         base_dir = Path(spec.orchestrate_registry_path).parent if spec.orchestrate_registry_path else repo_root
-        env.update(_load_env_file(spec.container_env_file, base_dir=base_dir))
+        env.update(load_env_file(spec.container_env_file, base_dir=base_dir))
     env.update(dict(allocation.runtime_env))
     if not env.get("HF_TOKEN"):
         token = _load_hf_token_from_login()
@@ -599,16 +620,6 @@ def _prune_task_logs(paths: TaskPaths) -> None:
 
 async def _teardown_runtime(runtime_adapter: RuntimeAdapter, handle: RuntimeHandle) -> None:
     await asyncio.to_thread(runtime_adapter.teardown, handle)
-
-
-def _load_env_file(path: object, *, base_dir: Path) -> dict[str, str]:
-    env_path = Path(str(path)).expanduser()
-    if not env_path.is_absolute():
-        env_path = (base_dir / env_path).resolve()
-    if not env_path.exists():
-        raise RuntimeLaunchError(f"env_file not found: {env_path}")
-    values = dotenv_values(env_path)
-    return {key: value for key, value in values.items() if value is not None}
 
 
 def _parse_time(value: str | None):

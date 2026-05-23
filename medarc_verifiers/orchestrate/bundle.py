@@ -82,6 +82,22 @@ class TaskBundlePaths:
         return self.runtime_dir / "allocation.json"
 
     @property
+    def construct_allocation_path(self) -> Path:
+        return self.runtime_dir / "construct-allocation.json"
+
+    @property
+    def teardown_allocation_path(self) -> Path:
+        return self.runtime_dir / "teardown-allocation.json"
+
+    @property
+    def construct_result_path(self) -> Path:
+        return self.runtime_dir / "construct_result.json"
+
+    @property
+    def teardown_result_path(self) -> Path:
+        return self.runtime_dir / "teardown_result.json"
+
+    @property
     def state_path(self) -> Path:
         return self.runtime_dir / "state.json"
 
@@ -98,8 +114,24 @@ class TaskBundlePaths:
         return self.root / "sidecars"
 
     @property
+    def construct_dir(self) -> Path:
+        return self.root / "construct"
+
+    @property
+    def teardown_dir(self) -> Path:
+        return self.root / "teardown"
+
+    @property
     def submit_script_path(self) -> Path:
         return self.root / "submit.sh"
+
+    @property
+    def construct_script_path(self) -> Path:
+        return self.root / "construct.sh"
+
+    @property
+    def teardown_script_path(self) -> Path:
+        return self.root / "teardown.sh"
 
     @property
     def orchestrate_snapshot_path(self) -> Path:
@@ -116,11 +148,19 @@ class TaskOutputPaths:
     task_spec_path: str
     eval_config_path: str
     allocation_path: str
+    construct_allocation_path: str
+    teardown_allocation_path: str
+    construct_result_path: str
+    teardown_result_path: str
     state_path: str
     serve_dir: str
     bench_dir: str
     sidecar_dir: str
+    construct_dir: str
+    teardown_dir: str
     submit_script_path: str
+    construct_script_path: str
+    teardown_script_path: str
 
 
 @dataclass(frozen=True)
@@ -167,6 +207,7 @@ class ResolvedTaskSpec:
     serve_args: Mapping[str, Any]
     sidecars: list[SidecarSpec]
     output_paths: TaskOutputPaths
+    container_image_source: str | None = None
     endpoints_path: str | None = None
     orchestrate_registry_path: str | None = None
     orchestrate_registry_checksum: str | None = None
@@ -174,6 +215,8 @@ class ResolvedTaskSpec:
     eval_images_registry_path: str | None = None
     eval_images_registry_checksum: str | None = None
     selected_eval_images: list[Mapping[str, Any]] = field(default_factory=list)
+    construct_cache: Mapping[str, Any] = field(default_factory=dict)
+    teardown: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -223,11 +266,27 @@ class ResolvedTaskSpec:
                 task_spec_path=str(output_paths["task_spec_path"]),
                 eval_config_path=str(output_paths["eval_config_path"]),
                 allocation_path=str(output_paths["allocation_path"]),
+                construct_allocation_path=str(
+                    output_paths.get("construct_allocation_path") or (Path(root) / "runtime" / "construct-allocation.json")
+                ),
+                teardown_allocation_path=str(
+                    output_paths.get("teardown_allocation_path") or (Path(root) / "runtime" / "teardown-allocation.json")
+                ),
+                construct_result_path=str(
+                    output_paths.get("construct_result_path") or (Path(root) / "runtime" / "construct_result.json")
+                ),
+                teardown_result_path=str(
+                    output_paths.get("teardown_result_path") or (Path(root) / "runtime" / "teardown_result.json")
+                ),
                 state_path=str(output_paths["state_path"]),
                 serve_dir=str(output_paths["serve_dir"]),
                 bench_dir=str(output_paths["bench_dir"]),
                 sidecar_dir=str(output_paths.get("sidecar_dir") or (Path(root) / "sidecars")),
+                construct_dir=str(output_paths.get("construct_dir") or (Path(root) / "construct")),
+                teardown_dir=str(output_paths.get("teardown_dir") or (Path(root) / "teardown")),
                 submit_script_path=str(output_paths["submit_script_path"]),
+                construct_script_path=str(output_paths.get("construct_script_path") or (Path(root) / "construct.sh")),
+                teardown_script_path=str(output_paths.get("teardown_script_path") or (Path(root) / "teardown.sh")),
             ),
             endpoints_path=(str(payload["endpoints_path"]) if payload.get("endpoints_path") is not None else None),
             orchestrate_registry_path=(
@@ -252,6 +311,11 @@ class ResolvedTaskSpec:
                 else None
             ),
             selected_eval_images=[dict(item) for item in payload.get("selected_eval_images", [])],
+            container_image_source=(
+                str(payload["container_image_source"]) if payload.get("container_image_source") is not None else None
+            ),
+            construct_cache=dict(payload.get("construct_cache") or {}),
+            teardown=dict(payload.get("teardown") or {}),
         )
 
 
@@ -441,6 +505,9 @@ def ensure_run_bundle(
     runtime: str,
     allocation_defaults: Mapping[str, ExecutionAllocation] | None = None,
     existing_manifest: RunBundleManifest | None = None,
+    construct_cache_by_task: Mapping[str, Mapping[str, Any]] | None = None,
+    teardown_by_task: Mapping[str, Mapping[str, Any]] | None = None,
+    container_image_by_task: Mapping[str, str] | None = None,
 ) -> BundlePlan:
     if mode != "slurm":
         raise ValueError("Task bundles are only supported in slurm mode.")
@@ -465,6 +532,9 @@ def ensure_run_bundle(
             mode=mode,
             runtime=runtime,
             allocation_default=allocation_defaults.get(task.task_id) if allocation_defaults else None,
+            construct_cache=dict((construct_cache_by_task or {}).get(task.task_id) or {}),
+            teardown=dict((teardown_by_task or {}).get(task.task_id) or {}),
+            container_image_override=(container_image_by_task or {}).get(task.task_id),
         )
         bundles[task.task_id] = bundle
         manifest_entries.append(
@@ -530,17 +600,25 @@ def _ensure_task_bundle(
     mode: str,
     runtime: str,
     allocation_default: ExecutionAllocation | None,
+    construct_cache: Mapping[str, Any],
+    teardown: Mapping[str, Any],
+    container_image_override: str | None,
 ) -> PlannedTaskBundle:
     paths = task_bundle_paths(output_root, task.task_id)
     paths.root.mkdir(parents=True, exist_ok=True)
     paths.serve_dir.mkdir(parents=True, exist_ok=True)
     paths.bench_dir.mkdir(parents=True, exist_ok=True)
     paths.sidecar_dir.mkdir(parents=True, exist_ok=True)
+    paths.construct_dir.mkdir(parents=True, exist_ok=True)
+    paths.teardown_dir.mkdir(parents=True, exist_ok=True)
     expected_payload, expected_spec = _build_task_spec(
         task=task,
         paths=paths,
         mode=mode,
         runtime=runtime,
+        construct_cache=construct_cache,
+        teardown=teardown,
+        container_image_override=container_image_override,
     )
 
     if paths.task_spec_path.exists() and paths.eval_config_path.exists():
@@ -571,6 +649,9 @@ def _build_task_spec(
     paths: TaskBundlePaths,
     mode: str,
     runtime: str,
+    construct_cache: Mapping[str, Any],
+    teardown: Mapping[str, Any],
+    container_image_override: str | None,
 ) -> tuple[bytes, ResolvedTaskSpec]:
     source_checksum = _sha256_file(task.suite_path)
     eval_payload = deepcopy(dict(task.generated_eval_config))
@@ -588,6 +669,9 @@ def _build_task_spec(
     pyxis_srun_extra_args = [str(item) for item in pyxis_cfg.get("srun_extra_args", []) or []]
     if sidecars and not _srun_args_include_flag(pyxis_srun_extra_args, "--overlap"):
         pyxis_srun_extra_args.append("--overlap")
+    container_image_source = _required_string(
+        container_cfg.get("image"), f"Task {task.task_id} orchestrate.container.image"
+    )
     spec = ResolvedTaskSpec(
         task_id=task.task_id,
         task_slug=paths.root.name,
@@ -607,9 +691,7 @@ def _build_task_spec(
         data_parallel_size=(
             int(model_cfg["data_parallel_size"]) if model_cfg.get("data_parallel_size") is not None else None
         ),
-        container_image=_required_string(
-            container_cfg.get("image"), f"Task {task.task_id} orchestrate.container.image"
-        ),
+        container_image=container_image_override or container_image_source,
         container_port=_required_int(
             container_cfg.get("container_port"), f"Task {task.task_id} orchestrate.container.container_port"
         ),
@@ -626,12 +708,21 @@ def _build_task_spec(
             task_spec_path=str(paths.task_spec_path),
             eval_config_path=str(paths.eval_config_path),
             allocation_path=str(paths.allocation_path),
+            construct_allocation_path=str(paths.construct_allocation_path),
+            teardown_allocation_path=str(paths.teardown_allocation_path),
+            construct_result_path=str(paths.construct_result_path),
+            teardown_result_path=str(paths.teardown_result_path),
             state_path=str(paths.state_path),
             serve_dir=str(paths.serve_dir),
             bench_dir=str(paths.bench_dir),
             sidecar_dir=str(paths.sidecar_dir),
+            construct_dir=str(paths.construct_dir),
+            teardown_dir=str(paths.teardown_dir),
             submit_script_path=str(paths.submit_script_path),
+            construct_script_path=str(paths.construct_script_path),
+            teardown_script_path=str(paths.teardown_script_path),
         ),
+        container_image_source=container_image_source if container_image_override else None,
         endpoints_path=str(task.endpoints_path) if task.endpoints_path is not None else None,
         orchestrate_registry_path=task.orchestrate_registry.path,
         orchestrate_registry_checksum=task.orchestrate_registry.checksum,
@@ -639,6 +730,8 @@ def _build_task_spec(
         eval_images_registry_path=task.eval_images_registry.path,
         eval_images_registry_checksum=task.eval_images_registry.checksum,
         selected_eval_images=[dict(item) for item in task.eval_images],
+        construct_cache=dict(construct_cache),
+        teardown=dict(teardown),
     )
     return bundled_bytes, spec
 
