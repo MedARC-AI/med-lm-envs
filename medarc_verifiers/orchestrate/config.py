@@ -714,7 +714,19 @@ def _validate_eval_images_registry(payload: Mapping[str, Any], *, source: Path) 
             raise ValueError(f"Each [[eval_image]] entry in {source} must be a table.")
         _reject_unknown_keys(
             entry,
-            {"id", "evals", "envs", "env_ids", "runtime", "image", "command", "srun_args", "env", "readiness"},
+            {
+                "id",
+                "evals",
+                "envs",
+                "env_ids",
+                "runtime",
+                "image",
+                "command",
+                "srun_args",
+                "env",
+                "readiness",
+                "inject",
+            },
             label=f"{source} [[eval_image]]",
         )
         if "readiness" in entry:
@@ -723,6 +735,15 @@ def _validate_eval_images_registry(payload: Mapping[str, Any], *, source: Path) 
                 {"enabled", "url", "timeout_s", "interval_s"},
                 label=f"{source} [[eval_image]].readiness",
             )
+        if "inject" in entry:
+            inject = _required_mapping(entry.get("inject"), "eval_image inject")
+            _reject_unknown_keys(inject, {"env_args"}, label=f"{source} [[eval_image]].inject")
+            env_args = _required_mapping(inject.get("env_args"), "eval_image inject.env_args")
+            for key, value in env_args.items():
+                if not isinstance(key, str) or not key.strip() or not isinstance(value, str):
+                    raise ValueError(
+                        f"Eval image inject.env_args in {source} must map non-empty string keys to string values."
+                    )
         image_id = entry.get("id")
         if not isinstance(image_id, str) or not image_id.strip():
             raise ValueError(f"Each [[eval_image]] entry in {source} must include non-empty id.")

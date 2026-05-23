@@ -1,0 +1,28 @@
+[[eval_image]]
+id = "medagentbench-fhir"
+envs = ["medagentbench", "medagentbenchv2"]
+runtime = "pyxis"
+image = "/admin/home/benjamin/med-lm-envs/.enroot/medagentbench_withsh.sqsh"
+srun_args = [
+    "--mem=16G",
+    "--no-container-entrypoint",
+    "--container-env=JAVA_TOOL_OPTIONS,SERVER_PORT",
+]
+command = [
+    "/usr/bin/java",
+    "--class-path",
+    "/app/main.war",
+    "-Dloader.path=main.war!/WEB-INF/classes/,main.war!/WEB-INF/,/app/extra-classes",
+    "org.springframework.boot.loader.PropertiesLauncher",
+]
+
+[eval_image.env]
+JAVA_TOOL_OPTIONS = "-XX:+UseSerialGC -Xms256m -Xmx1024m"
+SERVER_PORT = "{port}"
+
+[eval_image.readiness]
+url = "http://127.0.0.1:{port}/fhir/metadata"
+timeout_s = 240
+
+[eval_image.inject.env_args]
+fhir_api_base = "http://127.0.0.1:{port}/fhir/"

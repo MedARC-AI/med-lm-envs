@@ -18,9 +18,9 @@ from medarc_verifiers.orchestrate.config import TaskSpec, render_toml_mapping
 from medarc_verifiers.orchestrate.internal_io import load_internal_mapping
 from medarc_verifiers.orchestrate.task_naming import sanitize_task_dirname
 
-_SIDECAR_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+_AUXILIARY_IMAGE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_RESERVED_SIDECAR_SRUN_FLAGS = {
+_RESERVED_AUXILIARY_IMAGE_SRUN_FLAGS = {
     "--overlap",
     "--nodes",
     "--ntasks",
@@ -110,8 +110,8 @@ class TaskBundlePaths:
         return self.root / "bench"
 
     @property
-    def sidecar_dir(self) -> Path:
-        return self.root / "sidecars"
+    def auxiliary_image_dir(self) -> Path:
+        return self.root / "auxiliary_images"
 
     @property
     def construct_dir(self) -> Path:
@@ -155,7 +155,7 @@ class TaskOutputPaths:
     state_path: str
     serve_dir: str
     bench_dir: str
-    sidecar_dir: str
+    auxiliary_image_dir: str
     construct_dir: str
     teardown_dir: str
     submit_script_path: str
@@ -164,7 +164,7 @@ class TaskOutputPaths:
 
 
 @dataclass(frozen=True)
-class SidecarReadinessSpec:
+class AuxiliaryImageReadinessSpec:
     enabled: bool = True
     url: str | None = None
     timeout_s: int = 240
@@ -172,14 +172,17 @@ class SidecarReadinessSpec:
 
 
 @dataclass(frozen=True)
-class SidecarSpec:
+class AuxiliaryImageSpec:
     name: str
+    evals: list[str]
+    envs: list[str]
     runtime: str
     image: str
     srun_args: list[str]
     env: Mapping[str, str]
     command: list[str]
-    readiness: SidecarReadinessSpec
+    readiness: AuxiliaryImageReadinessSpec
+    inject_env_args: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -205,7 +208,7 @@ class ResolvedTaskSpec:
     volume_mounts: list[str]
     pyxis_srun_extra_args: list[str]
     serve_args: Mapping[str, Any]
-    sidecars: list[SidecarSpec]
+    auxiliary_images: list[AuxiliaryImageSpec]
     output_paths: TaskOutputPaths
     container_image_source: str | None = None
     endpoints_path: str | None = None
@@ -226,11 +229,11 @@ class ResolvedTaskSpec:
         output_paths = payload.get("output_paths")
         if not isinstance(output_paths, Mapping):
             raise ValueError("Resolved task spec output_paths must be a mapping.")
-        if "sidecars" not in payload:
-            raise ValueError("Resolved task spec is missing required sidecars field.")
-        if "sidecar_dir" not in output_paths:
-            raise ValueError("Resolved task spec output_paths is missing required sidecar_dir field.")
-        sidecars = [_sidecar_from_dict(item) for item in payload.get("sidecars", [])]
+        if "auxiliary_images" not in payload:
+            raise ValueError("Resolved task spec is missing required auxiliary_images field.")
+        if "auxiliary_image_dir" not in output_paths:
+            raise ValueError("Resolved task spec output_paths is missing required auxiliary_image_dir field.")
+        auxiliary_images = [_auxiliary_image_from_dict(item) for item in payload.get("auxiliary_images", [])]
         root = str(output_paths["root"])
         return cls(
             task_id=str(payload["task_id"]),
@@ -260,7 +263,7 @@ class ResolvedTaskSpec:
             volume_mounts=[str(item) for item in payload.get("volume_mounts", [])],
             pyxis_srun_extra_args=[str(item) for item in payload.get("pyxis_srun_extra_args", [])],
             serve_args=dict(payload.get("serve_args") or {}),
-            sidecars=sidecars,
+            auxiliary_images=auxiliary_images,
             output_paths=TaskOutputPaths(
                 root=root,
                 task_spec_path=str(output_paths["task_spec_path"]),
@@ -281,7 +284,7 @@ class ResolvedTaskSpec:
                 state_path=str(output_paths["state_path"]),
                 serve_dir=str(output_paths["serve_dir"]),
                 bench_dir=str(output_paths["bench_dir"]),
-                sidecar_dir=str(output_paths.get("sidecar_dir") or (Path(root) / "sidecars")),
+                auxiliary_image_dir=str(output_paths.get("auxiliary_image_dir") or (Path(root) / "auxiliary_images")),
                 construct_dir=str(output_paths.get("construct_dir") or (Path(root) / "construct")),
                 teardown_dir=str(output_paths.get("teardown_dir") or (Path(root) / "teardown")),
                 submit_script_path=str(output_paths["submit_script_path"]),
@@ -608,7 +611,7 @@ def _ensure_task_bundle(
     paths.root.mkdir(parents=True, exist_ok=True)
     paths.serve_dir.mkdir(parents=True, exist_ok=True)
     paths.bench_dir.mkdir(parents=True, exist_ok=True)
-    paths.sidecar_dir.mkdir(parents=True, exist_ok=True)
+    paths.auxiliary_image_dir.mkdir(parents=True, exist_ok=True)
     paths.construct_dir.mkdir(parents=True, exist_ok=True)
     paths.teardown_dir.mkdir(parents=True, exist_ok=True)
     expected_payload, expected_spec = _build_task_spec(
@@ -665,9 +668,9 @@ def _build_task_spec(
     model_cfg = dict(_mapping_section(task.orchestrate, "vllm", task_id=task.task_id))
     container_cfg = dict(_mapping_section(task.orchestrate, "container", task_id=task.task_id))
     pyxis_cfg = dict(task.orchestrate.get("pyxis") or {})
-    sidecars = _parse_eval_image_sidecars(task.eval_images, task_id=task.task_id, mode=mode, runtime=runtime)
+    auxiliary_images = _parse_eval_image_auxiliary_images(task.eval_images, task_id=task.task_id, mode=mode, runtime=runtime)
     pyxis_srun_extra_args = [str(item) for item in pyxis_cfg.get("srun_extra_args", []) or []]
-    if sidecars and not _srun_args_include_flag(pyxis_srun_extra_args, "--overlap"):
+    if auxiliary_images and not _srun_args_include_flag(pyxis_srun_extra_args, "--overlap"):
         pyxis_srun_extra_args.append("--overlap")
     container_image_source = _required_string(
         container_cfg.get("image"), f"Task {task.task_id} orchestrate.container.image"
@@ -702,7 +705,7 @@ def _build_task_spec(
         volume_mounts=[str(item) for item in container_cfg.get("volumes", []) or []],
         pyxis_srun_extra_args=pyxis_srun_extra_args,
         serve_args=dict(model_cfg.get("serve") or {}),
-        sidecars=sidecars,
+        auxiliary_images=auxiliary_images,
         output_paths=TaskOutputPaths(
             root=str(paths.root),
             task_spec_path=str(paths.task_spec_path),
@@ -715,7 +718,7 @@ def _build_task_spec(
             state_path=str(paths.state_path),
             serve_dir=str(paths.serve_dir),
             bench_dir=str(paths.bench_dir),
-            sidecar_dir=str(paths.sidecar_dir),
+            auxiliary_image_dir=str(paths.auxiliary_image_dir),
             construct_dir=str(paths.construct_dir),
             teardown_dir=str(paths.teardown_dir),
             submit_script_path=str(paths.submit_script_path),
@@ -736,23 +739,26 @@ def _build_task_spec(
     return bundled_bytes, spec
 
 
-def _sidecar_from_dict(payload: Mapping[str, Any]) -> SidecarSpec:
+def _auxiliary_image_from_dict(payload: Mapping[str, Any]) -> AuxiliaryImageSpec:
     readiness_payload = payload.get("readiness") or {}
     if not isinstance(readiness_payload, Mapping):
-        raise ValueError("Sidecar readiness must be a mapping.")
-    return SidecarSpec(
+        raise ValueError("Auxiliary image readiness must be a mapping.")
+    return AuxiliaryImageSpec(
         name=str(payload["name"]),
+        evals=[str(item) for item in payload.get("evals", [])],
+        envs=[str(item) for item in payload.get("envs", [])],
         runtime=str(payload["runtime"]),
         image=str(payload["image"]),
         srun_args=[str(item) for item in payload.get("srun_args", [])],
         env={str(key): str(value) for key, value in dict(payload.get("env") or {}).items()},
         command=[str(item) for item in payload.get("command", [])],
-        readiness=SidecarReadinessSpec(
+        readiness=AuxiliaryImageReadinessSpec(
             enabled=bool(readiness_payload.get("enabled", True)),
             url=str(readiness_payload["url"]) if readiness_payload.get("url") is not None else None,
             timeout_s=int(readiness_payload.get("timeout_s", 240) or 240),
             interval_s=int(readiness_payload.get("interval_s", 2) or 2),
         ),
+        inject_env_args={str(key): str(value) for key, value in dict(payload.get("inject_env_args") or {}).items()},
     )
 
 
@@ -814,56 +820,64 @@ def _toml_value(value: Any) -> str:
     return _json.dumps(str(value))
 
 
-def _parse_eval_image_sidecars(
+def _parse_eval_image_auxiliary_images(
     eval_images: list[Mapping[str, Any]],
     *,
     task_id: str,
     mode: str,
     runtime: str,
-) -> list[SidecarSpec]:
+) -> list[AuxiliaryImageSpec]:
     if not eval_images:
         return []
     if mode != "slurm":
         raise ValueError(f"Task {task_id} configures eval images, but eval images are only supported in slurm mode.")
-    specs: list[SidecarSpec] = []
+    specs: list[AuxiliaryImageSpec] = []
     suffixes: dict[str, str] = {}
     for entry in eval_images:
         name = str(entry["id"])
-        if _SIDECAR_NAME_RE.fullmatch(name) is None:
+        if _AUXILIARY_IMAGE_NAME_RE.fullmatch(name) is None:
             raise ValueError(f"Task {task_id} eval image id {name!r} must match [A-Za-z0-9_.-]+.")
-        suffix = _sidecar_shell_suffix(name)
+        suffix = _auxiliary_image_shell_suffix(name)
         previous = suffixes.get(suffix)
         if previous is not None:
             raise ValueError(
                 f"Task {task_id} eval image ids {previous!r} and {name!r} produce the same shell variable suffix."
             )
         suffixes[suffix] = name
-        sidecar_runtime = str(entry.get("runtime", "")).strip().lower()
-        if sidecar_runtime != "pyxis":
+        auxiliary_image_runtime = str(entry.get("runtime", "")).strip().lower()
+        if auxiliary_image_runtime != "pyxis":
             raise ValueError(f"Task {task_id} eval image {name} runtime must be 'pyxis' in v1.")
         if runtime != "pyxis":
             raise ValueError(f"Task {task_id} eval image {name} requires orchestrate runtime 'pyxis'.")
         image = _required_string(entry.get("image"), f"Task {task_id} eval image {name} image")
         command = _required_string_list(entry.get("command"), f"Task {task_id} eval image {name} command")
         srun_args = _optional_string_list(entry.get("srun_args", []), f"Task {task_id} eval image {name} srun_args")
-        _validate_sidecar_srun_args(srun_args, task_id=task_id, sidecar_name=name)
-        env = _sidecar_env(entry.get("env", {}), task_id=task_id, sidecar_name=name)
-        readiness = _sidecar_readiness(entry.get("readiness", {}), task_id=task_id, sidecar_name=name)
+        _validate_auxiliary_image_srun_args(srun_args, task_id=task_id, auxiliary_image_name=name)
+        env = _auxiliary_image_env(entry.get("env", {}), task_id=task_id, auxiliary_image_name=name)
+        readiness = _auxiliary_image_readiness(entry.get("readiness", {}), task_id=task_id, auxiliary_image_name=name)
+        inject_env_args = _eval_image_inject_env_args(entry.get("inject", {}), task_id=task_id, image_name=name)
+        if inject_env_args and any(":" in str(item) for item in entry.get("evals", []) or []):
+            raise ValueError(
+                f"Task {task_id} eval image {name} inject.env_args does not support variant eval selectors."
+            )
         specs.append(
-            SidecarSpec(
+            AuxiliaryImageSpec(
                 name=name,
-                runtime=sidecar_runtime,
+                evals=[str(item) for item in entry.get("evals", []) or []],
+                envs=[str(item) for item in (entry.get("envs", []) or []) + (entry.get("env_ids", []) or [])],
+                runtime=auxiliary_image_runtime,
                 image=image,
                 srun_args=srun_args,
                 env=env,
                 command=command,
                 readiness=readiness,
+                inject_env_args=inject_env_args,
             )
         )
     return specs
 
 
-def _sidecar_shell_suffix(name: str) -> str:
+def _auxiliary_image_shell_suffix(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "_", name).upper()
 
 
@@ -895,47 +909,65 @@ def _optional_string_list(value: object, label: str) -> list[str]:
     return list(value)
 
 
-def _sidecar_env(value: object, *, task_id: str, sidecar_name: str) -> dict[str, str]:
+def _auxiliary_image_env(value: object, *, task_id: str, auxiliary_image_name: str) -> dict[str, str]:
     if not isinstance(value, Mapping):
-        raise ValueError(f"Task {task_id} sidecar {sidecar_name} env must be a mapping.")
+        raise ValueError(f"Task {task_id} auxiliary image {auxiliary_image_name} env must be a mapping.")
     env: dict[str, str] = {}
     for key, item in value.items():
         env_key = str(key)
         if _ENV_NAME_RE.fullmatch(env_key) is None:
-            raise ValueError(f"Task {task_id} sidecar {sidecar_name} env key {env_key!r} is not shell-safe.")
+            raise ValueError(f"Task {task_id} auxiliary image {auxiliary_image_name} env key {env_key!r} is not shell-safe.")
         if not isinstance(item, str):
-            raise ValueError(f"Task {task_id} sidecar {sidecar_name} env values must be strings.")
+            raise ValueError(f"Task {task_id} auxiliary image {auxiliary_image_name} env values must be strings.")
         env[env_key] = item
     return env
 
 
-def _sidecar_readiness(value: object, *, task_id: str, sidecar_name: str) -> SidecarReadinessSpec:
+def _auxiliary_image_readiness(value: object, *, task_id: str, auxiliary_image_name: str) -> AuxiliaryImageReadinessSpec:
     if not isinstance(value, Mapping):
-        raise ValueError(f"Task {task_id} sidecar {sidecar_name} readiness must be a mapping.")
+        raise ValueError(f"Task {task_id} auxiliary image {auxiliary_image_name} readiness must be a mapping.")
     enabled = bool(value.get("enabled", True))
     url = value.get("url")
     if enabled and (not isinstance(url, str) or not url.strip()):
         raise ValueError(
-            f"Task {task_id} sidecar {sidecar_name} readiness.url is required unless readiness.enabled=false."
+            f"Task {task_id} auxiliary image {auxiliary_image_name} readiness.url is required unless readiness.enabled=false."
         )
     timeout_s = int(value.get("timeout_s", 240) or 240)
     interval_s = int(value.get("interval_s", 2) or 2)
     if timeout_s <= 0:
-        raise ValueError(f"Task {task_id} sidecar {sidecar_name} readiness.timeout_s must be positive.")
+        raise ValueError(f"Task {task_id} auxiliary image {auxiliary_image_name} readiness.timeout_s must be positive.")
     if interval_s <= 0:
-        raise ValueError(f"Task {task_id} sidecar {sidecar_name} readiness.interval_s must be positive.")
-    return SidecarReadinessSpec(
+        raise ValueError(f"Task {task_id} auxiliary image {auxiliary_image_name} readiness.interval_s must be positive.")
+    return AuxiliaryImageReadinessSpec(
         enabled=enabled, url=str(url) if url is not None else None, timeout_s=timeout_s, interval_s=interval_s
     )
 
 
-def _validate_sidecar_srun_args(args: list[str], *, task_id: str, sidecar_name: str) -> None:
+def _eval_image_inject_env_args(value: object, *, task_id: str, image_name: str) -> dict[str, str]:
+    if value in (None, {}):
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"Task {task_id} eval image {image_name} inject must be a mapping.")
+    env_args = value.get("env_args", {})
+    if not isinstance(env_args, Mapping):
+        raise ValueError(f"Task {task_id} eval image {image_name} inject.env_args must be a mapping.")
+    rendered: dict[str, str] = {}
+    for key, item in env_args.items():
+        if not isinstance(item, str):
+            raise ValueError(f"Task {task_id} eval image {image_name} inject.env_args values must be strings.")
+        rendered[str(key)] = item
+    return rendered
+
+
+def _validate_auxiliary_image_srun_args(args: list[str], *, task_id: str, auxiliary_image_name: str) -> None:
     for arg in args:
         if not arg.startswith("--"):
             continue
         key = _srun_arg_key(arg)
-        if key in _RESERVED_SIDECAR_SRUN_FLAGS:
-            raise ValueError(f"Task {task_id} sidecar {sidecar_name} srun_args cannot set renderer-owned flag {key}.")
+        if key in _RESERVED_AUXILIARY_IMAGE_SRUN_FLAGS:
+            raise ValueError(
+                f"Task {task_id} auxiliary image {auxiliary_image_name} srun_args cannot set renderer-owned flag {key}."
+            )
 
 
 def _srun_args_include_flag(args: list[str], flag: str) -> bool:
@@ -986,8 +1018,8 @@ __all__ = [
     "RunBundleEntry",
     "RunBundleManifest",
     "RuntimeState",
-    "SidecarReadinessSpec",
-    "SidecarSpec",
+    "AuxiliaryImageReadinessSpec",
+    "AuxiliaryImageSpec",
     "TaskBundlePaths",
     "ensure_run_bundle",
     "load_execution_allocation",

@@ -46,6 +46,31 @@ uv run medarc-orchestrate run --plan configs/qwen3_5-4b-medmarks-verified-plan.t
 uv run medarc-orchestrate run --plan configs/qwen3_5-4b-medmarks-verified-plan.toml
 ```
 
+### Auxiliary Images
+
+`eval_images_config` selects auxiliary Pyxis images by eval or env id. These images launch inside the same Slurm allocation before the worker starts. Use `{port}` in an auxiliary image command, env, readiness URL, or injected env arg when the image needs a per-job node-local port.
+
+```toml
+[[eval_image]]
+id = "medagentbench-fhir"
+envs = ["medagentbench", "medagentbenchv2"]
+runtime = "pyxis"
+image = "/path/to/medagentbench_withsh.sqsh"
+srun_args = ["--mem=16G", "--no-container-entrypoint", "--container-env=JAVA_TOOL_OPTIONS,SERVER_PORT"]
+command = ["/usr/bin/java", "--class-path", "/app/main.war", "org.springframework.boot.loader.PropertiesLauncher"]
+
+[eval_image.env]
+JAVA_TOOL_OPTIONS = "-XX:+UseSerialGC -Xms256m -Xmx1024m"
+SERVER_PORT = "{port}"
+
+[eval_image.readiness]
+url = "http://127.0.0.1:{port}/fhir/metadata"
+timeout_s = 240
+
+[eval_image.inject.env_args]
+fhir_api_base = "http://127.0.0.1:{port}/fhir/"
+```
+
 ### Generated Eval Configs
 
 Each task bundle gets `<task>/eval-config.toml`. It contains the suite's `[[eval]]` and `[[ablation]]` entries plus orchestrator-owned top-level values:
