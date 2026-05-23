@@ -212,6 +212,45 @@ def test_duplicate_task_ids_are_rejected(tmp_path: Path) -> None:
         expand_tasks(plan)
 
 
+def test_same_model_distinct_endpoint_targets_expand(tmp_path: Path) -> None:
+    suite = _write_suite(tmp_path / "suite.toml")
+    endpoints = tmp_path / "endpoints.toml"
+    endpoints.write_text(
+        """
+[[endpoint]]
+endpoint_id = "foo-instruct"
+model = "Foo/Bar"
+
+[endpoint.orchestrate.vllm]
+gpus = 1
+
+[endpoint.orchestrate.container]
+image = "fake"
+
+[[endpoint]]
+endpoint_id = "foo-thinking"
+model = "Foo/Bar"
+
+[endpoint.orchestrate.vllm]
+gpus = 1
+
+[endpoint.orchestrate.container]
+image = "fake"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    plan = PlanConfig(
+        suite=suite,
+        endpoints_path=endpoints,
+        targets=[{"endpoint_id": "foo-instruct"}, {"endpoint_id": "foo-thinking"}],
+    )
+
+    tasks = expand_tasks(plan)
+
+    assert [task.task_id for task in tasks] == ["foo-instruct:suite", "foo-thinking:suite"]
+    assert [task.model_id for task in tasks] == ["Foo/Bar", "Foo/Bar"]
+
+
 def test_endpoint_orchestration_registry_applies_defaults_and_default_tensor_parallel(tmp_path: Path) -> None:
     endpoints = tmp_path / "endpoints.toml"
     endpoints.write_text(

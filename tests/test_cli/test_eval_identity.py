@@ -24,6 +24,16 @@ def test_unique_model_env_path_uses_base_variant_directory(tmp_path: Path) -> No
     assert plan.results_path == tmp_path / "runs" / "evals" / "openai-gpt-5-mini" / "medqa" / "base"
 
 
+def test_endpoint_id_controls_write_path_when_present(tmp_path: Path) -> None:
+    [plan] = plan_eval_paths(
+        [{"model": "Qwen/Qwen3.5-4B", "endpoint_id": "qwen3.5-4b-thinking", "env_id": "medqa"}],
+        output_root=tmp_path / "runs" / "evals",
+    )
+
+    assert plan.identity.model_id == "qwen3.5-4b-thinking"
+    assert plan.results_path == tmp_path / "runs" / "evals" / "qwen3.5-4b-thinking" / "medqa" / "base"
+
+
 def test_explicit_variant_id_controls_variant_directory(tmp_path: Path) -> None:
     [plan] = plan_eval_paths(
         [{"model": "gpt-5-mini", "env_id": "medqa", "variant_id": "shuffle_seed-1618"}],

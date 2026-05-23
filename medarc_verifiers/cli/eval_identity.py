@@ -193,10 +193,11 @@ def _expand_variant_template(template: str, config: Mapping[str, Any]) -> str:
 
 
 def _model_id(config: Mapping[str, Any]) -> str:
-    value = config.get("model")
+    value = config.get("endpoint_id") or config.get("model")
     if not value:
         raise ValueError(
-            "Eval config must include resolved 'model' for deterministic identity; build EvalConfig before planning paths."
+            "Eval config must include resolved 'model' or 'endpoint_id' for deterministic identity; "
+            "build EvalConfig before planning paths."
         )
     return str(value)
 

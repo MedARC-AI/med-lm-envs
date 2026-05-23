@@ -190,7 +190,6 @@ def expand_tasks(plan: PlanConfig, *, default_endpoints_path: Path | None = None
     eval_images_path = plan.eval_images_config.expanduser().resolve() if plan.eval_images_config is not None else None
     eval_images_payload = load_eval_images_config(eval_images_path)
     tasks: list[TaskSpec] = []
-    seen_eval_identities: set[tuple[str, str, str]] = set()
     seen_task_ids: set[str] = set()
 
     endpoints_path = _resolve_plan_endpoints_path(plan, default_endpoints_path=default_endpoints_path)
@@ -213,7 +212,11 @@ def expand_tasks(plan: PlanConfig, *, default_endpoints_path: Path | None = None
         overrides = EvalConfigOverrides(endpoints_path=endpoints_path)
         identity_payloads = [build_eval_identity_payload(raw, overrides=overrides) for raw in raw_eval_configs]
         path_plans = plan_eval_paths(identity_payloads, output_root=".")
-        model_ids = {plan.identity.model_id for plan in path_plans}
+        model_ids = {
+            str(model_id)
+            for payload in identity_payloads
+            if isinstance((model_id := payload.get("model")), str) and model_id
+        }
         if len(model_ids) != 1:
             raise ValueError(
                 f"Suite {suite_path} with endpoint {target.endpoint_id!r} resolves to multiple effective models "
@@ -249,18 +252,6 @@ def expand_tasks(plan: PlanConfig, *, default_endpoints_path: Path | None = None
         seen_task_ids.add(task_id)
         eval_ids = _resolved_eval_ids(path_plans)
         env_ids = sorted({plan.identity.env_id for plan in path_plans})
-        for plan_item in path_plans:
-            identity = (
-                model_id,
-                plan_item.identity.env_id,
-                plan_item.identity.variant_id,
-            )
-            if identity in seen_eval_identities:
-                raise ValueError(
-                    "Duplicate orchestrated eval identity across tasks: "
-                    f"model={identity[0]!r}, env_id={identity[1]!r}, variant_id={identity[2]!r}."
-                )
-            seen_eval_identities.add(identity)
         selected_eval_images = _select_eval_images(eval_images_payload, eval_ids=eval_ids, env_ids=env_ids)
         orchestrate_snapshot = RegistrySnapshot(
             path=str(endpoints_path),
