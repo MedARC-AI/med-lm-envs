@@ -1,5 +1,5 @@
 # MedMarks model alias registry.
-# Endpoint entries may include MedARC [endpoint.orchestrate] blocks for local vLLM orchestration.
+# Endpoint entries include MedARC [endpoint.orchestrate] blocks for local vLLM orchestration on 80GB GPUs.
 # URL, key, and max_concurrent are intentionally omitted; supply deployment-specific API settings at runtime.
 
 [[endpoint]]
@@ -20,10 +20,6 @@ max_num_batched_tokens = 32768
 max_num_seqs = 768
 tool_call_parser = "hermes"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -47,8 +43,6 @@ tool_call_parser = "hermes"
 
 [endpoint.orchestrate.container]
 image = "vllm/vllm-openai:v0.12.0"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -73,8 +67,6 @@ trust_remote_code = true
 
 [endpoint.orchestrate.container]
 image = "vllm/vllm-openai:v0.12.0"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -91,17 +83,12 @@ top_k = 20
 gpus = 2
 
 [endpoint.orchestrate.vllm.serve]
-max_model_len = 32064
 gpu_memory_utilization = 0.92
 max_num_batched_tokens = 16384
 max_num_seqs = 128
 reasoning_parser = "qwen3"
 tool_call_parser = "hermes"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 [endpoint.orchestrate.pyxis]
 srun_extra_args = []
@@ -126,10 +113,6 @@ max_num_seqs = 512
 tool_call_parser = "hermes"
 enable_expert_parallel = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -150,10 +133,6 @@ max_num_seqs = 256
 tool_call_parser = "hermes"
 enable_expert_parallel = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -173,10 +152,6 @@ max_num_batched_tokens = 32768
 max_num_seqs = 768
 tool_call_parser = "hermes"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -209,7 +184,7 @@ api_client_type = "openai_chat_completions"
 [endpoint.sampling_args]
 temperature = 1.0
 top_p = 0.95
-top_k = 60
+top_k = 64
 
 [endpoint.orchestrate.vllm]
 gpus = 1
@@ -218,10 +193,6 @@ gpus = 1
 max_num_batched_tokens = 32768
 max_num_seqs = 512
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -232,7 +203,7 @@ api_client_type = "openai_chat_completions"
 [endpoint.sampling_args]
 temperature = 1.0
 top_p = 0.95
-top_k = 60
+top_k = 64
 
 [endpoint.orchestrate.vllm]
 gpus = 1
@@ -242,10 +213,6 @@ gpu_memory_utilization = 0.92
 max_num_batched_tokens = 16384
 max_num_seqs = 128
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -256,7 +223,7 @@ api_client_type = "openai_chat_completions"
 [endpoint.sampling_args]
 temperature = 1.0
 top_p = 0.95
-top_k = 60
+top_k = 64
 
 [endpoint.orchestrate.vllm]
 gpus = 1
@@ -266,10 +233,206 @@ gpu_memory_utilization = 0.96
 max_num_batched_tokens = 32768
 max_num_seqs = 768
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
+
+
+[[endpoint]]
+endpoint_id = "gemma-4-e2b-it"
+model = "google/gemma-4-E2B-it"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+top_k = 64
+
+[endpoint.sampling_args.extra_body.chat_template_kwargs]
+enable_thinking = false
+
+[endpoint.orchestrate.vllm]
+gpus = 1
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 32768
+max_num_seqs = 1024
+reasoning_parser = "gemma4"
+tool_call_parser = "gemma4"
+chat_template = "examples/tool_chat_template_gemma4.jinja"
+
+
+
+[[endpoint]]
+endpoint_id = "gemma-4-e2b-thinking"
+model = "google/gemma-4-E2B-it"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+top_k = 64
+
+[endpoint.sampling_args.extra_body.chat_template_kwargs]
+enable_thinking = true
+
+[endpoint.orchestrate.vllm]
+gpus = 1
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 32768
+max_num_seqs = 1024
+reasoning_parser = "gemma4"
+tool_call_parser = "gemma4"
+chat_template = "examples/tool_chat_template_gemma4.jinja"
+
+
+
+[[endpoint]]
+endpoint_id = "gemma-4-e4b-it"
+model = "google/gemma-4-E4B-it"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+top_k = 64
+
+[endpoint.sampling_args.extra_body.chat_template_kwargs]
+enable_thinking = false
+
+[endpoint.orchestrate.vllm]
+gpus = 1
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 32768
+max_num_seqs = 1024
+reasoning_parser = "gemma4"
+tool_call_parser = "gemma4"
+chat_template = "examples/tool_chat_template_gemma4.jinja"
+
+
+
+[[endpoint]]
+endpoint_id = "gemma-4-e4b-thinking"
+model = "google/gemma-4-E4B-it"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+top_k = 64
+
+[endpoint.sampling_args.extra_body.chat_template_kwargs]
+enable_thinking = true
+
+[endpoint.orchestrate.vllm]
+gpus = 1
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 32768
+max_num_seqs = 1024
+reasoning_parser = "gemma4"
+tool_call_parser = "gemma4"
+chat_template = "examples/tool_chat_template_gemma4.jinja"
+
+
+
+[[endpoint]]
+endpoint_id = "gemma-4-26b-a4b-it"
+model = "google/gemma-4-26B-A4B-it"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+top_k = 64
+
+[endpoint.sampling_args.extra_body.chat_template_kwargs]
+enable_thinking = false
+
+[endpoint.orchestrate.vllm]
+gpus = 1
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 16384
+max_num_seqs = 256
+reasoning_parser = "gemma4"
+tool_call_parser = "gemma4"
+chat_template = "examples/tool_chat_template_gemma4.jinja"
+
+
+
+[[endpoint]]
+endpoint_id = "gemma-4-26b-a4b-thinking"
+model = "google/gemma-4-26B-A4B-it"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+top_k = 64
+
+[endpoint.sampling_args.extra_body.chat_template_kwargs]
+enable_thinking = true
+
+[endpoint.orchestrate.vllm]
+gpus = 1
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 16384
+max_num_seqs = 256
+reasoning_parser = "gemma4"
+tool_call_parser = "gemma4"
+chat_template = "examples/tool_chat_template_gemma4.jinja"
+
+
+
+[[endpoint]]
+endpoint_id = "gemma-4-31b-it"
+model = "google/gemma-4-31B-it"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+top_k = 64
+
+[endpoint.sampling_args.extra_body.chat_template_kwargs]
+enable_thinking = false
+
+[endpoint.orchestrate.vllm]
+gpus = 2
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 16384
+max_num_seqs = 256
+reasoning_parser = "gemma4"
+tool_call_parser = "gemma4"
+chat_template = "examples/tool_chat_template_gemma4.jinja"
+
+
+
+[[endpoint]]
+endpoint_id = "gemma-4-31b-thinking"
+model = "google/gemma-4-31B-it"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+top_k = 64
+
+[endpoint.sampling_args.extra_body.chat_template_kwargs]
+enable_thinking = true
+
+[endpoint.orchestrate.vllm]
+gpus = 2
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 16384
+max_num_seqs = 256
+reasoning_parser = "gemma4"
+tool_call_parser = "gemma4"
+chat_template = "examples/tool_chat_template_gemma4.jinja"
+
 
 
 [[endpoint]]
@@ -290,10 +453,6 @@ reasoning_parser = "glm45"
 tool_call_parser = "glm45"
 enable_expert_parallel = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -316,8 +475,6 @@ tool_call_parser = "glm47"
 
 [endpoint.orchestrate.container]
 image = "vllm-glm-flash:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -339,10 +496,6 @@ reasoning_parser = "glm45"
 tool_call_parser = "glm47"
 enable_expert_parallel = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 [endpoint.orchestrate.pyxis]
 srun_extra_args = []
@@ -401,10 +554,6 @@ gpus = 2
 [endpoint.orchestrate.vllm.serve]
 tool_call_parser = "openai"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 [endpoint.orchestrate.pyxis]
 srun_extra_args = []
@@ -427,10 +576,6 @@ gpus = 2
 [endpoint.orchestrate.vllm.serve]
 tool_call_parser = "openai"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -450,10 +595,6 @@ gpus = 2
 [endpoint.orchestrate.vllm.serve]
 tool_call_parser = "openai"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -473,10 +614,6 @@ gpus = 1
 [endpoint.orchestrate.vllm.serve]
 tool_call_parser = "openai"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 [endpoint.orchestrate.pyxis]
 srun_extra_args = []
@@ -499,10 +636,6 @@ gpus = 1
 [endpoint.orchestrate.vllm.serve]
 tool_call_parser = "openai"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -522,10 +655,6 @@ gpus = 1
 [endpoint.orchestrate.vllm.serve]
 tool_call_parser = "openai"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -570,10 +699,6 @@ max_num_batched_tokens = 12288
 max_num_seqs = 256
 tool_call_parser = "hermes"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -594,10 +719,6 @@ max_num_batched_tokens = 32768
 max_num_seqs = 1024
 tool_call_parser = "hermes"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -631,10 +752,6 @@ max_num_batched_tokens = 16384
 max_num_seqs = 512
 tool_call_parser = "hermes"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -655,10 +772,6 @@ max_num_batched_tokens = 16384
 max_num_seqs = 256
 tool_call_parser = "hermes"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -679,10 +792,6 @@ reasoning_parser = "deepseek_r1"
 tool_call_parser = "qwen3_coder"
 enable_expert_parallel = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -701,10 +810,6 @@ gpus = 8
 reasoning_parser = "kimi_k2"
 trust_remote_code = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -724,10 +829,6 @@ dtype = "bfloat16"
 trust_remote_code = true
 enable_expert_parallel = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -751,8 +852,6 @@ trust_remote_code = true
 
 [endpoint.orchestrate.container]
 image = "vllm/vllm-openai:v0.12.0"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -772,10 +871,6 @@ gpus = 4
 max_num_batched_tokens = 16384
 max_num_seqs = 256
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -796,10 +891,6 @@ gpu_memory_utilization = 0.94
 max_num_batched_tokens = 32768
 max_num_seqs = 512
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -821,10 +912,6 @@ config_format = "mistral"
 load_format = "mistral"
 tool_call_parser = "mistral"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -841,14 +928,9 @@ top_k = 0
 gpus = 2
 
 [endpoint.orchestrate.vllm.serve]
-max_model_len = 32064
 gpu_memory_utilization = 0.92
 max_num_seqs = 128
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -869,10 +951,6 @@ max_num_batched_tokens = 32768
 max_num_seqs = 1024
 gpu_memory_utilization = 0.96
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -893,10 +971,6 @@ gpu_memory_utilization = 0.96
 max_num_batched_tokens = 32768
 max_num_seqs = 1024
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -917,10 +991,6 @@ max_num_batched_tokens = 32768
 max_num_seqs = 1024
 trust_remote_code = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -942,10 +1012,6 @@ reasoning_parser = "minimax_m2_append_think"
 tool_call_parser = "minimax_m2"
 trust_remote_code = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -967,10 +1033,6 @@ reasoning_parser = "minimax_m2_append_think"
 tool_call_parser = "minimax_m2"
 trust_remote_code = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -993,10 +1055,6 @@ config_format = "mistral"
 load_format = "mistral"
 tool_call_parser = "mistral"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1019,10 +1077,6 @@ config_format = "mistral"
 load_format = "mistral"
 tool_call_parser = "mistral"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1046,10 +1100,6 @@ config_format = "mistral"
 load_format = "mistral"
 tool_call_parser = "mistral"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1073,10 +1123,6 @@ config_format = "mistral"
 load_format = "mistral"
 tool_call_parser = "mistral"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1099,10 +1145,6 @@ config_format = "mistral"
 load_format = "mistral"
 tool_call_parser = "mistral"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1125,10 +1167,6 @@ config_format = "mistral"
 load_format = "mistral"
 tool_call_parser = "mistral"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1149,10 +1187,6 @@ max_num_seqs = 512
 tool_call_parser = "hermes"
 enable_expert_parallel = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1173,10 +1207,6 @@ max_num_seqs = 256
 tool_call_parser = "hermes"
 enable_expert_parallel = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1198,10 +1228,6 @@ tool_call_parser = "nemotron_json"
 tool_parser_plugin = "/opt/vllm/nemotron_toolcall_parser_no_streaming.py"
 trust_remote_code = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1222,12 +1248,32 @@ max_num_seqs = 256
 reasoning_parser = "nano_v3"
 reasoning_parser_plugin = "/opt/vllm/nano_v3_reasoning_parser.py"
 tool_call_parser = "qwen3_coder"
+mamba_ssm_cache_dtype = "float32"
 trust_remote_code = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
+
+
+[[endpoint]]
+endpoint_id = "nemotron-super-v3"
+model = "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+
+[endpoint.orchestrate.vllm]
+gpus = 4
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 16384
+max_num_seqs = 256
+mamba_ssm_cache_dtype = "float32"
+reasoning_parser = "super_v3"
+reasoning_parser_plugin = "/opt/vllm/super_v3_reasoning_parser.py"
+tool_call_parser = "qwen3_coder"
+trust_remote_code = true
+
 
 
 [[endpoint]]
@@ -1248,10 +1294,6 @@ max_num_batched_tokens = 8192
 max_num_seqs = 128
 reasoning_parser = "olmo3"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1272,10 +1314,6 @@ max_num_batched_tokens = 32768
 max_num_seqs = 512
 tool_call_parser = "olmo3"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1296,10 +1334,6 @@ max_num_batched_tokens = 32768
 max_num_seqs = 512
 reasoning_parser = "olmo3"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1320,10 +1354,6 @@ max_num_batched_tokens = 16384
 max_num_seqs = 256
 tool_call_parser = "olmo3"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1344,10 +1374,6 @@ max_num_batched_tokens = 16384
 max_num_seqs = 128
 reasoning_parser = "olmo3"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1367,10 +1393,6 @@ gpus = 1
 max_num_batched_tokens = 16384
 max_num_seqs = 512
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1390,10 +1412,6 @@ gpus = 1
 max_num_batched_tokens = 16384
 max_num_seqs = 512
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1402,8 +1420,8 @@ model = "Qwen/Qwen3-0.6B"
 api_client_type = "openai_chat_completions"
 
 [endpoint.sampling_args]
-temperature = 0.6
-top_p = 0.95
+temperature = 0.7
+top_p = 0.8
 top_k = 20
 min_p = 0
 
@@ -1420,10 +1438,6 @@ max_num_seqs = 2048
 reasoning_parser = "deepseek_r1"
 tool_call_parser = "hermes"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1450,10 +1464,6 @@ max_num_seqs = 2048
 reasoning_parser = "deepseek_r1"
 tool_call_parser = "hermes"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1462,8 +1472,8 @@ model = "Qwen/Qwen3-1.7B"
 api_client_type = "openai_chat_completions"
 
 [endpoint.sampling_args]
-temperature = 0.6
-top_p = 0.95
+temperature = 0.7
+top_p = 0.8
 top_k = 20
 min_p = 0
 
@@ -1480,10 +1490,6 @@ max_num_seqs = 1536
 reasoning_parser = "deepseek_r1"
 tool_call_parser = "hermes"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1510,10 +1516,6 @@ max_num_seqs = 1536
 reasoning_parser = "deepseek_r1"
 tool_call_parser = "hermes"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1536,10 +1538,6 @@ max_num_batched_tokens = 32768
 max_num_seqs = 768
 tool_call_parser = "hermes"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1556,16 +1554,11 @@ top_k = 20
 gpus = 2
 
 [endpoint.orchestrate.vllm.serve]
-max_model_len = 32064
 gpu_memory_utilization = 0.92
 max_num_batched_tokens = 16384
 max_num_seqs = 128
 tool_call_parser = "hermes"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1588,10 +1581,6 @@ max_num_seqs = 512
 reasoning_parser = "deepseek_r1"
 tool_call_parser = "hermes"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1614,10 +1603,6 @@ max_num_seqs = 512
 tool_call_parser = "hermes"
 enable_expert_parallel = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 [endpoint.orchestrate.pyxis]
 srun_extra_args = []
@@ -1643,10 +1628,6 @@ max_num_seqs = 256
 tool_call_parser = "hermes"
 enable_expert_parallel = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1670,10 +1651,6 @@ max_num_seqs = 256
 tool_call_parser = "hermes"
 enable_expert_parallel = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1696,10 +1673,6 @@ max_num_seqs = 256
 tool_call_parser = "hermes"
 enable_expert_parallel = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1722,10 +1695,6 @@ max_num_seqs = 256
 tool_call_parser = "hermes"
 enable_expert_parallel = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1749,10 +1718,6 @@ reasoning_parser = "deepseek_r1"
 tool_call_parser = "hermes"
 enable_expert_parallel = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 [endpoint.orchestrate.pyxis]
 srun_extra_args = []
@@ -1780,10 +1745,6 @@ max_num_batched_tokens = 16384
 max_num_seqs = 256
 tool_call_parser = "hermes"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1807,10 +1768,6 @@ max_num_batched_tokens = 16384
 max_num_seqs = 256
 tool_call_parser = "hermes"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1835,10 +1792,6 @@ max_num_batched_tokens = 16384
 max_num_seqs = 256
 tool_call_parser = "hermes"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1860,10 +1813,6 @@ max_num_batched_tokens = 32768
 max_num_seqs = 768
 tool_call_parser = "hermes"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1887,28 +1836,353 @@ max_num_seqs = 512
 reasoning_parser = "deepseek_r1"
 tool_call_parser = "hermes"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 [endpoint.orchestrate.pyxis]
 srun_extra_args = []
 
 
 [[endpoint]]
-endpoint_id = "qwen3-max"
-model = "qwen/qwen3-max"
+endpoint_id = "qwen3.6-27b-instruct"
+model = "Qwen/Qwen3.6-27B"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.7
+top_p = 0.8
+top_k = 20
+min_p = 0.0
+presence_penalty = 1.5
+repetition_penalty = 1.0
+
+[endpoint.sampling_args.extra_body.chat_template_kwargs]
+enable_thinking = false
+
+[endpoint.orchestrate.vllm]
+gpus = 2
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 16384
+max_num_seqs = 256
+reasoning_parser = "qwen3"
+tool_call_parser = "qwen3_coder"
+language_model_only = true
+
+
+
+[[endpoint]]
+endpoint_id = "qwen3.6-27b-thinking"
+model = "Qwen/Qwen3.6-27B"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+top_k = 20
+min_p = 0.0
+presence_penalty = 1.5
+repetition_penalty = 1.0
+
+[endpoint.sampling_args.extra_body.chat_template_kwargs]
+enable_thinking = true
+
+[endpoint.orchestrate.vllm]
+gpus = 2
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 16384
+max_num_seqs = 256
+reasoning_parser = "qwen3"
+tool_call_parser = "qwen3_coder"
+language_model_only = true
+
+
+
+[[endpoint]]
+endpoint_id = "qwen3.6-35b-a3b-instruct"
+model = "Qwen/Qwen3.6-35B-A3B"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.7
+top_p = 0.8
+top_k = 20
+min_p = 0.0
+presence_penalty = 1.5
+repetition_penalty = 1.0
+
+[endpoint.sampling_args.extra_body.chat_template_kwargs]
+enable_thinking = false
+
+[endpoint.orchestrate.vllm]
+gpus = 2
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 16384
+max_num_seqs = 256
+reasoning_parser = "qwen3"
+tool_call_parser = "qwen3_coder"
+language_model_only = true
+enable_expert_parallel = true
+
+
+
+[[endpoint]]
+endpoint_id = "qwen3.6-35b-a3b-thinking"
+model = "Qwen/Qwen3.6-35B-A3B"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+top_k = 20
+min_p = 0.0
+presence_penalty = 1.5
+repetition_penalty = 1.0
+
+[endpoint.sampling_args.extra_body.chat_template_kwargs]
+enable_thinking = true
+
+[endpoint.orchestrate.vllm]
+gpus = 2
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 16384
+max_num_seqs = 256
+reasoning_parser = "qwen3"
+tool_call_parser = "qwen3_coder"
+language_model_only = true
+enable_expert_parallel = true
+
+
+
+[[endpoint]]
+endpoint_id = "qwen3.5-27b-instruct"
+model = "Qwen/Qwen3.5-27B"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.7
+top_p = 0.8
+top_k = 20
+min_p = 0.0
+presence_penalty = 1.5
+repetition_penalty = 1.0
+
+[endpoint.sampling_args.extra_body.chat_template_kwargs]
+enable_thinking = false
+
+[endpoint.orchestrate.vllm]
+gpus = 2
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 16384
+max_num_seqs = 256
+reasoning_parser = "qwen3"
+tool_call_parser = "qwen3_coder"
+language_model_only = true
+
+
+
+[[endpoint]]
+endpoint_id = "qwen3.5-27b-thinking"
+model = "Qwen/Qwen3.5-27B"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+top_k = 20
+min_p = 0.0
+presence_penalty = 1.5
+repetition_penalty = 1.0
+
+[endpoint.sampling_args.extra_body.chat_template_kwargs]
+enable_thinking = true
+
+[endpoint.orchestrate.vllm]
+gpus = 2
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 16384
+max_num_seqs = 256
+reasoning_parser = "qwen3"
+tool_call_parser = "qwen3_coder"
+language_model_only = true
+
+
+
+[[endpoint]]
+endpoint_id = "qwen3.5-35b-a3b-instruct"
+model = "Qwen/Qwen3.5-35B-A3B"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.7
+top_p = 0.8
+top_k = 20
+min_p = 0.0
+presence_penalty = 1.5
+repetition_penalty = 1.0
+
+[endpoint.sampling_args.extra_body.chat_template_kwargs]
+enable_thinking = false
+
+[endpoint.orchestrate.vllm]
+gpus = 2
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 16384
+max_num_seqs = 256
+reasoning_parser = "qwen3"
+tool_call_parser = "qwen3_coder"
+language_model_only = true
+enable_expert_parallel = true
+
+
+
+[[endpoint]]
+endpoint_id = "qwen3.5-35b-a3b-thinking"
+model = "Qwen/Qwen3.5-35B-A3B"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+top_k = 20
+min_p = 0.0
+presence_penalty = 1.5
+repetition_penalty = 1.0
+
+[endpoint.sampling_args.extra_body.chat_template_kwargs]
+enable_thinking = true
+
+[endpoint.orchestrate.vllm]
+gpus = 2
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 16384
+max_num_seqs = 256
+reasoning_parser = "qwen3"
+tool_call_parser = "qwen3_coder"
+language_model_only = true
+enable_expert_parallel = true
+
+
+
+[[endpoint]]
+endpoint_id = "qwen3.5-122b-a10b-instruct"
+model = "Qwen/Qwen3.5-122B-A10B"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.7
+top_p = 0.8
+top_k = 20
+min_p = 0.0
+presence_penalty = 1.5
+repetition_penalty = 1.0
+
+[endpoint.sampling_args.extra_body.chat_template_kwargs]
+enable_thinking = false
+
+[endpoint.orchestrate.vllm]
+gpus = 4
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 16384
+max_num_seqs = 256
+reasoning_parser = "qwen3"
+tool_call_parser = "qwen3_coder"
+language_model_only = true
+enable_expert_parallel = true
+
+
+
+[[endpoint]]
+endpoint_id = "qwen3.5-122b-a10b-thinking"
+model = "Qwen/Qwen3.5-122B-A10B"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+top_k = 20
+min_p = 0.0
+presence_penalty = 1.5
+repetition_penalty = 1.0
+
+[endpoint.sampling_args.extra_body.chat_template_kwargs]
+enable_thinking = true
+
+[endpoint.orchestrate.vllm]
+gpus = 4
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 16384
+max_num_seqs = 256
+reasoning_parser = "qwen3"
+tool_call_parser = "qwen3_coder"
+language_model_only = true
+enable_expert_parallel = true
+
+
+
+[[endpoint]]
+endpoint_id = "qwen3.5-397b-a17b-fp8-instruct"
+model = "Qwen/Qwen3.5-397B-A17B-FP8"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.7
+top_p = 0.8
+top_k = 20
+min_p = 0.0
+presence_penalty = 1.5
+repetition_penalty = 1.0
+
+[endpoint.sampling_args.extra_body.chat_template_kwargs]
+enable_thinking = false
+
+[endpoint.orchestrate.vllm]
+gpus = 8
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 16384
+max_num_seqs = 128
+reasoning_parser = "qwen3"
+tool_call_parser = "qwen3_coder"
+language_model_only = true
+enable_expert_parallel = true
+
+
+
+[[endpoint]]
+endpoint_id = "qwen3.5-397b-a17b-fp8-thinking"
+model = "Qwen/Qwen3.5-397B-A17B-FP8"
 api_client_type = "openai_chat_completions"
 
 [endpoint.sampling_args]
 temperature = 0.6
 top_p = 0.95
 top_k = 20
-min_p = 0
+min_p = 0.0
+presence_penalty = 0.0
+repetition_penalty = 1.0
 
-[endpoint.sampling_args.extra_body.usage]
-include = true
+[endpoint.sampling_args.extra_body.chat_template_kwargs]
+enable_thinking = true
+
+[endpoint.orchestrate.vllm]
+gpus = 8
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 16384
+max_num_seqs = 128
+reasoning_parser = "qwen3"
+tool_call_parser = "qwen3_coder"
+language_model_only = true
+enable_expert_parallel = true
+
 
 
 [[endpoint]]
@@ -1931,10 +2205,6 @@ max_num_seqs = 256
 tool_call_parser = "hermes"
 enable_expert_parallel = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1958,10 +2228,6 @@ reasoning_parser = "deepseek_r1"
 tool_call_parser = "hermes"
 enable_expert_parallel = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -1989,10 +2255,6 @@ enable_expert_parallel = true
 video = 0
 image = 0
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -2021,10 +2283,6 @@ reasoning_parser = "qwen3"
 tool_call_parser = "qwen3_coder"
 language_model_only = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -2053,10 +2311,6 @@ reasoning_parser = "qwen3"
 tool_call_parser = "qwen3_coder"
 language_model_only = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -2085,10 +2339,6 @@ reasoning_parser = "qwen3"
 tool_call_parser = "qwen3_coder"
 language_model_only = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -2117,10 +2367,6 @@ reasoning_parser = "qwen3"
 tool_call_parser = "qwen3_coder"
 language_model_only = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -2149,10 +2395,6 @@ reasoning_parser = "qwen3"
 tool_call_parser = "qwen3_coder"
 language_model_only = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -2181,10 +2423,6 @@ reasoning_parser = "qwen3"
 tool_call_parser = "qwen3_coder"
 language_model_only = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -2213,10 +2451,6 @@ reasoning_parser = "qwen3"
 tool_call_parser = "qwen3_coder"
 language_model_only = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -2245,10 +2479,6 @@ reasoning_parser = "qwen3"
 tool_call_parser = "qwen3_coder"
 language_model_only = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -2269,10 +2499,6 @@ max_num_batched_tokens = 32768
 max_num_seqs = 768
 tool_call_parser = "hermes"
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -2305,10 +2531,6 @@ reasoning_parser = "deepseek_r1"
 tool_call_parser = "hermes"
 enable_expert_parallel = true
 
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
 
 
 [[endpoint]]
@@ -2330,8 +2552,3 @@ max_num_batched_tokens = 32768
 max_num_seqs = 768
 tool_call_parser = "hermes"
 enable_expert_parallel = true
-
-[endpoint.orchestrate.container]
-image = "vllm/vllm-openai:latest"
-container_port = 8000
-ipc_mode = "host"
