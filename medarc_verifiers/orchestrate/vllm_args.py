@@ -66,6 +66,7 @@ def _render_serve_flags(serve: Mapping[str, object]) -> list[str]:
         "dtype": "--dtype",
         "max_model_len": "--max-model-len",
         "gpu_memory_utilization": "--gpu-memory-utilization",
+        "performance_mode": "--performance-mode",
         "max_num_seqs": "--max-num-seqs",
         "max_num_batched_tokens": "--max-num-batched-tokens",
         "tokenizer_mode": "--tokenizer_mode",
@@ -107,6 +108,7 @@ def _validate_serve_config(serve: Mapping[str, object]) -> None:
         "dtype",
         "max_model_len",
         "gpu_memory_utilization",
+        "performance_mode",
         "max_num_seqs",
         "max_num_batched_tokens",
         "tokenizer_mode",
@@ -133,6 +135,9 @@ def _validate_serve_config(serve: Mapping[str, object]) -> None:
     unknown = sorted(set(serve.keys()) - allowed)
     if unknown:
         raise ValueError(f"Unknown vLLM serve keys: {unknown}")
+    performance_mode = serve.get("performance_mode")
+    if performance_mode is not None and performance_mode not in {"balanced", "interactivity", "throughput"}:
+        raise ValueError("performance_mode must be one of: balanced, interactivity, throughput.")
     limit_mm = serve.get("limit_mm_per_prompt")
     if limit_mm is None:
         return

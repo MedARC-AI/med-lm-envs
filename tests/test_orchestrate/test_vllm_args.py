@@ -61,6 +61,27 @@ def test_build_container_args_renders_async_scheduling_when_requested() -> None:
     assert args == ["--model", "some/model", "--async-scheduling"]
 
 
+def test_build_container_args_renders_performance_mode() -> None:
+    args = build_container_args(
+        "some/model",
+        tensor_parallel_size=None,
+        data_parallel_size=None,
+        serve={"performance_mode": "throughput"},
+    )
+
+    assert args == ["--model", "some/model", "--performance-mode", "throughput"]
+
+
+def test_build_container_args_rejects_unknown_performance_mode() -> None:
+    with pytest.raises(ValueError, match="performance_mode"):
+        build_container_args(
+            "some/model",
+            tensor_parallel_size=None,
+            data_parallel_size=None,
+            serve={"performance_mode": "maximum"},
+        )
+
+
 def test_normalize_volume_mounts_parses_mount_strings() -> None:
     mounts = normalize_volume_mounts(["/host/cache:/root/.cache/huggingface:ro", "/host/data:/data"])
 

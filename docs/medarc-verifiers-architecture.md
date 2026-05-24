@@ -144,8 +144,12 @@ Relevant env vars:
 
 TOML bench writes eval outputs under deterministic directories:
 
-- Non-variant evals: `runs/evals/<model>/<env>/base/`
-- Variant evals: `runs/evals/<model>/<env>/<variant_id>/`
+- Non-variant evals: `runs/evals/<model-or-endpoint>/<env>/base/`
+- Variant evals: `runs/evals/<model-or-endpoint>/<env>/<variant_id>/`
+
+Endpoint-backed evals use the resolved `endpoint_id` for the path's
+model-or-endpoint component. Execution and upstream `metadata.json["model"]`
+still use the endpoint registry entry's served `model`.
 
 If neither `--output-dir` nor TOML `output_dir` is set, the output root
 defaults to `runs/evals`. Existing valid outputs resume automatically: bench
@@ -280,7 +284,7 @@ It:
 
 - CLI flags or routing:
   - `medarc_verifiers/cli/main.py`, `medarc_verifiers/cli/_single_run.py`
-- TOML bench behavior, deterministic paths, or bench sidecar identity:
+- TOML bench behavior, deterministic paths, or bench auxiliary-image identity:
   - `medarc_verifiers/cli/main.py`, `medarc_verifiers/cli/eval_identity.py`,
     `medarc_verifiers/cli/upstream_eval.py`, `medarc_verifiers/cli/verifiers_adapter.py`
 - Processed dataset schema:

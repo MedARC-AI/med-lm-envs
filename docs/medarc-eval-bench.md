@@ -149,8 +149,14 @@ runs/evals/openai-gpt-4.1-mini/medqa/shuffle_seed-9331/
 ```
 
 Non-variant evals use the reserved variant id `base` and write to
-`runs/evals/<model>/<env>/base/`. Duplicate `(model, env)` evals must provide
-an explicit `variant_id` or `name`. `name` may use simple templates such as
+`runs/evals/<model-or-endpoint>/<env>/base/`. When an eval resolves through an
+endpoint registry alias, the endpoint id is used for the path's model component
+so endpoint modes that share one served model do not collide. The upstream
+served model and `metadata.json["model"]` still use the registry entry's
+`model`.
+
+Duplicate `(model-or-endpoint, env)` evals must provide an explicit
+`variant_id` or `name`. `name` may use simple templates such as
 `shuffle_seed-{env_args.shuffle_seed}` after ablation expansion.
 
 `variant_id` and `name` are path identities. They must already be path-safe:
