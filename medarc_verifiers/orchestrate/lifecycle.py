@@ -10,6 +10,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import time
 import uuid
 from dataclasses import asdict, dataclass
@@ -18,9 +19,8 @@ from typing import Any, Mapping
 
 import httpx
 
-from medarc_verifiers.orchestrate.bundle import ExecutionAllocation, load_execution_allocation, load_task_spec
 from medarc_verifiers.orchestrate.config import ConstructConfig
-from medarc_verifiers.orchestrate.env import apply_env, load_runtime_env
+from medarc_verifiers.orchestrate.env import apply_env, load_explicit_runtime_env
 
 HF_CONTAINER_HOME = "/root/.cache/huggingface"
 HF_CONTAINER_HUB = "/root/.cache/huggingface/hub"
@@ -165,76 +165,109 @@ def configure_enroot_paths(image_dir: Path) -> dict[str, str]:
     return {key: str(path) for key, path in paths.items()}
 
 
-def run_construct(
+def run_prepare(
     *,
-    task_path: Path,
-    allocation_path: Path,
+    model: str | None,
+    result_path: Path | None,
     env_file: Path | None,
-    prefetch_model_flag: bool,
-    materialize_image_flag: bool,
+    hf_home: Path | None = None,
+    hub_cache: Path | None = None,
+    image: str | None = None,
+    image_dir: Path | None = None,
+    image_output: Path | None = None,
+    latest_link: bool = True,
+    prefetch_model_flag: bool | None = None,
+    materialize_image_flag: bool | None = None,
 ) -> int:
-    spec = load_task_spec(task_path)
-    allocation = load_execution_allocation(allocation_path) or ExecutionAllocation(task_id=spec.task_id)
-    env = load_runtime_env(spec, allocation=allocation, env_file=env_file)
+    if model is None and image is None:
+        raise ValueError("prepare requires at least one of --model or --image.")
+    prefetch_model_flag = model is not None if prefetch_model_flag is None else bool(prefetch_model_flag)
+    materialize_image_flag = image is not None if materialize_image_flag is None else bool(materialize_image_flag)
+    env = load_explicit_runtime_env(env_file=env_file)
     apply_env(env)
-    cache = ConstructCache.from_dict(spec.construct_cache)
+    resolved_hf_home = str(hf_home) if hf_home is not None else None
+    resolved_hub_cache = (
+        str(hub_cache or (hf_home / "hub" if hf_home is not None else None)) if (hub_cache or hf_home) else None
+    )
+    cache = ConstructCache(
+        hf_home=resolved_hf_home,
+        hub_cache=resolved_hub_cache,
+        image_dir=str(image_dir) if image_dir is not None else None,
+        latest_link=latest_link,
+        isolated=_looks_isolated_cache(resolved_hf_home),
+    )
+    if prefetch_model_flag and not model:
+        raise ValueError("prepare model prefetch requires --model.")
+    if materialize_image_flag and not image:
+        raise ValueError("prepare image materialization requires --image.")
+    if prefetch_model_flag and not cache.hub_cache:
+        raise ValueError("prepare --model requires --hub-cache or --hf-home.")
+    if image and not is_absolute_sqsh_image(image) and image_output is None and image_dir is None:
+        raise ValueError("prepare --image requires --image-dir or --image-output unless the image is an absolute .sqsh.")
     if cache.hf_home:
         os.environ["HF_HOME"] = cache.hf_home
     if cache.hub_cache:
         os.environ["HUGGINGFACE_HUB_CACHE"] = cache.hub_cache
-    result: dict[str, Any] = {"task_id": spec.task_id, "state": "completed", "cache": cache.to_dict()}
+    result: dict[str, Any] = {"state": "completed", "cache": cache.to_dict()}
     try:
         if prefetch_model_flag:
-            if not cache.hub_cache:
-                raise RuntimeError("construct prefetch requested but no Hugging Face hub cache is configured.")
-            result["model"] = prefetch_model(model_id=spec.model_id, hub_cache=cache.hub_cache)
+            result["model"] = prefetch_model(model_id=str(model), hub_cache=str(cache.hub_cache))
         if materialize_image_flag:
-            if not spec.container_image_source:
-                raise RuntimeError("construct image materialization requested but container_image_source is missing.")
-            if cache.image_dir:
-                result["enroot"] = configure_enroot_paths(Path(cache.image_dir))
-            image_path = Path(spec.container_image)
-            if cache.image_dir and not _is_relative_to(image_path, Path(cache.image_dir)):
-                raise RuntimeError(f"Materialized image path {image_path} is not under image cache {cache.image_dir}.")
-            result["image"] = materialize_image(
-                source=spec.container_image_source,
-                final_path=image_path,
-                latest_link=cache.latest_link,
-            )
+            assert image is not None
+            if is_absolute_sqsh_image(image):
+                image_path = Path(image).expanduser()
+                if not image_path.is_file() or not os.access(image_path, os.R_OK):
+                    raise RuntimeError(f"Configured Pyxis image does not exist or is unreadable: {image}")
+                result["image"] = {"source": image, "image_path": str(image_path), "skipped": True}
+            elif image_output is not None:
+                image_path = image_output.expanduser()
+                result["image"] = materialize_image(source=image, final_path=image_path, latest_link=latest_link)
+            else:
+                assert image_dir is not None
+                image_path = materialized_image_path(image, image_dir)
+                result["enroot"] = configure_enroot_paths(image_dir)
+                if not _is_relative_to(image_path, image_dir):
+                    raise RuntimeError(f"Materialized image path {image_path} is not under image cache {image_dir}.")
+                result["image"] = materialize_image(source=image, final_path=image_path, latest_link=latest_link)
     except Exception as exc:  # noqa: BLE001
         result.update({"state": "failed", "error": str(exc)})
-        _write_json(Path(spec.output_paths.construct_result_path), result)
+        _emit_prepare_result(result_path, result)
         return 1
-    _write_json(Path(spec.output_paths.construct_result_path), result)
+    _emit_prepare_result(result_path, result)
     return 0
 
 
-def run_teardown(*, task_path: Path, allocation_path: Path, env_file: Path | None) -> int:
-    spec = load_task_spec(task_path)
-    allocation = load_execution_allocation(allocation_path) or ExecutionAllocation(task_id=spec.task_id)
-    env = load_runtime_env(spec, allocation=allocation, env_file=env_file)
+def run_teardown(
+    *,
+    result_path: Path,
+    model: str,
+    env_file: Path | None,
+    hub_cache: Path | None = None,
+    remove_model_weights: bool = False,
+    remove_image: Path | None = None,
+    image_root: Path | None = None,
+    prepare_result: Path | None = None,
+) -> int:
+    env = load_explicit_runtime_env(env_file=env_file)
     apply_env(env)
-    result_path = Path(spec.output_paths.teardown_result_path)
-    construct_result_path = Path(spec.output_paths.construct_result_path)
-    payload: dict[str, Any] = {"task_id": spec.task_id, "state": "completed", "removed": []}
+    payload: dict[str, Any] = {"model": model, "state": "completed", "removed": []}
     try:
-        construct_result = json.loads(construct_result_path.read_text(encoding="utf-8")) if construct_result_path.exists() else {}
-        teardown = dict(spec.teardown or {})
-        cache = ConstructCache.from_dict(spec.construct_cache)
-        if teardown.get("remove_model_weights"):
-            if not cache.isolated:
+        prepare_payload = json.loads(prepare_result.read_text(encoding="utf-8")) if prepare_result and prepare_result.exists() else {}
+        cache = ConstructCache.from_dict(prepare_payload.get("cache") if isinstance(prepare_payload, Mapping) else {})
+        effective_hub_cache = str(hub_cache or cache.hub_cache or "")
+        if remove_model_weights:
+            if not _looks_isolated_cache(str(effective_hub_cache)):
                 raise RuntimeError("teardown remove_model_weights is only supported for isolated per-run cache roots.")
-            model_info = dict(construct_result.get("model") or {})
-            repo_id = str(model_info.get("repo_id") or spec.model_id)
-            repo_dir = Path(str(cache.hub_cache)) / ("models--" + repo_id.replace("/", "--"))
-            _safe_delete(repo_dir, root=Path(str(cache.hub_cache)))
+            if not effective_hub_cache:
+                raise RuntimeError("teardown remove_model_weights requires --hub-cache or prepare cache metadata.")
+            repo_dir = Path(effective_hub_cache) / ("models--" + model.replace("/", "--"))
+            _safe_delete(repo_dir, root=Path(effective_hub_cache))
             payload["removed"].append(str(repo_dir))
-        if teardown.get("remove_images"):
-            image_path = Path(spec.container_image)
-            if cache.image_dir is None or not _is_relative_to(image_path, Path(cache.image_dir)):
+        if remove_image is not None:
+            if image_root is None or not _is_relative_to(remove_image, image_root):
                 raise RuntimeError("Refusing to remove image outside configured image cache.")
-            _safe_delete(image_path, root=Path(cache.image_dir))
-            payload["removed"].append(str(image_path))
+            _safe_delete(remove_image, root=image_root)
+            payload["removed"].append(str(remove_image))
     except Exception as exc:  # noqa: BLE001
         payload.update({"state": "failed", "error": str(exc)})
         _write_json(result_path, payload)
@@ -243,20 +276,34 @@ def run_teardown(*, task_path: Path, allocation_path: Path, env_file: Path | Non
     return 0
 
 
-def build_construct_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="medarc-orchestrate construct")
-    parser.add_argument("--task", type=Path, required=True)
-    parser.add_argument("--allocation", type=Path, required=True)
+def build_prepare_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="medarc-orchestrate prepare")
+    parser.add_argument("--model")
+    parser.add_argument("--hf-home", type=Path)
+    parser.add_argument("--hub-cache", type=Path)
+    parser.add_argument("--image")
+    image_output = parser.add_mutually_exclusive_group()
+    image_output.add_argument("--image-dir", type=Path)
+    image_output.add_argument("--image-output", type=Path)
+    latest = parser.add_mutually_exclusive_group()
+    latest.add_argument("--latest-link", action="store_true", dest="latest_link", default=True)
+    latest.add_argument("--no-latest-link", action="store_false", dest="latest_link")
     parser.add_argument("--env-file", type=Path)
-    parser.add_argument("--prefetch-model", action="store_true")
-    parser.add_argument("--materialize-image", action="store_true")
+    parser.add_argument("--prefetch-model", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--materialize-image", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--result", type=Path)
     return parser
 
 
 def build_teardown_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="medarc-orchestrate teardown")
-    parser.add_argument("--task", type=Path, required=True)
-    parser.add_argument("--allocation", type=Path, required=True)
+    parser.add_argument("--result", type=Path, required=True)
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--hub-cache", type=Path)
+    parser.add_argument("--remove-model-weights", action="store_true")
+    parser.add_argument("--remove-image", type=Path)
+    parser.add_argument("--image-root", type=Path)
+    parser.add_argument("--prepare-result", type=Path)
     parser.add_argument("--env-file", type=Path)
     return parser
 
@@ -493,9 +540,26 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.write_text(json.dumps(dict(payload), indent=2, sort_keys=True), encoding="utf-8")
 
 
+def _emit_prepare_result(result_path: Path | None, payload: Mapping[str, Any]) -> None:
+    if result_path is not None:
+        _write_json(result_path, payload)
+        return
+    if payload.get("state") == "failed":
+        print(f"prepare failed: {payload.get('error')}", file=sys.stderr)
+        return
+    parts = ["prepare completed"]
+    model = payload.get("model")
+    if isinstance(model, Mapping) and model.get("repo_id"):
+        parts.append(f"model={model['repo_id']}")
+    image = payload.get("image")
+    if isinstance(image, Mapping) and image.get("image_path"):
+        parts.append(f"image={image['image_path']}")
+    print(" ".join(parts))
+
+
 __all__ = [
     "ConstructCache",
-    "build_construct_parser",
+    "build_prepare_parser",
     "build_teardown_parser",
     "configure_enroot_paths",
     "is_absolute_sqsh_image",
@@ -504,6 +568,6 @@ __all__ = [
     "prefetch_model",
     "resolve_image_digest",
     "resolve_construct_cache",
-    "run_construct",
+    "run_prepare",
     "run_teardown",
 ]

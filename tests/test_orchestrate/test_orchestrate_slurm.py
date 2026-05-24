@@ -1,4 +1,5 @@
 import json
+import re
 import tomllib
 from pathlib import Path
 
@@ -6,14 +7,10 @@ import pytest
 
 from medarc_verifiers.orchestrate.bundle import (
     ensure_run_bundle,
-    load_execution_allocation,
     load_run_bundle_manifest,
-    load_task_spec,
 )
 from medarc_verifiers.orchestrate.cli import main as orchestrate_main
-from medarc_verifiers.orchestrate.cli import _load_combined_status
 from medarc_verifiers.orchestrate.config import TaskSpec, expand_tasks, load_plan, load_suite_config
-from medarc_verifiers.orchestrate.internal_io import load_internal_mapping
 from medarc_verifiers.orchestrate.slurm.manifest import SlurmBundleManifest
 from medarc_verifiers.orchestrate.slurm.plan import build_submission_plan
 from medarc_verifiers.orchestrate.slurm.render import render_bundle
@@ -71,13 +68,13 @@ def _write_lifecycle_plan(tmp_path: Path, suite_cfg: Path) -> Path:
 [container]
 volumes = ["{tmp_path / 'hf'}:/root/.cache/huggingface"]
 
-[construct]
+[prepare]
 enabled = true
 cpus = 4
 time = "01:00:00"
 partition = "cpu"
 
-[construct.cache]
+[prepare.cache]
 image_dir = "{tmp_path / 'images'}"
 
 [teardown]
@@ -106,13 +103,50 @@ def _write_lifecycle_sqsh_plan(tmp_path: Path, suite_cfg: Path, image_path: Path
 [container]
 volumes = ["{tmp_path / 'hf'}:/root/.cache/huggingface"]
 
-[construct]
+[prepare]
 enabled = true
 materialize_images = true
 prefetch_model_weights = true
 cpus = 4
 time = "01:00:00"
 partition = "cpu"
+""",
+        encoding="utf-8",
+    )
+    return plan_path
+
+
+def _write_prepare_only_plan(
+    tmp_path: Path,
+    suite_cfg: Path,
+    *,
+    prefetch: bool,
+    materialize: bool,
+) -> Path:
+    _write_plan(tmp_path, [suite_cfg])
+    endpoints = tmp_path / "endpoints.toml"
+    endpoints.write_text(
+        endpoints.read_text(encoding="utf-8").replace('image = "fake"', 'image = "vllm/vllm-openai:v0.12.0"'),
+        encoding="utf-8",
+    )
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text(
+        plan_path.read_text(encoding="utf-8")
+        + f"""
+
+[container]
+volumes = ["{tmp_path / 'hf'}:/root/.cache/huggingface"]
+
+[prepare]
+enabled = true
+materialize_images = {"true" if materialize else "false"}
+prefetch_model_weights = {"true" if prefetch else "false"}
+cpus = 4
+time = "01:00:00"
+partition = "cpu"
+
+[prepare.cache]
+image_dir = "{tmp_path / 'images'}"
 """,
         encoding="utf-8",
     )
@@ -418,7 +452,6 @@ def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
     assert entry.vllm_world_size == 2
     assert entry.suite_checksum
     assert entry.bundled_eval_config_checksum
-    assert entry.task_spec_checksum
     assert "#SBATCH --gpus-per-task=2" in script
     assert "#SBATCH --nodes=1" in script
     assert "#SBATCH --ntasks=1" in script
@@ -429,9 +462,16 @@ def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
     assert "#SBATCH --nice=500" in script
     assert "#SBATCH --requeue" in script
     assert "--runtime pyxis" in script
-    assert "medarc-orchestrate worker" in script
-    assert "--task" in script
-    assert "--allocation" in script
+    assert "medarc-orchestrate launch" in script
+    assert "--task-id" in script
+    assert "-- medarc-eval bench" in script
+    assert "--api-base-url http://127.0.0.1:" in script
+    assert "--provider local" in script
+    assert "worker" not in script
+    assert "--task " not in script
+    assert "--allocation" not in script
+    assert "task.yaml" not in script
+    assert "allocation.json" not in script
     assert "--no-uv-run" not in script
     assert "--resume" not in script
     assert f'ACTIVATE_SCRIPT="${{ACTIVATE_SCRIPT:-{tmp_path / ".venv" / "bin" / "activate"}}}"' in script
@@ -446,20 +486,14 @@ def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
     assert bundled_payload["endpoints_path"] == str((tmp_path / "endpoints.toml").resolve())
     assert bundled_payload["env_dir_path"] == str((tmp_path / "envs").resolve())
     assert "orchestrate" not in bundled_payload
-    task_spec = load_task_spec(Path(entry.task_spec_path))
-    assert task_spec.gpus == 2
-    assert task_spec.tensor_parallel_size == 2
-    assert task_spec.data_parallel_size is None
     orchestrate_snapshot = tomllib.loads(
-        (Path(task_spec.output_paths.root) / "orchestrate-snapshot.toml").read_text(encoding="utf-8")
+        (Path(entry.script_path).parent / "orchestrate-snapshot.toml").read_text(encoding="utf-8")
     )
     assert orchestrate_snapshot["registry_path"] == str((tmp_path / "endpoints.toml").resolve())
     assert orchestrate_snapshot["registry_checksum"]
     assert orchestrate_snapshot["model"]["model"].startswith("Foo/")
-    allocation = load_execution_allocation(Path(entry.allocation_path))
-    assert allocation is not None
-    assert allocation.allocated_gpus == 2
-    assert Path(entry.task_spec_path).name == "task.yaml"
+    assert not (Path(entry.script_path).parent / "task.yaml").exists()
+    assert not (Path(entry.script_path).parent / "runtime" / "allocation.json").exists()
     assert Path(entry.script_path).name == "submit.sh"
 
     run_manifest = load_run_bundle_manifest(tmp_path / "outputs" / "run_manifest.json")
@@ -481,38 +515,47 @@ def test_lifecycle_render_writes_cpu_scripts_manifest_and_symbolic_dependencies(
         env_file=tmp_path / ".env",
         readiness_timeout_s=None,
         prune_logs_on_success=False,
-        construct=plan.construct,
+        construct=plan.prepare,
         teardown=plan.teardown,
     )
 
     assert len(manifest.entries) == 1
     assert len(manifest.lifecycle_entries) == 2
     entry = manifest.entries[0]
-    construct = manifest.lifecycle_entry_map()[(entry.task_id, "construct")]
+    prepare = manifest.lifecycle_entry_map()[(entry.task_id, "prepare")]
     teardown = manifest.lifecycle_entry_map()[(entry.task_id, "teardown")]
-    assert construct.cpus == 4
-    assert construct.base_dependency == "afterok:99"
+    assert prepare.cpus == 4
+    assert prepare.base_dependency == "afterok:99"
     assert entry.base_dependency is None
-    assert entry.generated_dependency == f"afterok:${{{entry.task_id}:construct}}"
+    assert entry.generated_dependency == f"afterok:${{{entry.task_id}:prepare}}"
     assert teardown.generated_dependency == f"afterany:${{{entry.task_id}:eval}}"
 
-    construct_script = Path(construct.script_path).read_text(encoding="utf-8")
+    prepare_script = Path(prepare.script_path).read_text(encoding="utf-8")
     teardown_script = Path(teardown.script_path).read_text(encoding="utf-8")
-    assert "#SBATCH --cpus-per-task=4" in construct_script
-    assert "#SBATCH --gpus-per-task" not in construct_script
-    assert "MEDARC_ALLOCATED_GPU_COUNT" not in construct_script
-    assert "medarc-orchestrate construct" in construct_script
-    assert "--prefetch-model" in construct_script
-    assert "--materialize-image" in construct_script
+    assert "#SBATCH --cpus-per-task=4" in prepare_script
+    assert "#SBATCH --gpus-per-task" not in prepare_script
+    assert "MEDARC_ALLOCATED_GPU_COUNT" not in prepare_script
+    assert "medarc-orchestrate prepare" in prepare_script
+    assert "--task" not in prepare_script
+    assert "--allocation" not in prepare_script
+    assert "--prefetch-model" in prepare_script
+    assert "--materialize-image" in prepare_script
     assert "#SBATCH --cpus-per-task=2" in teardown_script
     assert "medarc-orchestrate teardown" in teardown_script
+    assert "--task" not in teardown_script
+    assert "--allocation" not in teardown_script
+    assert "''" not in prepare_script
+    assert "''" not in teardown_script
 
-    task_spec = load_task_spec(Path(entry.task_spec_path))
-    assert task_spec.container_image_source == "vllm/vllm-openai:v0.12.0"
-    assert task_spec.container_image.startswith(str(tmp_path / "images"))
-    assert task_spec.container_image.endswith(".sqsh")
-    assert task_spec.construct_cache["hf_home"] == str(tmp_path / "hf")
-    assert task_spec.construct_cache["container_hf_home"] == "/root/.cache/huggingface"
+    assert "vllm/vllm-openai:v0.12.0" in prepare_script
+    assert str(tmp_path / "images") in prepare_script
+    assert str(tmp_path / "hf") in prepare_script
+    submit_script = Path(entry.script_path).read_text(encoding="utf-8")
+    assert "--container-image-source vllm/vllm-openai:v0.12.0" in submit_script
+    assert f"--image-dir {tmp_path / 'images'}" in submit_script
+    assert "--image-root" not in teardown_script
+    assert "--prepare-result" not in teardown_script
+    assert "--remove-image" not in teardown_script
 
 
 def test_lifecycle_render_treats_absolute_sqsh_as_already_materialized(tmp_path: Path) -> None:
@@ -531,20 +574,90 @@ def test_lifecycle_render_treats_absolute_sqsh_as_already_materialized(tmp_path:
         env_file=None,
         readiness_timeout_s=None,
         prune_logs_on_success=False,
-        construct=plan.construct,
+        construct=plan.prepare,
         teardown=plan.teardown,
     )
 
     entry = manifest.entries[0]
-    construct = manifest.lifecycle_entry_map()[(entry.task_id, "construct")]
-    construct_script = Path(construct.script_path).read_text(encoding="utf-8")
-    task_spec = load_task_spec(Path(entry.task_spec_path))
+    prepare = manifest.lifecycle_entry_map()[(entry.task_id, "prepare")]
+    prepare_script = Path(prepare.script_path).read_text(encoding="utf-8")
 
-    assert "--prefetch-model" in construct_script
-    assert "--materialize-image" not in construct_script
-    assert task_spec.container_image == str(image_path)
-    assert task_spec.container_image_source is None
-    assert task_spec.construct_cache["image_dir"] is None
+    assert "--prefetch-model" in prepare_script
+    assert "--materialize-image" not in prepare_script
+    assert "--image " not in prepare_script
+    assert "--image-output" not in prepare_script
+    assert str(image_path) not in prepare_script
+    submit_script = Path(entry.script_path).read_text(encoding="utf-8")
+    assert "--container-image-source" not in submit_script
+    assert "--image-dir" not in submit_script
+
+
+def test_prepare_render_omits_image_flags_for_model_only_prepare(tmp_path: Path) -> None:
+    suite_cfg = tmp_path / "job.yaml"
+    _write_suite_config(suite_cfg, gpus=1)
+    plan = load_plan(_write_prepare_only_plan(tmp_path, suite_cfg, prefetch=True, materialize=False))
+    planned = build_submission_plan(expand_tasks(plan), base_dependency=None, submission_options=SlurmSubmissionOptions())
+
+    manifest = render_bundle(
+        planned_tasks=planned,
+        bundle_root=tmp_path / "outputs",
+        source_dir=tmp_path,
+        activate_script=tmp_path / ".venv" / "bin" / "activate",
+        env_file=None,
+        readiness_timeout_s=None,
+        prune_logs_on_success=False,
+        construct=plan.prepare,
+        teardown=plan.teardown,
+    )
+
+    entry = manifest.entries[0]
+    prepare = manifest.lifecycle_entry_map()[(entry.task_id, "prepare")]
+    prepare_script = Path(prepare.script_path).read_text(encoding="utf-8")
+    submit_script = Path(entry.script_path).read_text(encoding="utf-8")
+
+    assert "--prefetch-model" in prepare_script
+    assert "--model Foo/job" in prepare_script
+    assert f"--hub-cache {tmp_path / 'hf' / 'hub'}" in prepare_script
+    assert "--materialize-image" not in prepare_script
+    assert "--image " not in prepare_script
+    assert "--image-output" not in prepare_script
+    assert "''" not in prepare_script
+    assert "--container-image-source" not in submit_script
+    assert "--image-dir" not in submit_script
+
+
+def test_prepare_render_omits_model_flags_for_image_only_prepare(tmp_path: Path) -> None:
+    suite_cfg = tmp_path / "job.yaml"
+    _write_suite_config(suite_cfg, gpus=1)
+    plan = load_plan(_write_prepare_only_plan(tmp_path, suite_cfg, prefetch=False, materialize=True))
+    planned = build_submission_plan(expand_tasks(plan), base_dependency=None, submission_options=SlurmSubmissionOptions())
+
+    manifest = render_bundle(
+        planned_tasks=planned,
+        bundle_root=tmp_path / "outputs",
+        source_dir=tmp_path,
+        activate_script=tmp_path / ".venv" / "bin" / "activate",
+        env_file=None,
+        readiness_timeout_s=None,
+        prune_logs_on_success=False,
+        construct=plan.prepare,
+        teardown=plan.teardown,
+    )
+
+    entry = manifest.entries[0]
+    prepare = manifest.lifecycle_entry_map()[(entry.task_id, "prepare")]
+    prepare_script = Path(prepare.script_path).read_text(encoding="utf-8")
+    submit_script = Path(entry.script_path).read_text(encoding="utf-8")
+
+    assert "--materialize-image" in prepare_script
+    assert "--image vllm/vllm-openai:v0.12.0" in prepare_script
+    assert f"--image-output {tmp_path / 'images'}" in prepare_script
+    assert "--prefetch-model" not in prepare_script
+    assert "--model " not in prepare_script
+    assert "--hub-cache" not in prepare_script
+    assert "''" not in prepare_script
+    assert "--container-image-source vllm/vllm-openai:v0.12.0" in submit_script
+    assert f"--image-dir {tmp_path / 'images'}" in submit_script
 
 
 def test_lifecycle_dry_run_prints_phase_commands_in_dependency_order(tmp_path: Path) -> None:
@@ -560,13 +673,13 @@ def test_lifecycle_dry_run_prints_phase_commands_in_dependency_order(tmp_path: P
         env_file=None,
         readiness_timeout_s=None,
         prune_logs_on_success=False,
-        construct=plan.construct,
+        construct=plan.prepare,
         teardown=plan.teardown,
     )
 
-    commands = mark_dry_run(tmp_path / "outputs" / "submission_manifest.json", manifest)
+    commands = mark_dry_run(tmp_path / "outputs" / "slurm_manifest.json", manifest)
 
-    assert [Path(command.split()[-1]).name for command in commands] == ["construct.sh", "submit.sh", "teardown.sh"]
+    assert [Path(command.split()[-1]).name for command in commands] == ["prepare.sh", "submit.sh", "teardown.sh"]
     assert "--dependency=afterok:" in commands[1]
     assert "--dependency=afterany:" in commands[2]
 
@@ -576,7 +689,7 @@ def test_lifecycle_fake_sbatch_threads_job_ids_into_dependencies(tmp_path: Path,
     _write_suite_config(suite_cfg)
     plan = load_plan(_write_lifecycle_plan(tmp_path, suite_cfg))
     planned = build_submission_plan(expand_tasks(plan), base_dependency="afterok:base", submission_options=SlurmSubmissionOptions())
-    manifest_path = tmp_path / "outputs" / "submission_manifest.json"
+    manifest_path = tmp_path / "outputs" / "slurm_manifest.json"
     manifest = render_bundle(
         planned_tasks=planned,
         bundle_root=tmp_path / "outputs",
@@ -585,7 +698,7 @@ def test_lifecycle_fake_sbatch_threads_job_ids_into_dependencies(tmp_path: Path,
         env_file=None,
         readiness_timeout_s=None,
         prune_logs_on_success=False,
-        construct=plan.construct,
+        construct=plan.prepare,
         teardown=plan.teardown,
     )
     calls: list[list[str]] = []
@@ -607,7 +720,7 @@ def test_lifecycle_fake_sbatch_threads_job_ids_into_dependencies(tmp_path: Path,
 
     submit_lifecycle_bundle(manifest_path, manifest)
 
-    assert calls[0][-1].endswith("construct.sh")
+    assert calls[0][-1].endswith("prepare.sh")
     assert "--dependency=afterok:base" in calls[0]
     assert calls[1][-1].endswith("submit.sh")
     assert "--dependency=afterok:101" in calls[1]
@@ -615,17 +728,16 @@ def test_lifecycle_fake_sbatch_threads_job_ids_into_dependencies(tmp_path: Path,
     assert "--dependency=afterany:102" in calls[2]
     persisted = SlurmBundleManifest.from_dict(json.loads(manifest_path.read_text(encoding="utf-8")))
     entry = persisted.entries[0]
-    assert persisted.lifecycle_entry_map()[(entry.task_id, "construct")].slurm_job_id == "101"
+    assert persisted.lifecycle_entry_map()[(entry.task_id, "prepare")].slurm_job_id == "101"
     assert entry.slurm_job_id == "102"
     assert persisted.lifecycle_entry_map()[(entry.task_id, "teardown")].slurm_job_id == "103"
 
 
-def test_lifecycle_status_groups_phase_fields(tmp_path: Path) -> None:
+def test_lifecycle_manifest_records_prepare_phase_fields(tmp_path: Path) -> None:
     suite_cfg = tmp_path / "job.yaml"
     _write_suite_config(suite_cfg)
     plan = load_plan(_write_lifecycle_plan(tmp_path, suite_cfg))
     planned = build_submission_plan(expand_tasks(plan), base_dependency=None, submission_options=SlurmSubmissionOptions())
-    manifest_path = tmp_path / "outputs" / "submission_manifest.json"
     manifest = render_bundle(
         planned_tasks=planned,
         bundle_root=tmp_path / "outputs",
@@ -634,28 +746,24 @@ def test_lifecycle_status_groups_phase_fields(tmp_path: Path) -> None:
         env_file=None,
         readiness_timeout_s=None,
         prune_logs_on_success=False,
-        construct=plan.construct,
+        construct=plan.prepare,
         teardown=plan.teardown,
     )
     entry = manifest.entries[0]
     lifecycle = manifest.lifecycle_entry_map()
-    lifecycle[(entry.task_id, "construct")].state = "submitted"
-    lifecycle[(entry.task_id, "construct")].slurm_job_id = "201"
+    lifecycle[(entry.task_id, "prepare")].state = "submitted"
+    lifecycle[(entry.task_id, "prepare")].slurm_job_id = "201"
     entry.state = "submitted"
     entry.slurm_job_id = "202"
     lifecycle[(entry.task_id, "teardown")].state = "submitted"
     lifecycle[(entry.task_id, "teardown")].slurm_job_id = "203"
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(json.dumps(manifest.to_dict()), encoding="utf-8")
 
-    row = _load_combined_status(tmp_path / "outputs")["tasks"][0]
-
-    assert row["construct_state"] == "submitted"
-    assert row["construct_slurm_job_id"] == "201"
-    assert row["eval_state"] == "submitted"
-    assert row["eval_slurm_job_id"] == "202"
-    assert row["teardown_state"] == "submitted"
-    assert row["teardown_slurm_job_id"] == "203"
+    assert lifecycle[(entry.task_id, "prepare")].state == "submitted"
+    assert lifecycle[(entry.task_id, "prepare")].slurm_job_id == "201"
+    assert entry.state == "submitted"
+    assert entry.slurm_job_id == "202"
+    assert lifecycle[(entry.task_id, "teardown")].state == "submitted"
+    assert lifecycle[(entry.task_id, "teardown")].slurm_job_id == "203"
 
 
 def test_bundle_parses_auxiliary_images(tmp_path: Path) -> None:
@@ -670,7 +778,7 @@ def test_bundle_parses_auxiliary_images(tmp_path: Path) -> None:
         runtime="pyxis",
     )
 
-    spec = plan.tasks[tasks[0].task_id].spec
+    spec = plan.tasks[tasks[0].task_id].runtime
     assert spec.output_paths.auxiliary_image_dir.endswith("/auxiliary_images")
     assert len(spec.auxiliary_images) == 1
     auxiliary_image = spec.auxiliary_images[0]
@@ -694,7 +802,7 @@ def test_bundle_parses_auxiliary_images(tmp_path: Path) -> None:
     assert eval_images_snapshot["eval_image"][0]["id"] == "medagentbench-fhir"
 
 
-def test_slurm_render_starts_auxiliary_image_before_worker(tmp_path: Path) -> None:
+def test_slurm_render_starts_auxiliary_image_before_launch(tmp_path: Path) -> None:
     suite_cfg = tmp_path / "job.yaml"
     _write_auxiliary_image_suite_config(suite_cfg)
     tasks = expand_tasks(load_plan(_write_plan(tmp_path, [suite_cfg])))
@@ -715,10 +823,10 @@ def test_slurm_render_starts_auxiliary_image_before_worker(tmp_path: Path) -> No
     )
     script = Path(manifest.entries[0].script_path).read_text(encoding="utf-8")
 
-    assert script.index("srun --overlap") < script.index("medarc-orchestrate worker")
+    assert script.index("srun --overlap") < script.index("medarc-orchestrate launch")
     assert "'--container-image=/tmp/image with space.sqsh'" in script
     assert "/usr/bin/java --class-path '/app/main war'" in script
-    assert "--overlap" in load_task_spec(Path(manifest.entries[0].task_spec_path)).pyxis_srun_extra_args
+    assert "--pyxis-srun-arg --overlap" in script
 
 
 def test_slurm_render_auxiliary_image_has_exit_trap(tmp_path: Path) -> None:
@@ -921,7 +1029,7 @@ def test_slurm_render_dynamic_aux_image_port_and_env_arg_injection(tmp_path: Pat
         mode="slurm",
         runtime="pyxis",
     )
-    spec = plan.tasks[tasks[0].task_id].spec
+    spec = plan.tasks[tasks[0].task_id].runtime
     assert spec.auxiliary_images[0].inject_env_args == {"fhir_api_base": "http://127.0.0.1:{port}/fhir/"}
 
     manifest = render_bundle(
@@ -945,7 +1053,7 @@ def test_slurm_render_dynamic_aux_image_port_and_env_arg_injection(tmp_path: Pat
     assert "env_match = bool(envs and env_id in envs)" in script
 
 
-def test_record_failure_writes_pre_worker_failure_artifacts(tmp_path: Path) -> None:
+def test_auxiliary_image_failures_are_recorded_directly_in_shell(tmp_path: Path) -> None:
     suite_cfg = tmp_path / "job.yaml"
     _write_auxiliary_image_suite_config(suite_cfg)
     tasks = expand_tasks(load_plan(_write_plan(tmp_path, [suite_cfg])))
@@ -963,37 +1071,18 @@ def test_record_failure_writes_pre_worker_failure_artifacts(tmp_path: Path) -> N
         readiness_timeout_s=None,
         prune_logs_on_success=False,
     )
-    entry = manifest.entries[0]
+    script = Path(manifest.entries[0].script_path).read_text(encoding="utf-8")
 
-    rc = orchestrate_main(
-        [
-            "record-failure",
-            "--task-spec",
-            entry.task_spec_path,
-            "--allocation",
-            entry.allocation_path,
-            "--reason",
-            "auxiliary_image_readiness_timeout",
-            "--message",
-            "Timed out waiting for auxiliary image medagentbench-fhir",
-        ]
-    )
-
-    task_root = Path(entry.task_spec_path).parent
-    state = json.loads((task_root / "runtime" / "state.json").read_text(encoding="utf-8"))
-    result = json.loads((task_root / "runtime" / "result.json").read_text(encoding="utf-8"))
-    task_manifest = json.loads((task_root / "runtime" / "task_manifest.json").read_text(encoding="utf-8"))
-    summary = json.loads((tmp_path / "outputs" / "summary.json").read_text(encoding="utf-8"))
-
-    assert rc == 0
-    assert state["state"] == "failed"
-    assert result["failure_reason"] == "auxiliary_image_readiness_timeout"
-    assert task_manifest["state"] == "failed"
-    assert task_manifest["error"] == "Timed out waiting for auxiliary image medagentbench-fhir"
-    assert summary["tasks"][0]["failure_reason"] == "auxiliary_image_readiness_timeout"
+    assert "record_auxiliary_image_failure() {" in script
+    assert "medarc-orchestrate record-failure" not in script
+    assert "runtime/state.json" in script
+    assert "runtime/result.json" in script
+    assert "failure_reason" in script
+    assert "--task-spec" not in script
+    assert "--allocation" not in script
 
 
-def test_task_spec_requires_auxiliary_image_fields(tmp_path: Path) -> None:
+def test_run_bundle_no_longer_writes_task_spec_execution_input(tmp_path: Path) -> None:
     suite_cfg = tmp_path / "job.yaml"
     _write_suite_config(suite_cfg)
     tasks = expand_tasks(load_plan(_write_plan(tmp_path, [suite_cfg])))
@@ -1003,15 +1092,12 @@ def test_task_spec_requires_auxiliary_image_fields(tmp_path: Path) -> None:
         mode="slurm",
         runtime="pyxis",
     )
-    task_spec_path = plan.tasks[tasks[0].task_id].paths.task_spec_path
-    payload = dict(load_internal_mapping(task_spec_path, label="task spec"))
-    payload.pop("auxiliary_images", None)
-    from omegaconf import OmegaConf
+    task_bundle = plan.tasks[tasks[0].task_id]
 
-    OmegaConf.save(config=OmegaConf.create(payload), f=str(task_spec_path))
-
-    with pytest.raises(ValueError, match="missing required auxiliary_images"):
-        load_task_spec(task_spec_path)
+    assert not (task_bundle.paths.root / "task.yaml").exists()
+    assert not (task_bundle.paths.runtime_dir / "allocation.json").exists()
+    assert task_bundle.paths.eval_config_path.exists()
+    assert task_bundle.paths.state_path.exists()
 
 
 def test_render_bundle_assigns_unique_ports_per_task(tmp_path: Path) -> None:
@@ -1036,9 +1122,13 @@ def test_render_bundle_assigns_unique_ports_per_task(tmp_path: Path) -> None:
         prune_logs_on_success=False,
     )
 
-    allocations = [load_execution_allocation(Path(entry.allocation_path)) for entry in manifest.entries]
-
-    ports = [allocation.server_port for allocation in allocations if allocation is not None]
+    scripts = [Path(entry.script_path).read_text(encoding="utf-8") for entry in manifest.entries]
+    ports = [
+        int(match.group(1))
+        for script in scripts
+        for match in [re.search(r"--host-port (\d+)", script)]
+        if match is not None
+    ]
 
     assert len(ports) == 2
     assert len(set(ports)) == 2
@@ -1152,7 +1242,7 @@ def test_slurm_dry_run_writes_manifest_and_prints_commands(tmp_path: Path, capsy
     assert stdout_lines[1].startswith("sbatch --parsable ")
     assert all("--dependency=afterany:$JOBID_" not in line for line in stdout_lines)
 
-    manifest = json.loads((tmp_path / "bundle" / "submission_manifest.json").read_text())
+    manifest = json.loads((tmp_path / "bundle" / "slurm_manifest.json").read_text())
     assert [entry["state"] for entry in manifest["entries"]] == ["dry-run", "dry-run"]
     assert all(entry["slurm_job_id"] is None for entry in manifest["entries"])
     assert all(entry["account"] is None for entry in manifest["entries"])
@@ -1233,7 +1323,7 @@ def test_submit_bundle_resumes_from_existing_job_ids(tmp_path: Path, monkeypatch
 
     monkeypatch.setattr("medarc_verifiers.orchestrate.slurm.submit.subprocess.run", fake_run)
 
-    submit_bundle(tmp_path / "bundle" / "submission_manifest.json", manifest)
+    submit_bundle(tmp_path / "bundle" / "slurm_manifest.json", manifest)
 
     assert calls[0][0:2] == ["sbatch", "--parsable"]
     assert all(not any(arg.startswith("--dependency=afterany:") for arg in call) for call in calls)

@@ -152,13 +152,13 @@ def test_lifecycle_config_parses_and_resolves_cache_paths(tmp_path: Path) -> Non
 suite = "configs/suite.toml"
 endpoints_path = "configs/endpoints.toml"
 
-[construct]
+[prepare]
 enabled = true
 cpus = 4
 time = "01:00:00"
 partition = "cpu-short"
 
-[construct.cache]
+[prepare.cache]
 hf_home = "cache/hf"
 hub_cache = "cache/hf/hub"
 image_dir = "cache/images"
@@ -177,36 +177,60 @@ endpoint_id = "foo"
 
     plan = load_plan(plan_path)
 
-    assert plan.construct.enabled is True
-    assert plan.construct.prefetch_enabled is True
-    assert plan.construct.image_materialization_enabled is True
-    assert plan.construct.cpus == 4
-    assert plan.construct.cache.hf_home == (tmp_path / "cache" / "hf").resolve()
-    assert plan.construct.cache.image_dir == (tmp_path / "cache" / "images").resolve()
-    assert plan.construct.cache.latest_link is False
+    assert plan.prepare.enabled is True
+    assert plan.prepare.prefetch_enabled is True
+    assert plan.prepare.image_materialization_enabled is True
+    assert plan.prepare.cpus == 4
+    assert plan.prepare.cache.hf_home == (tmp_path / "cache" / "hf").resolve()
+    assert plan.prepare.cache.image_dir == (tmp_path / "cache" / "images").resolve()
+    assert plan.prepare.cache.latest_link is False
     assert plan.teardown.enabled is True
     assert plan.teardown.cpus == 1
     assert endpoints.exists() and suite.exists()
 
 
-def test_construct_operation_flags_enable_construct(tmp_path: Path) -> None:
+def test_prepare_operation_flags_enable_prepare(tmp_path: Path) -> None:
     plan = PlanConfig(
         suite=tmp_path / "suite.toml",
         endpoints_path=tmp_path / "endpoints.toml",
-        construct={"materialize_images": True, "prefetch_model_weights": False},
+        prepare={"materialize_images": True, "prefetch_model_weights": False},
         targets=[{"endpoint_id": "foo"}],
     )
 
-    assert plan.construct.enabled is True
-    assert plan.construct.prefetch_enabled is False
-    assert plan.construct.image_materialization_enabled is True
+    assert plan.prepare.enabled is True
+    assert plan.prepare.prefetch_enabled is False
+    assert plan.prepare.image_materialization_enabled is True
+
+
+def test_legacy_construct_section_normalizes_to_prepare(tmp_path: Path) -> None:
+    plan = PlanConfig(
+        suite=tmp_path / "suite.toml",
+        endpoints_path=tmp_path / "endpoints.toml",
+        construct={"enabled": True, "cpus": 3},
+        targets=[{"endpoint_id": "foo"}],
+    )
+
+    assert plan.prepare.enabled is True
+    assert plan.prepare.cpus == 3
+    assert plan.construct is plan.prepare
+
+
+def test_prepare_and_legacy_construct_together_are_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=r"\[prepare\].*\[construct\]"):
+        PlanConfig(
+            suite=tmp_path / "suite.toml",
+            endpoints_path=tmp_path / "endpoints.toml",
+            prepare={"enabled": True},
+            construct={"enabled": True},
+            targets=[{"endpoint_id": "foo"}],
+        )
 
 
 def test_construct_cache_resolves_hf_home_from_container_volume(tmp_path: Path) -> None:
     plan = PlanConfig(
         suite=tmp_path / "suite.toml",
         endpoints_path=tmp_path / "endpoints.toml",
-        construct={
+        prepare={
             "enabled": True,
             "cache": {"image_dir": str(tmp_path / "images")},
         },
@@ -228,7 +252,7 @@ def test_construct_cache_requires_roots_for_enabled_operations(tmp_path: Path) -
     plan = PlanConfig(
         suite=tmp_path / "suite.toml",
         endpoints_path=tmp_path / "endpoints.toml",
-        construct={"enabled": True, "cache": {"hf_home": str(tmp_path / "hf")}},
+        prepare={"enabled": True, "cache": {"hf_home": str(tmp_path / "hf")}},
         targets=[{"endpoint_id": "foo"}],
     )
 

@@ -184,12 +184,19 @@ resolved from endpoint registry entries:
 - `endpoints.toml` or `medmarks-endpoints.toml` stores aliases under `[[endpoint]]`; entries with
   `[endpoint.orchestrate]` are orchestratable.
 - `eval_images.toml` stores eval-scoped auxiliary images selected by eval/env id.
-- The same endpoint registry is used for exact `endpoint_id` matching and passed through to the worker bench command.
+- The same endpoint registry is used for exact `endpoint_id` matching and passed through to the generated bench config.
 
 Task bundles live under `outputs/orchestrate/<run_id>/tasks/<task-slug>/` and
-contain generated `eval-config.toml`, internal `task.yaml`, registry snapshot
-TOML files, allocation state, runtime logs, and a task-local `bench/` output root.
-Workers always run `medarc-eval bench --config <task>/eval-config.toml --provider local --output-dir <task>/bench`; removed YAML-runner flags such as `--run-id`, `--restart`, and `--on-complete` are not used. Processing can scan these nested task-local bench outputs recursively from the orchestrator run root.
+contain generated `eval-config.toml`, readable Slurm scripts (`prepare.sh`,
+`submit.sh`, `teardown.sh`), registry snapshot TOML files, runtime outputs,
+`serve/` logs, and a task-local `bench/` output root. They do not contain
+`task.yaml` or allocation JSON execution inputs.
+
+`submit.sh` directly renders any selected auxiliary images before calling
+`medarc-orchestrate launch ... -- medarc-eval bench --config <task>/eval-config.toml --api-base-url <local> --provider local --output-dir <task>/bench`.
+Removed YAML-runner flags such as `--run-id`, `--restart`, and `--on-complete`
+are not used. Processing can scan these nested task-local bench outputs
+recursively from the orchestrator run root.
 
 ## Eval Outputs
 
@@ -270,15 +277,15 @@ orchestration backends.
 - CLI entry: `medarc_verifiers/orchestrate/cli.py`
 - Launch resolver: `medarc_verifiers/orchestrate/launch.py`
 - Slurm submission: `medarc_verifiers/orchestrate/slurm/submit.py`
-- Worker entry: `medarc_verifiers/orchestrate/worker.py`
+- Launch entry: `medarc_verifiers/orchestrate/worker.py`
 
 It:
 
 1. Resolves TOML jobs into task bundles.
-2. Renders and submits Slurm jobs.
-3. Runs each task with `medarc-orchestrate worker --runtime pyxis`.
-4. Runs `medarc-eval bench --config <task>/eval-config.toml --api-base-url <local> --provider local`.
-5. Tracks submission and worker state under `outputs/orchestrate/<run_id>/`.
+2. Renders `prepare.sh`, `submit.sh`, `teardown.sh`, snapshots, and task-local runtime directories.
+3. Submits Slurm jobs and records them in `slurm_manifest.json`.
+4. Runs each GPU task with `medarc-orchestrate launch <explicit flags> -- medarc-eval bench ...`.
+5. Tracks status from `slurm_manifest.json` plus task runtime summary/output files. Old local orchestrator runs using the previous manifest or task/allocation artifact shape are unsupported.
 
 ## Where To Change Things
 

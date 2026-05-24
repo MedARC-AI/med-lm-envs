@@ -58,8 +58,8 @@ class BenchOverrideConfig(BaseModel):
     sampling_args: dict[str, object] | None = None
 
 
-class ConstructCacheConfig(BaseModel):
-    """Shared cache locations used by construct lifecycle jobs."""
+class PrepareCacheConfig(BaseModel):
+    """Shared cache locations used by prepare lifecycle jobs."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -69,8 +69,8 @@ class ConstructCacheConfig(BaseModel):
     latest_link: bool = True
 
 
-class ConstructConfig(BaseModel):
-    """CPU-only construct phase configuration."""
+class PrepareConfig(BaseModel):
+    """CPU-only prepare phase configuration."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -85,10 +85,10 @@ class ConstructConfig(BaseModel):
     mail_user: str | None = None
     prefetch_model_weights: bool | None = None
     materialize_images: bool | None = None
-    cache: ConstructCacheConfig = Field(default_factory=ConstructCacheConfig)
+    cache: PrepareCacheConfig = Field(default_factory=PrepareCacheConfig)
 
     @model_validator(mode="after")
-    def _enable_when_operation_enabled(self) -> "ConstructConfig":
+    def _enable_when_operation_enabled(self) -> "PrepareConfig":
         if not self.enabled and (self.prefetch_model_weights is True or self.materialize_images is True):
             self.enabled = True
         return self
@@ -149,12 +149,35 @@ class PlanConfig(BaseModel):
     endpoints_path: Path | None = None
     container: ContainerOverrideConfig = Field(default_factory=ContainerOverrideConfig)
     bench: BenchOverrideConfig = Field(default_factory=BenchOverrideConfig)
-    construct_config: ConstructConfig = Field(default_factory=ConstructConfig, alias="construct")
+    prepare_config: PrepareConfig = Field(default_factory=PrepareConfig, alias="prepare")
     teardown: TeardownConfig = Field(default_factory=TeardownConfig)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_prepare_alias(cls, data: object) -> object:
+        if not isinstance(data, Mapping):
+            return data
+        if "prepare" in data and "construct" in data:
+            raise ValueError("Plan config must use [prepare], not both [prepare] and legacy [construct].")
+        if "construct" not in data:
+            return data
+        normalized = dict(data)
+        normalized["prepare"] = normalized.pop("construct")
+        return normalized
+
     @property
-    def construct(self) -> ConstructConfig:
-        return self.construct_config
+    def prepare(self) -> PrepareConfig:
+        return self.prepare_config
+
+    @property
+    def construct(self) -> PrepareConfig:
+        """Transitional internal alias for the prepare lifecycle config."""
+
+        return self.prepare_config
+
+
+ConstructCacheConfig = PrepareCacheConfig
+ConstructConfig = PrepareConfig
 
 
 @dataclass(frozen=True)
@@ -381,12 +404,12 @@ def _resolve_plan_paths(plan: PlanConfig, *, base_dir: Path) -> PlanConfig:
             updates[field_name] = _resolve_path(value, base_dir=base_dir)
     cache_updates: dict[str, object] = {}
     for field_name in ("hf_home", "hub_cache", "image_dir"):
-        value = getattr(plan.construct.cache, field_name)
+        value = getattr(plan.prepare.cache, field_name)
         if value is not None:
             cache_updates[field_name] = _resolve_path(value, base_dir=base_dir)
     if cache_updates:
-        cache = plan.construct.cache.model_copy(update=cache_updates)
-        updates["construct_config"] = plan.construct.model_copy(update={"cache": cache})
+        cache = plan.prepare.cache.model_copy(update=cache_updates)
+        updates["prepare_config"] = plan.prepare.model_copy(update={"cache": cache})
     return plan.model_copy(update=updates)
 
 

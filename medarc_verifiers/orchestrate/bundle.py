@@ -1,4 +1,4 @@
-"""Shared task bundle models and persistence for medarc-orchestrate."""
+"""Shared task bundle planning and path helpers for medarc-orchestrate."""
 
 from __future__ import annotations
 
@@ -12,10 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from omegaconf import OmegaConf
-
 from medarc_verifiers.orchestrate.config import TaskSpec, render_toml_mapping
-from medarc_verifiers.orchestrate.internal_io import load_internal_mapping
 from medarc_verifiers.orchestrate.task_naming import sanitize_task_dirname
 
 _AUXILIARY_IMAGE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -46,13 +43,6 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
     tmp_path.replace(path)
 
 
-def _write_yaml_atomic(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(f"{path.suffix}.tmp-{uuid.uuid4().hex}")
-    OmegaConf.save(config=OmegaConf.create(payload), f=str(tmp_path))
-    tmp_path.replace(path)
-
-
 def _sha256_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
@@ -66,10 +56,6 @@ class TaskBundlePaths:
     root: Path
 
     @property
-    def task_spec_path(self) -> Path:
-        return self.root / "task.yaml"
-
-    @property
     def eval_config_path(self) -> Path:
         return self.root / "eval-config.toml"
 
@@ -78,20 +64,8 @@ class TaskBundlePaths:
         return self.root / "runtime"
 
     @property
-    def allocation_path(self) -> Path:
-        return self.runtime_dir / "allocation.json"
-
-    @property
-    def construct_allocation_path(self) -> Path:
-        return self.runtime_dir / "construct-allocation.json"
-
-    @property
-    def teardown_allocation_path(self) -> Path:
-        return self.runtime_dir / "teardown-allocation.json"
-
-    @property
-    def construct_result_path(self) -> Path:
-        return self.runtime_dir / "construct_result.json"
+    def prepare_result_path(self) -> Path:
+        return self.runtime_dir / "prepare_result.json"
 
     @property
     def teardown_result_path(self) -> Path:
@@ -114,8 +88,8 @@ class TaskBundlePaths:
         return self.root / "auxiliary_images"
 
     @property
-    def construct_dir(self) -> Path:
-        return self.root / "construct"
+    def prepare_dir(self) -> Path:
+        return self.root / "prepare"
 
     @property
     def teardown_dir(self) -> Path:
@@ -126,8 +100,8 @@ class TaskBundlePaths:
         return self.root / "submit.sh"
 
     @property
-    def construct_script_path(self) -> Path:
-        return self.root / "construct.sh"
+    def prepare_script_path(self) -> Path:
+        return self.root / "prepare.sh"
 
     @property
     def teardown_script_path(self) -> Path:
@@ -143,23 +117,19 @@ class TaskBundlePaths:
 
 
 @dataclass(frozen=True)
-class TaskOutputPaths:
+class PlannedRuntimePaths:
     root: str
-    task_spec_path: str
     eval_config_path: str
-    allocation_path: str
-    construct_allocation_path: str
-    teardown_allocation_path: str
-    construct_result_path: str
+    prepare_result_path: str
     teardown_result_path: str
     state_path: str
     serve_dir: str
     bench_dir: str
     auxiliary_image_dir: str
-    construct_dir: str
+    prepare_dir: str
     teardown_dir: str
     submit_script_path: str
-    construct_script_path: str
+    prepare_script_path: str
     teardown_script_path: str
 
 
@@ -186,7 +156,7 @@ class AuxiliaryImageSpec:
 
 
 @dataclass(frozen=True)
-class ResolvedTaskSpec:
+class PlannedTaskRuntime:
     task_id: str
     task_slug: str
     model_key: str
@@ -209,7 +179,7 @@ class ResolvedTaskSpec:
     pyxis_srun_extra_args: list[str]
     serve_args: Mapping[str, Any]
     auxiliary_images: list[AuxiliaryImageSpec]
-    output_paths: TaskOutputPaths
+    output_paths: PlannedRuntimePaths
     container_image_source: str | None = None
     endpoints_path: str | None = None
     orchestrate_registry_path: str | None = None
@@ -220,121 +190,6 @@ class ResolvedTaskSpec:
     selected_eval_images: list[Mapping[str, Any]] = field(default_factory=list)
     construct_cache: Mapping[str, Any] = field(default_factory=dict)
     teardown: Mapping[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, payload: Mapping[str, Any]) -> "ResolvedTaskSpec":
-        output_paths = payload.get("output_paths")
-        if not isinstance(output_paths, Mapping):
-            raise ValueError("Resolved task spec output_paths must be a mapping.")
-        if "auxiliary_images" not in payload:
-            raise ValueError("Resolved task spec is missing required auxiliary_images field.")
-        if "auxiliary_image_dir" not in output_paths:
-            raise ValueError("Resolved task spec output_paths is missing required auxiliary_image_dir field.")
-        auxiliary_images = [_auxiliary_image_from_dict(item) for item in payload.get("auxiliary_images", [])]
-        root = str(output_paths["root"])
-        return cls(
-            task_id=str(payload["task_id"]),
-            task_slug=str(payload["task_slug"]),
-            model_key=str(payload["model_key"]),
-            model_id=str(payload["model_id"]),
-            mode=str(payload["mode"]),
-            runtime=str(payload["runtime"]),
-            suite_path=str(payload["suite_path"]),
-            suite_checksum=str(payload["suite_checksum"]),
-            target_endpoint_id=str(payload["target_endpoint_id"]),
-            bundled_eval_config_path=str(payload["bundled_eval_config_path"]),
-            bundled_eval_config_checksum=str(payload["bundled_eval_config_checksum"]),
-            gpus=int(payload["gpus"]),
-            tensor_parallel_size=int(payload["tensor_parallel_size"]),
-            data_parallel_size=(
-                int(payload["data_parallel_size"]) if payload.get("data_parallel_size") is not None else None
-            ),
-            container_image=str(payload["container_image"]),
-            container_port=int(payload["container_port"]),
-            container_ipc_mode=(
-                str(payload["container_ipc_mode"]) if payload.get("container_ipc_mode") is not None else None
-            ),
-            container_env_file=(
-                str(payload["container_env_file"]) if payload.get("container_env_file") is not None else None
-            ),
-            volume_mounts=[str(item) for item in payload.get("volume_mounts", [])],
-            pyxis_srun_extra_args=[str(item) for item in payload.get("pyxis_srun_extra_args", [])],
-            serve_args=dict(payload.get("serve_args") or {}),
-            auxiliary_images=auxiliary_images,
-            output_paths=TaskOutputPaths(
-                root=root,
-                task_spec_path=str(output_paths["task_spec_path"]),
-                eval_config_path=str(output_paths["eval_config_path"]),
-                allocation_path=str(output_paths["allocation_path"]),
-                construct_allocation_path=str(
-                    output_paths.get("construct_allocation_path") or (Path(root) / "runtime" / "construct-allocation.json")
-                ),
-                teardown_allocation_path=str(
-                    output_paths.get("teardown_allocation_path") or (Path(root) / "runtime" / "teardown-allocation.json")
-                ),
-                construct_result_path=str(
-                    output_paths.get("construct_result_path") or (Path(root) / "runtime" / "construct_result.json")
-                ),
-                teardown_result_path=str(
-                    output_paths.get("teardown_result_path") or (Path(root) / "runtime" / "teardown_result.json")
-                ),
-                state_path=str(output_paths["state_path"]),
-                serve_dir=str(output_paths["serve_dir"]),
-                bench_dir=str(output_paths["bench_dir"]),
-                auxiliary_image_dir=str(output_paths.get("auxiliary_image_dir") or (Path(root) / "auxiliary_images")),
-                construct_dir=str(output_paths.get("construct_dir") or (Path(root) / "construct")),
-                teardown_dir=str(output_paths.get("teardown_dir") or (Path(root) / "teardown")),
-                submit_script_path=str(output_paths["submit_script_path"]),
-                construct_script_path=str(output_paths.get("construct_script_path") or (Path(root) / "construct.sh")),
-                teardown_script_path=str(output_paths.get("teardown_script_path") or (Path(root) / "teardown.sh")),
-            ),
-            endpoints_path=(str(payload["endpoints_path"]) if payload.get("endpoints_path") is not None else None),
-            orchestrate_registry_path=(
-                str(payload["orchestrate_registry_path"])
-                if payload.get("orchestrate_registry_path") is not None
-                else None
-            ),
-            orchestrate_registry_checksum=(
-                str(payload["orchestrate_registry_checksum"])
-                if payload.get("orchestrate_registry_checksum") is not None
-                else None
-            ),
-            matched_model=dict(payload.get("matched_model") or {}),
-            eval_images_registry_path=(
-                str(payload["eval_images_registry_path"])
-                if payload.get("eval_images_registry_path") is not None
-                else None
-            ),
-            eval_images_registry_checksum=(
-                str(payload["eval_images_registry_checksum"])
-                if payload.get("eval_images_registry_checksum") is not None
-                else None
-            ),
-            selected_eval_images=[dict(item) for item in payload.get("selected_eval_images", [])],
-            container_image_source=(
-                str(payload["container_image_source"]) if payload.get("container_image_source") is not None else None
-            ),
-            construct_cache=dict(payload.get("construct_cache") or {}),
-            teardown=dict(payload.get("teardown") or {}),
-        )
-
-
-@dataclass(frozen=True)
-class ExecutionAllocation:
-    task_id: str
-    allocated_gpus: int | None = None
-    gpu_ids: list[int] = field(default_factory=list)
-    server_port: int | None = None
-    require_contiguous_gpus: bool | None = None
-    slurm_job_id: str | None = None
-    constraints: Mapping[str, Any] = field(default_factory=dict)
-    runtime_env: Mapping[str, str] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -360,9 +215,6 @@ class RunBundleEntry:
     target_endpoint_id: str
     bundled_eval_config_path: str
     bundled_eval_config_checksum: str
-    task_spec_path: str
-    task_spec_checksum: str
-    allocation_path: str
     state_path: str
 
     def to_dict(self) -> dict[str, Any]:
@@ -410,9 +262,8 @@ class RunBundleManifest:
 @dataclass(frozen=True)
 class PlannedTaskBundle:
     task: TaskSpec
-    spec: ResolvedTaskSpec
+    runtime: PlannedTaskRuntime
     paths: TaskBundlePaths
-    allocation: ExecutionAllocation
     state: RuntimeState
 
 
@@ -456,47 +307,9 @@ def write_runtime_state(path: Path, state: RuntimeState) -> None:
     _write_json_atomic(path, state.to_dict())
 
 
-def load_execution_allocation(path: Path) -> ExecutionAllocation | None:
-    if not path.exists():
-        return None
-    with open(path, "r", encoding="utf-8") as handle:
-        payload = json.load(handle)
-    if not isinstance(payload, Mapping):
-        raise ValueError(f"Execution allocation must be a mapping: {path}")
-    return ExecutionAllocation(
-        task_id=str(payload["task_id"]),
-        allocated_gpus=(int(payload["allocated_gpus"]) if payload.get("allocated_gpus") is not None else None),
-        gpu_ids=[int(item) for item in payload.get("gpu_ids", [])],
-        server_port=(int(payload["server_port"]) if payload.get("server_port") is not None else None),
-        require_contiguous_gpus=payload.get("require_contiguous_gpus"),
-        slurm_job_id=(str(payload["slurm_job_id"]) if payload.get("slurm_job_id") is not None else None),
-        constraints=dict(payload.get("constraints") or {}),
-        runtime_env={str(key): str(value) for key, value in dict(payload.get("runtime_env") or {}).items()},
-    )
-
-
-def write_execution_allocation(path: Path, allocation: ExecutionAllocation) -> None:
-    _write_json_atomic(path, allocation.to_dict())
-
-
 def write_run_bundle_manifest(path: Path, manifest: RunBundleManifest) -> None:
     manifest.touch()
     _write_json_atomic(path, manifest.to_dict())
-
-
-def load_task_spec(path: Path) -> ResolvedTaskSpec:
-    payload = dict(load_internal_mapping(path, label="task spec"))
-    spec = ResolvedTaskSpec.from_dict(payload)
-    bundled_eval_path = Path(spec.bundled_eval_config_path)
-    if not bundled_eval_path.exists():
-        raise FileNotFoundError(f"Bundled eval config not found: {bundled_eval_path}")
-    checksum = _sha256_file(bundled_eval_path)
-    if checksum != spec.bundled_eval_config_checksum:
-        raise ValueError(
-            f"Bundled eval config checksum mismatch for task {spec.task_id}: "
-            f"expected {spec.bundled_eval_config_checksum}, got {checksum}."
-        )
-    return spec
 
 
 def ensure_run_bundle(
@@ -506,7 +319,6 @@ def ensure_run_bundle(
     output_root: Path,
     mode: str,
     runtime: str,
-    allocation_defaults: Mapping[str, ExecutionAllocation] | None = None,
     existing_manifest: RunBundleManifest | None = None,
     construct_cache_by_task: Mapping[str, Mapping[str, Any]] | None = None,
     teardown_by_task: Mapping[str, Mapping[str, Any]] | None = None,
@@ -534,7 +346,6 @@ def ensure_run_bundle(
             output_root=output_root,
             mode=mode,
             runtime=runtime,
-            allocation_default=allocation_defaults.get(task.task_id) if allocation_defaults else None,
             construct_cache=dict((construct_cache_by_task or {}).get(task.task_id) or {}),
             teardown=dict((teardown_by_task or {}).get(task.task_id) or {}),
             container_image_override=(container_image_by_task or {}).get(task.task_id),
@@ -543,20 +354,17 @@ def ensure_run_bundle(
         manifest_entries.append(
             RunBundleEntry(
                 task_id=task.task_id,
-                task_slug=bundle.spec.task_slug,
+                task_slug=bundle.runtime.task_slug,
                 model_key=task.model_key,
                 model_id=task.model_id,
                 mode=mode,
                 runtime=runtime,
                 suite_path=str(task.suite_path),
-                suite_checksum=bundle.spec.suite_checksum,
+                suite_checksum=bundle.runtime.suite_checksum,
                 target_endpoint_id=task.target_endpoint_id,
-                bundled_eval_config_path=bundle.spec.bundled_eval_config_path,
-                bundled_eval_config_checksum=bundle.spec.bundled_eval_config_checksum,
-                task_spec_path=bundle.spec.output_paths.task_spec_path,
-                task_spec_checksum=_sha256_file(Path(bundle.spec.output_paths.task_spec_path)),
-                allocation_path=bundle.spec.output_paths.allocation_path,
-                state_path=bundle.spec.output_paths.state_path,
+                bundled_eval_config_path=bundle.runtime.bundled_eval_config_path,
+                bundled_eval_config_checksum=bundle.runtime.bundled_eval_config_checksum,
+                state_path=bundle.runtime.output_paths.state_path,
             )
         )
 
@@ -602,7 +410,6 @@ def _ensure_task_bundle(
     output_root: Path,
     mode: str,
     runtime: str,
-    allocation_default: ExecutionAllocation | None,
     construct_cache: Mapping[str, Any],
     teardown: Mapping[str, Any],
     container_image_override: str | None,
@@ -612,9 +419,9 @@ def _ensure_task_bundle(
     paths.serve_dir.mkdir(parents=True, exist_ok=True)
     paths.bench_dir.mkdir(parents=True, exist_ok=True)
     paths.auxiliary_image_dir.mkdir(parents=True, exist_ok=True)
-    paths.construct_dir.mkdir(parents=True, exist_ok=True)
+    paths.prepare_dir.mkdir(parents=True, exist_ok=True)
     paths.teardown_dir.mkdir(parents=True, exist_ok=True)
-    expected_payload, expected_spec = _build_task_spec(
+    expected_payload, expected_runtime = _build_task_runtime(
         task=task,
         paths=paths,
         mode=mode,
@@ -624,29 +431,17 @@ def _ensure_task_bundle(
         container_image_override=container_image_override,
     )
 
-    if paths.task_spec_path.exists() and paths.eval_config_path.exists():
-        loaded_spec = load_task_spec(paths.task_spec_path)
-        if loaded_spec.to_dict() == expected_spec.to_dict():
-            spec = loaded_spec
-        else:
-            _write_task_bundle(paths=paths, eval_payload=expected_payload, spec=expected_spec)
-            spec = expected_spec
-    else:
-        _write_task_bundle(paths=paths, eval_payload=expected_payload, spec=expected_spec)
-        spec = expected_spec
+    _write_task_bundle(paths=paths, eval_payload=expected_payload, runtime=expected_runtime)
+    runtime_plan = expected_runtime
 
     state = load_runtime_state(paths.state_path)
     if state is None:
         state = RuntimeState(task_id=task.task_id)
         write_runtime_state(paths.state_path, state)
-    allocation = load_execution_allocation(paths.allocation_path)
-    if allocation is None:
-        allocation = allocation_default or ExecutionAllocation(task_id=task.task_id)
-        write_execution_allocation(paths.allocation_path, allocation)
-    return PlannedTaskBundle(task=task, spec=spec, paths=paths, allocation=allocation, state=state)
+    return PlannedTaskBundle(task=task, runtime=runtime_plan, paths=paths, state=state)
 
 
-def _build_task_spec(
+def _build_task_runtime(
     *,
     task: TaskSpec,
     paths: TaskBundlePaths,
@@ -655,7 +450,7 @@ def _build_task_spec(
     construct_cache: Mapping[str, Any],
     teardown: Mapping[str, Any],
     container_image_override: str | None,
-) -> tuple[bytes, ResolvedTaskSpec]:
+) -> tuple[bytes, PlannedTaskRuntime]:
     source_checksum = _sha256_file(task.suite_path)
     eval_payload = deepcopy(dict(task.generated_eval_config))
     eval_payload["endpoint_id"] = task.target_endpoint_id
@@ -675,7 +470,7 @@ def _build_task_spec(
     container_image_source = _required_string(
         container_cfg.get("image"), f"Task {task.task_id} orchestrate.container.image"
     )
-    spec = ResolvedTaskSpec(
+    runtime_plan = PlannedTaskRuntime(
         task_id=task.task_id,
         task_slug=paths.root.name,
         model_key=task.model_key,
@@ -706,23 +501,19 @@ def _build_task_spec(
         pyxis_srun_extra_args=pyxis_srun_extra_args,
         serve_args=dict(model_cfg.get("serve") or {}),
         auxiliary_images=auxiliary_images,
-        output_paths=TaskOutputPaths(
+        output_paths=PlannedRuntimePaths(
             root=str(paths.root),
-            task_spec_path=str(paths.task_spec_path),
             eval_config_path=str(paths.eval_config_path),
-            allocation_path=str(paths.allocation_path),
-            construct_allocation_path=str(paths.construct_allocation_path),
-            teardown_allocation_path=str(paths.teardown_allocation_path),
-            construct_result_path=str(paths.construct_result_path),
+            prepare_result_path=str(paths.prepare_result_path),
             teardown_result_path=str(paths.teardown_result_path),
             state_path=str(paths.state_path),
             serve_dir=str(paths.serve_dir),
             bench_dir=str(paths.bench_dir),
             auxiliary_image_dir=str(paths.auxiliary_image_dir),
-            construct_dir=str(paths.construct_dir),
+            prepare_dir=str(paths.prepare_dir),
             teardown_dir=str(paths.teardown_dir),
             submit_script_path=str(paths.submit_script_path),
-            construct_script_path=str(paths.construct_script_path),
+            prepare_script_path=str(paths.prepare_script_path),
             teardown_script_path=str(paths.teardown_script_path),
         ),
         container_image_source=container_image_source if container_image_override else None,
@@ -736,30 +527,7 @@ def _build_task_spec(
         construct_cache=dict(construct_cache),
         teardown=dict(teardown),
     )
-    return bundled_bytes, spec
-
-
-def _auxiliary_image_from_dict(payload: Mapping[str, Any]) -> AuxiliaryImageSpec:
-    readiness_payload = payload.get("readiness") or {}
-    if not isinstance(readiness_payload, Mapping):
-        raise ValueError("Auxiliary image readiness must be a mapping.")
-    return AuxiliaryImageSpec(
-        name=str(payload["name"]),
-        evals=[str(item) for item in payload.get("evals", [])],
-        envs=[str(item) for item in payload.get("envs", [])],
-        runtime=str(payload["runtime"]),
-        image=str(payload["image"]),
-        srun_args=[str(item) for item in payload.get("srun_args", [])],
-        env={str(key): str(value) for key, value in dict(payload.get("env") or {}).items()},
-        command=[str(item) for item in payload.get("command", [])],
-        readiness=AuxiliaryImageReadinessSpec(
-            enabled=bool(readiness_payload.get("enabled", True)),
-            url=str(readiness_payload["url"]) if readiness_payload.get("url") is not None else None,
-            timeout_s=int(readiness_payload.get("timeout_s", 240) or 240),
-            interval_s=int(readiness_payload.get("interval_s", 2) or 2),
-        ),
-        inject_env_args={str(key): str(value) for key, value in dict(payload.get("inject_env_args") or {}).items()},
-    )
+    return bundled_bytes, runtime_plan
 
 
 def _write_snapshot_toml(path: Path, payload: Mapping[str, Any]) -> None:
@@ -978,29 +746,24 @@ def _srun_arg_key(arg: str) -> str:
     return arg.split("=", maxsplit=1)[0]
 
 
-def _write_task_bundle(*, paths: TaskBundlePaths, eval_payload: bytes, spec: ResolvedTaskSpec) -> None:
+def _write_task_bundle(*, paths: TaskBundlePaths, eval_payload: bytes, runtime: PlannedTaskRuntime) -> None:
     paths.eval_config_path.write_bytes(eval_payload)
-    _write_task_spec(paths.task_spec_path, spec)
     _write_snapshot_toml(
         paths.orchestrate_snapshot_path,
         {
-            "registry_path": spec.orchestrate_registry_path,
-            "registry_checksum": spec.orchestrate_registry_checksum,
-            "model": spec.matched_model,
+            "registry_path": runtime.orchestrate_registry_path,
+            "registry_checksum": runtime.orchestrate_registry_checksum,
+            "model": runtime.matched_model,
         },
     )
     _write_snapshot_toml(
         paths.eval_images_snapshot_path,
         {
-            "registry_path": spec.eval_images_registry_path,
-            "registry_checksum": spec.eval_images_registry_checksum,
-            "eval_image": spec.selected_eval_images,
+            "registry_path": runtime.eval_images_registry_path,
+            "registry_checksum": runtime.eval_images_registry_checksum,
+            "eval_image": runtime.selected_eval_images,
         },
     )
-
-
-def _write_task_spec(path: Path, spec: ResolvedTaskSpec) -> None:
-    _write_yaml_atomic(path, spec.to_dict())
 
 
 def _mapping_section(payload: Mapping[str, Any], key: str, *, task_id: str) -> dict[str, Any]:
@@ -1012,9 +775,8 @@ def _mapping_section(payload: Mapping[str, Any], key: str, *, task_id: str) -> d
 
 __all__ = [
     "BundlePlan",
-    "ExecutionAllocation",
     "PlannedTaskBundle",
-    "ResolvedTaskSpec",
+    "PlannedTaskRuntime",
     "RunBundleEntry",
     "RunBundleManifest",
     "RuntimeState",
@@ -1022,13 +784,10 @@ __all__ = [
     "AuxiliaryImageSpec",
     "TaskBundlePaths",
     "ensure_run_bundle",
-    "load_execution_allocation",
     "load_run_bundle_manifest",
     "load_runtime_state",
-    "load_task_spec",
     "run_manifest_path",
     "task_bundle_paths",
-    "write_execution_allocation",
     "write_run_bundle_manifest",
     "write_runtime_state",
 ]

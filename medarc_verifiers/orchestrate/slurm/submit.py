@@ -48,7 +48,7 @@ def submit_slurm_launch_plan(launch: LaunchPlan, options: SlurmSubmissionOptions
         base_dependency=options.base_dependency,
         submission_options=options,
     )
-    manifest_path = output_root / "submission_manifest.json"
+    manifest_path = output_root / "slurm_manifest.json"
     existing_manifest = _load_existing_manifest(manifest_path, run_id=launch.run_id)
     manifest = render_bundle(
         planned_tasks=planned_tasks,
@@ -59,7 +59,7 @@ def submit_slurm_launch_plan(launch: LaunchPlan, options: SlurmSubmissionOptions
         env_file=launch.env_file,
         readiness_timeout_s=launch.readiness_timeout_s,
         prune_logs_on_success=launch.prune_logs_on_success,
-        construct=launch.construct,
+        construct=launch.prepare,
         teardown=launch.teardown,
         existing_manifest=existing_manifest,
     )
@@ -90,20 +90,20 @@ def mark_dry_run(path: Path, manifest: SlurmBundleManifest) -> list[str]:
     commands: list[str] = []
     lifecycle = manifest.lifecycle_entry_map()
     for entry in manifest.entries:
-        construct = lifecycle.get((entry.task_id, "construct"))
+        prepare = lifecycle.get((entry.task_id, "prepare"))
         teardown = lifecycle.get((entry.task_id, "teardown"))
-        if construct is not None and not (construct.state == "submitted" and construct.slurm_job_id):
-            if construct.state != "submitted":
-                construct.state = "dry-run"
+        if prepare is not None and not (prepare.state == "submitted" and prepare.slurm_job_id):
+            if prepare.state != "submitted":
+                prepare.state = "dry-run"
             commands.append(
                 _render_sbatch_command(
-                    construct.script_path,
-                    dependency=construct.base_dependency,
-                    account=construct.account,
+                    prepare.script_path,
+                    dependency=prepare.base_dependency,
+                    account=prepare.account,
                     test_only=False,
                 )
             )
-            entry.generated_dependency = f"afterok:${{{entry.task_id}:construct}}"
+            entry.generated_dependency = f"afterok:${{{entry.task_id}:prepare}}"
         if entry.state == "submitted" and entry.slurm_job_id:
             eval_dependency = None
         else:
@@ -153,23 +153,23 @@ def submit_bundle(path: Path, manifest: SlurmBundleManifest, *, test_only: bool 
 def submit_lifecycle_bundle(path: Path, manifest: SlurmBundleManifest, *, test_only: bool = False) -> SlurmBundleManifest:
     lifecycle = manifest.lifecycle_entry_map()
     for entry in manifest.entries:
-        construct = lifecycle.get((entry.task_id, "construct"))
+        prepare = lifecycle.get((entry.task_id, "prepare"))
         teardown = lifecycle.get((entry.task_id, "teardown"))
-        construct_job_id: str | None = None
-        if construct is not None:
-            if not (construct.state == "submitted" and construct.slurm_job_id):
-                construct_job_id = _submit_entry(
-                    construct,
-                    dependency=construct.base_dependency,
-                    account=construct.account,
+        prepare_job_id: str | None = None
+        if prepare is not None:
+            if not (prepare.state == "submitted" and prepare.slurm_job_id):
+                prepare_job_id = _submit_entry(
+                    prepare,
+                    dependency=prepare.base_dependency,
+                    account=prepare.account,
                     test_only=test_only,
                     task_id=entry.task_id,
                     path=path,
                     manifest=manifest,
                 )
             else:
-                construct_job_id = construct.slurm_job_id
-            entry.generated_dependency = f"afterok:{construct_job_id}" if construct_job_id else entry.generated_dependency
+                prepare_job_id = prepare.slurm_job_id
+            entry.generated_dependency = f"afterok:{prepare_job_id}" if prepare_job_id else entry.generated_dependency
             entry.base_dependency = None
             write_bundle_manifest(path, manifest)
         if not (entry.state == "submitted" and entry.slurm_job_id):

@@ -26,8 +26,8 @@ def test_cleanup_rejects_pyxis() -> None:
         main(["cleanup", "--runtime", "pyxis"])
 
 
-def test_status_combines_submission_manifest_and_summary(tmp_path: Path, capsys) -> None:
-    (tmp_path / "submission_manifest.json").write_text(
+def test_status_combines_slurm_manifest_and_summary(tmp_path: Path, capsys) -> None:
+    (tmp_path / "slurm_manifest.json").write_text(
         json.dumps(
             {
                 "entries": [
@@ -36,8 +36,22 @@ def test_status_combines_submission_manifest_and_summary(tmp_path: Path, capsys)
                         "state": "submitted",
                         "slurm_job_id": "123",
                         "generated_dependency": "afterany:122",
+                        "target_endpoint_id": "foo",
                     }
-                ]
+                ],
+                "lifecycle_entries": [
+                    {
+                        "task_id": "task-a",
+                        "phase": "prepare",
+                        "state": "submitted",
+                        "slurm_job_id": "122",
+                    },
+                    {
+                        "task_id": "task-a",
+                        "phase": "teardown",
+                        "state": "pending",
+                    },
+                ],
             }
         ),
         encoding="utf-8",
@@ -58,9 +72,30 @@ def test_status_combines_submission_manifest_and_summary(tmp_path: Path, capsys)
     )
 
     assert main(["status", "--output-dir", str(tmp_path)]) == 0
-    assert "task-a\tsubmitted\tcompleted\t123" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "task-a\tsubmitted\tcompleted\t123" in output
+    assert "\t122\t" in output
+    assert "construct" not in output
+
+
+def test_status_json_uses_slurm_manifest_key(tmp_path: Path, capsys) -> None:
+    (tmp_path / "slurm_manifest.json").write_text(json.dumps({"entries": [], "lifecycle_entries": []}), encoding="utf-8")
+
+    assert main(["status", "--output-dir", str(tmp_path), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert "slurm_manifest" in payload
+    assert "submission_manifest" not in payload
 
 
 def test_status_fails_when_artifacts_missing(tmp_path: Path) -> None:
     with pytest.raises(SystemExit, match="No orchestrator status found"):
         main(["status", "--output-dir", str(tmp_path)])
+
+
+def test_top_level_help_lists_direct_commands(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--help"])
+
+    assert exc_info.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "{run,prepare,launch,teardown,status,cleanup}" in help_text

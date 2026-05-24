@@ -2,301 +2,157 @@ import sys
 import types
 from pathlib import Path
 
-import pytest
-
-from medarc_verifiers.orchestrate.bundle import ExecutionAllocation, ensure_run_bundle, load_task_spec
-from medarc_verifiers.orchestrate.config import expand_tasks, load_plan
-from medarc_verifiers.orchestrate.state import TaskManifest
-from medarc_verifiers.orchestrate.runtime import RuntimeLaunchError
 from medarc_verifiers.orchestrate.podman_vllm import PodmanRuntimeAdapter
-from medarc_verifiers.orchestrate.worker import _load_runtime_env, main as worker_main
+from medarc_verifiers.orchestrate.runtime import RuntimeLaunchError
+from medarc_verifiers.orchestrate.state import TaskManifest
+from medarc_verifiers.orchestrate.worker import LaunchInputs, main as launch_main
 
 
-def _write_suite_config(path: Path) -> None:
-    path.write_text(
-        """
-[[eval]]
-env_id = "medqa"
-num_examples = 1
-rollouts_per_example = 1
-""".lstrip(),
-        encoding="utf-8",
-    )
+def _launch_args(tmp_path: Path) -> list[str]:
+    task_root = tmp_path / "task"
+    eval_config = task_root / "eval-config.toml"
+    eval_config.parent.mkdir(parents=True)
+    eval_config.write_text("[[eval]]\nenv_id = \"medqa\"\n", encoding="utf-8")
+    return [
+        "--task-id",
+        "foo-medqa",
+        "--model",
+        "Foo/Bar",
+        "--endpoint-id",
+        "foo",
+        "--image",
+        "fake",
+        "--gpus",
+        "1",
+        "--runtime",
+        "pyxis",
+        "--runtime-dir",
+        str(task_root / "runtime"),
+        "--serve-dir",
+        str(task_root / "serve"),
+        "--ready-file",
+        str(task_root / "runtime" / "ready.json"),
+        "--host-port",
+        "18734",
+        "--",
+        "medarc-eval",
+        "bench",
+        "--config",
+        str(eval_config),
+        "--api-base-url",
+        "http://127.0.0.1:18734/v1",
+        "--provider",
+        "local",
+        "--output-dir",
+        str(task_root / "bench"),
+    ]
 
 
-def _write_endpoint_registry(
-    path: Path,
-    *,
-    gpus: int = 1,
-    tensor_parallel_size: int = 1,
-    data_parallel_size: int | None = 1,
-) -> None:
-    dp_line = f"data_parallel_size = {data_parallel_size}\n" if data_parallel_size is not None else ""
-    path.write_text(
-        f"""
-[[endpoint]]
-endpoint_id = "foo"
-model = "Foo/Bar"
-
-[endpoint.orchestrate.vllm]
-gpus = {gpus}
-tensor_parallel_size = {tensor_parallel_size}
-{dp_line}
-[endpoint.orchestrate.vllm.serve]
-
-[endpoint.orchestrate.container]
-image = "fake"
-""".lstrip(),
-        encoding="utf-8",
-    )
-
-
-def _bundle(
-    tmp_path: Path,
-    *,
-    gpus: int = 1,
-    tensor_parallel_size: int = 1,
-    data_parallel_size: int | None = 1,
-    allocated_gpus: int = 1,
-):
-    suite_cfg = tmp_path / "job.toml"
-    endpoints = tmp_path / "endpoints.toml"
-    plan_path = tmp_path / "plan.toml"
-    _write_suite_config(suite_cfg)
-    _write_endpoint_registry(
-        endpoints,
-        gpus=gpus,
-        tensor_parallel_size=tensor_parallel_size,
-        data_parallel_size=data_parallel_size,
-    )
-    plan_path.write_text(
-        f'suite = "{suite_cfg.name}"\nendpoints_path = "{endpoints.name}"\n[[target]]\nendpoint_id = "foo"\n',
-        encoding="utf-8",
-    )
-    tasks = expand_tasks(load_plan(plan_path))
-    return tasks, ensure_run_bundle(
-        tasks=tasks,
-        run_id="bundle",
-        output_root=tmp_path / "outputs",
-        mode="slurm",
-        runtime="pyxis",
-        allocation_defaults={
-            tasks[0].task_id: ExecutionAllocation(
-                task_id=tasks[0].task_id,
-                allocated_gpus=allocated_gpus,
-                server_port=8000,
-            )
-        },
-    )
-
-
-def test_ensure_run_bundle_rejects_output_root_from_different_run_id(tmp_path: Path) -> None:
-    tasks, _ = _bundle(tmp_path)
-
-    with pytest.raises(ValueError, match="belongs to run_id=bundle, not fresh-run"):
-        ensure_run_bundle(
-            tasks=tasks,
-            run_id="fresh-run",
-            output_root=tmp_path / "outputs",
-            mode="slurm",
-            runtime="pyxis",
-        )
-
-
-def test_ensure_run_bundle_rejects_orphaned_task_bundle_artifacts(tmp_path: Path) -> None:
-    suite_cfg = tmp_path / "job.toml"
-    endpoints = tmp_path / "endpoints.toml"
-    plan_path = tmp_path / "plan.toml"
-    _write_suite_config(suite_cfg)
-    _write_endpoint_registry(endpoints)
-    plan_path.write_text(
-        f'suite = "{suite_cfg.name}"\nendpoints_path = "{endpoints.name}"\n[[target]]\nendpoint_id = "foo"\n',
-        encoding="utf-8",
-    )
-    tasks = expand_tasks(load_plan(plan_path))
-    orphan_root = tmp_path / "outputs" / "tasks" / "orphan-task"
-    orphan_root.mkdir(parents=True)
-
-    with pytest.raises(ValueError, match="contains orchestrate task bundle artifacts without a run manifest"):
-        ensure_run_bundle(
-            tasks=tasks,
-            run_id="bundle",
-            output_root=tmp_path / "outputs",
-            mode="slurm",
-            runtime="pyxis",
-        )
-
-
-def test_load_task_spec_rejects_bundled_eval_config_checksum_mismatch(tmp_path: Path) -> None:
-    tasks, bundle = _bundle(tmp_path)
-    task_bundle = bundle.tasks[tasks[0].task_id]
-    Path(task_bundle.spec.bundled_eval_config_path).write_text('model = "changed"\n', encoding="utf-8")
-
-    with pytest.raises(ValueError, match="Bundled eval config checksum mismatch"):
-        load_task_spec(Path(task_bundle.spec.output_paths.task_spec_path))
-
-
-def test_worker_cli_loads_task_and_allocation(tmp_path: Path, monkeypatch) -> None:
-    tasks, bundle = _bundle(tmp_path)
-    task_bundle = bundle.tasks[tasks[0].task_id]
+def test_launch_cli_uses_explicit_inputs_and_literal_bench_argv(tmp_path: Path, monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     async def fake_run(self, *, manifest=None):
-        captured["task_id"] = self._spec.task_id
-        captured["server_port"] = self._allocation.server_port
-        captured["command_template"] = self._command_template
+        captured["launch"] = self._launch
         return manifest or TaskManifest(
-            task_id=self._spec.task_id,
-            config_path=self._spec.bundled_eval_config_path,
-            model_key=self._spec.model_key,
-            model_id=self._spec.model_id,
+            task_id=self._launch.task_id,
+            config_path=str(tmp_path / "task" / "eval-config.toml"),
+            model_key=self._launch.endpoint_id,
+            model_id=self._launch.model_id,
         )
 
     monkeypatch.setattr("medarc_verifiers.orchestrate.worker.build_runtime_adapter", lambda runtime: object())
     monkeypatch.setattr("medarc_verifiers.orchestrate.worker.TaskWorker.run", fake_run)
 
-    rc = worker_main(
-        [
-            "--task",
-            task_bundle.spec.output_paths.task_spec_path,
-            "--allocation",
-            task_bundle.spec.output_paths.allocation_path,
-            "--runtime",
-            "pyxis",
-        ]
-    )
+    rc = launch_main(_launch_args(tmp_path))
 
     assert rc == 0
-    assert captured["task_id"] == tasks[0].task_id
-    assert captured["server_port"] == 8000
-    assert str(captured["command_template"]).startswith("medarc-eval bench ")
-    assert "uv run medarc-eval" not in str(captured["command_template"])
+    launch = captured["launch"]
+    assert isinstance(launch, LaunchInputs)
+    assert launch.task_id == "foo-medqa"
+    assert launch.model_id == "Foo/Bar"
+    assert launch.endpoint_id == "foo"
+    assert launch.host_port == 18734
+    assert launch.bench_argv[:2] == ("medarc-eval", "bench")
+    assert "--config" in launch.bench_argv
 
 
-def test_worker_cli_persists_failed_state(tmp_path: Path, monkeypatch) -> None:
-    tasks, bundle = _bundle(tmp_path)
-    task_bundle = bundle.tasks[tasks[0].task_id]
-
+def test_launch_cli_persists_failed_state_without_task_or_allocation(tmp_path: Path, monkeypatch) -> None:
     async def fake_run(self, *, manifest=None):
         raise RuntimeLaunchError("boom")
 
     monkeypatch.setattr("medarc_verifiers.orchestrate.worker.build_runtime_adapter", lambda runtime: object())
     monkeypatch.setattr("medarc_verifiers.orchestrate.worker.TaskWorker.run", fake_run)
 
-    rc = worker_main(
-        [
-            "--task",
-            task_bundle.spec.output_paths.task_spec_path,
-            "--allocation",
-            task_bundle.spec.output_paths.allocation_path,
-            "--runtime",
-            "pyxis",
-        ]
-    )
+    rc = launch_main(_launch_args(tmp_path))
 
     assert rc == 1
-    state_payload = Path(task_bundle.spec.output_paths.state_path).read_text(encoding="utf-8")
-    result_payload = Path(task_bundle.paths.runtime_dir / "result.json").read_text(encoding="utf-8")
+    state_payload = (tmp_path / "task" / "runtime" / "state.json").read_text(encoding="utf-8")
+    result_payload = (tmp_path / "task" / "runtime" / "result.json").read_text(encoding="utf-8")
     assert '"state": "failed"' in state_payload
     assert '"failure_reason": "serve_launch_failed"' in result_payload
 
 
-def test_worker_cli_rejects_allocation_incompatible_with_tp(tmp_path: Path, monkeypatch) -> None:
-    tasks, bundle = _bundle(tmp_path, gpus=3, tensor_parallel_size=3, data_parallel_size=None, allocated_gpus=4)
-    task_bundle = bundle.tasks[tasks[0].task_id]
-
+def test_launch_cli_rejects_incompatible_explicit_topology(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("medarc_verifiers.orchestrate.worker.build_runtime_adapter", lambda runtime: object())
+    args = _launch_args(tmp_path)
+    args[args.index("--gpus") + 1] = "3"
+    bench_separator = args.index("--")
+    args[bench_separator:bench_separator] = ["--tensor-parallel-size", "3"]
 
-    rc = worker_main(
-        [
-            "--task",
-            task_bundle.spec.output_paths.task_spec_path,
-            "--allocation",
-            task_bundle.spec.output_paths.allocation_path,
-            "--runtime",
-            "pyxis",
-        ]
-    )
+    rc = launch_main(args)
 
     assert rc == 1
-    state_payload = Path(task_bundle.spec.output_paths.state_path).read_text(encoding="utf-8")
-    result_payload = Path(task_bundle.paths.runtime_dir / "result.json").read_text(encoding="utf-8")
-    assert '"state": "failed"' in state_payload
+    result_payload = (tmp_path / "task" / "runtime" / "result.json").read_text(encoding="utf-8")
     assert '"failure_reason": "unexpected_exception"' in result_payload
-    assert "allocated_gpus=4 must be divisible by tensor_parallel_size=3" in result_payload
 
 
-def test_worker_cli_infers_allocated_gpus_from_visible_devices(tmp_path: Path, monkeypatch) -> None:
-    tasks, bundle = _bundle(tmp_path, gpus=1, tensor_parallel_size=1, data_parallel_size=None, allocated_gpus=1)
-    task_bundle = bundle.tasks[tasks[0].task_id]
-    allocation_path = Path(task_bundle.spec.output_paths.allocation_path)
-    allocation_path.write_text(
-        f'{{"task_id": "{tasks[0].task_id}", "server_port": 8000, "gpu_ids": []}}',
-        encoding="utf-8",
-    )
+def test_launch_cli_infers_allocated_gpus_from_visible_devices(tmp_path: Path, monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     async def fake_run(self, *, manifest=None):
-        captured["allocated_gpus"] = self._allocation.allocated_gpus
+        captured["allocated_gpus"] = self._launch.allocated_gpus
         return manifest or TaskManifest(
-            task_id=self._spec.task_id,
-            config_path=self._spec.bundled_eval_config_path,
-            model_key=self._spec.model_key,
-            model_id=self._spec.model_id,
+            task_id=self._launch.task_id,
+            config_path=str(tmp_path / "task" / "eval-config.toml"),
+            model_key=self._launch.endpoint_id,
+            model_id=self._launch.model_id,
         )
 
     monkeypatch.setattr("medarc_verifiers.orchestrate.worker.build_runtime_adapter", lambda runtime: object())
     monkeypatch.setattr("medarc_verifiers.orchestrate.worker.TaskWorker.run", fake_run)
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,3,5")
 
-    rc = worker_main(
-        [
-            "--task",
-            task_bundle.spec.output_paths.task_spec_path,
-            "--allocation",
-            task_bundle.spec.output_paths.allocation_path,
-            "--runtime",
-            "pyxis",
-        ]
-    )
+    rc = launch_main(_launch_args(tmp_path))
 
     assert rc == 0
     assert captured["allocated_gpus"] == 4
 
 
-def test_load_runtime_env_falls_back_to_huggingface_login(tmp_path: Path, monkeypatch) -> None:
-    tasks, bundle = _bundle(tmp_path)
-    task_bundle = bundle.tasks[tasks[0].task_id]
+def test_load_explicit_runtime_env_falls_back_to_huggingface_login(tmp_path: Path, monkeypatch) -> None:
+    from medarc_verifiers.orchestrate.env import load_explicit_runtime_env
+
     fake_module = types.SimpleNamespace(get_token=lambda: "hf-login-token")
     monkeypatch.setitem(sys.modules, "huggingface_hub", fake_module)
 
-    env = _load_runtime_env(
-        task_bundle.spec,
-        allocation=ExecutionAllocation(task_id=tasks[0].task_id),
-        options=type("Options", (), {"env_file": None})(),
-    )
+    env = load_explicit_runtime_env(repo_root=tmp_path)
 
     assert env["HF_TOKEN"] == "hf-login-token"
 
 
-def test_load_runtime_env_prefers_explicit_hf_token_over_huggingface_login(tmp_path: Path, monkeypatch) -> None:
-    tasks, bundle = _bundle(tmp_path)
-    task_bundle = bundle.tasks[tasks[0].task_id]
+def test_load_explicit_runtime_env_prefers_explicit_hf_token_over_huggingface_login(tmp_path: Path, monkeypatch) -> None:
+    from medarc_verifiers.orchestrate.env import load_explicit_runtime_env
+
     fake_module = types.SimpleNamespace(get_token=lambda: "hf-login-token")
     monkeypatch.setitem(sys.modules, "huggingface_hub", fake_module)
 
-    env = _load_runtime_env(
-        task_bundle.spec,
-        allocation=ExecutionAllocation(task_id=tasks[0].task_id, runtime_env={"HF_TOKEN": "explicit-token"}),
-        options=type("Options", (), {"env_file": None})(),
-    )
+    env = load_explicit_runtime_env(repo_root=tmp_path, env_overrides={"HF_TOKEN": "explicit-token"})
 
     assert env["HF_TOKEN"] == "explicit-token"
 
 
-def test_load_runtime_env_skips_huggingface_login_when_library_missing(tmp_path: Path, monkeypatch) -> None:
-    tasks, bundle = _bundle(tmp_path)
-    task_bundle = bundle.tasks[tasks[0].task_id]
+def test_load_explicit_runtime_env_skips_huggingface_login_when_library_missing(tmp_path: Path, monkeypatch) -> None:
+    from medarc_verifiers.orchestrate.env import load_explicit_runtime_env
+
     monkeypatch.delitem(sys.modules, "huggingface_hub", raising=False)
     original_import_module = __import__("importlib").import_module
 
@@ -305,13 +161,9 @@ def test_load_runtime_env_skips_huggingface_login_when_library_missing(tmp_path:
             raise ImportError("missing")
         return original_import_module(name, package)
 
-    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.importlib.import_module", fake_import_module)
+    monkeypatch.setattr("medarc_verifiers.orchestrate.env.importlib.import_module", fake_import_module)
 
-    env = _load_runtime_env(
-        task_bundle.spec,
-        allocation=ExecutionAllocation(task_id=tasks[0].task_id),
-        options=type("Options", (), {"env_file": None})(),
-    )
+    env = load_explicit_runtime_env(repo_root=tmp_path)
 
     assert "HF_TOKEN" not in env
 

@@ -1,10 +1,9 @@
-"""Single-task worker for orchestrator task bundles."""
+"""Launch one explicit vLLM benchmark command."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import importlib
 import json
 import os
 import shlex
@@ -16,17 +15,11 @@ from typing import Callable, Mapping
 
 from medarc_verifiers.orchestrate.bench import (
     BenchProcess,
-    render_command,
     start_benchmark,
     wait_benchmark,
 )
 from medarc_verifiers.orchestrate.bundle import (
-    ExecutionAllocation,
-    ResolvedTaskSpec,
     RuntimeState,
-    load_execution_allocation,
-    load_task_spec,
-    write_execution_allocation,
     write_runtime_state,
 )
 from medarc_verifiers.orchestrate.docker_vllm import (
@@ -34,7 +27,7 @@ from medarc_verifiers.orchestrate.docker_vllm import (
     wait_for_readiness_async,
     write_container_request,
 )
-from medarc_verifiers.orchestrate.env import load_env_file, load_runtime_env
+from medarc_verifiers.orchestrate.env import load_explicit_runtime_env
 from medarc_verifiers.orchestrate.ranges import parse_index_range
 from medarc_verifiers.orchestrate.runtime import (
     LogStreamer,
@@ -54,13 +47,9 @@ from medarc_verifiers.orchestrate.state import (
     write_task_result,
     write_text,
 )
-from medarc_verifiers.orchestrate.topology import ResolvedTopology, resolve_task_spec_topology
+from medarc_verifiers.orchestrate.topology import ResolvedTopology, resolve_launch_topology
 from medarc_verifiers.orchestrate.vllm_args import build_container_args, normalize_volume_mounts
 
-_COMMAND_TEMPLATE = (
-    "medarc-eval bench --config {eval_config_path} --api-base-url {base_url} "
-    "--provider local --output-dir {output_dir} {endpoints_arg}"
-)
 StateHandler = Callable[[TaskManifest, TaskPaths, str], None]
 LogFn = Callable[[str], None]
 HandleRegistration = Callable[[str, RuntimeHandle], None]
@@ -75,9 +64,37 @@ StreamerRemoval = Callable[[str], None]
 class WorkerOptions:
     runtime: RuntimeName
     readiness_timeout_s: int
-    command_template: str | None = None
     env_file: Path | None = None
     prune_logs_on_success: bool = False
+
+
+@dataclass(frozen=True)
+class LaunchInputs:
+    task_id: str
+    model_id: str
+    image: str
+    gpus: int
+    runtime_dir: Path
+    serve_dir: Path
+    ready_file: Path
+    bench_argv: tuple[str, ...]
+    endpoint_id: str | None = None
+    container_port: int = 8000
+    host_port: int = 8000
+    tensor_parallel_size: int = 1
+    data_parallel_size: int | None = None
+    allocated_gpus: int | None = None
+    gpu_ids: tuple[int, ...] = ()
+    serve_args: Mapping[str, object] | None = None
+    volumes: tuple[str, ...] = ()
+    container_env_file: Path | None = None
+    container_env_base_dir: Path | None = None
+    container_ipc_mode: str | None = None
+    pyxis_srun_extra_args: tuple[str, ...] = ()
+    container_image_source: str | None = None
+    image_dir: Path | None = None
+    hf_home: str | None = None
+    hub_cache: str | None = None
 
 
 @dataclass(frozen=True)
@@ -95,19 +112,16 @@ class WorkerCallbacks:
 class TaskWorker:
     def __init__(
         self,
-        task_spec: ResolvedTaskSpec,
-        allocation: ExecutionAllocation,
+        launch: LaunchInputs,
         *,
         options: WorkerOptions,
         runtime_adapter: RuntimeAdapter | None = None,
         callbacks: WorkerCallbacks | None = None,
     ) -> None:
-        self._spec = task_spec
-        self._allocation = _normalize_allocation(allocation, task_spec=task_spec)
+        self._launch = _normalize_launch_inputs(launch)
         self._options = options
         self._runtime = normalize_runtime(options.runtime)
         self._runtime_adapter = runtime_adapter or build_runtime_adapter(self._runtime)
-        self._command_template = options.command_template or _COMMAND_TEMPLATE
         self._callbacks = callbacks
         self._active_handle: RuntimeHandle | None = None
         self._bench_process: BenchProcess | None = None
@@ -120,22 +134,21 @@ class TaskWorker:
         state_handler: StateHandler | None = None,
         log: LogFn | None = None,
     ) -> TaskManifest:
-        paths = TaskPaths(Path(self._spec.output_paths.root))
+        paths = TaskPaths(self._launch.runtime_dir.parent)
         manifest = manifest or TaskManifest(
-            task_id=self._spec.task_id,
-            config_path=self._spec.bundled_eval_config_path,
-            model_key=self._spec.model_key,
-            model_id=self._spec.model_id,
+            task_id=self._launch.task_id,
+            config_path=_bench_config_path(self._launch.bench_argv),
+            model_key=self._launch.endpoint_id or self._launch.model_id,
+            model_id=self._launch.model_id,
         )
-        manifest.gpu_ids = list(self._allocation.gpu_ids)
-        manifest.port = self._allocation.server_port
-        manifest.gpus = self._spec.gpus
-        manifest.tensor_parallel_size = self._spec.tensor_parallel_size
-        manifest.data_parallel_size = self._spec.data_parallel_size
-        manifest.allocated_gpus = self._allocation.allocated_gpus
+        manifest.gpu_ids = list(self._launch.gpu_ids)
+        manifest.port = self._launch.host_port
+        manifest.gpus = self._launch.gpus
+        manifest.tensor_parallel_size = self._launch.tensor_parallel_size
+        manifest.data_parallel_size = self._launch.data_parallel_size
+        manifest.allocated_gpus = self._launch.allocated_gpus
         if manifest.started_at is None:
             manifest.started_at = _utcnow()
-        write_execution_allocation(Path(self._spec.output_paths.allocation_path), self._allocation)
         state_handler = state_handler or (
             self._callbacks.set_state
             if self._callbacks is not None and self._callbacks.set_state is not None
@@ -156,57 +169,63 @@ class TaskWorker:
         state_handler: StateHandler,
         log: LogFn,
     ) -> None:
-        topology = _resolve_worker_topology(self._spec, self._allocation)
+        topology = _resolve_worker_topology(self._launch)
         _apply_topology_to_manifest(manifest, topology)
         state_handler(manifest, paths, JobState.allocating)
-        image = self._spec.container_image.strip()
+        image = self._launch.image.strip()
         if not image:
-            raise RuntimeError(f"Missing container image for task {self._spec.task_id}.")
+            raise RuntimeError(f"Missing container image for task {self._launch.task_id}.")
         manifest.image = image
 
-        serve_args = _effective_serve_args(self._spec.serve_args, topology=topology)
-        if serve_args.get("async_scheduling") is not self._spec.serve_args.get("async_scheduling"):
+        configured_serve_args = dict(self._launch.serve_args or {})
+        serve_args = _effective_serve_args(configured_serve_args, topology=topology)
+        if serve_args.get("async_scheduling") is not configured_serve_args.get("async_scheduling"):
             log(
-                f"JOB info task={self._spec.task_id} async_scheduling_disabled=true "
+                f"JOB info task={self._launch.task_id} async_scheduling_disabled=true "
                 f"reason=data_parallel_size_gt_1 data_parallel_size={topology.data_parallel_size}"
             )
-        if serve_args.get("gpu_memory_utilization") != self._spec.serve_args.get("gpu_memory_utilization"):
+        if serve_args.get("gpu_memory_utilization") != configured_serve_args.get("gpu_memory_utilization"):
             log(
-                f"JOB info task={self._spec.task_id} gpu_memory_utilization_adjusted=true "
+                f"JOB info task={self._launch.task_id} gpu_memory_utilization_adjusted=true "
                 f"reason=data_parallel_rank0_overhead data_parallel_size={topology.data_parallel_size} "
-                f"base={self._spec.serve_args.get('gpu_memory_utilization', 0.9)} "
+                f"base={configured_serve_args.get('gpu_memory_utilization', 0.9)} "
                 f"adjusted={serve_args['gpu_memory_utilization']}"
             )
 
         container_args = build_container_args(
-            self._spec.model_id,
+            self._launch.model_id,
             tensor_parallel_size=topology.tensor_parallel_size if topology.tensor_parallel_size > 1 else None,
             data_parallel_size=topology.data_parallel_size if topology.data_parallel_size > 1 else None,
             serve=serve_args,
         )
-        _verify_materialized_image(self._spec, image=image, runtime=self._runtime)
-        env = load_runtime_env(self._spec, allocation=self._allocation, env_file=self._options.env_file)
-        cache = dict(self._spec.construct_cache or {})
-        if cache.get("container_hf_home"):
-            env.setdefault("HF_HOME", str(cache["container_hf_home"]))
-        if cache.get("container_hub_cache"):
-            env.setdefault("HUGGINGFACE_HUB_CACHE", str(cache["container_hub_cache"]))
-        volume_mounts = normalize_volume_mounts(self._spec.volume_mounts)
-        run_label = _run_label_from_task_root(self._spec)
-        labels = {"orchestrator.run_id": run_label, "orchestrator.task_id": self._spec.task_id}
-        container_name = sanitize_container_name(f"vllm-{run_label}-{self._spec.task_id}")
+        _verify_materialized_image(self._launch, image=image, runtime=self._runtime)
+        env = load_explicit_runtime_env(
+            env_file=self._options.env_file,
+            container_env_file=self._launch.container_env_file,
+            container_env_base_dir=self._launch.container_env_base_dir,
+        )
+        if self._launch.hf_home:
+            env.setdefault("HF_HOME", str(self._launch.hf_home))
+        if self._launch.hub_cache:
+            env.setdefault("HUGGINGFACE_HUB_CACHE", str(self._launch.hub_cache))
+        volume_mounts = normalize_volume_mounts(list(self._launch.volumes))
+        run_label = _run_label_from_task_root(paths.root)
+        labels = {"orchestrator.run_id": run_label, "orchestrator.task_id": self._launch.task_id}
+        if self._launch.endpoint_id:
+            labels["orchestrator.endpoint_id"] = self._launch.endpoint_id
+        container_name = sanitize_container_name(f"vllm-{run_label}-{self._launch.task_id}")
         manifest.container_name = container_name
 
         request_payload = {
             "runtime": self._runtime,
             "image": image,
             "name": container_name,
-            "container_port": self._spec.container_port,
-            "host_port": self._allocation.server_port,
-            "ipc_mode": self._spec.container_ipc_mode,
+            "container_port": self._launch.container_port,
+            "host_port": self._launch.host_port,
+            "ipc_mode": self._launch.container_ipc_mode,
             "volumes": volume_mounts,
             "env": sorted(env.keys()),
-            "gpu_ids": self._allocation.gpu_ids,
+            "gpu_ids": self._launch.gpu_ids,
             "allocated_gpus": topology.allocated_gpus,
             "gpus": topology.gpus,
             "tensor_parallel_size": topology.tensor_parallel_size,
@@ -216,25 +235,26 @@ class TaskWorker:
             "labels": labels,
         }
         write_container_request(str(paths.container_request_path), request_payload)
+        _write_runtime_manifest(paths, self._launch, manifest=manifest, request=request_payload)
 
         state_handler(manifest, paths, JobState.launching)
         try:
             self._active_handle = await asyncio.to_thread(
                 self._runtime_adapter.launch,
-                task_id=self._spec.task_id,
-                model_id=self._spec.model_id,
+                task_id=self._launch.task_id,
+                model_id=self._launch.model_id,
                 container_args=container_args,
                 image=image,
-                container_port=self._spec.container_port,
+                container_port=self._launch.container_port,
                 volume_mounts=volume_mounts,
                 gpus_required=topology.allocated_gpus,
-                gpu_ids=list(self._allocation.gpu_ids),
-                server_port=_require_server_port(self._allocation),
+                gpu_ids=list(self._launch.gpu_ids),
+                server_port=self._launch.host_port,
                 env=env,
                 labels=labels,
                 name=container_name,
-                ipc_mode=self._spec.container_ipc_mode,
-                srun_extra_args=list(self._spec.pyxis_srun_extra_args),
+                ipc_mode=self._launch.container_ipc_mode,
+                srun_extra_args=list(self._launch.pyxis_srun_extra_args),
             )
         except RuntimeLaunchError:
             raise
@@ -242,22 +262,23 @@ class TaskWorker:
             raise RuntimeLaunchError(str(exc)) from exc
         manifest.container_id = self._active_handle.identifier
         if self._callbacks is not None and self._callbacks.register_handle is not None:
-            self._callbacks.register_handle(self._spec.task_id, self._active_handle)
+            self._callbacks.register_handle(self._launch.task_id, self._active_handle)
 
         self._log_streamer = self._runtime_adapter.stream_logs(self._active_handle, paths.container_logs_path)
         self._log_streamer.start()
         if self._callbacks is not None and self._callbacks.register_log_streamer is not None:
-            self._callbacks.register_log_streamer(self._spec.task_id, self._log_streamer)
+            self._callbacks.register_log_streamer(self._launch.task_id, self._log_streamer)
         completed_successfully = False
         try:
             state_handler(manifest, paths, JobState.loading)
             readiness = await wait_for_readiness_async(
                 self._active_handle.base_url,
-                model_id=self._spec.model_id,
+                model_id=self._launch.model_id,
                 timeout_s=self._options.readiness_timeout_s,
             )
             manifest.readiness = readiness.__dict__
             write_text(paths.readiness_path, json.dumps(readiness.__dict__, indent=2))
+            write_text(self._launch.ready_file, json.dumps(readiness.__dict__, indent=2))
             if not readiness.ready:
                 manifest.failure_reason = "readiness_timeout"
                 manifest.error = readiness.last_error
@@ -267,32 +288,17 @@ class TaskWorker:
                 )
                 state_handler(manifest, paths, JobState.failed)
                 return
-            log(f"JOB ready task={self._spec.task_id} attempts={readiness.attempts}")
-
-            endpoints_arg = (
-                f"--endpoints-path {_command_template_value(self._spec.endpoints_path)}"
-                if self._spec.endpoints_path
-                else ""
-            )
-            command_context = {
-                "base_url": _command_template_value(self._active_handle.base_url),
-                "host_port": _command_template_value(_require_server_port(self._allocation)),
-                "model_key": _command_template_value(self._spec.model_key),
-                "model_id": _command_template_value(self._spec.model_id),
-                "output_dir": _command_template_value(paths.bench_dir),
-                "task_id": _command_template_value(self._spec.task_id),
-                "eval_config_path": _command_template_value(self._spec.bundled_eval_config_path),
-                "endpoints_arg": endpoints_arg,
-            }
+            log(f"JOB ready task={self._launch.task_id} attempts={readiness.attempts}")
             quarantined_outputs = _quarantine_malformed_bench_outputs(paths.bench_dir)
             for old_path, archived_path in quarantined_outputs:
-                log(f"JOB bench-quarantine task={self._spec.task_id} old={old_path} archived={archived_path}")
+                log(f"JOB bench-quarantine task={self._launch.task_id} old={old_path} archived={archived_path}")
 
-            command = render_command(self._command_template, command_context)
+            command = list(self._launch.bench_argv)
             manifest.bench_command = shlex.join(command)
-            log(f"JOB bench-start task={self._spec.task_id} cmd={_shorten(manifest.bench_command)}")
+            _write_runtime_manifest(paths, self._launch, manifest=manifest, request=request_payload)
+            log(f"JOB bench-start task={self._launch.task_id} cmd={_shorten(manifest.bench_command)}")
             state_handler(manifest, paths, JobState.running)
-            bench_env = {**os.environ, **dict(self._allocation.runtime_env), "TQDM_DISABLE": "1"}
+            bench_env = {**os.environ, "TQDM_DISABLE": "1"}
             self._bench_process = await start_benchmark(
                 command,
                 cwd=Path(__file__).resolve().parents[2],
@@ -301,10 +307,10 @@ class TaskWorker:
                 stderr_path=paths.stderr_path,
             )
             if self._callbacks is not None and self._callbacks.register_bench is not None:
-                self._callbacks.register_bench(self._spec.task_id, self._bench_process)
+                self._callbacks.register_bench(self._launch.task_id, self._bench_process)
             bench_result = await wait_benchmark(self._bench_process)
             if self._callbacks is not None and self._callbacks.unregister_bench is not None:
-                self._callbacks.unregister_bench(self._spec.task_id)
+                self._callbacks.unregister_bench(self._launch.task_id)
             self._bench_process = None
             manifest.bench_exit_code = bench_result.exit_code
             manifest.bench_duration_s = bench_result.duration_s
@@ -332,48 +338,99 @@ class TaskWorker:
             if self._active_handle is not None:
                 await _teardown_runtime(self._runtime_adapter, self._active_handle)
                 if self._callbacks is not None and self._callbacks.unregister_handle is not None:
-                    self._callbacks.unregister_handle(self._spec.task_id)
+                    self._callbacks.unregister_handle(self._launch.task_id)
                 self._active_handle = None
             if self._log_streamer is not None:
                 await asyncio.to_thread(self._log_streamer.stop)
                 if self._callbacks is not None and self._callbacks.unregister_log_streamer is not None:
-                    self._callbacks.unregister_log_streamer(self._spec.task_id)
+                    self._callbacks.unregister_log_streamer(self._launch.task_id)
                 self._log_streamer = None
             if completed_successfully and self._options.prune_logs_on_success:
                 _prune_task_logs(paths)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="medarc-orchestrate worker", description="Run one bundled task.")
-    parser.add_argument("--task", type=Path, required=True, help="Path to bundled task.yaml.")
-    parser.add_argument("--allocation", type=Path, required=True, help="Path to execution allocation JSON.")
+    parser = argparse.ArgumentParser(
+        prog="medarc-orchestrate launch",
+        description="Launch vLLM, wait for readiness, run the benchmark argv after --, then clean up.",
+    )
+    parser.add_argument("--task-id", required=True)
+    parser.add_argument("--model", required=True, help="Model id served by vLLM.")
+    parser.add_argument("--endpoint-id", default=None)
+    parser.add_argument("--image", required=True)
+    parser.add_argument("--gpus", type=int, required=True)
     parser.add_argument("--runtime", choices=("docker", "podman", "pyxis"), required=True)
+    parser.add_argument("--runtime-dir", type=Path, required=True)
+    parser.add_argument("--serve-dir", type=Path, required=True)
+    parser.add_argument("--ready-file", type=Path, required=True)
+    parser.add_argument("--container-port", type=int, default=8000)
+    parser.add_argument("--host-port", type=int, default=8000)
+    parser.add_argument("--tensor-parallel-size", type=int, default=1)
+    parser.add_argument("--data-parallel-size", type=int, default=None)
+    parser.add_argument("--serve-args-json", default=None)
+    parser.add_argument("--volume", action="append", default=[])
+    parser.add_argument("--container-env-file", type=Path, default=None)
+    parser.add_argument("--container-env-base-dir", type=Path, default=None)
+    parser.add_argument("--container-ipc-mode", default=None)
+    parser.add_argument("--pyxis-srun-arg", action="append", default=[])
+    parser.add_argument("--container-image-source", default=None)
+    parser.add_argument("--image-dir", type=Path, default=None)
+    parser.add_argument("--hf-home", default=None)
+    parser.add_argument("--hub-cache", default=None)
     parser.add_argument("--env-file", type=Path, default=None)
     parser.add_argument("--readiness-timeout-s", type=int, default=1800)
     parser.add_argument("--prune-logs-on-success", action="store_true")
+    parser.add_argument("bench_argv", nargs=argparse.REMAINDER)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    task_spec = load_task_spec(args.task.expanduser().resolve())
-    allocation = load_execution_allocation(args.allocation.expanduser().resolve())
-    if allocation is None:
-        raise FileNotFoundError(f"Execution allocation not found: {args.allocation}")
+    bench_argv = _normalize_bench_argv(args.bench_argv)
+    serve_args = _parse_serve_args_json(args.serve_args_json)
+    launch = LaunchInputs(
+        task_id=args.task_id,
+        model_id=args.model,
+        endpoint_id=args.endpoint_id,
+        image=args.image,
+        gpus=args.gpus,
+        runtime_dir=args.runtime_dir.expanduser().resolve(),
+        serve_dir=args.serve_dir.expanduser().resolve(),
+        ready_file=args.ready_file.expanduser().resolve(),
+        bench_argv=tuple(bench_argv),
+        container_port=args.container_port,
+        host_port=args.host_port,
+        tensor_parallel_size=args.tensor_parallel_size,
+        data_parallel_size=args.data_parallel_size,
+        serve_args=serve_args,
+        volumes=tuple(args.volume or ()),
+        container_env_file=args.container_env_file.expanduser().resolve()
+        if args.container_env_file is not None
+        else None,
+        container_env_base_dir=args.container_env_base_dir.expanduser().resolve()
+        if args.container_env_base_dir is not None
+        else None,
+        container_ipc_mode=args.container_ipc_mode,
+        pyxis_srun_extra_args=tuple(args.pyxis_srun_arg or ()),
+        container_image_source=args.container_image_source,
+        image_dir=args.image_dir.expanduser().resolve() if args.image_dir is not None else None,
+        hf_home=args.hf_home,
+        hub_cache=args.hub_cache,
+    )
     options = WorkerOptions(
         runtime=normalize_runtime(args.runtime),
         readiness_timeout_s=args.readiness_timeout_s,
         env_file=args.env_file.expanduser().resolve() if args.env_file is not None else None,
         prune_logs_on_success=bool(args.prune_logs_on_success),
     )
-    worker = TaskWorker(task_spec, allocation, options=options)
-    paths = TaskPaths(Path(task_spec.output_paths.root))
+    worker = TaskWorker(launch, options=options)
+    paths = TaskPaths(launch.runtime_dir.parent)
     manifest = TaskManifest(
-        task_id=task_spec.task_id,
-        config_path=task_spec.bundled_eval_config_path,
-        model_key=task_spec.model_key,
-        model_id=task_spec.model_id,
+        task_id=launch.task_id,
+        config_path=_bench_config_path(bench_argv),
+        model_key=launch.endpoint_id or launch.model_id,
+        model_id=launch.model_id,
     )
     state_handler = _default_state_handler(paths=paths)
     try:
@@ -392,12 +449,11 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _run_label_from_task_root(spec: ResolvedTaskSpec) -> str:
-    root = Path(spec.output_paths.root)
+def _run_label_from_task_root(root: Path) -> str:
     try:
         return root.parents[1].name
     except IndexError:
-        return root.parent.name or spec.task_slug
+        return root.parent.name or root.name
 
 
 def _default_state_handler(*, paths: TaskPaths) -> StateHandler:
@@ -424,82 +480,59 @@ def _default_state_handler(*, paths: TaskPaths) -> StateHandler:
     return handler
 
 
-def _verify_materialized_image(spec: ResolvedTaskSpec, *, image: str, runtime: RuntimeName) -> None:
-    if runtime != "pyxis" or not spec.container_image_source:
+def _verify_materialized_image(launch: LaunchInputs, *, image: str, runtime: RuntimeName) -> None:
+    if runtime != "pyxis" or not launch.container_image_source:
         return
     path = Path(image)
-    cache = dict(spec.construct_cache or {})
-    image_dir = cache.get("image_dir")
+    image_dir = launch.image_dir
     if image_dir is None:
-        raise RuntimeLaunchError(f"Task {spec.task_id} uses a materialized image but no image cache root is recorded.")
+        raise RuntimeLaunchError(f"Task {launch.task_id} uses a materialized image but no image cache root is recorded.")
     try:
-        path.expanduser().resolve().relative_to(Path(str(image_dir)).expanduser().resolve())
+        path.expanduser().resolve().relative_to(image_dir.expanduser().resolve())
     except ValueError as exc:
         raise RuntimeLaunchError(f"Materialized image {path} is outside configured image cache {image_dir}.") from exc
     if not path.is_file():
-        raise RuntimeLaunchError(f"Materialized Pyxis image not found for task {spec.task_id}: {path}")
+        raise RuntimeLaunchError(f"Materialized Pyxis image not found for task {launch.task_id}: {path}")
 
 
-def _load_runtime_env(
-    spec: ResolvedTaskSpec,
-    *,
-    allocation: ExecutionAllocation,
-    options: WorkerOptions,
-) -> dict[str, str]:
-    env: dict[str, str] = {}
-    repo_root = Path(__file__).resolve().parents[2]
-    if options.env_file is not None:
-        env.update(load_env_file(options.env_file, base_dir=repo_root))
-    else:
-        default_env = repo_root / ".env"
-        if default_env.exists():
-            env.update(load_env_file(default_env, base_dir=repo_root))
-    if spec.container_env_file:
-        base_dir = Path(spec.orchestrate_registry_path).parent if spec.orchestrate_registry_path else repo_root
-        env.update(load_env_file(spec.container_env_file, base_dir=base_dir))
-    env.update(dict(allocation.runtime_env))
-    if not env.get("HF_TOKEN"):
-        token = _load_hf_token_from_login()
-        if token:
-            env["HF_TOKEN"] = token
-    return env
-
-
-def _load_hf_token_from_login() -> str | None:
-    try:
-        module = importlib.import_module("huggingface_hub")
-    except ImportError:
-        return None
-    get_token = getattr(module, "get_token", None)
-    if not callable(get_token):
-        return None
-    try:
-        token = get_token()
-    except Exception:
-        return None
-    if token is None:
-        return None
-    text = str(token).strip()
-    return text or None
-
-
-def _normalize_allocation(allocation: ExecutionAllocation, *, task_spec: ResolvedTaskSpec) -> ExecutionAllocation:
-    allocated_gpus = allocation.allocated_gpus
+def _normalize_launch_inputs(launch: LaunchInputs) -> LaunchInputs:
+    expected_root = launch.runtime_dir.parent
+    if launch.runtime_dir.name != "runtime" or launch.serve_dir != expected_root / "serve":
+        raise ValueError(
+            "launch expects task-local paths: --runtime-dir <task>/runtime and --serve-dir <task>/serve."
+        )
+    allocated_gpus = launch.allocated_gpus
     if allocated_gpus is None:
-        if allocation.gpu_ids:
-            allocated_gpus = len(allocation.gpu_ids)
+        if launch.gpu_ids:
+            allocated_gpus = len(launch.gpu_ids)
         else:
-            allocated_gpus = _infer_allocated_gpu_count_from_environment() or task_spec.gpus
-    server_port = allocation.server_port if allocation.server_port is not None else 8000
-    return ExecutionAllocation(
-        task_id=allocation.task_id,
+            allocated_gpus = _infer_allocated_gpu_count_from_environment() or launch.gpus
+    return LaunchInputs(
+        task_id=launch.task_id,
+        model_id=launch.model_id,
+        image=launch.image,
+        gpus=launch.gpus,
+        runtime_dir=launch.runtime_dir,
+        serve_dir=launch.serve_dir,
+        ready_file=launch.ready_file,
+        bench_argv=launch.bench_argv,
+        endpoint_id=launch.endpoint_id,
+        container_port=launch.container_port,
+        host_port=launch.host_port,
+        tensor_parallel_size=launch.tensor_parallel_size,
+        data_parallel_size=launch.data_parallel_size,
         allocated_gpus=allocated_gpus,
-        gpu_ids=list(allocation.gpu_ids),
-        server_port=server_port,
-        require_contiguous_gpus=allocation.require_contiguous_gpus,
-        slurm_job_id=allocation.slurm_job_id,
-        constraints=dict(allocation.constraints),
-        runtime_env=dict(allocation.runtime_env),
+        gpu_ids=tuple(launch.gpu_ids),
+        serve_args=dict(launch.serve_args or {}),
+        volumes=tuple(launch.volumes),
+        container_env_file=launch.container_env_file,
+        container_env_base_dir=launch.container_env_base_dir,
+        container_ipc_mode=launch.container_ipc_mode,
+        pyxis_srun_extra_args=tuple(launch.pyxis_srun_extra_args),
+        container_image_source=launch.container_image_source,
+        image_dir=launch.image_dir,
+        hf_home=launch.hf_home,
+        hub_cache=launch.hub_cache,
     )
 
 
@@ -595,11 +628,17 @@ def _update_gpu_accounting(manifest: TaskManifest) -> None:
         manifest.gpu_hours = manifest.gpus * elapsed_hours
 
 
-def _resolve_worker_topology(task_spec: ResolvedTaskSpec, allocation: ExecutionAllocation) -> ResolvedTopology:
-    allocated_gpus = allocation.allocated_gpus
+def _resolve_worker_topology(launch: LaunchInputs) -> ResolvedTopology:
+    allocated_gpus = launch.allocated_gpus
     if allocated_gpus is None:
-        raise RuntimeError(f"Task {task_spec.task_id} is missing allocated_gpus.")
-    return resolve_task_spec_topology(task_spec, allocated_gpus=allocated_gpus)
+        raise RuntimeError(f"Task {launch.task_id} is missing allocated_gpus.")
+    return resolve_launch_topology(
+        task_id=launch.task_id,
+        gpus=launch.gpus,
+        allocated_gpus=allocated_gpus,
+        tensor_parallel_size=launch.tensor_parallel_size,
+        data_parallel_size=launch.data_parallel_size,
+    )
 
 
 def _apply_topology_to_manifest(manifest: TaskManifest, topology: ResolvedTopology) -> None:
@@ -616,6 +655,30 @@ def _prune_task_logs(paths: TaskPaths) -> None:
             log_path.unlink(missing_ok=True)
         except Exception:  # noqa: BLE001
             continue
+
+
+def _write_runtime_manifest(
+    paths: TaskPaths,
+    launch: LaunchInputs,
+    *,
+    manifest: TaskManifest,
+    request: Mapping[str, object],
+) -> None:
+    payload = {
+        "task_id": launch.task_id,
+        "endpoint_id": launch.endpoint_id,
+        "model_id": launch.model_id,
+        "image": launch.image,
+        "container_port": launch.container_port,
+        "host_port": launch.host_port,
+        "runtime_dir": str(launch.runtime_dir),
+        "serve_dir": str(launch.serve_dir),
+        "ready_file": str(launch.ready_file),
+        "bench_command": manifest.bench_command,
+        "bench_argv": list(launch.bench_argv),
+        "container_request": dict(request),
+    }
+    write_text(paths.runtime_dir / "manifest.json", json.dumps(payload, indent=2))
 
 
 async def _teardown_runtime(runtime_adapter: RuntimeAdapter, handle: RuntimeHandle) -> None:
@@ -671,16 +734,6 @@ def _archive_malformed_bench_output(path: Path) -> Path:
     return candidate
 
 
-def _require_server_port(allocation: ExecutionAllocation) -> int:
-    if allocation.server_port is None:
-        raise RuntimeError(f"Task {allocation.task_id} is missing server_port in execution allocation.")
-    return allocation.server_port
-
-
-def _command_template_value(value: object) -> str:
-    return shlex.quote(str(value))
-
-
 def _shorten(text: str, *, max_len: int = 220) -> str:
     if len(text) <= max_len:
         return text
@@ -695,4 +748,32 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-__all__ = ["TaskWorker", "WorkerCallbacks", "WorkerOptions", "build_parser", "main"]
+def _parse_serve_args_json(value: str | None) -> dict[str, object]:
+    if value is None or not value.strip():
+        return {}
+    payload = json.loads(value)
+    if not isinstance(payload, dict):
+        raise ValueError("--serve-args-json must decode to a JSON object.")
+    return payload
+
+
+def _normalize_bench_argv(values: list[str]) -> list[str]:
+    bench_argv = list(values)
+    if bench_argv and bench_argv[0] == "--":
+        bench_argv = bench_argv[1:]
+    if not bench_argv:
+        raise SystemExit("medarc-orchestrate launch requires a benchmark command after --.")
+    return bench_argv
+
+
+def _bench_config_path(bench_argv: tuple[str, ...] | list[str]) -> str:
+    values = list(bench_argv)
+    for index, value in enumerate(values):
+        if value == "--config" and index + 1 < len(values):
+            return values[index + 1]
+        if value.startswith("--config="):
+            return value.split("=", maxsplit=1)[1]
+    return ""
+
+
+__all__ = ["LaunchInputs", "TaskWorker", "WorkerCallbacks", "WorkerOptions", "build_parser", "main"]

@@ -32,9 +32,6 @@ class SlurmTaskEntry:
     target_endpoint_id: str
     generated_eval_config_path: str
     bundled_eval_config_checksum: str
-    task_spec_path: str
-    task_spec_checksum: str
-    allocation_path: str
     state_path: str
     gpus: int
     allocated_gpus: int
@@ -64,9 +61,6 @@ class SlurmTaskEntry:
             target_endpoint_id=str(payload["target_endpoint_id"]),
             generated_eval_config_path=str(payload["generated_eval_config_path"]),
             bundled_eval_config_checksum=str(payload["bundled_eval_config_checksum"]),
-            task_spec_path=str(payload["task_spec_path"]),
-            task_spec_checksum=str(payload["task_spec_checksum"]),
-            allocation_path=str(payload["allocation_path"]),
             state_path=str(payload["state_path"]),
             gpus=int(payload["gpus"]),
             allocated_gpus=int(payload["allocated_gpus"]),

@@ -9,11 +9,9 @@ import re
 import shlex
 
 from medarc_verifiers.orchestrate.bundle import (
-    ExecutionAllocation,
-    PlannedTaskBundle,
     AuxiliaryImageSpec,
+    PlannedTaskBundle,
     ensure_run_bundle,
-    write_execution_allocation,
 )
 from medarc_verifiers.orchestrate.config import ConstructConfig, TeardownConfig
 from medarc_verifiers.orchestrate.lifecycle import is_absolute_sqsh_image, materialized_image_path, resolve_construct_cache
@@ -41,21 +39,6 @@ def render_bundle(
     teardown = teardown or TeardownConfig()
     existing_entries = existing_manifest.eval_entry_map() if existing_manifest else {}
     existing_lifecycle = existing_manifest.lifecycle_entry_map() if existing_manifest else {}
-    allocation_defaults = {
-        task.task.task_id: ExecutionAllocation(
-            task_id=task.task.task_id,
-            allocated_gpus=task.allocated_gpus,
-            server_port=_default_server_port(run_id, task.submission_order),
-            require_contiguous_gpus=task.allocated_gpus > 1,
-            slurm_job_id=(
-                existing_entries.get(task.task.task_id).slurm_job_id
-                if existing_entries.get(task.task.task_id)
-                else None
-            ),
-            constraints={"scheduler": "slurm", "allocated_gpus": task.allocated_gpus},
-        )
-        for task in planned_tasks
-    }
     construct_caches: dict[str, dict[str, object]] = {}
     container_image_overrides: dict[str, str] = {}
     teardowns: dict[str, dict[str, object]] = {}
@@ -81,23 +64,21 @@ def render_bundle(
         output_root=bundle_root,
         mode="slurm",
         runtime="pyxis",
-        allocation_defaults=allocation_defaults,
         construct_cache_by_task=construct_caches,
         teardown_by_task=teardowns,
         container_image_by_task=container_image_overrides,
     )
-    bundle_entries = bundle_plan.manifest.entry_map()
     entries: list[SlurmTaskEntry] = []
     lifecycle_entries: list[SlurmLifecycleEntry] = []
 
     for planned_task in planned_tasks:
         existing_entry = existing_entries.get(planned_task.task.task_id)
         bundle = bundle_plan.tasks[planned_task.task.task_id]
-        bundle_entry = bundle_entries[planned_task.task.task_id]
-        write_execution_allocation(bundle.paths.allocation_path, allocation_defaults[planned_task.task.task_id])
+        server_port = _default_server_port(run_id, planned_task.submission_order)
         rendered = render_task_artifacts(
             planned_task=planned_task,
             task_bundle=bundle,
+            server_port=server_port,
             source_dir=source_dir,
             activate_script=activate_script,
             env_file=env_file,
@@ -106,8 +87,8 @@ def render_bundle(
         )
         if construct.enabled:
             write_lifecycle_script(
-                phase="construct",
-                script_path=bundle.paths.construct_script_path,
+                phase="prepare",
+                script_path=bundle.paths.prepare_script_path,
                 planned_task=planned_task,
                 task_bundle=bundle,
                 source_dir=source_dir,
@@ -116,7 +97,7 @@ def render_bundle(
                 construct=construct,
                 teardown=teardown,
             )
-            existing_life = existing_lifecycle.get((planned_task.task.task_id, "construct"))
+            existing_life = existing_lifecycle.get((planned_task.task.task_id, "prepare"))
             life_state = existing_life.state if existing_life else "pending"
             life_job = existing_life.slurm_job_id if existing_life else None
             if life_state == "submitted" and not life_job:
@@ -126,12 +107,12 @@ def render_bundle(
                     run_id=run_id,
                     task_id=planned_task.task.task_id,
                     task_slug=planned_task.task_slug,
-                    phase="construct",
-                    script_path=str(bundle.paths.construct_script_path),
+                    phase="prepare",
+                    script_path=str(bundle.paths.prepare_script_path),
                     generated_dependency=None,
                     base_dependency=planned_task.base_dependency,
                     submission_order=planned_task.submission_order,
-                    job_name=f"{planned_task.options.job_name}-construct",
+                    job_name=f"{planned_task.options.job_name}-prepare",
                     cpus=construct.cpus,
                     account=construct.account or planned_task.options.account,
                     slurm_job_id=life_job,
@@ -148,14 +129,11 @@ def render_bundle(
                 task_id=planned_task.task.task_id,
                 task_slug=planned_task.task_slug,
                 suite_path=str(planned_task.task.suite_path),
-                suite_checksum=bundle.spec.suite_checksum,
+                suite_checksum=bundle.runtime.suite_checksum,
                 target_endpoint_id=planned_task.task.target_endpoint_id,
-                generated_eval_config_path=bundle.spec.bundled_eval_config_path,
-                bundled_eval_config_checksum=bundle.spec.bundled_eval_config_checksum,
-                task_spec_path=bundle.spec.output_paths.task_spec_path,
-                task_spec_checksum=bundle_entry.task_spec_checksum,
-                allocation_path=bundle.spec.output_paths.allocation_path,
-                state_path=bundle.spec.output_paths.state_path,
+                generated_eval_config_path=bundle.runtime.bundled_eval_config_path,
+                bundled_eval_config_checksum=bundle.runtime.bundled_eval_config_checksum,
+                state_path=bundle.runtime.output_paths.state_path,
                 gpus=planned_task.gpus,
                 allocated_gpus=planned_task.allocated_gpus,
                 tensor_parallel_size=planned_task.tensor_parallel_size,
@@ -207,7 +185,7 @@ def render_bundle(
             )
     if construct.enabled:
         for entry in entries:
-            entry.generated_dependency = f"afterok:${{{entry.task_id}:construct}}"
+            entry.generated_dependency = f"afterok:${{{entry.task_id}:prepare}}"
 
     manifest = SlurmBundleManifest(
         run_id=run_id,
@@ -232,7 +210,7 @@ def write_lifecycle_script(
     construct: ConstructConfig,
     teardown: TeardownConfig,
 ) -> None:
-    if phase == "construct":
+    if phase == "prepare":
         cpus = construct.cpus
         time = construct.time
         partition = construct.partition
@@ -241,18 +219,22 @@ def write_lifecycle_script(
         nice = construct.nice if construct.nice is not None else planned_task.options.nice
         mail_type = construct.mail_type or planned_task.options.mail_type
         mail_user = construct.mail_user or planned_task.options.mail_user
-        output_path = Path(task_bundle.spec.output_paths.construct_dir) / "slurm_%j.log"
-        command = [
-            "medarc-orchestrate",
-            "construct",
-            "--task",
-            task_bundle.spec.output_paths.task_spec_path,
-            "--allocation",
-            task_bundle.spec.output_paths.construct_allocation_path,
-        ]
+        output_path = Path(task_bundle.runtime.output_paths.prepare_dir) / "slurm_%j.log"
+        cache = dict(task_bundle.runtime.construct_cache or {})
+        command = ["medarc-orchestrate", "prepare", "--result", task_bundle.runtime.output_paths.prepare_result_path]
         if construct.prefetch_enabled:
+            command.extend(["--model", task_bundle.runtime.model_id])
+            _append_optional_flag(command, "--hub-cache", cache.get("hub_cache"))
             command.append("--prefetch-model")
-        if construct.image_materialization_enabled and task_bundle.spec.container_image_source is not None:
+        if construct.image_materialization_enabled and task_bundle.runtime.container_image_source is not None:
+            command.extend(
+                [
+                    "--image",
+                    task_bundle.runtime.container_image_source,
+                    "--image-output",
+                    task_bundle.runtime.container_image,
+                ]
+            )
             command.append("--materialize-image")
     elif phase == "teardown":
         cpus = teardown.cpus
@@ -263,26 +245,34 @@ def write_lifecycle_script(
         nice = teardown.nice if teardown.nice is not None else planned_task.options.nice
         mail_type = teardown.mail_type or planned_task.options.mail_type
         mail_user = teardown.mail_user or planned_task.options.mail_user
-        output_path = Path(task_bundle.spec.output_paths.teardown_dir) / "slurm_%j.log"
+        output_path = Path(task_bundle.runtime.output_paths.teardown_dir) / "slurm_%j.log"
+        cache = dict(task_bundle.runtime.construct_cache or {})
+        teardown_payload = dict(task_bundle.runtime.teardown or {})
+        remove_model_weights = bool(teardown_payload.get("remove_model_weights"))
+        remove_image = bool(teardown_payload.get("remove_images") and task_bundle.runtime.container_image_source)
         command = [
             "medarc-orchestrate",
             "teardown",
-            "--task",
-            task_bundle.spec.output_paths.task_spec_path,
-            "--allocation",
-            task_bundle.spec.output_paths.teardown_allocation_path,
+            "--result",
+            task_bundle.runtime.output_paths.teardown_result_path,
+            "--model",
+            task_bundle.runtime.model_id,
         ]
+        if remove_model_weights:
+            _append_optional_flag(command, "--hub-cache", cache.get("hub_cache"))
+            command.append("--remove-model-weights")
+        elif cache.get("hub_cache"):
+            _append_optional_flag(command, "--hub-cache", cache.get("hub_cache"))
+        if remove_image:
+            command.extend(["--remove-image", task_bundle.runtime.container_image])
+            _append_optional_flag(command, "--image-root", cache.get("image_dir"))
+        if remove_model_weights or remove_image:
+            command.extend(["--prepare-result", task_bundle.runtime.output_paths.prepare_result_path])
     else:
         raise ValueError(f"Unknown lifecycle phase: {phase}")
     if env_file is not None:
         command.extend(["--env-file", str(env_file)])
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    allocation_path = (
-        Path(task_bundle.spec.output_paths.construct_allocation_path)
-        if phase == "construct"
-        else Path(task_bundle.spec.output_paths.teardown_allocation_path)
-    )
-    write_execution_allocation(allocation_path, ExecutionAllocation(task_id=task_bundle.spec.task_id))
     lines = [
         "#!/bin/bash",
         f"#SBATCH --job-name={planned_task.options.job_name}-{phase}",
@@ -326,6 +316,7 @@ def render_task_artifacts(
     *,
     planned_task: PlannedSlurmTask,
     task_bundle: PlannedTaskBundle,
+    server_port: int,
     source_dir: Path,
     activate_script: Path,
     env_file: Path | None,
@@ -337,6 +328,7 @@ def render_task_artifacts(
         script_path=script_path,
         planned_task=planned_task,
         task_bundle=task_bundle,
+        server_port=server_port,
         source_dir=source_dir,
         activate_script=activate_script,
         env_file=env_file,
@@ -351,13 +343,14 @@ def write_script(
     script_path: Path,
     planned_task: PlannedSlurmTask,
     task_bundle: PlannedTaskBundle,
+    server_port: int,
     source_dir: Path,
     activate_script: Path,
     env_file: Path | None,
     readiness_timeout_s: int | None,
     prune_logs_on_success: bool,
 ) -> None:
-    log_path = Path(task_bundle.spec.output_paths.root) / "slurm" / "job_%j.log"
+    log_path = Path(task_bundle.runtime.output_paths.root) / "slurm" / "job_%j.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         "#!/bin/bash",
@@ -381,22 +374,14 @@ def write_script(
     if planned_task.options.slurm_resume:
         lines.append("#SBATCH --requeue")
 
-    command = [
-        "medarc-orchestrate",
-        "worker",
-        "--task",
-        task_bundle.spec.output_paths.task_spec_path,
-        "--allocation",
-        task_bundle.spec.output_paths.allocation_path,
-        "--runtime",
-        "pyxis",
-    ]
-    if env_file is not None:
-        command.extend(["--env-file", str(env_file)])
-    if readiness_timeout_s is not None:
-        command.extend(["--readiness-timeout-s", str(readiness_timeout_s)])
-    if prune_logs_on_success:
-        command.append("--prune-logs-on-success")
+    command = _launch_command(
+        planned_task=planned_task,
+        task_bundle=task_bundle,
+        server_port=server_port,
+        env_file=env_file,
+        readiness_timeout_s=readiness_timeout_s,
+        prune_logs_on_success=prune_logs_on_success,
+    )
 
     body_lines = [
         "",
@@ -415,17 +400,97 @@ def write_script(
         'source "$ACTIVATE_SCRIPT"',
         f"export MEDARC_ALLOCATED_GPU_COUNT={planned_task.allocated_gpus}",
         "",
-        *_render_auxiliary_images(task_bundle.spec.auxiliary_images, task_bundle=task_bundle),
+        *_render_auxiliary_images(task_bundle.runtime.auxiliary_images, task_bundle=task_bundle),
         " ".join(shlex.quote(arg) for arg in command),
         "",
     ]
     script_path.write_text("\n".join(lines + body_lines), encoding="utf-8")
 
 
+def _launch_command(
+    *,
+    planned_task: PlannedSlurmTask,
+    task_bundle: PlannedTaskBundle,
+    server_port: int,
+    env_file: Path | None,
+    readiness_timeout_s: int | None,
+    prune_logs_on_success: bool,
+) -> list[str]:
+    command = [
+        "medarc-orchestrate",
+        "launch",
+        "--task-id",
+        task_bundle.runtime.task_id,
+        "--model",
+        task_bundle.runtime.model_id,
+        "--endpoint-id",
+        task_bundle.runtime.target_endpoint_id,
+        "--image",
+        task_bundle.runtime.container_image,
+        "--gpus",
+        str(planned_task.allocated_gpus),
+        "--runtime",
+        "pyxis",
+        "--runtime-dir",
+        str(Path(task_bundle.runtime.output_paths.root) / "runtime"),
+        "--serve-dir",
+        task_bundle.runtime.output_paths.serve_dir,
+        "--ready-file",
+        str(Path(task_bundle.runtime.output_paths.root) / "runtime" / "ready.json"),
+        "--container-port",
+        str(task_bundle.runtime.container_port),
+        "--host-port",
+        str(server_port),
+        "--tensor-parallel-size",
+        str(planned_task.tensor_parallel_size),
+        "--data-parallel-size",
+        str(planned_task.data_parallel_size),
+    ]
+    if task_bundle.runtime.container_ipc_mode:
+        command.extend(["--container-ipc-mode", task_bundle.runtime.container_ipc_mode])
+    if task_bundle.runtime.container_env_file:
+        command.extend(["--container-env-file", task_bundle.runtime.container_env_file])
+    if task_bundle.runtime.container_image_source:
+        command.extend(["--container-image-source", task_bundle.runtime.container_image_source])
+        _append_optional_flag(command, "--image-dir", dict(task_bundle.runtime.construct_cache or {}).get("image_dir"))
+    if task_bundle.runtime.serve_args:
+        command.extend(["--serve-args-json", json.dumps(task_bundle.runtime.serve_args, sort_keys=True)])
+    for volume in task_bundle.runtime.volume_mounts:
+        command.extend(["--volume", volume])
+    for arg in task_bundle.runtime.pyxis_srun_extra_args:
+        command.extend(["--pyxis-srun-arg", arg])
+    if env_file is not None:
+        command.extend(["--env-file", str(env_file)])
+    if readiness_timeout_s is not None:
+        command.extend(["--readiness-timeout-s", str(readiness_timeout_s)])
+    if prune_logs_on_success:
+        command.append("--prune-logs-on-success")
+    command.extend(
+        [
+            "--",
+            "medarc-eval",
+            "bench",
+            "--config",
+            task_bundle.runtime.bundled_eval_config_path,
+            "--api-base-url",
+            f"http://127.0.0.1:{server_port}/v1",
+            "--provider",
+            "local",
+            "--output-dir",
+            task_bundle.runtime.output_paths.bench_dir,
+        ]
+    )
+    return command
+
+
 def _render_auxiliary_images(auxiliary_images: list[AuxiliaryImageSpec], *, task_bundle: PlannedTaskBundle) -> list[str]:
     if not auxiliary_images:
         return []
-    dynamic_port_auxiliary_images = [auxiliary_image for auxiliary_image in auxiliary_images if _auxiliary_image_uses_dynamic_port(auxiliary_image)]
+    dynamic_port_auxiliary_images = [
+        auxiliary_image for auxiliary_image in auxiliary_images if _auxiliary_image_uses_dynamic_port(auxiliary_image)
+    ]
+    state_path = str(Path(task_bundle.runtime.output_paths.root) / "runtime" / "state.json")
+    result_path = str(Path(task_bundle.runtime.output_paths.root) / "runtime" / "result.json")
     lines: list[str] = [
         "AUX_IMAGE_PIDS=()",
         "AUX_IMAGE_PORTS=()",
@@ -443,11 +508,23 @@ def _render_auxiliary_images(auxiliary_images: list[AuxiliaryImageSpec], *, task
         "record_auxiliary_image_failure() {",
         '    reason="$1"',
         '    message="$2"',
-        "    medarc-orchestrate record-failure \\",
-        f"        --task-spec {shlex.quote(task_bundle.spec.output_paths.task_spec_path)} \\",
-        f"        --allocation {shlex.quote(task_bundle.spec.output_paths.allocation_path)} \\",
-        '        --reason "$reason" \\',
-        '        --message "$message"',
+        f"    python3 - {shlex.quote(state_path)} {shlex.quote(result_path)} "
+        f"{shlex.quote(task_bundle.runtime.task_id)} \"$reason\" \"$message\" <<'PY'",
+        "import json",
+        "import sys",
+        "from datetime import datetime, timezone",
+        "from pathlib import Path",
+        "",
+        "state_path = Path(sys.argv[1])",
+        "result_path = Path(sys.argv[2])",
+        "task_id = sys.argv[3]",
+        "reason = sys.argv[4]",
+        "message = sys.argv[5]",
+        "updated_at = datetime.now(timezone.utc).isoformat()",
+        "state_path.parent.mkdir(parents=True, exist_ok=True)",
+        "state_path.write_text(json.dumps({'task_id': task_id, 'state': 'failed', 'updated_at': updated_at}, indent=2), encoding='utf-8')",
+        "result_path.write_text(json.dumps({'task_id': task_id, 'state': 'failed', 'failure_reason': reason, 'error': message, 'updated_at': updated_at}, indent=2), encoding='utf-8')",
+        "PY",
         "}",
         "",
     ]
@@ -472,7 +549,7 @@ def _render_auxiliary_image(auxiliary_image: AuxiliaryImageSpec, *, task_bundle:
     port_var = _auxiliary_image_port_var(auxiliary_image) if _auxiliary_image_uses_dynamic_port(auxiliary_image) else None
     log_var = f"AUX_IMAGE_LOG_{suffix}"
     pid_var = f"AUX_IMAGE_PID_{suffix}"
-    log_path = str(Path(task_bundle.spec.output_paths.auxiliary_image_dir) / f"{auxiliary_image.name}.log")
+    log_path = str(Path(task_bundle.runtime.output_paths.auxiliary_image_dir) / f"{auxiliary_image.name}.log")
     lines: list[str] = [
         f"{log_var}={shlex.quote(log_path)}",
         f'mkdir -p "$(dirname "${log_var}")"',
@@ -639,23 +716,19 @@ def _render_eval_image_injections(auxiliary_images: list[AuxiliaryImageSpec], *,
     ]
     if not injections:
         return []
-    config_path = task_bundle.spec.bundled_eval_config_path
-    task_spec_path = task_bundle.spec.output_paths.task_spec_path
+    config_path = task_bundle.runtime.bundled_eval_config_path
     injection_json = json.dumps(injections, sort_keys=True)
     return [
-        f"python3 - {shlex.quote(config_path)} {shlex.quote(task_spec_path)} <<'PY'",
-        "import hashlib",
+        f"python3 - {shlex.quote(config_path)} <<'PY'",
         "import json",
         "import os",
         "import sys",
         "import tomllib",
         "from pathlib import Path",
-        "from omegaconf import OmegaConf",
         "from medarc_verifiers.orchestrate.config import render_toml_mapping",
         "",
         f"injections = json.loads({json.dumps(injection_json)})",
         "path = Path(sys.argv[1])",
-        "task_spec_path = Path(sys.argv[2])",
         "payload = tomllib.loads(path.read_text(encoding='utf-8'))",
         "for section_name in ('eval', 'ablation'):",
         "    entries = payload.get(section_name) or []",
@@ -681,12 +754,6 @@ def _render_eval_image_injections(auxiliary_images: list[AuxiliaryImageSpec], *,
         "            entry['env_args'] = env_args",
         "rendered = render_toml_mapping(payload)",
         "path.write_text(rendered, encoding='utf-8')",
-        "checksum = hashlib.sha256(rendered.encode('utf-8')).hexdigest()",
-        "task_spec = OmegaConf.to_container(OmegaConf.load(task_spec_path), resolve=True)",
-        "task_spec['bundled_eval_config_checksum'] = checksum",
-        "tmp_path = task_spec_path.with_suffix(task_spec_path.suffix + '.tmp')",
-        "OmegaConf.save(config=OmegaConf.create(task_spec), f=str(tmp_path))",
-        "tmp_path.replace(task_spec_path)",
         "PY",
     ]
 
@@ -727,6 +794,15 @@ def _sbatch_line(flag: str, value: object) -> str | None:
     if value is None:
         return None
     return f"#SBATCH {flag}={value}"
+
+
+def _append_optional_flag(command: list[str], flag: str, value: object) -> None:
+    if value is None:
+        return
+    rendered = str(value)
+    if not rendered:
+        return
+    command.extend([flag, rendered])
 
 
 def _default_server_port(run_id: str, submission_order: int, *, min_port: int = 8000, max_port: int = 65000) -> int:

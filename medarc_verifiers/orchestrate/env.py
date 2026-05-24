@@ -8,15 +8,15 @@ from typing import Mapping
 
 from dotenv import dotenv_values
 
-from medarc_verifiers.orchestrate.bundle import ExecutionAllocation, ResolvedTaskSpec
 from medarc_verifiers.orchestrate.runtime import RuntimeLaunchError
 
 
-def load_runtime_env(
-    spec: ResolvedTaskSpec,
+def load_explicit_runtime_env(
     *,
-    allocation: ExecutionAllocation | None = None,
     env_file: Path | None = None,
+    container_env_file: Path | None = None,
+    container_env_base_dir: Path | None = None,
+    env_overrides: Mapping[str, str] | None = None,
     repo_root: Path | None = None,
 ) -> dict[str, str]:
     env: dict[str, str] = {}
@@ -27,11 +27,10 @@ def load_runtime_env(
         default_env = root / ".env"
         if default_env.exists():
             env.update(load_env_file(default_env, base_dir=root))
-    if spec.container_env_file:
-        base_dir = Path(spec.orchestrate_registry_path).parent if spec.orchestrate_registry_path else root
-        env.update(load_env_file(spec.container_env_file, base_dir=base_dir))
-    if allocation is not None:
-        env.update(dict(allocation.runtime_env))
+    if container_env_file is not None:
+        env.update(load_env_file(container_env_file, base_dir=container_env_base_dir or root))
+    if env_overrides is not None:
+        env.update(dict(env_overrides))
     if not env.get("HF_TOKEN"):
         token = load_hf_token_from_login()
         if token:
@@ -74,4 +73,4 @@ def load_env_file(path: object, *, base_dir: Path) -> dict[str, str]:
     return {key: value for key, value in values.items() if value is not None}
 
 
-__all__ = ["apply_env", "load_env_file", "load_hf_token_from_login", "load_runtime_env"]
+__all__ = ["apply_env", "load_env_file", "load_explicit_runtime_env", "load_hf_token_from_login"]

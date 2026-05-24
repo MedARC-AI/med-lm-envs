@@ -17,23 +17,12 @@ from medarc_verifiers.orchestrate.podman_vllm import cleanup_orphan_containers a
 from medarc_verifiers.orchestrate.slurm.submit import SlurmSubmissionOptions, submit_slurm_launch_plan
 
 
-def build_record_failure_parser(*, prog: str = "medarc-orchestrate record-failure") -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog=prog, description="Record a bundled orchestrator task failure before worker start."
-    )
-    parser.add_argument("--task-spec", type=Path, required=True, help="Path to bundled task.yaml.")
-    parser.add_argument("--allocation", type=Path, required=True, help="Path to execution allocation JSON.")
-    parser.add_argument("--reason", required=True, help="Machine-readable failure reason.")
-    parser.add_argument("--message", required=True, help="Human-readable failure message.")
-    return parser
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="medarc-orchestrate",
         description="Run Slurm/Pyxis vLLM orchestration.",
     )
-    subparsers = parser.add_subparsers(dest="command", metavar="{run,status,cleanup}")
+    subparsers = parser.add_subparsers(dest="command", metavar="{run,prepare,launch,teardown,status,cleanup}")
     subparsers.required = True
 
     run_parser = subparsers.add_parser("run", description="Submit Slurm orchestration jobs.")
@@ -47,6 +36,17 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--endpoints-path", type=Path, help="Path to endpoint registry TOML.")
     _add_slurm_arguments(run_parser)
     run_parser.set_defaults(handler=_run_launch)
+
+    prepare_parser = subparsers.add_parser(
+        "prepare", description="Prepare model weights and/or materialized images."
+    )
+    prepare_parser.set_defaults(handler=lambda _args: main(["prepare", "--help"]))
+
+    launch_parser = subparsers.add_parser("launch", description="Start vLLM and run the benchmark command after --.")
+    launch_parser.set_defaults(handler=lambda _args: main(["launch", "--help"]))
+
+    teardown_parser = subparsers.add_parser("teardown", description="Remove explicit prepared cache artifacts.")
+    teardown_parser.set_defaults(handler=lambda _args: main(["teardown", "--help"]))
 
     status_parser = subparsers.add_parser("status", description="Print orchestrator status artifacts.")
     status_parser.add_argument("--run-id", help="Run identifier under outputs/orchestrate.")
@@ -140,15 +140,15 @@ def _run_status(args: argparse.Namespace) -> int:
                 for field in (
                     "task_id",
                     "submit_state",
-                    "worker_state",
+                    "runtime_state",
                     "slurm_job_id",
                     "endpoint_id",
                     "model_id",
                     "suite",
                     "failure_reason",
                     "error",
-                    "construct_state",
-                    "construct_slurm_job_id",
+                    "prepare_state",
+                    "prepare_slurm_job_id",
                     "eval_state",
                     "eval_slurm_job_id",
                     "teardown_state",
@@ -167,14 +167,12 @@ def _run_cleanup(args: argparse.Namespace) -> int:
 
 
 def _load_combined_status(output_root: Path) -> dict[str, object]:
-    manifest_path = output_root / "submission_manifest.json"
+    manifest_path = output_root / "slurm_manifest.json"
     summary_path = output_root / "summary.json"
     manifest = _load_json_artifact(manifest_path) if manifest_path.exists() else None
     summary = _load_json_artifact(summary_path) if summary_path.exists() else None
-    if manifest is None and summary is None:
-        raise SystemExit(
-            f"No orchestrator status found at {output_root}: missing submission_manifest.json and summary.json."
-        )
+    if manifest is None:
+        raise SystemExit(f"No orchestrator status found at {output_root}: missing slurm_manifest.json.")
     rows: dict[str, dict[str, object]] = {}
     if isinstance(manifest, dict):
         for entry in manifest.get("entries", []) or []:
@@ -198,7 +196,7 @@ def _load_combined_status(output_root: Path) -> dict[str, object]:
                 continue
             task_id = str(entry.get("task_id") or "")
             phase = str(entry.get("phase") or "")
-            if phase not in {"construct", "teardown"}:
+            if phase not in {"prepare", "teardown"}:
                 continue
             row = rows.setdefault(task_id, {"task_id": task_id})
             row[f"{phase}_state"] = entry.get("state")
@@ -212,7 +210,7 @@ def _load_combined_status(output_root: Path) -> dict[str, object]:
             row = rows.setdefault(task_id, {"task_id": task_id})
             row.update(
                 {
-                    "worker_state": entry.get("state"),
+                    "runtime_state": entry.get("state"),
                     "model_id": entry.get("model_id"),
                     "failure_reason": entry.get("failure_reason"),
                     "error": entry.get("error"),
@@ -220,7 +218,7 @@ def _load_combined_status(output_root: Path) -> dict[str, object]:
             )
     return {
         "output_root": str(output_root),
-        "submission_manifest": manifest,
+        "slurm_manifest": manifest,
         "summary": summary,
         "tasks": [rows[key] for key in sorted(rows)],
     }
@@ -245,87 +243,49 @@ def _require_source(args: argparse.Namespace) -> None:
 def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
-    if argv and argv[0] == "worker":
+    if argv and argv[0] == "launch":
         from medarc_verifiers.orchestrate.worker import main as worker_main
 
         return worker_main(argv[1:])
-    if argv and argv[0] == "construct":
-        from medarc_verifiers.orchestrate.lifecycle import build_construct_parser, run_construct
+    if argv and argv[0] == "prepare":
+        from medarc_verifiers.orchestrate.lifecycle import build_prepare_parser, run_prepare
 
-        args = build_construct_parser().parse_args(argv[1:])
-        return run_construct(
-            task_path=args.task.expanduser().resolve(),
-            allocation_path=args.allocation.expanduser().resolve(),
+        args = build_prepare_parser().parse_args(argv[1:])
+        return run_prepare(
+            model=args.model,
+            result_path=args.result.expanduser().resolve() if args.result is not None else None,
             env_file=args.env_file.expanduser().resolve() if args.env_file is not None else None,
-            prefetch_model_flag=bool(args.prefetch_model),
-            materialize_image_flag=bool(args.materialize_image),
+            hf_home=args.hf_home.expanduser().resolve() if args.hf_home is not None else None,
+            hub_cache=args.hub_cache.expanduser().resolve() if args.hub_cache is not None else None,
+            image=args.image,
+            image_dir=args.image_dir.expanduser().resolve() if args.image_dir is not None else None,
+            image_output=args.image_output.expanduser().resolve() if args.image_output is not None else None,
+            latest_link=bool(args.latest_link),
+            prefetch_model_flag=bool(args.prefetch_model) if (args.prefetch_model or args.materialize_image) else None,
+            materialize_image_flag=(
+                bool(args.materialize_image) if (args.prefetch_model or args.materialize_image) else None
+            ),
         )
     if argv and argv[0] == "teardown":
         from medarc_verifiers.orchestrate.lifecycle import build_teardown_parser, run_teardown
 
         args = build_teardown_parser().parse_args(argv[1:])
         return run_teardown(
-            task_path=args.task.expanduser().resolve(),
-            allocation_path=args.allocation.expanduser().resolve(),
+            result_path=args.result.expanduser().resolve(),
+            model=args.model,
             env_file=args.env_file.expanduser().resolve() if args.env_file is not None else None,
+            hub_cache=args.hub_cache.expanduser().resolve() if args.hub_cache is not None else None,
+            remove_model_weights=bool(args.remove_model_weights),
+            remove_image=args.remove_image.expanduser().resolve() if args.remove_image is not None else None,
+            image_root=args.image_root.expanduser().resolve() if args.image_root is not None else None,
+            prepare_result=args.prepare_result.expanduser().resolve() if args.prepare_result is not None else None,
         )
-    if argv and argv[0] == "record-failure":
-        return _run_record_failure(build_record_failure_parser().parse_args(argv[1:]))
     parser = build_parser()
     args = parser.parse_args(argv)
     return args.handler(args)
 
 
-__all__ = ["build_parser", "build_record_failure_parser", "main"]
-
-
-def _run_record_failure(args: argparse.Namespace) -> int:
-    from medarc_verifiers.orchestrate.bundle import (
-        RuntimeState,
-        load_execution_allocation,
-        load_task_spec,
-        write_runtime_state,
-    )
-    from medarc_verifiers.orchestrate.state import (
-        JobState,
-        TaskManifest,
-        TaskPaths,
-        upsert_summary_entry,
-        write_task_manifest,
-        write_task_result,
-    )
-
-    task_spec = load_task_spec(args.task_spec.expanduser().resolve())
-    allocation = load_execution_allocation(args.allocation.expanduser().resolve())
-    if allocation is None:
-        raise FileNotFoundError(f"Execution allocation not found: {args.allocation}")
-    paths = TaskPaths(Path(task_spec.output_paths.root))
-    manifest = TaskManifest(
-        task_id=task_spec.task_id,
-        config_path=task_spec.bundled_eval_config_path,
-        model_key=task_spec.model_key,
-        model_id=task_spec.model_id,
-        state=JobState.failed,
-        failure_reason=str(args.reason),
-        error=str(args.message),
-        gpu_ids=list(allocation.gpu_ids),
-        port=allocation.server_port,
-        gpus=task_spec.gpus,
-        tensor_parallel_size=task_spec.tensor_parallel_size,
-        data_parallel_size=task_spec.data_parallel_size,
-        allocated_gpus=allocation.allocated_gpus,
-    )
-    manifest.completed_at = manifest.updated_at
-    write_task_manifest(paths, manifest)
-    write_task_result(
-        paths, {"state": JobState.failed, "failure_reason": manifest.failure_reason, "error": manifest.error}
-    )
-    write_runtime_state(
-        paths.state_path,
-        RuntimeState(task_id=task_spec.task_id, state=JobState.failed),
-    )
-    upsert_summary_entry(paths.root.parents[1] / "summary.json", manifest)
-    return 0
+__all__ = ["build_parser", "main"]
 
 
 def _cleanup_orphans(*, runtime: str, run_id: str | None) -> list[str]:

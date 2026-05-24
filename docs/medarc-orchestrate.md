@@ -1,6 +1,6 @@
 ## vLLM Orchestrator
 
-`medarc-orchestrate` submits eval suites to Slurm/Pyxis vLLM workers. The suite is ordinary `medarc-eval bench` TOML without a model selection; the launch plan chooses endpoint targets and the orchestrator generates task-local bench configs.
+`medarc-orchestrate` submits eval suites to Slurm/Pyxis vLLM jobs. The suite is ordinary `medarc-eval bench` TOML without a model selection; the launch plan chooses endpoint targets and the orchestrator generates task-local bench configs and readable Slurm scripts.
 
 ### Concepts
 
@@ -48,7 +48,7 @@ uv run medarc-orchestrate run --plan configs/qwen3_5-4b-medmarks-verified-plan.t
 
 ### Auxiliary Images
 
-`eval_images_config` selects auxiliary Pyxis images by eval or env id. These images launch inside the same Slurm allocation before the worker starts. Use `{port}` in an auxiliary image command, env, readiness URL, or injected env arg when the image needs a per-job node-local port.
+`eval_images_config` selects auxiliary Pyxis images by eval or env id. These images are rendered directly into each task's `submit.sh` and launch inside the same Slurm allocation before `medarc-orchestrate launch` starts vLLM. Use `{port}` in an auxiliary image command, env, readiness URL, or injected env arg when the image needs a per-job node-local port.
 
 ```toml
 [[eval_image]]
@@ -99,7 +99,7 @@ gpus = 1
 image = "vllm/vllm-openai:latest"
 ```
 
-Container mounts that are specific to a launch belong in plan `[container]`, not endpoint metadata. Slurm policy such as account, partition, qos, and nice comes from explicit CLI flags or `[endpoint.orchestrate.slurm]`. If construct image materialization is enabled, mutable image tags such as `:latest` are resolved to immutable registry digests before import.
+Container mounts that are specific to a launch belong in plan `[container]`, not endpoint metadata. Slurm policy such as account, partition, qos, and nice comes from explicit CLI flags or `[endpoint.orchestrate.slurm]`. If prepare image materialization is enabled, mutable image tags such as `:latest` are resolved to immutable registry digests before import.
 
 ### Slurm Usage
 
@@ -114,19 +114,19 @@ Common flags:
 - `--dependency` applies an sbatch dependency to submitted tasks.
 - `--prune-logs-on-success` removes per-task serve and bench logs after successful tasks.
 
-Status reads the Slurm submission manifest and worker summary when present:
+Status reads `slurm_manifest.json` and task runtime summary/output files when present. There is no backward compatibility for old local orchestrator runs that wrote the previous manifest or task/allocation artifact shape.
 
 ```bash
 uv run medarc-orchestrate status --run-id qwen-run
 uv run medarc-orchestrate status --output-dir outputs/orchestrate/qwen-run --json
 ```
 
-### Construct and Teardown Jobs
+### Prepare and Teardown Jobs
 
-Plans may opt into CPU-only lifecycle jobs around each GPU eval task. The construct phase can prefetch Hugging Face model weights into the cache mounted into the vLLM container and materialize the vLLM OCI image into a deterministic Enroot/Pyxis `.sqsh` image. The eval job then depends on construct with `afterok`; optional teardown depends on eval with `afterany`.
+Plans may opt into CPU-only lifecycle jobs around each GPU eval task. The prepare phase can prefetch Hugging Face model weights into the cache mounted into the vLLM container and materialize the vLLM OCI image into a deterministic Enroot/Pyxis `.sqsh` image. The eval job then depends on prepare with `afterok`; optional teardown depends on eval with `afterany`.
 
 ```toml
-[construct]
+[prepare]
 enabled = true
 cpus = 8
 time = "02:00:00"
@@ -134,7 +134,7 @@ partition = "cpu"
 prefetch_model_weights = true
 materialize_images = true
 
-[construct.cache]
+[prepare.cache]
 # Optional when inferred from a /root/.cache/huggingface volume.
 hf_home = "/path/to/hf-cache"
 hub_cache = "/path/to/hf-cache/hub"
@@ -147,9 +147,9 @@ remove_model_weights = false
 remove_images = false
 ```
 
-When `[container].volumes` includes `/path/to/hf-cache:/root/.cache/huggingface`, construct infers `hf_home = "/path/to/hf-cache"` and `hub_cache = "/path/to/hf-cache/hub"`. The Pyxis worker receives the matching container-side cache env vars: `HF_HOME=/root/.cache/huggingface` and `HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub`.
+When `[container].volumes` includes `/path/to/hf-cache:/root/.cache/huggingface`, prepare infers `hf_home = "/path/to/hf-cache"` and `hub_cache = "/path/to/hf-cache/hub"`. The Pyxis launch receives the matching container-side cache env vars: `HF_HOME=/root/.cache/huggingface` and `HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub`.
 
-Image materialization uses direct `enroot import` before the GPU job starts. For regular tags or digest-pinned images, construct writes a deterministic `.sqsh` path under `[construct.cache].image_dir`. For mutable tags such as `:latest`, construct first queries the registry, resolves the tag to a digest, imports the digest-specific image if needed, and atomically updates `latest.sqsh` and `latest` symlinks to that image. Existing absolute `.sqsh` image paths are treated as already materialized and are left unchanged.
+Image materialization uses direct `enroot import` before the GPU job starts. For regular tags or digest-pinned images, prepare writes a deterministic `.sqsh` path under `[prepare.cache].image_dir`. For mutable tags such as `:latest`, prepare first queries the registry, resolves the tag to a digest, imports the digest-specific image if needed, and atomically updates `latest.sqsh` and `latest` symlinks to that image. Existing absolute `.sqsh` image paths are treated as already materialized and are left unchanged.
 
 Teardown deletion is intentionally conservative. Model-weight deletion is only for isolated per-run cache roots; shared production caches should leave teardown disabled and rely on a separate retention policy. For preemptible idle-capacity jobs, use Slurm requeue for the eval job. The teardown `afterany` dependency is expected to release only after the same requeued eval job id reaches final completion.
 
@@ -158,19 +158,23 @@ Teardown deletion is intentionally conservative. Model-weight deletion is only f
 Before launching a task, the orchestrator creates a bundle under `outputs/orchestrate/<run_id>/tasks/<task-slug>/`:
 
 - `eval-config.toml`: generated task-local bench config.
-- `task.yaml`: resolved worker spec.
+- `prepare.sh`: optional CPU-only cache/image preparation script.
+- `submit.sh`: GPU script that starts auxiliary images, launches vLLM, and runs `medarc-eval bench`.
+- `teardown.sh`: optional CPU-only cleanup script.
 - `orchestrate-snapshot.toml`: matched endpoint runtime entry and registry provenance.
 - `eval_images-snapshot.toml`: selected eval images and registry provenance.
-- `allocation.json`: GPU/port allocation for the worker.
-- `construct.sh` / `teardown.sh`: CPU-only lifecycle scripts when enabled.
-- `runtime/construct_result.json` / `runtime/teardown_result.json`: lifecycle result artifacts when enabled.
+- `runtime/prepare_result.json` / `runtime/teardown_result.json`: lifecycle result artifacts when enabled.
+- `runtime/`: runtime state, result, and summary files.
+- `serve/`: vLLM logs and serve-side runtime files.
 - `bench/`: task-local `medarc-eval bench --output-dir` root.
-- `serve/` and `runtime/`: runtime logs, state, and task manifest files.
 
-Workers run:
+Task bundles do not contain `task.yaml`, `allocation.json`, `construct-allocation.json`, or `teardown-allocation.json`. The generated scripts carry the explicit command arguments instead.
+
+`submit.sh` runs:
 
 ```bash
-medarc-eval bench --config <task>/eval-config.toml --api-base-url <local-url> --provider local --output-dir <task>/bench
+medarc-orchestrate launch <explicit vLLM/container/port flags> -- \
+  medarc-eval bench --config <task>/eval-config.toml --api-base-url <local-url> --provider local --output-dir <task>/bench
 ```
 
 ### Processing Outputs

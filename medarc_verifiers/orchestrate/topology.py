@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from medarc_verifiers.orchestrate.bundle import ResolvedTaskSpec
 from medarc_verifiers.orchestrate.config import TaskSpec
 
 ALLOWED_ALLOCATED_GPU_SHAPES = frozenset({1, 2, 4, 8})
@@ -57,18 +56,21 @@ def resolve_topology(
     )
 
 
-def resolve_task_spec_topology(
-    task_spec: ResolvedTaskSpec,
+def resolve_launch_topology(
     *,
+    task_id: str,
+    gpus: int,
     allocated_gpus: int,
+    tensor_parallel_size: int,
+    data_parallel_size: int | None = None,
     allow_explicit_data_parallel: bool = True,
 ) -> ResolvedTopology:
     return _resolve_topology(
-        task_id=task_spec.task_id,
-        gpus=task_spec.gpus,
+        task_id=task_id,
+        gpus=gpus,
         allocated_gpus=allocated_gpus,
-        tensor_parallel_size=task_spec.tensor_parallel_size,
-        explicit_data_parallel=task_spec.data_parallel_size,
+        tensor_parallel_size=tensor_parallel_size,
+        explicit_data_parallel=data_parallel_size,
         allow_explicit_data_parallel=allow_explicit_data_parallel,
     )
 
@@ -148,7 +150,7 @@ __all__ = [
     "ResolvedTopology",
     "configured_tensor_parallel_size",
     "minimum_required_gpus",
+    "resolve_launch_topology",
     "resolve_topology",
-    "resolve_task_spec_topology",
     "task_sort_key",
 ]
