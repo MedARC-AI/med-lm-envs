@@ -2388,9 +2388,11 @@ enable_thinking = false
 gpus = 1
 
 [endpoint.orchestrate.vllm.serve]
-gpu_memory_utilization = 0.94
+gpu_memory_utilization = 0.92
 max_num_batched_tokens = 32768
 max_num_seqs = 768
+enable_chunked_prefill = true
+enable_prefix_caching = true
 reasoning_parser = "qwen3"
 tool_call_parser = "qwen3_coder"
 language_model_only = true
@@ -2416,9 +2418,11 @@ enable_thinking = true
 gpus = 1
 
 [endpoint.orchestrate.vllm.serve]
-gpu_memory_utilization = 0.94
+gpu_memory_utilization = 0.92
 max_num_batched_tokens = 32768
 max_num_seqs = 768
+enable_chunked_prefill = true
+enable_prefix_caching = true
 reasoning_parser = "qwen3"
 tool_call_parser = "qwen3_coder"
 language_model_only = true

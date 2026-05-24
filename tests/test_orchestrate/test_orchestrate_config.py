@@ -407,4 +407,5 @@ reasoning_parser = "qwen3"
     assert model["slurm"]["nice"] == 500
     assert model["vllm"]["serve"]["max_model_len"] == 40960
     assert model["vllm"]["serve"]["reasoning_parser"] == "qwen3"
+    assert model["vllm"]["serve"]["performance_mode"] == "throughput"
     assert model["vllm"]["serve"]["async_scheduling"] is True

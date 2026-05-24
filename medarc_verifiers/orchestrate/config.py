@@ -31,6 +31,7 @@ DEFAULT_PYXIS_CONFIG: Mapping[str, Any] = {
 }
 DEFAULT_VLLM_SERVE_CONFIG: Mapping[str, Any] = {
     "gpu_memory_utilization": 0.90,
+    "performance_mode": "throughput",
     "max_model_len": 32768,
     "async_scheduling": True,
     "enable_prefix_caching": True,
@@ -625,6 +626,7 @@ def _validate_endpoint_orchestration_registry(payload: Mapping[str, Any], *, sou
                     "dtype",
                     "max_model_len",
                     "gpu_memory_utilization",
+                    "performance_mode",
                     "max_num_seqs",
                     "max_num_batched_tokens",
                     "tokenizer_mode",
