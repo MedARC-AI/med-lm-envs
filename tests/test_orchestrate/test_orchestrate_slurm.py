@@ -1,5 +1,6 @@
 import json
 import re
+import shlex
 import tomllib
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from medarc_verifiers.orchestrate.slurm.manifest import SlurmBundleManifest
 from medarc_verifiers.orchestrate.slurm.plan import build_submission_plan
 from medarc_verifiers.orchestrate.slurm.render import render_bundle
 from medarc_verifiers.orchestrate.slurm.submit import SlurmSubmissionOptions, mark_dry_run, submit_bundle, submit_lifecycle_bundle
+from medarc_verifiers.orchestrate.worker import build_parser as build_launch_parser
 
 
 _JOB_META: dict[Path, dict[str, object]] = {}
@@ -826,7 +828,10 @@ def test_slurm_render_starts_auxiliary_image_before_launch(tmp_path: Path) -> No
     assert script.index("srun --overlap") < script.index("medarc-orchestrate launch")
     assert "'--container-image=/tmp/image with space.sqsh'" in script
     assert "/usr/bin/java --class-path '/app/main war'" in script
-    assert "--pyxis-srun-arg --overlap" in script
+    assert "--pyxis-srun-arg=--overlap" in script
+    launch_line = next(line for line in script.splitlines() if line.startswith("medarc-orchestrate launch "))
+    parsed = build_launch_parser().parse_args(shlex.split(launch_line)[2:])
+    assert parsed.pyxis_srun_arg == ["--overlap"]
 
 
 def test_slurm_render_auxiliary_image_has_exit_trap(tmp_path: Path) -> None:

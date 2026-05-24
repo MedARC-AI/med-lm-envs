@@ -458,7 +458,7 @@ def _launch_command(
     for volume in task_bundle.runtime.volume_mounts:
         command.extend(["--volume", volume])
     for arg in task_bundle.runtime.pyxis_srun_extra_args:
-        command.extend(["--pyxis-srun-arg", arg])
+        command.append(f"--pyxis-srun-arg={arg}")
     if env_file is not None:
         command.extend(["--env-file", str(env_file)])
     if readiness_timeout_s is not None:
