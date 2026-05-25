@@ -403,8 +403,8 @@ reasoning_parser = "qwen3"
     assert model["vllm"]["tensor_parallel_size"] == 2
     assert model["container"]["image"] == "vllm/vllm-openai:latest"
     assert model["pyxis"] == {"srun_extra_args": ["--overlap"]}
-    assert model["slurm"]["qos"] == "low"
-    assert model["slurm"]["nice"] == 500
+    assert model["slurm"]["qos"] == "bottom"
+    assert model["slurm"]["nice"] == -1
     assert model["vllm"]["serve"]["max_model_len"] == 40960
     assert model["vllm"]["serve"]["reasoning_parser"] == "qwen3"
     assert model["vllm"]["serve"]["performance_mode"] == "throughput"

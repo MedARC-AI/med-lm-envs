@@ -104,6 +104,7 @@ Container mounts that are specific to a launch belong in plan `[container]`, not
 ### Slurm Usage
 
 Slurm options come from CLI overrides first, then `[endpoint.orchestrate.slurm]`, then built-in defaults. GPU allocation is derived per task from `[endpoint.orchestrate.vllm].gpus`; there is no Python-side concurrency throttle.
+The built-in Slurm defaults use `qos = "bottom"` with `nice = -1`, giving orchestrated jobs a slight priority boost over other bottom-QoS jobs that leave nice unset.
 
 Common flags:
 

@@ -210,6 +210,48 @@ top_p = 0.9
     assert config.sampling_args["top_p"] == 0.9
 
 
+def test_build_eval_config_attaches_endpoint_reasoning_field(tmp_path: Path) -> None:
+    endpoints_path = tmp_path / "endpoints.toml"
+    endpoints_path.write_text(
+        """
+[[endpoint]]
+endpoint_id = "trinity"
+model = "arcee-ai/Trinity-Large-Thinking-FP8-Block"
+url = "http://localhost:8000/v1"
+key = "VLLM_API_KEY"
+reasoning_field = "reasoning"
+""".strip()
+    )
+
+    config = build_eval_config({"env_id": "medqa", "endpoint_id": "trinity", "endpoints_path": str(endpoints_path)})
+
+    assert getattr(config.client_config, "reasoning_field") == "reasoning"
+
+
+def test_build_eval_config_rejects_conflicting_replica_reasoning_fields(tmp_path: Path) -> None:
+    endpoints_path = tmp_path / "endpoints.toml"
+    endpoints_path.write_text(
+        """
+[[endpoint]]
+endpoint_id = "replica"
+model = "org/model"
+url = "http://localhost:8001/v1"
+key = "KEY_A"
+reasoning_field = "reasoning"
+
+[[endpoint]]
+endpoint_id = "replica"
+model = "org/model"
+url = "http://localhost:8002/v1"
+key = "KEY_B"
+reasoning_field = "none"
+""".strip()
+    )
+
+    with pytest.raises(ValueError, match="conflicting reasoning_field"):
+        build_eval_config({"env_id": "medqa", "endpoint_id": "replica", "endpoints_path": str(endpoints_path)})
+
+
 def test_build_eval_config_supports_endpoint_replicas(tmp_path: Path) -> None:
     endpoints_path = _write_endpoints(tmp_path / "endpoints.toml")
 

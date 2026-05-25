@@ -42,6 +42,7 @@ DEFAULT_PROVIDER = "prime"
 ADAPTER_TOML_FIELDS = {"debug", "header_from_state", "headers_from_state", "timeout"}
 MEDARC_TOML_METADATA_FIELD = "medarc"
 MEDARC_TOML_IDENTITY_FIELDS = {"name", "variant_id"}
+VALID_REASONING_FIELDS = {"reasoning", "reasoning_content", "none"}
 
 PROVIDER_CONFIGS: dict[str, dict[str, str]] = {
     "prime": {
@@ -176,6 +177,15 @@ def _load_endpoint_registry(endpoints_path: str) -> dict[str, list[Endpoint]]:
             endpoint["key"] = resolved_key
         if client_type is not None:
             endpoint["api_client_type"] = cast(ClientType, client_type)
+
+        reasoning_field = raw_entry.get("reasoning_field")
+        if reasoning_field is not None:
+            if not isinstance(reasoning_field, str) or reasoning_field not in VALID_REASONING_FIELDS:
+                raise ValueError(
+                    f"Endpoint '{endpoint_id}' reasoning_field must be one of "
+                    f"{sorted(VALID_REASONING_FIELDS)} in {entry_source}"
+                )
+            endpoint["reasoning_field"] = reasoning_field  # type: ignore[typeddict-unknown-key]
 
         raw_headers = raw_entry.get("headers")
         raw_extra_headers = raw_entry.get("extra_headers")
@@ -443,6 +453,16 @@ def _build_client_config(
         registry_headers_base = dict(endpoint_group[0].get("extra_headers", {}))
     merged_headers = {**prime_headers, **registry_headers_base, **eval_headers_merged}
 
+    reasoning_fields: set[str | None] = set()
+    if endpoint_group is not None:
+        reasoning_fields = {cast(str | None, endpoint.get("reasoning_field")) for endpoint in endpoint_group}
+        if len(reasoning_fields) > 1:
+            raise ValueError(
+                f"Endpoint alias '{resolved_endpoint_id}' has conflicting reasoning_field values across replicas. "
+                "Use the same reasoning_field for every replica or omit it from every replica."
+            )
+    reasoning_field = next(iter(reasoning_fields), None)
+
     endpoint_configs: list[EndpointClientConfig] = []
     if (
         endpoint_group is not None
@@ -474,6 +494,8 @@ def _build_client_config(
         client_kwargs["max_retries"] = raw["http_max_retries"]
 
     client_config = ClientConfig(**client_kwargs)
+    if reasoning_field is not None:
+        object.__setattr__(client_config, "reasoning_field", reasoning_field)
     return cast(str, model), resolved_endpoint_id, client_config
 
 

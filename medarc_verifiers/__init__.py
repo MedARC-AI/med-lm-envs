@@ -15,3 +15,19 @@ try:
         )
 except ImportError as e:
     logging.getLogger(__name__).warning(f"Could not import judge_cache_fix: {e}")
+
+# Honor MedARC endpoint reasoning_field overrides without modifying upstream
+# Verifiers' source tree.
+try:
+    from medarc_verifiers.utils.reasoning_field_patch import install_reasoning_field_patch
+
+    _REASONING_FIELD_PATCH_INSTALLED = install_reasoning_field_patch()
+    if _REASONING_FIELD_PATCH_INSTALLED:
+        logging.getLogger(__name__).debug("OpenAI chat reasoning_field overrides enabled")
+    else:
+        logging.getLogger(__name__).warning(
+            "OpenAI chat reasoning_field patch failed to initialize. "
+            "Endpoint reasoning_field values will be ignored."
+        )
+except ImportError as e:
+    logging.getLogger(__name__).warning(f"Could not import reasoning_field_patch: {e}")

@@ -22,8 +22,8 @@ DEFAULT_CONTAINER_CONFIG: Mapping[str, Any] = {
     "ipc_mode": "host",
 }
 DEFAULT_SLURM_CONFIG: Mapping[str, Any] = {
-    "qos": "low",
-    "nice": 500,
+    "qos": "bottom",
+    "nice": -1,
     "slurm_resume": True,
 }
 DEFAULT_PYXIS_CONFIG: Mapping[str, Any] = {
