@@ -1266,11 +1266,11 @@ top_p = 0.95
 gpus = 4
 
 [endpoint.orchestrate.vllm.serve]
+gpu_memory_utilization = 0.92
 max_num_batched_tokens = 16384
 max_num_seqs = 256
 mamba_ssm_cache_dtype = "float32"
-reasoning_parser = "super_v3"
-reasoning_parser_plugin = "/opt/vllm/super_v3_reasoning_parser.py"
+reasoning_parser = "nemotron_v3"
 tool_call_parser = "qwen3_coder"
 trust_remote_code = true
 
@@ -1861,7 +1861,8 @@ enable_thinking = false
 gpus = 2
 
 [endpoint.orchestrate.vllm.serve]
-max_num_batched_tokens = 16384
+gpu_memory_utilization = 0.92
+max_num_batched_tokens = 32768
 max_num_seqs = 256
 reasoning_parser = "qwen3"
 tool_call_parser = "qwen3_coder"
@@ -1889,7 +1890,8 @@ enable_thinking = true
 gpus = 2
 
 [endpoint.orchestrate.vllm.serve]
-max_num_batched_tokens = 16384
+gpu_memory_utilization = 0.92
+max_num_batched_tokens = 32768
 max_num_seqs = 256
 reasoning_parser = "qwen3"
 tool_call_parser = "qwen3_coder"
@@ -1975,7 +1977,8 @@ enable_thinking = false
 gpus = 2
 
 [endpoint.orchestrate.vllm.serve]
-max_num_batched_tokens = 16384
+gpu_memory_utilization = 0.92
+max_num_batched_tokens = 32768
 max_num_seqs = 256
 reasoning_parser = "qwen3"
 tool_call_parser = "qwen3_coder"
@@ -2003,7 +2006,8 @@ enable_thinking = true
 gpus = 2
 
 [endpoint.orchestrate.vllm.serve]
-max_num_batched_tokens = 16384
+gpu_memory_utilization = 0.92
+max_num_batched_tokens = 32768
 max_num_seqs = 256
 reasoning_parser = "qwen3"
 tool_call_parser = "qwen3_coder"
@@ -2089,6 +2093,7 @@ enable_thinking = false
 gpus = 4
 
 [endpoint.orchestrate.vllm.serve]
+gpu_memory_utilization = 0.92
 max_num_batched_tokens = 16384
 max_num_seqs = 256
 reasoning_parser = "qwen3"
@@ -2147,6 +2152,7 @@ enable_thinking = false
 gpus = 8
 
 [endpoint.orchestrate.vllm.serve]
+gpu_memory_utilization = 0.92
 max_num_batched_tokens = 16384
 max_num_seqs = 128
 reasoning_parser = "qwen3"
@@ -2176,6 +2182,7 @@ enable_thinking = true
 gpus = 8
 
 [endpoint.orchestrate.vllm.serve]
+gpu_memory_utilization = 0.92
 max_num_batched_tokens = 16384
 max_num_seqs = 128
 reasoning_parser = "qwen3"
@@ -2450,7 +2457,7 @@ gpus = 1
 [endpoint.orchestrate.vllm.serve]
 gpu_memory_utilization = 0.92
 max_num_batched_tokens = 16384
-max_num_seqs = 512
+max_num_seqs = 256
 reasoning_parser = "qwen3"
 tool_call_parser = "qwen3_coder"
 language_model_only = true
@@ -2478,7 +2485,7 @@ gpus = 1
 [endpoint.orchestrate.vllm.serve]
 gpu_memory_utilization = 0.92
 max_num_batched_tokens = 16384
-max_num_seqs = 512
+max_num_seqs = 256
 reasoning_parser = "qwen3"
 tool_call_parser = "qwen3_coder"
 language_model_only = true
@@ -2515,9 +2522,31 @@ temperature = 0.7
 
 
 [[endpoint]]
+endpoint_id = "trinity-large-thinking-fp8-block"
+model = "arcee-ai/Trinity-Large-Thinking-FP8-Block"
+api_client_type = "openai_chat_completions"
+reasoning_field = "reasoning"
+
+[endpoint.sampling_args]
+temperature = 0.45
+
+[endpoint.orchestrate.vllm]
+gpus = 8
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 16384
+max_num_seqs = 256
+trust_remote_code = true
+reasoning_parser = "deepseek_r1"
+tool_call_parser = "hermes"
+enable_expert_parallel = true
+
+
+[[endpoint]]
 endpoint_id = "trinity-mini"
 model = "arcee-ai/Trinity-Mini"
 api_client_type = "openai_chat_completions"
+reasoning_field = "reasoning"
 
 [endpoint.sampling_args]
 temperature = 0.15
