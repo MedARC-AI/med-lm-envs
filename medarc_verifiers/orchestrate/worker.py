@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import shlex
 import shutil
 import uuid
@@ -178,11 +179,11 @@ class TaskWorker:
         manifest.image = image
 
         configured_serve_args = dict(self._launch.serve_args or {})
-        serve_args = _effective_serve_args(configured_serve_args, topology=topology)
+        serve_args = _effective_serve_args(configured_serve_args, topology=topology, image=image)
         if serve_args.get("async_scheduling") is not configured_serve_args.get("async_scheduling"):
             log(
                 f"JOB info task={self._launch.task_id} async_scheduling_disabled=true "
-                f"reason=data_parallel_size_gt_1 data_parallel_size={topology.data_parallel_size}"
+                f"reason=vllm_lt_0_20_data_parallel data_parallel_size={topology.data_parallel_size}"
             )
         if serve_args.get("gpu_memory_utilization") != configured_serve_args.get("gpu_memory_utilization"):
             log(
@@ -537,10 +538,14 @@ def _normalize_launch_inputs(launch: LaunchInputs) -> LaunchInputs:
 
 
 def _effective_serve_args(
-    serve_args: dict[str, object] | Mapping[str, object], *, topology: ResolvedTopology
+    serve_args: dict[str, object] | Mapping[str, object], *, topology: ResolvedTopology, image: str
 ) -> dict[str, object]:
     effective = dict(serve_args)
-    if topology.data_parallel_size > 1 and effective.get("async_scheduling") is True:
+    if (
+        topology.data_parallel_size > 1
+        and effective.get("async_scheduling") is True
+        and _requires_dp_async_scheduling_workaround(image)
+    ):
         effective["async_scheduling"] = False
     adjusted_gpu_memory_utilization = _adjust_gpu_memory_utilization_for_dp(
         effective.get("gpu_memory_utilization"),
@@ -549,6 +554,26 @@ def _effective_serve_args(
     if adjusted_gpu_memory_utilization is not None:
         effective["gpu_memory_utilization"] = adjusted_gpu_memory_utilization
     return effective
+
+
+_VLLM_IMAGE_VERSION_RE = re.compile(r"(?:^|[/:\-_.])v?(\d+)\.(\d+)(?:\.(\d+))?(?:$|[+\-_.])", re.IGNORECASE)
+
+
+def _requires_dp_async_scheduling_workaround(image: str) -> bool:
+    version = _parse_vllm_image_version(image)
+    return version is not None and version < (0, 20, 0)
+
+
+def _parse_vllm_image_version(image: str) -> tuple[int, int, int] | None:
+    text = image.strip()
+    if "vllm" not in text.lower():
+        return None
+    for match in _VLLM_IMAGE_VERSION_RE.finditer(text):
+        major = int(match.group(1))
+        minor = int(match.group(2))
+        patch = int(match.group(3) or 0)
+        return major, minor, patch
+    return None
 
 
 def _adjust_gpu_memory_utilization_for_dp(

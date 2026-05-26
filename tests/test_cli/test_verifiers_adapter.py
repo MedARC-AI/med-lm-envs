@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 
 from medarc_verifiers.cli.utils.endpoint_utils import load_endpoint_sampling_profiles
-from medarc_verifiers.cli.verifiers_adapter import EvalConfigOverrides, build_eval_config, load_toml_eval_configs
+from medarc_verifiers.cli.verifiers_adapter import (
+    DEFAULT_MAX_CONCURRENT,
+    EvalConfigOverrides,
+    build_eval_config,
+    build_eval_identity_payload,
+    load_toml_eval_configs,
+)
 from medarc_verifiers.utils.prime_inference import PRIME_INFERENCE_URL
 
 
@@ -177,6 +183,41 @@ def test_build_eval_config_resolves_endpoint_alias_and_core_fields(tmp_path: Pat
         "X-Trace": "trace_id",
         "X-User": "user_id",
     }
+
+
+def test_build_eval_config_defaults_max_concurrent_from_endpoint_max_num_seqs(tmp_path: Path) -> None:
+    endpoints_path = tmp_path / "endpoints.toml"
+    endpoints_path.write_text(
+        """
+[[endpoint]]
+endpoint_id = "local-large"
+model = "openai/local-large"
+url = "http://127.0.0.1:8000/v1"
+key = "VLLM_API_KEY"
+
+[endpoint.orchestrate.vllm]
+gpus = 4
+
+[endpoint.orchestrate.vllm.serve]
+max_num_seqs = 256
+""".strip()
+    )
+
+    raw = {"env_id": "medqa", "endpoint_id": "local-large", "endpoints_path": str(endpoints_path)}
+
+    config = build_eval_config(raw)
+    identity = build_eval_identity_payload(raw)
+
+    assert config.max_concurrent == 256
+    assert identity["max_concurrent"] == 256
+
+
+def test_build_eval_config_uses_verifiers_default_without_endpoint_max_num_seqs(tmp_path: Path) -> None:
+    endpoints_path = _write_endpoints(tmp_path / "endpoints.toml")
+
+    config = build_eval_config({"env_id": "medqa", "endpoint_id": "openai-alias", "endpoints_path": str(endpoints_path)})
+
+    assert config.max_concurrent == DEFAULT_MAX_CONCURRENT
 
 
 def test_build_eval_config_supports_model_only_endpoint_alias(tmp_path: Path) -> None:

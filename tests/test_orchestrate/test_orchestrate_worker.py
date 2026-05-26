@@ -5,7 +5,13 @@ from pathlib import Path
 from medarc_verifiers.orchestrate.podman_vllm import PodmanRuntimeAdapter
 from medarc_verifiers.orchestrate.runtime import RuntimeLaunchError
 from medarc_verifiers.orchestrate.state import TaskManifest
-from medarc_verifiers.orchestrate.worker import LaunchInputs, main as launch_main
+from medarc_verifiers.orchestrate.topology import ResolvedTopology
+from medarc_verifiers.orchestrate.worker import (
+    LaunchInputs,
+    _effective_serve_args,
+    _parse_vllm_image_version,
+    main as launch_main,
+)
 
 
 def _launch_args(tmp_path: Path) -> list[str]:
@@ -126,6 +132,46 @@ def test_launch_cli_infers_allocated_gpus_from_visible_devices(tmp_path: Path, m
 
     assert rc == 0
     assert captured["allocated_gpus"] == 4
+
+
+def test_effective_serve_args_keeps_async_scheduling_for_latest_vllm_image() -> None:
+    topology = ResolvedTopology(gpus=2, allocated_gpus=4, tensor_parallel_size=2, data_parallel_size=2, vllm_world_size=4)
+
+    serve_args = _effective_serve_args(
+        {"async_scheduling": True, "gpu_memory_utilization": 0.9},
+        topology=topology,
+        image="vllm/vllm-openai:latest",
+    )
+
+    assert serve_args["async_scheduling"] is True
+
+
+def test_effective_serve_args_disables_async_scheduling_for_old_vllm_image() -> None:
+    topology = ResolvedTopology(gpus=2, allocated_gpus=4, tensor_parallel_size=2, data_parallel_size=2, vllm_world_size=4)
+
+    serve_args = _effective_serve_args(
+        {"async_scheduling": True, "gpu_memory_utilization": 0.9},
+        topology=topology,
+        image="vllm/vllm-openai:v0.19.2",
+    )
+
+    assert serve_args["async_scheduling"] is False
+
+
+def test_effective_serve_args_keeps_async_scheduling_for_vllm_0_20_and_newer() -> None:
+    topology = ResolvedTopology(gpus=2, allocated_gpus=4, tensor_parallel_size=2, data_parallel_size=2, vllm_world_size=4)
+
+    serve_args = _effective_serve_args(
+        {"async_scheduling": True, "gpu_memory_utilization": 0.9},
+        topology=topology,
+        image="vllm/vllm-openai:v0.20.0",
+    )
+
+    assert serve_args["async_scheduling"] is True
+
+
+def test_parse_vllm_image_version_ignores_unversioned_materialized_image() -> None:
+    assert _parse_vllm_image_version("/data/pyxis/vllm/latest.sqsh") is None
 
 
 def test_load_explicit_runtime_env_falls_back_to_huggingface_login(tmp_path: Path, monkeypatch) -> None:

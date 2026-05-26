@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from medarc_verifiers.cli import main
+from medarc_verifiers.cli.verifiers_adapter import DEFAULT_MAX_CONCURRENT
 from medarc_verifiers.cli.process import ProcessResult
 from medarc_verifiers.cli._single_run import (
     _build_base_parser_layout,
@@ -674,7 +675,7 @@ def test_toml_bench_executes_sequentially_to_deterministic_path(
     assert not (output_dir / "gpt-5-mini" / ".medarc_eval_metadata.json").exists()
 
 
-def test_toml_bench_defaults_max_concurrent_to_one(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_toml_bench_uses_verifiers_default_max_concurrent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _patch_toml_bench_envs_installed(monkeypatch)
     config_path = tmp_path / "bench.toml"
     _write_config(
@@ -696,7 +697,7 @@ def test_toml_bench_defaults_max_concurrent_to_one(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(main, "run_evaluation", fake_run)
 
     assert main.main(["bench", "--config", str(config_path), "--output-dir", str(tmp_path / "evals")]) == 0
-    assert captured == [1]
+    assert captured == [DEFAULT_MAX_CONCURRENT]
 
     captured.clear()
     assert (

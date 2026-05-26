@@ -1367,8 +1367,6 @@ def _prepare_toml_raw_configs(raw_configs: Sequence[dict[str, Any]], args: argpa
         item = dict(raw)
         item.setdefault("save_results", True)
         item.setdefault("env_dir_path", str(args.env_dir))
-        if args.max_concurrent is None and "max_concurrent" not in item:
-            item["max_concurrent"] = 1
         if args.timeout is not None:
             item["timeout"] = args.timeout
         if args.rollout_max_retries is not None:

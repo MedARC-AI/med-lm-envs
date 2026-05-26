@@ -221,6 +221,7 @@ def build_eval_config(raw: Mapping[str, Any], *, overrides: EvalConfigOverrides 
     endpoints_path = str(merged_raw.get("endpoints_path", DEFAULT_ENDPOINTS_PATH))
     endpoints = _load_endpoint_registry(endpoints_path)
     model, resolved_endpoint_id, client_config = _build_client_config(merged_raw, endpoints, endpoints_path)
+    max_concurrent = _resolve_max_concurrent(merged_raw, endpoints_path, resolved_endpoint_id)
 
     endpoint_sampling_profiles = load_endpoint_sampling_profiles(endpoints_path)
     endpoint_sampling_args = _resolve_endpoint_sampling_args(endpoint_sampling_profiles, resolved_endpoint_id)
@@ -249,7 +250,7 @@ def build_eval_config(raw: Mapping[str, Any], *, overrides: EvalConfigOverrides 
         "sampling_args": sampling_args,
         "num_examples": num_examples,
         "rollouts_per_example": rollouts_per_example,
-        "max_concurrent": merged_raw.get("max_concurrent", DEFAULT_MAX_CONCURRENT),
+        "max_concurrent": max_concurrent,
         "max_retries": merged_raw.get("max_retries", 0),
         "num_workers": merged_raw.get("num_workers", "auto"),
         "verbose": merged_raw.get("verbose", False),
@@ -273,6 +274,7 @@ def build_eval_identity_payload(
     endpoints_path = str(merged_raw.get("endpoints_path", DEFAULT_ENDPOINTS_PATH))
     endpoints = _load_endpoint_registry(endpoints_path)
     model, resolved_endpoint_id, _client_config = _build_client_config(merged_raw, endpoints, endpoints_path)
+    max_concurrent = _resolve_max_concurrent(merged_raw, endpoints_path, resolved_endpoint_id)
 
     payload = {
         "env_args": dict(merged_raw.get("env_args", {})),
@@ -280,7 +282,7 @@ def build_eval_identity_payload(
         "model": model,
         "num_examples": merged_raw.get("num_examples", DEFAULT_NUM_EXAMPLES),
         "rollouts_per_example": merged_raw.get("rollouts_per_example", DEFAULT_ROLLOUTS_PER_EXAMPLE),
-        "max_concurrent": merged_raw.get("max_concurrent", DEFAULT_MAX_CONCURRENT),
+        "max_concurrent": max_concurrent,
         "sampling_args": dict(merged_raw.get("sampling_args", {})),
     }
     if resolved_endpoint_id is not None:
@@ -290,6 +292,74 @@ def build_eval_identity_payload(
     if "name" in raw:
         payload["name"] = raw["name"]
     return payload
+
+
+def _resolve_max_concurrent(
+    merged_raw: Mapping[str, Any], endpoints_path: str, resolved_endpoint_id: str | None
+) -> int:
+    if merged_raw.get("max_concurrent") is not None:
+        return int(merged_raw["max_concurrent"])
+
+    endpoint_max_num_seqs = _endpoint_max_num_seqs(endpoints_path, resolved_endpoint_id)
+    if endpoint_max_num_seqs is not None:
+        return endpoint_max_num_seqs
+
+    return DEFAULT_MAX_CONCURRENT
+
+
+def _endpoint_max_num_seqs(endpoints_path: str, endpoint_id: str | None) -> int | None:
+    if endpoint_id is None:
+        return None
+
+    endpoints_file = resolve_endpoints_file(endpoints_path)
+    if endpoints_file is None or not endpoints_file.exists() or endpoints_file.suffix != ".toml":
+        return None
+
+    with endpoints_file.open("rb") as handle:
+        raw_toml = load_toml(handle)
+    if not isinstance(raw_toml, Mapping):
+        return None
+
+    raw_entries = raw_toml.get("endpoint", [])
+    if not isinstance(raw_entries, list):
+        return None
+
+    values: set[int] = set()
+    for raw_entry in raw_entries:
+        if not isinstance(raw_entry, Mapping) or raw_entry.get("endpoint_id") != endpoint_id:
+            continue
+        value = _nested_max_num_seqs(raw_entry)
+        if value is not None:
+            values.add(value)
+
+    if not values:
+        return None
+    if len(values) > 1:
+        raise ValueError(
+            f"Endpoint '{endpoint_id}' has conflicting orchestrate.vllm.serve.max_num_seqs values "
+            f"in {endpoints_file}: {sorted(values)}"
+        )
+    return next(iter(values))
+
+
+def _nested_max_num_seqs(raw_entry: Mapping[str, Any]) -> int | None:
+    orchestrate = raw_entry.get("orchestrate")
+    if not isinstance(orchestrate, Mapping):
+        return None
+    vllm = orchestrate.get("vllm")
+    if not isinstance(vllm, Mapping):
+        return None
+    serve = vllm.get("serve")
+    if not isinstance(serve, Mapping):
+        return None
+    value = serve.get("max_num_seqs")
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("orchestrate.vllm.serve.max_num_seqs must be an integer")
+    if value < 1:
+        raise ValueError("orchestrate.vllm.serve.max_num_seqs must be >= 1")
+    return value
 
 
 def get_env_eval_defaults(env_id: str) -> dict[str, Any]:
