@@ -23,7 +23,6 @@ DEFAULT_CONTAINER_CONFIG: Mapping[str, Any] = {
 }
 DEFAULT_SLURM_CONFIG: Mapping[str, Any] = {
     "qos": "bottom",
-    "nice": -1,
     "slurm_resume": True,
 }
 DEFAULT_PYXIS_CONFIG: Mapping[str, Any] = {
@@ -78,7 +77,7 @@ class PrepareConfig(BaseModel):
     enabled: bool = False
     cpus: int = 8
     time: str = "02:00:00"
-    partition: str | None = "cpu"
+    partition: str | None = "main"
     account: str | None = None
     qos: str | None = None
     nice: int | None = None
@@ -111,7 +110,7 @@ class TeardownConfig(BaseModel):
     enabled: bool = False
     cpus: int = 2
     time: str = "00:30:00"
-    partition: str | None = "cpu"
+    partition: str | None = "main"
     account: str | None = None
     qos: str | None = None
     nice: int | None = None
@@ -627,6 +626,9 @@ def _validate_endpoint_orchestration_registry(payload: Mapping[str, Any], *, sou
                     "max_model_len",
                     "gpu_memory_utilization",
                     "performance_mode",
+                    "decode_context_parallel_size",
+                    "dcp_comm_backend",
+                    "dcp_kv_cache_interleave_size",
                     "max_num_seqs",
                     "max_num_batched_tokens",
                     "tokenizer_mode",

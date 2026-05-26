@@ -393,6 +393,9 @@ gpus = 2
 [endpoint.orchestrate.vllm.serve]
 max_model_len = 40960
 reasoning_parser = "qwen3"
+decode_context_parallel_size = 2
+dcp_comm_backend = "a2a"
+dcp_kv_cache_interleave_size = 256
 """.lstrip(),
         encoding="utf-8",
     )
@@ -404,8 +407,11 @@ reasoning_parser = "qwen3"
     assert model["container"]["image"] == "vllm/vllm-openai:latest"
     assert model["pyxis"] == {"srun_extra_args": ["--overlap"]}
     assert model["slurm"]["qos"] == "bottom"
-    assert model["slurm"]["nice"] == -1
+    assert "nice" not in model["slurm"]
     assert model["vllm"]["serve"]["max_model_len"] == 40960
     assert model["vllm"]["serve"]["reasoning_parser"] == "qwen3"
+    assert model["vllm"]["serve"]["decode_context_parallel_size"] == 2
+    assert model["vllm"]["serve"]["dcp_comm_backend"] == "a2a"
+    assert model["vllm"]["serve"]["dcp_kv_cache_interleave_size"] == 256
     assert model["vllm"]["serve"]["performance_mode"] == "throughput"
     assert model["vllm"]["serve"]["async_scheduling"] is True

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
+import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -153,6 +156,11 @@ def _run_status(args: argparse.Namespace) -> int:
                     "eval_slurm_job_id",
                     "teardown_state",
                     "teardown_slurm_job_id",
+                    "eval_slurm_live_state",
+                    "eval_slurm_reason",
+                    "eval_slurm_restarts",
+                    "eval_slurm_preemptions",
+                    "eval_slurm_elapsed",
                 )
             )
         )
@@ -216,12 +224,205 @@ def _load_combined_status(output_root: Path) -> dict[str, object]:
                     "error": entry.get("error"),
                 }
             )
+    slurm_status = _collect_slurm_status(rows.values())
+    _merge_slurm_status(rows.values(), slurm_status)
     return {
         "output_root": str(output_root),
         "slurm_manifest": manifest,
         "summary": summary,
+        "slurm": slurm_status,
         "tasks": [rows[key] for key in sorted(rows)],
     }
+
+
+def _collect_slurm_status(rows: object) -> dict[str, object]:
+    job_ids = _collect_status_job_ids(rows)
+    status: dict[str, object] = {
+        "queried_at": dt.datetime.now(dt.UTC).isoformat(),
+        "available": True,
+        "commands": [],
+        "jobs": {},
+    }
+    if not job_ids:
+        return status
+
+    jobs: dict[str, dict[str, object]] = {}
+    command = [
+        "squeue",
+        "-h",
+        "-j",
+        ",".join(job_ids),
+        "-o",
+        "%i|%T|%R|%M|%l|%D|%C|%b|%q|%a|%y|%N",
+    ]
+    status["commands"].append(" ".join(command))
+    squeue_result = _run_status_command(command)
+    if squeue_result["ok"]:
+        for line in str(squeue_result["stdout"]).splitlines():
+            fields = line.split("|")
+            if len(fields) != 12:
+                continue
+            job_id, state, reason, elapsed, time_limit, nodes, cpus, tres, qos, account, nice, node_list = fields
+            jobs.setdefault(job_id, {}).update(
+                {
+                    "job_id": job_id,
+                    "live_state": state,
+                    "reason": reason,
+                    "elapsed": elapsed,
+                    "time_limit": time_limit,
+                    "nodes": nodes,
+                    "cpus": cpus,
+                    "tres": tres,
+                    "qos": qos,
+                    "account": account,
+                    "nice": nice,
+                    "node_list": node_list,
+                }
+            )
+    else:
+        status["available"] = False
+        status["squeue_error"] = squeue_result["error"]
+
+    command = [
+        "sacct",
+        "-j",
+        ",".join(job_ids),
+        "--duplicates",
+        "--format=JobID,JobName%80,State,ExitCode,Elapsed,Submit,Start,End",
+        "-P",
+    ]
+    status["commands"].append(" ".join(command))
+    sacct_result = _run_status_command(command)
+    if sacct_result["ok"]:
+        _merge_sacct_rows(jobs, str(sacct_result["stdout"]))
+    else:
+        status["sacct_error"] = sacct_result["error"]
+
+    live_job_ids = [job_id for job_id in job_ids if "live_state" in jobs.get(job_id, {})]
+    for job_id in live_job_ids:
+        command = ["scontrol", "show", "job", job_id]
+        status["commands"].append(" ".join(command))
+        scontrol_result = _run_status_command(command)
+        if not scontrol_result["ok"]:
+            jobs.setdefault(job_id, {"job_id": job_id})["scontrol_error"] = scontrol_result["error"]
+            continue
+        fields = _parse_scontrol_fields(str(scontrol_result["stdout"]))
+        if fields:
+            jobs.setdefault(job_id, {"job_id": job_id}).update(
+                {
+                    "live_state": fields.get("JobState") or jobs.get(job_id, {}).get("live_state"),
+                    "reason": fields.get("Reason") or jobs.get(job_id, {}).get("reason"),
+                    "restarts": _parse_int(fields.get("Restarts")),
+                    "requeue": _parse_int(fields.get("Requeue")),
+                    "priority": _parse_int(fields.get("Priority")),
+                    "submit_time": fields.get("SubmitTime"),
+                    "eligible_time": fields.get("EligibleTime"),
+                    "start_time": fields.get("StartTime"),
+                    "end_time": fields.get("EndTime"),
+                    "node_list": fields.get("NodeList") or jobs.get(job_id, {}).get("node_list"),
+                    "scheduled_node_list": fields.get("SchedNodeList"),
+                }
+            )
+    for job in jobs.values():
+        attempts = job.get("attempts")
+        if isinstance(attempts, list):
+            job["preemptions"] = sum(1 for attempt in attempts if attempt.get("state") == "PREEMPTED")
+    status["jobs"] = jobs
+    return status
+
+
+def _collect_status_job_ids(rows: object) -> list[str]:
+    job_ids: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for key in ("prepare_slurm_job_id", "eval_slurm_job_id", "teardown_slurm_job_id", "slurm_job_id"):
+            value = row.get(key)
+            if value is None:
+                continue
+            text = str(value)
+            if text:
+                job_ids.add(text)
+    return sorted(job_ids)
+
+
+def _run_status_command(command: list[str]) -> dict[str, object]:
+    try:
+        result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=20)
+    except FileNotFoundError as exc:
+        return {"ok": False, "stdout": "", "stderr": "", "error": str(exc)}
+    except subprocess.SubprocessError as exc:
+        return {"ok": False, "stdout": "", "stderr": "", "error": str(exc)}
+    return {
+        "ok": result.returncode == 0,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "error": result.stderr.strip() or f"exit code {result.returncode}",
+    }
+
+
+def _merge_sacct_rows(jobs: dict[str, dict[str, object]], stdout: str) -> None:
+    lines = [line for line in stdout.splitlines() if line.strip()]
+    if lines and lines[0].startswith("JobID|"):
+        lines = lines[1:]
+    for line in lines:
+        fields = line.split("|")
+        if len(fields) != 8:
+            continue
+        job_id, job_name, state, exit_code, elapsed, submit, start, end = fields
+        root_job_id = job_id.split(".", 1)[0]
+        if job_id != root_job_id:
+            continue
+        job = jobs.setdefault(root_job_id, {"job_id": root_job_id})
+        attempt = {
+            "job_id": job_id,
+            "job_name": job_name,
+            "state": state,
+            "exit_code": exit_code,
+            "elapsed": elapsed,
+            "submit": submit,
+            "start": start,
+            "end": end,
+        }
+        job.setdefault("attempts", []).append(attempt)
+        if state not in {"PENDING", "RUNNING"} or "accounting_state" not in job:
+            job["accounting_state"] = state
+            job["exit_code"] = exit_code
+            job["accounting_elapsed"] = elapsed
+
+
+def _parse_scontrol_fields(stdout: str) -> dict[str, str]:
+    return dict(re.findall(r"(\w+)=(\S+)", stdout))
+
+
+def _parse_int(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(str(value))
+    except ValueError:
+        return None
+
+
+def _merge_slurm_status(rows: object, slurm_status: dict[str, object]) -> None:
+    jobs = slurm_status.get("jobs")
+    if not isinstance(jobs, dict):
+        return
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for phase in ("prepare", "eval", "teardown"):
+            job_id = row.get(f"{phase}_slurm_job_id")
+            if job_id is None:
+                continue
+            job = jobs.get(str(job_id))
+            if not isinstance(job, dict):
+                continue
+            row[f"{phase}_slurm_live_state"] = job.get("live_state") or job.get("accounting_state")
+            row[f"{phase}_slurm_reason"] = job.get("reason")
+            row[f"{phase}_slurm_restarts"] = job.get("restarts")
+            row[f"{phase}_slurm_preemptions"] = job.get("preemptions")
+            row[f"{phase}_slurm_elapsed"] = job.get("elapsed") or job.get("accounting_elapsed")
 
 
 def _load_json_artifact(path: Path) -> object:

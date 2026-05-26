@@ -1251,6 +1251,9 @@ def test_slurm_dry_run_writes_manifest_and_prints_commands(tmp_path: Path, capsy
     assert [entry["state"] for entry in manifest["entries"]] == ["dry-run", "dry-run"]
     assert all(entry["slurm_job_id"] is None for entry in manifest["entries"])
     assert all(entry["account"] is None for entry in manifest["entries"])
+    for entry in manifest["entries"]:
+        script = Path(entry["script_path"]).read_text(encoding="utf-8")
+        assert "#SBATCH --nice" not in script
 
     run_manifest = json.loads((tmp_path / "bundle" / "run_manifest.json").read_text())
     assert len(run_manifest["tasks"]) == 2

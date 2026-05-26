@@ -470,8 +470,9 @@ def _import_image_locked(*, source: str, final_path: Path, latest_link: bool) ->
         import_path = materialized_image_path(resolved_source, final_path.parent)
     if import_path.exists() and os.access(import_path, os.R_OK):
         if resolved_source != source:
-            _update_symlink(final_path, target=import_path)
-            if latest_link and final_path.name != "latest":
+            if final_path != import_path:
+                _update_symlink(final_path, target=import_path)
+            if latest_link and final_path.name != "latest" and final_path.parent / "latest" != import_path:
                 _update_symlink(final_path.parent / "latest", target=import_path)
         return {
             "resolved_source": resolved_source,
@@ -490,8 +491,9 @@ def _import_image_locked(*, source: str, final_path: Path, latest_link: bool) ->
         raise RuntimeError(f"enroot import did not produce expected image: {tmp_prefix} or {tmp_prefix.with_suffix('.sqsh')}")
     tmp_sqsh.replace(import_path)
     if resolved_source != source:
-        _update_symlink(final_path, target=import_path)
-        if latest_link and final_path.name != "latest":
+        if final_path != import_path:
+            _update_symlink(final_path, target=import_path)
+        if latest_link and final_path.name != "latest" and final_path.parent / "latest" != import_path:
             _update_symlink(final_path.parent / "latest", target=import_path)
     elif latest_link:
         _update_symlink(final_path.parent / "latest", target=import_path)

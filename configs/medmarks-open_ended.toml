@@ -1,7 +1,7 @@
 # MedARC judge- and free-form-heavy benchmark suite.
 
 save_results = true
-output_dir = "runs/evals"
+output_dir = "runs/open_ended"
 
 [[eval]]
 env_id = "agentclinic"

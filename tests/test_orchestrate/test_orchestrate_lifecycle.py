@@ -7,7 +7,13 @@ from pathlib import Path
 import pytest
 
 from medarc_verifiers.orchestrate import lifecycle as lifecycle_module
-from medarc_verifiers.orchestrate.lifecycle import materialize_image, resolve_image_digest, run_prepare, run_teardown
+from medarc_verifiers.orchestrate.lifecycle import (
+    materialize_image,
+    materialized_image_path,
+    resolve_image_digest,
+    run_prepare,
+    run_teardown,
+)
 
 
 def test_materialize_image_skips_existing_final_image(tmp_path: Path, monkeypatch) -> None:
@@ -118,6 +124,38 @@ def test_materialize_latest_resolves_digest_imports_digest_path_and_updates_syml
     assert final.resolve() == Path(result["resolved_image_path"])
     assert (tmp_path / "latest").is_symlink()
     assert imported_paths
+
+
+def test_materialize_latest_does_not_self_link_digest_path(tmp_path: Path, monkeypatch) -> None:
+    resolved_source = "docker.io/vllm/vllm-openai@sha256:abc123"
+    final = materialized_image_path(resolved_source, tmp_path)
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.lifecycle.shutil.which", lambda name: "/usr/bin/enroot")
+    monkeypatch.setattr(
+        "medarc_verifiers.orchestrate.lifecycle.resolve_image_digest",
+        lambda source: resolved_source,
+    )
+
+    class Completed:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(command, check, capture_output, text):
+        del check, capture_output, text
+        tmp_prefix = Path(command[command.index("--output") + 1])
+        tmp_prefix.write_text("sqsh", encoding="utf-8")
+        return Completed()
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.lifecycle.subprocess.run", fake_run)
+
+    result = materialize_image(source="vllm/vllm-openai:latest", final_path=final)
+
+    assert result["resolved_image_path"] == str(final)
+    assert final.is_file()
+    assert not final.is_symlink()
+    assert (tmp_path / "latest").is_symlink()
+    assert (tmp_path / "latest").resolve() == final
 
 
 def test_lock_dir_recovers_stale_slurm_owner(tmp_path: Path, monkeypatch) -> None:

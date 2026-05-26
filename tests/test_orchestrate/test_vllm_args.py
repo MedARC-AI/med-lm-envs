@@ -72,6 +72,32 @@ def test_build_container_args_renders_performance_mode() -> None:
     assert args == ["--model", "some/model", "--performance-mode", "throughput"]
 
 
+def test_build_container_args_renders_decode_context_parallel() -> None:
+    args = build_container_args(
+        "some/model",
+        tensor_parallel_size=8,
+        data_parallel_size=None,
+        serve={
+            "decode_context_parallel_size": 2,
+            "dcp_comm_backend": "a2a",
+            "dcp_kv_cache_interleave_size": 256,
+        },
+    )
+
+    assert args == [
+        "--model",
+        "some/model",
+        "--tensor-parallel-size",
+        "8",
+        "--decode-context-parallel-size",
+        "2",
+        "--dcp-comm-backend",
+        "a2a",
+        "--dcp-kv-cache-interleave-size",
+        "256",
+    ]
+
+
 def test_build_container_args_rejects_unknown_performance_mode() -> None:
     with pytest.raises(ValueError, match="performance_mode"):
         build_container_args(
@@ -79,6 +105,16 @@ def test_build_container_args_rejects_unknown_performance_mode() -> None:
             tensor_parallel_size=None,
             data_parallel_size=None,
             serve={"performance_mode": "maximum"},
+        )
+
+
+def test_build_container_args_rejects_unknown_dcp_comm_backend() -> None:
+    with pytest.raises(ValueError, match="dcp_comm_backend"):
+        build_container_args(
+            "some/model",
+            tensor_parallel_size=None,
+            data_parallel_size=None,
+            serve={"dcp_comm_backend": "ring"},
         )
 
 

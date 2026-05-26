@@ -3,7 +3,7 @@
 # runs/evals/<model>/<env>/env_args.shuffle_seed-1618/.
 
 save_results = true
-output_dir = "runs/evals"
+output_dir = "runs/verified"
 
 [[eval]]
 env_id = "careqa"

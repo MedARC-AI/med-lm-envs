@@ -67,6 +67,9 @@ def _render_serve_flags(serve: Mapping[str, object]) -> list[str]:
         "max_model_len": "--max-model-len",
         "gpu_memory_utilization": "--gpu-memory-utilization",
         "performance_mode": "--performance-mode",
+        "decode_context_parallel_size": "--decode-context-parallel-size",
+        "dcp_comm_backend": "--dcp-comm-backend",
+        "dcp_kv_cache_interleave_size": "--dcp-kv-cache-interleave-size",
         "max_num_seqs": "--max-num-seqs",
         "max_num_batched_tokens": "--max-num-batched-tokens",
         "tokenizer_mode": "--tokenizer_mode",
@@ -109,6 +112,9 @@ def _validate_serve_config(serve: Mapping[str, object]) -> None:
         "max_model_len",
         "gpu_memory_utilization",
         "performance_mode",
+        "decode_context_parallel_size",
+        "dcp_comm_backend",
+        "dcp_kv_cache_interleave_size",
         "max_num_seqs",
         "max_num_batched_tokens",
         "tokenizer_mode",
@@ -138,6 +144,9 @@ def _validate_serve_config(serve: Mapping[str, object]) -> None:
     performance_mode = serve.get("performance_mode")
     if performance_mode is not None and performance_mode not in {"balanced", "interactivity", "throughput"}:
         raise ValueError("performance_mode must be one of: balanced, interactivity, throughput.")
+    dcp_comm_backend = serve.get("dcp_comm_backend")
+    if dcp_comm_backend is not None and dcp_comm_backend not in {"a2a", "ag_rs"}:
+        raise ValueError("dcp_comm_backend must be one of: a2a, ag_rs.")
     limit_mm = serve.get("limit_mm_per_prompt")
     if limit_mm is None:
         return
