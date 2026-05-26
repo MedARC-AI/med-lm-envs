@@ -104,7 +104,7 @@ Container mounts that are specific to a launch belong in plan `[container]`, not
 ### Slurm Usage
 
 Slurm options come from CLI overrides first, then `[endpoint.orchestrate.slurm]`, then built-in defaults. GPU allocation is derived per task from `[endpoint.orchestrate.vllm].gpus`; there is no Python-side concurrency throttle.
-The built-in Slurm defaults use `qos = "bottom"` with `nice = -1`, giving orchestrated jobs a slight priority boost over other bottom-QoS jobs that leave nice unset.
+The built-in Slurm defaults use `qos = "bottom"` and leave `nice` unset so the cluster default applies unless a plan, endpoint entry, or CLI flag sets it explicitly.
 
 Common flags:
 
@@ -115,7 +115,7 @@ Common flags:
 - `--dependency` applies an sbatch dependency to submitted tasks.
 - `--prune-logs-on-success` removes per-task serve and bench logs after successful tasks.
 
-Status reads `slurm_manifest.json` and task runtime summary/output files when present. There is no backward compatibility for old local orchestrator runs that wrote the previous manifest or task/allocation artifact shape.
+Status uses `slurm_manifest.json` to find the prepared/eval/teardown job ids, then queries Slurm for live state and accounting details. The JSON output includes the commands run, current `squeue`/`scontrol` fields when available, `sacct --duplicates` attempts, restart counts, and per-task live Slurm fields such as `eval_slurm_live_state`, `eval_slurm_reason`, `eval_slurm_restarts`, and `eval_slurm_preemptions`. Runtime summary files are still included as task-local context, but Slurm is the source of truth for current queue state.
 
 ```bash
 uv run medarc-orchestrate status --run-id qwen-run
@@ -131,7 +131,7 @@ Plans may opt into CPU-only lifecycle jobs around each GPU eval task. The prepar
 enabled = true
 cpus = 8
 time = "02:00:00"
-partition = "cpu"
+partition = "main"
 prefetch_model_weights = true
 materialize_images = true
 
