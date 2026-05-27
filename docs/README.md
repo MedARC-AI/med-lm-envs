@@ -23,6 +23,14 @@ Environments are installed separately via `prime env install <owner/env>` (from 
 
 See [medarc-eval.md](medarc-eval.md) for full documentation.
 
+## MedMarks vLLM Requests
+
+Faithful MedMarks vLLM input sampling lives in
+[`benchmarks/medmarks_vllm`](../benchmarks/medmarks_vllm). Use the generated
+`*.requests.jsonl` files and the MedMarks request adapter there for chat
+benchmarks. Stock vLLM custom JSONL flattens chat roles into one user prompt and
+is not the canonical path for these inputs.
+
 ## Developer workflow
 
 See [developer-guide.md](developer-guide.md) for local setup, environment authoring, and development workflow notes.
