@@ -142,6 +142,7 @@ class PlanConfig(BaseModel):
     targets: list[TargetConfig] = Field(..., min_length=1, alias="target")
     env_file: Path | None = None
     run_id: str | None = None
+    bundle_dir: Path | None = None
     output_dir: Path | None = None
     readiness_timeout_s: int | None = None
     prune_logs_on_success: bool = False
@@ -294,7 +295,7 @@ def expand_tasks(plan: PlanConfig, *, default_endpoints_path: Path | None = None
             endpoint_id=target.endpoint_id,
             endpoints_path=endpoints_path,
             bench_overrides=bench_overrides,
-            output_dir=Path("."),
+            output_dir=plan.output_dir,
         )
         raw_eval_configs = _load_materialized_eval_configs(generated_eval_config, source=suite_path)
         if not raw_eval_configs:
@@ -398,7 +399,7 @@ def _resolve_plan_paths(plan: PlanConfig, *, base_dir: Path) -> PlanConfig:
             target_updates["suite"] = _resolve_path(target.suite, base_dir=base_dir)
         targets.append(target.model_copy(update=target_updates) if target_updates else target)
     updates["targets"] = targets
-    for field_name in ("env_file", "output_dir", "eval_images_config", "endpoints_path"):
+    for field_name in ("env_file", "bundle_dir", "output_dir", "eval_images_config", "endpoints_path"):
         value = getattr(plan, field_name)
         if value is not None:
             updates[field_name] = _resolve_path(value, base_dir=base_dir)
@@ -419,7 +420,7 @@ def materialize_task_eval_config(
     endpoint_id: str,
     endpoints_path: Path,
     bench_overrides: BenchOverrideConfig,
-    output_dir: Path,
+    output_dir: Path | None = None,
 ) -> Mapping[str, Any]:
     suite_path = suite_path.expanduser().resolve()
     suite_payload = dict(load_suite_config(suite_path))
@@ -429,7 +430,8 @@ def materialize_task_eval_config(
     payload.update(_bench_override_payload(bench_overrides))
     payload["endpoint_id"] = endpoint_id
     payload["endpoints_path"] = str(endpoints_path.expanduser().resolve())
-    payload["output_dir"] = str(output_dir.expanduser())
+    if output_dir is not None:
+        payload["output_dir"] = str(output_dir.expanduser())
     return payload
 
 

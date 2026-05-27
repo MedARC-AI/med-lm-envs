@@ -86,7 +86,7 @@ def test_launch_resolver_explicit_endpoint_overrides_default_endpoint(tmp_path: 
 
 
 def test_status_target_resolves_absolute_run_path(tmp_path: Path) -> None:
-    target = resolve_status_target(run_id="run-1", output_dir=None, cwd=tmp_path)
+    target = resolve_status_target(run_id="run-1", bundle_dir=None, cwd=tmp_path)
 
     assert target.run_id == "run-1"
     assert target.output_root == (tmp_path / "outputs" / "orchestrate" / "run-1").resolve()

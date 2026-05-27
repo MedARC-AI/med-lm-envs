@@ -109,7 +109,8 @@ suite = "configs/suite.toml"
 endpoints_path = "configs/endpoints.toml"
 eval_images_config = "configs/eval_images.toml"
 run_id = "hello"
-output_dir = "outputs/orchestrate/test-run"
+bundle_dir = "outputs/orchestrate/test-run"
+output_dir = "outputs/results/test-run"
 readiness_timeout_s = 123
 
 [container]
@@ -127,13 +128,15 @@ endpoint_id = "foo"
     plan = load_plan(plan_path)
     assert plan.suite == suite.resolve()
     assert plan.eval_images_config == eval_images_cfg.resolve()
-    assert plan.output_dir == (tmp_path / "outputs" / "orchestrate" / "test-run").resolve()
+    assert plan.bundle_dir == (tmp_path / "outputs" / "orchestrate" / "test-run").resolve()
+    assert plan.output_dir == (tmp_path / "outputs" / "results" / "test-run").resolve()
 
     task = expand_tasks(plan)[0]
     assert task.suite_path == suite.resolve()
     assert task.target_endpoint_id == "foo"
     assert task.task_id == "foo:suite"
     assert task.model_id == "Foo/Bar"
+    assert task.generated_eval_config["output_dir"] == str((tmp_path / "outputs" / "results" / "test-run").resolve())
     assert task.generated_eval_config["max_concurrent"] == 768
     assert task.generated_eval_config["eval"][0]["max_concurrent"] == 12
     assert task.orchestrate["container"]["volumes"] == ["/host/cache:/root/.cache/huggingface:rw"]
@@ -287,6 +290,19 @@ def test_materialize_task_eval_config_forces_orchestrator_owned_fields(tmp_path:
     assert payload["timeout"] == 900
     assert payload["eval"][0]["max_concurrent"] == 12
     assert payload["ablation"][0]["sweep"]["env_args"]["shuffle_seed"] == [1, 2]
+
+
+def test_materialize_task_eval_config_preserves_suite_output_dir_by_default(tmp_path: Path) -> None:
+    suite = _write_suite(tmp_path / "suite.toml")
+
+    payload = materialize_task_eval_config(
+        suite_path=suite,
+        endpoint_id="foo",
+        endpoints_path=tmp_path / "endpoints.toml",
+        bench_overrides=BenchOverrideConfig(),
+    )
+
+    assert payload["output_dir"] == "runs/evals"
 
 
 def test_suite_rejects_model_selection(tmp_path: Path) -> None:

@@ -16,7 +16,8 @@ name = "qwen3_5-4b-medmarks-verified"
 suite = "medmarks-verified.toml"
 endpoints_path = "medmarks-endpoints.toml"
 eval_images_config = "eval_images.toml"
-output_dir = "../outputs/orchestrate/qwen3_5-4b-medmarks-verified"
+bundle_dir = "../outputs/orchestrate/qwen3_5-4b-medmarks-verified"
+output_dir = "../runs/verified/qwen3_5-4b-medmarks-verified"
 readiness_timeout_s = 1800
 prune_logs_on_success = true
 
@@ -73,11 +74,11 @@ fhir_api_base = "http://127.0.0.1:{port}/fhir/"
 
 ### Generated Eval Configs
 
-Each task bundle gets `<task>/eval-config.toml`. It contains the suite's `[[eval]]` and `[[ablation]]` entries plus orchestrator-owned top-level values:
+Each task bundle gets `<task>/eval-config.toml`. It contains the suite's `[[eval]]` and `[[ablation]]` entries plus resolved top-level values:
 
 - `endpoint_id`
 - `endpoints_path`
-- `output_dir = "<task>/bench"`
+- `output_dir`, from plan `output_dir`, otherwise the suite's `output_dir`, otherwise `<task>/bench`
 - typed `[bench]` defaults from the plan/target
 
 Suites may set normal bench defaults, but must not set `endpoint_id`, `model`, or `endpoints_path`.
@@ -110,7 +111,8 @@ Common flags:
 
 - `--eval-images-config` overrides the eval image registry.
 - `--endpoints-path` selects the endpoint registry used for target resolution and bench.
-- `--output-dir` sets the orchestrator output root.
+- `--bundle-dir` sets the orchestrator task bundle root.
+- `--output-dir` sets the `medarc-eval bench` result root.
 - `--account`, `--partition`, `--qos`, `--nice`, and `--time` explicitly override Slurm submission settings.
 - `--dependency` applies an sbatch dependency to submitted tasks.
 - `--prune-logs-on-success` removes per-task serve and bench logs after successful tasks.
@@ -119,7 +121,7 @@ Status uses `slurm_manifest.json` to find the prepared/eval/teardown job ids, th
 
 ```bash
 uv run medarc-orchestrate status --run-id qwen-run
-uv run medarc-orchestrate status --output-dir outputs/orchestrate/qwen-run --json
+uv run medarc-orchestrate status --bundle-dir outputs/orchestrate/qwen-run --json
 ```
 
 ### Prepare and Teardown Jobs
@@ -167,7 +169,7 @@ Before launching a task, the orchestrator creates a bundle under `outputs/orches
 - `runtime/prepare_result.json` / `runtime/teardown_result.json`: lifecycle result artifacts when enabled.
 - `runtime/`: runtime state, result, and summary files.
 - `serve/`: vLLM logs and serve-side runtime files.
-- `bench/`: task-local `medarc-eval bench --output-dir` root.
+- `bench/`: task-local benchmark stdout/stderr and fallback `medarc-eval bench --output-dir` root when no plan or suite `output_dir` is set.
 
 Task bundles do not contain `task.yaml`, `allocation.json`, `construct-allocation.json`, or `teardown-allocation.json`. The generated scripts carry the explicit command arguments instead.
 
@@ -175,12 +177,12 @@ Task bundles do not contain `task.yaml`, `allocation.json`, `construct-allocatio
 
 ```bash
 medarc-orchestrate launch <explicit vLLM/container/port flags> -- \
-  medarc-eval bench --config <task>/eval-config.toml --api-base-url <local-url> --provider local --output-dir <task>/bench
+  medarc-eval bench --config <task>/eval-config.toml --api-base-url <local-url> --provider local --output-dir <output-dir>
 ```
 
 ### Processing Outputs
 
-Process orchestrated outputs by pointing `medarc-eval process` at the orchestrator run root or a parent directory. Discovery recursively finds nested `results.jsonl` and `metadata.json` files under task-local `bench/` directories:
+Process orchestrated outputs by pointing `medarc-eval process` at the configured result root. If no plan or suite `output_dir` was set, use the orchestrator run root so discovery finds task-local fallback `bench/` outputs:
 
 ```bash
 uv run medarc-eval process --runs-dir outputs/orchestrate/<run_id> --output-dir runs/processed

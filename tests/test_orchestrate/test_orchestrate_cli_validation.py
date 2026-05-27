@@ -73,7 +73,7 @@ def test_status_combines_slurm_manifest_and_summary(tmp_path: Path, capsys) -> N
         encoding="utf-8",
     )
 
-    assert main(["status", "--output-dir", str(tmp_path)]) == 0
+    assert main(["status", "--bundle-dir", str(tmp_path)]) == 0
     output = capsys.readouterr().out
     assert "task-a\tsubmitted\tcompleted\t123" in output
     assert "\t122\t" in output
@@ -83,7 +83,7 @@ def test_status_combines_slurm_manifest_and_summary(tmp_path: Path, capsys) -> N
 def test_status_json_uses_slurm_manifest_key(tmp_path: Path, capsys) -> None:
     (tmp_path / "slurm_manifest.json").write_text(json.dumps({"entries": [], "lifecycle_entries": []}), encoding="utf-8")
 
-    assert main(["status", "--output-dir", str(tmp_path), "--json"]) == 0
+    assert main(["status", "--bundle-dir", str(tmp_path), "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert "slurm_manifest" in payload
     assert "submission_manifest" not in payload
@@ -135,7 +135,7 @@ def test_status_json_enriches_rows_with_live_slurm_state(tmp_path: Path, capsys,
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    assert main(["status", "--output-dir", str(tmp_path), "--json"]) == 0
+    assert main(["status", "--bundle-dir", str(tmp_path), "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     task = payload["tasks"][0]
     assert task["eval_slurm_live_state"] == "PENDING"
@@ -147,7 +147,7 @@ def test_status_json_enriches_rows_with_live_slurm_state(tmp_path: Path, capsys,
 
 def test_status_fails_when_artifacts_missing(tmp_path: Path) -> None:
     with pytest.raises(SystemExit, match="No orchestrator status found"):
-        main(["status", "--output-dir", str(tmp_path)])
+        main(["status", "--bundle-dir", str(tmp_path)])
 
 
 def test_top_level_help_lists_direct_commands(capsys) -> None:

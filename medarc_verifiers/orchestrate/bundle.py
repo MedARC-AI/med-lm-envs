@@ -168,6 +168,7 @@ class PlannedTaskRuntime:
     target_endpoint_id: str
     bundled_eval_config_path: str
     bundled_eval_config_checksum: str
+    output_dir: str
     gpus: int
     tensor_parallel_size: int
     data_parallel_size: int | None
@@ -456,7 +457,8 @@ def _build_task_runtime(
     eval_payload["endpoint_id"] = task.target_endpoint_id
     if task.endpoints_path is not None:
         eval_payload["endpoints_path"] = str(task.endpoints_path)
-    eval_payload["output_dir"] = str(paths.bench_dir)
+    output_dir = str(eval_payload.get("output_dir") or paths.bench_dir)
+    eval_payload["output_dir"] = output_dir
     bundled_bytes = render_toml_mapping(eval_payload).encode("utf-8")
     bundled_checksum = _sha256_bytes(bundled_bytes)
 
@@ -482,6 +484,7 @@ def _build_task_runtime(
         target_endpoint_id=task.target_endpoint_id,
         bundled_eval_config_path=str(paths.eval_config_path),
         bundled_eval_config_checksum=bundled_checksum,
+        output_dir=output_dir,
         gpus=_required_int(model_cfg.get("gpus"), f"Task {task.task_id} orchestrate.vllm.gpus"),
         tensor_parallel_size=_required_int(
             model_cfg.get("tensor_parallel_size"), f"Task {task.task_id} orchestrate.vllm.tensor_parallel_size"

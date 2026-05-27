@@ -477,7 +477,7 @@ def _launch_command(
             "--provider",
             "local",
             "--output-dir",
-            task_bundle.runtime.output_paths.bench_dir,
+            task_bundle.runtime.output_dir,
         ]
     )
     return command

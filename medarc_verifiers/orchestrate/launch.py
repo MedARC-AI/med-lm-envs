@@ -26,6 +26,7 @@ class LaunchRequest:
     name: str | None = None
     env_file: Path | None = None
     run_id: str | None = None
+    bundle_dir: Path | None = None
     output_dir: Path | None = None
     readiness_timeout_s: int | None = None
     prune_logs_on_success: bool = False
@@ -55,6 +56,8 @@ def resolve_launch_plan(request: LaunchRequest, *, cwd: Path) -> LaunchPlan:
     plan, base_dir = _resolve_plan_config(request, cwd=cwd)
     if request.env_file is not None:
         plan = plan.model_copy(update={"env_file": _resolve_path(request.env_file, base_dir=base_dir)})
+    if request.output_dir is not None:
+        plan = plan.model_copy(update={"output_dir": _resolve_path(request.output_dir, base_dir=base_dir)})
     if request.prune_logs_on_success:
         plan = plan.model_copy(update={"prune_logs_on_success": True})
 
@@ -79,14 +82,14 @@ def resolve_launch_plan(request: LaunchRequest, *, cwd: Path) -> LaunchPlan:
 def resolve_output_root(request: LaunchRequest, *, plan: PlanConfig) -> tuple[str, Path]:
     configured_run_id = request.run_id or plan.run_id
     run_id = configured_run_id or generate_run_id(plan.name)
-    output_root = request.output_dir or plan.output_dir or Path("outputs") / "orchestrate" / run_id
+    output_root = request.bundle_dir or plan.bundle_dir or Path("outputs") / "orchestrate" / run_id
     return run_id, output_root.expanduser().resolve()
 
 
-def resolve_status_target(*, run_id: str | None, output_dir: Path | None, cwd: Path) -> LaunchStatusTarget:
+def resolve_status_target(*, run_id: str | None, bundle_dir: Path | None, cwd: Path) -> LaunchStatusTarget:
     root_dir = cwd.expanduser().resolve()
-    if output_dir is not None:
-        root = output_dir.expanduser().resolve()
+    if bundle_dir is not None:
+        root = bundle_dir.expanduser().resolve()
     elif run_id:
         root = (root_dir / "outputs" / "orchestrate" / run_id).expanduser().resolve()
     else:

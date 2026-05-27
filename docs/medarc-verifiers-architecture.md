@@ -189,14 +189,15 @@ resolved from endpoint registry entries:
 Task bundles live under `outputs/orchestrate/<run_id>/tasks/<task-slug>/` and
 contain generated `eval-config.toml`, readable Slurm scripts (`prepare.sh`,
 `submit.sh`, `teardown.sh`), registry snapshot TOML files, runtime outputs,
-`serve/` logs, and a task-local `bench/` output root. They do not contain
+`serve/` logs, and task-local `bench/` logs/fallback outputs. They do not contain
 `task.yaml` or allocation JSON execution inputs.
 
 `submit.sh` directly renders any selected auxiliary images before calling
-`medarc-orchestrate launch ... -- medarc-eval bench --config <task>/eval-config.toml --api-base-url <local> --provider local --output-dir <task>/bench`.
+`medarc-orchestrate launch ... -- medarc-eval bench --config <task>/eval-config.toml --api-base-url <local> --provider local --output-dir <resolved-output-dir>`.
 Removed YAML-runner flags such as `--run-id`, `--restart`, and `--on-complete`
-are not used. Processing can scan these nested task-local bench outputs
-recursively from the orchestrator run root.
+are not used. Processing should normally scan the configured `output_dir`; if no
+plan or suite `output_dir` is set, it can scan nested task-local fallback bench
+outputs recursively from the orchestrator run root.
 
 ## Eval Outputs
 

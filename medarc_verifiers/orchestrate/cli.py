@@ -32,7 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_source_arguments(run_parser)
     run_parser.add_argument("--dry-run", action="store_true", help="Render bundle and print sbatch commands.")
     run_parser.add_argument("--run-id", help="Run identifier.")
-    run_parser.add_argument("--output-dir", type=Path, help="Override output directory root.")
+    run_parser.add_argument("--bundle-dir", type=Path, help="Override orchestrator bundle directory.")
+    run_parser.add_argument("--output-dir", type=Path, help="Override medarc-eval bench result directory.")
     run_parser.add_argument("--readiness-timeout-s", type=int, default=None, help="Readiness timeout in seconds.")
     run_parser.add_argument("--prune-logs-on-success", action="store_true")
     run_parser.add_argument("--eval-images-config", type=Path, help="Path to eval auxiliary image registry TOML.")
@@ -53,7 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     status_parser = subparsers.add_parser("status", description="Print orchestrator status artifacts.")
     status_parser.add_argument("--run-id", help="Run identifier under outputs/orchestrate.")
-    status_parser.add_argument("--output-dir", type=Path, help="Run output directory.")
+    status_parser.add_argument("--bundle-dir", type=Path, help="Run bundle directory.")
     status_parser.add_argument("--json", action="store_true", help="Print combined status JSON.")
     status_parser.set_defaults(handler=_run_status)
 
@@ -98,6 +99,7 @@ def _run_launch(args: argparse.Namespace) -> int:
         name=args.name,
         env_file=args.env_file,
         run_id=args.run_id,
+        bundle_dir=args.bundle_dir,
         output_dir=args.output_dir,
         readiness_timeout_s=args.readiness_timeout_s,
         prune_logs_on_success=bool(args.prune_logs_on_success),
@@ -131,7 +133,7 @@ def _run_launch(args: argparse.Namespace) -> int:
 
 
 def _run_status(args: argparse.Namespace) -> int:
-    target = resolve_status_target(run_id=args.run_id, output_dir=args.output_dir, cwd=Path.cwd())
+    target = resolve_status_target(run_id=args.run_id, bundle_dir=args.bundle_dir, cwd=Path.cwd())
     payload = _load_combined_status(target.output_root)
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))

@@ -1220,6 +1220,41 @@ def test_rendered_task_local_config_is_loadable_by_orchestrator(tmp_path: Path) 
     assert patched_payload["output_dir"].endswith("/bench")
 
 
+def test_render_bundle_uses_plan_output_dir_for_bench_results(tmp_path: Path) -> None:
+    suite_cfg = tmp_path / "job.yaml"
+    _write_suite_config(suite_cfg)
+    plan_path = _write_plan(tmp_path, [suite_cfg])
+    result_root = tmp_path / "durable-results"
+    plan_path.write_text(
+        plan_path.read_text(encoding="utf-8").replace(
+            'endpoints_path = "endpoints.toml"',
+            f'endpoints_path = "endpoints.toml"\noutput_dir = "{result_root}"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    planned = build_submission_plan(
+        expand_tasks(load_plan(plan_path)),
+        base_dependency=None,
+        submission_options=SlurmSubmissionOptions(),
+    )
+
+    manifest = render_bundle(
+        planned_tasks=planned,
+        bundle_root=tmp_path / "outputs",
+        source_dir=tmp_path,
+        activate_script=tmp_path / ".venv" / "bin" / "activate",
+        env_file=None,
+        readiness_timeout_s=None,
+        prune_logs_on_success=False,
+    )
+
+    payload = load_suite_config(Path(manifest.entries[0].generated_eval_config_path))
+    script = Path(manifest.entries[0].script_path).read_text(encoding="utf-8")
+    assert payload["output_dir"] == str(result_root)
+    assert f"--output-dir {result_root}" in script
+
+
 def test_slurm_dry_run_writes_manifest_and_prints_commands(tmp_path: Path, capsys) -> None:
     job_a = tmp_path / "job-a.yaml"
     job_b = tmp_path / "job-b.yaml"
@@ -1234,7 +1269,7 @@ def test_slurm_dry_run_writes_manifest_and_prints_commands(tmp_path: Path, capsy
             str(plan_path),
             "--run-id",
             "bundle",
-            "--output-dir",
+            "--bundle-dir",
             str(tmp_path / "bundle"),
             "--dry-run",
         ]
