@@ -775,7 +775,7 @@ def test_toml_bench_auto_resumes_existing_output(monkeypatch: pytest.MonkeyPatch
     assert calls == 2
 
 
-def test_toml_bench_resume_refuses_malformed_existing_output(
+def test_toml_bench_passes_malformed_existing_output_to_upstream(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -803,8 +803,8 @@ def test_toml_bench_resume_refuses_malformed_existing_output(
 
     monkeypatch.setattr(main, "run_evaluation", fake_run)
 
-    assert main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir)]) == 1
-    assert calls == 0
+    assert main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir)]) == 0
+    assert calls == 1
 
 
 def test_toml_bench_reuses_empty_existing_output_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
