@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Mapping
 
+HF_CONTAINER_HOME = "/root/.cache/huggingface"
+HF_CONTAINER_HUB = "/root/.cache/huggingface/hub"
+
 
 def normalize_volume_mounts(volumes: object) -> list[str]:
     if volumes is None:
@@ -41,6 +44,15 @@ def normalize_volume_mounts(volumes: object) -> list[str]:
             raise ValueError(f"Invalid volume mount mode: {entry!r} (expected ro/rw)")
         mounts.append(f"{host}:{container_path}:{mode}")
     return mounts
+
+
+def infer_hf_env_from_volume_mounts(volume_mounts: list[str]) -> dict[str, str]:
+    """Infer container-side Hugging Face cache env from canonical cache mounts."""
+    for mount in volume_mounts:
+        parts = str(mount).split(":")
+        if len(parts) >= 2 and parts[1] == HF_CONTAINER_HOME:
+            return {"HF_HOME": HF_CONTAINER_HOME, "HUGGINGFACE_HUB_CACHE": HF_CONTAINER_HUB}
+    return {}
 
 
 def build_container_args(
@@ -157,4 +169,10 @@ def _validate_serve_config(serve: Mapping[str, object]) -> None:
         raise ValueError(f"Unknown limit_mm_per_prompt keys: {unknown_subkeys}")
 
 
-__all__ = ["build_container_args", "normalize_volume_mounts"]
+__all__ = [
+    "HF_CONTAINER_HOME",
+    "HF_CONTAINER_HUB",
+    "build_container_args",
+    "infer_hf_env_from_volume_mounts",
+    "normalize_volume_mounts",
+]

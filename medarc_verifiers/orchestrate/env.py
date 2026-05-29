@@ -31,6 +31,7 @@ def load_explicit_runtime_env(
         env.update(load_env_file(container_env_file, base_dir=container_env_base_dir or root))
     if env_overrides is not None:
         env.update(dict(env_overrides))
+    env.setdefault("SAFETENSORS_FAST_GPU", "1")
     if not env.get("HF_TOKEN"):
         token = load_hf_token_from_login()
         if token:

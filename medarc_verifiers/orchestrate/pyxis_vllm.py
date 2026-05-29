@@ -163,7 +163,8 @@ class PyxisRuntimeAdapter:
         container_env_vars = sorted(
             name
             for name in env
-            if os.environ.get(name) is not None or name in {"HF_HOME", "HUGGINGFACE_HUB_CACHE", "HF_TOKEN"}
+            if os.environ.get(name) is not None
+            or name in {"HF_HOME", "HUGGINGFACE_HUB_CACHE", "HF_TOKEN", "SAFETENSORS_FAST_GPU"}
         )
         if container_env_vars:
             command.append(f"--container-env={','.join(container_env_vars)}")

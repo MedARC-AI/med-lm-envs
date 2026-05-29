@@ -102,6 +102,14 @@ image = "vllm/vllm-openai:latest"
 
 Container mounts that are specific to a launch belong in plan `[container]`, not endpoint metadata. Slurm policy such as account, partition, qos, and nice comes from explicit CLI flags or `[endpoint.orchestrate.slurm]`. If prepare image materialization is enabled, mutable image tags such as `:latest` are resolved to immutable registry digests before import.
 
+The vLLM launch environment defaults `SAFETENSORS_FAST_GPU=1`. When `[container].volumes` mounts a host cache to `/root/.cache/huggingface`, the worker also sets container-side `HF_HOME=/root/.cache/huggingface` and `HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub` automatically so Hugging Face uses the mounted cache instead of the user's home cache. Use `[container].env_file` only when you need to override those defaults or pass additional container environment:
+
+```dotenv
+HF_HOME=/root/.cache/huggingface
+HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub
+SAFETENSORS_FAST_GPU=1
+```
+
 ### Slurm Usage
 
 Slurm options come from CLI overrides first, then `[endpoint.orchestrate.slurm]`, then built-in defaults. GPU allocation is derived per task from `[endpoint.orchestrate.vllm].gpus`; there is no Python-side concurrency throttle.
@@ -150,7 +158,7 @@ remove_model_weights = false
 remove_images = false
 ```
 
-When `[container].volumes` includes `/path/to/hf-cache:/root/.cache/huggingface`, prepare infers `hf_home = "/path/to/hf-cache"` and `hub_cache = "/path/to/hf-cache/hub"`. The Pyxis launch receives the matching container-side cache env vars: `HF_HOME=/root/.cache/huggingface` and `HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub`.
+When `[container].volumes` includes `/path/to/hf-cache:/root/.cache/huggingface`, prepare infers `hf_home = "/path/to/hf-cache"` and `hub_cache = "/path/to/hf-cache/hub"`. The GPU eval worker infers the matching container-side env from the same mount and passes `HF_HOME` and `HUGGINGFACE_HUB_CACHE` through Pyxis. If vLLM logs show Hugging Face writing under a user home directory, check that the rendered eval job includes the canonical `/root/.cache/huggingface` mount.
 
 Image materialization uses direct `enroot import` before the GPU job starts. For regular tags or digest-pinned images, prepare writes a deterministic `.sqsh` path under `[prepare.cache].image_dir`. For mutable tags such as `:latest`, prepare first queries the registry, resolves the tag to a digest, imports the digest-specific image if needed, and atomically updates `latest.sqsh` and `latest` symlinks to that image. Existing absolute `.sqsh` image paths are treated as already materialized and are left unchanged.
 

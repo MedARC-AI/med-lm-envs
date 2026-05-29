@@ -183,6 +183,15 @@ def test_load_explicit_runtime_env_falls_back_to_huggingface_login(tmp_path: Pat
     env = load_explicit_runtime_env(repo_root=tmp_path)
 
     assert env["HF_TOKEN"] == "hf-login-token"
+    assert env["SAFETENSORS_FAST_GPU"] == "1"
+
+
+def test_load_explicit_runtime_env_keeps_explicit_safetensors_override(tmp_path: Path) -> None:
+    from medarc_verifiers.orchestrate.env import load_explicit_runtime_env
+
+    env = load_explicit_runtime_env(repo_root=tmp_path, env_overrides={"SAFETENSORS_FAST_GPU": "0"})
+
+    assert env["SAFETENSORS_FAST_GPU"] == "0"
 
 
 def test_load_explicit_runtime_env_prefers_explicit_hf_token_over_huggingface_login(tmp_path: Path, monkeypatch) -> None:

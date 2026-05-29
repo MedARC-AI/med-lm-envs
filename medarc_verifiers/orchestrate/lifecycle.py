@@ -21,9 +21,7 @@ import httpx
 
 from medarc_verifiers.orchestrate.config import ConstructConfig
 from medarc_verifiers.orchestrate.env import apply_env, load_explicit_runtime_env
-
-HF_CONTAINER_HOME = "/root/.cache/huggingface"
-HF_CONTAINER_HUB = "/root/.cache/huggingface/hub"
+from medarc_verifiers.orchestrate.vllm_args import HF_CONTAINER_HOME, HF_CONTAINER_HUB
 
 
 @dataclass(frozen=True)

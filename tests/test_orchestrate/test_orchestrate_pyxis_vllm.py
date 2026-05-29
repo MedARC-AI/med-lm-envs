@@ -69,7 +69,7 @@ def test_pyxis_launch_renders_expected_srun_command(monkeypatch) -> None:
         gpus_required=2,
         gpu_ids=[],
         server_port=8100,
-        env={"OPENAI_API_KEY": "host-key", "UNSET_VAR": "value"},
+        env={"OPENAI_API_KEY": "host-key", "SAFETENSORS_FAST_GPU": "1", "UNSET_VAR": "value"},
         labels={"orchestrator.task_id": "task-1"},
         srun_extra_args=["--container-entrypoint"],
     )
@@ -85,7 +85,7 @@ def test_pyxis_launch_renders_expected_srun_command(monkeypatch) -> None:
         "--container-image=docker://vllm/vllm-openai:latest",
     ]
     assert "--container-mounts=/cache:/root/.cache/huggingface:ro" in command
-    assert "--container-env=OPENAI_API_KEY" in command
+    assert "--container-env=OPENAI_API_KEY,SAFETENSORS_FAST_GPU" in command
     assert "--container-entrypoint" in command
     assert "--no-container-entrypoint" not in command
     assert "--no-container-mount-home" in command

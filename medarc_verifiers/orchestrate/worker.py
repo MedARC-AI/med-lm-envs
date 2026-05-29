@@ -49,7 +49,11 @@ from medarc_verifiers.orchestrate.state import (
     write_text,
 )
 from medarc_verifiers.orchestrate.topology import ResolvedTopology, resolve_launch_topology
-from medarc_verifiers.orchestrate.vllm_args import build_container_args, normalize_volume_mounts
+from medarc_verifiers.orchestrate.vllm_args import (
+    build_container_args,
+    infer_hf_env_from_volume_mounts,
+    normalize_volume_mounts,
+)
 
 StateHandler = Callable[[TaskManifest, TaskPaths, str], None]
 LogFn = Callable[[str], None]
@@ -210,6 +214,8 @@ class TaskWorker:
         if self._launch.hub_cache:
             env.setdefault("HUGGINGFACE_HUB_CACHE", str(self._launch.hub_cache))
         volume_mounts = normalize_volume_mounts(list(self._launch.volumes))
+        for name, value in infer_hf_env_from_volume_mounts(volume_mounts).items():
+            env.setdefault(name, value)
         run_label = _run_label_from_task_root(paths.root)
         labels = {"orchestrator.run_id": run_label, "orchestrator.task_id": self._launch.task_id}
         if self._launch.endpoint_id:

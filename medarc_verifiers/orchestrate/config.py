@@ -41,9 +41,10 @@ DEFAULT_VLLM_SERVE_CONFIG: Mapping[str, Any] = {
 class ContainerOverrideConfig(BaseModel):
     """Launch-scoped container overrides."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     volumes: list[str] = Field(default_factory=list)
+    env_file: Path | None = None
 
 
 class BenchOverrideConfig(BaseModel):
@@ -360,6 +361,10 @@ def expand_tasks(plan: PlanConfig, *, default_endpoints_path: Path | None = None
         container["volumes"] = normalize_volume_mounts(
             list(container.get("volumes") or []) + plan.container.volumes + target.container.volumes
         )
+        if plan.container.env_file is not None:
+            container["env_file"] = plan.container.env_file
+        if target.container.env_file is not None:
+            container["env_file"] = target.container.env_file
         orchestrate = {
             "vllm": vllm,
             "container": container,
@@ -397,8 +402,16 @@ def _resolve_plan_paths(plan: PlanConfig, *, base_dir: Path) -> PlanConfig:
         target_updates: dict[str, object] = {}
         if target.suite is not None:
             target_updates["suite"] = _resolve_path(target.suite, base_dir=base_dir)
+        if target.container.env_file is not None:
+            target_updates["container"] = target.container.model_copy(
+                update={"env_file": _resolve_path(target.container.env_file, base_dir=base_dir)}
+            )
         targets.append(target.model_copy(update=target_updates) if target_updates else target)
     updates["targets"] = targets
+    if plan.container.env_file is not None:
+        updates["container"] = plan.container.model_copy(
+            update={"env_file": _resolve_path(plan.container.env_file, base_dir=base_dir)}
+        )
     for field_name in ("env_file", "bundle_dir", "output_dir", "eval_images_config", "endpoints_path"):
         value = getattr(plan, field_name)
         if value is not None:

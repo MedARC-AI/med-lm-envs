@@ -1,6 +1,10 @@
 import pytest
 
-from medarc_verifiers.orchestrate.vllm_args import build_container_args, normalize_volume_mounts
+from medarc_verifiers.orchestrate.vllm_args import (
+    build_container_args,
+    infer_hf_env_from_volume_mounts,
+    normalize_volume_mounts,
+)
 
 
 def test_build_container_args_rejects_unknown_serve_keys() -> None:
@@ -127,3 +131,18 @@ def test_normalize_volume_mounts_parses_mount_strings() -> None:
 def test_normalize_volume_mounts_rejects_invalid_entries() -> None:
     with pytest.raises(ValueError):
         normalize_volume_mounts(["/host/only"])
+
+
+def test_infer_hf_env_from_canonical_cache_mount() -> None:
+    env = infer_hf_env_from_volume_mounts(["/data/medmarks/cache:/root/.cache/huggingface:rw"])
+
+    assert env == {
+        "HF_HOME": "/root/.cache/huggingface",
+        "HUGGINGFACE_HUB_CACHE": "/root/.cache/huggingface/hub",
+    }
+
+
+def test_infer_hf_env_ignores_noncanonical_cache_mount() -> None:
+    env = infer_hf_env_from_volume_mounts(["/data/medmarks/cache:/cache/huggingface:rw"])
+
+    assert env == {}

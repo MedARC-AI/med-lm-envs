@@ -102,6 +102,8 @@ command = ["bash", "-lc", "serve-fhir"]
         encoding="utf-8",
     )
     plan_path = tmp_path / "plan.toml"
+    container_env = tmp_path / "container.env"
+    container_env.write_text("HF_HOME=/root/.cache/huggingface\n", encoding="utf-8")
     plan_path.write_text(
         """
 name = "test"
@@ -115,6 +117,7 @@ readiness_timeout_s = 123
 
 [container]
 volumes = ["/host/cache:/root/.cache/huggingface"]
+env_file = "container.env"
 
 [bench]
 max_concurrent = 768
@@ -140,6 +143,7 @@ endpoint_id = "foo"
     assert task.generated_eval_config["max_concurrent"] == 768
     assert task.generated_eval_config["eval"][0]["max_concurrent"] == 12
     assert task.orchestrate["container"]["volumes"] == ["/host/cache:/root/.cache/huggingface:rw"]
+    assert task.orchestrate["container"]["env_file"] == container_env.resolve()
     assert task.eval_images[0]["id"] == "fhir"
     assert task.orchestrate_registry.path == str(endpoints.resolve())
 

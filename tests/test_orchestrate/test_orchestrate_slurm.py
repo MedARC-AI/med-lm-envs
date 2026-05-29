@@ -57,6 +57,8 @@ rollouts_per_example = 1
 
 def _write_lifecycle_plan(tmp_path: Path, suite_cfg: Path) -> Path:
     _write_plan(tmp_path, [suite_cfg])
+    container_env = tmp_path / "container.env"
+    container_env.write_text("HF_HOME=/root/.cache/huggingface\n", encoding="utf-8")
     endpoints = tmp_path / "endpoints.toml"
     endpoints.write_text(
         endpoints.read_text(encoding="utf-8").replace('image = "fake"', 'image = "vllm/vllm-openai:v0.12.0"'),
@@ -69,6 +71,7 @@ def _write_lifecycle_plan(tmp_path: Path, suite_cfg: Path) -> Path:
 
 [container]
 volumes = ["{tmp_path / 'hf'}:/root/.cache/huggingface"]
+env_file = "container.env"
 
 [prepare]
 enabled = true
@@ -554,6 +557,7 @@ def test_lifecycle_render_writes_cpu_scripts_manifest_and_symbolic_dependencies(
     assert str(tmp_path / "hf") in prepare_script
     submit_script = Path(entry.script_path).read_text(encoding="utf-8")
     assert "--container-image-source vllm/vllm-openai:v0.12.0" in submit_script
+    assert f"--container-env-file {tmp_path / 'container.env'}" in submit_script
     assert f"--image-dir {tmp_path / 'images'}" in submit_script
     assert "--image-root" not in teardown_script
     assert "--prepare-result" not in teardown_script
