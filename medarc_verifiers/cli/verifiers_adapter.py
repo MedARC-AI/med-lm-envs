@@ -115,13 +115,34 @@ def _strip_medarc_metadata(raw: Mapping[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
-def _load_endpoint_registry(endpoints_path: str) -> dict[str, list[Endpoint]]:
+_ENDPOINT_REGISTRY_CACHE: dict[
+    tuple[str, tuple[str, ...] | None, int | None, int | None], dict[str, list[Endpoint]]
+] = {}
+
+
+def _load_endpoint_registry(
+    endpoints_path: str, *, endpoint_ids: set[str] | frozenset[str] | None = None
+) -> dict[str, list[Endpoint]]:
     """Load endpoint aliases, allowing model-only entries for portable alias registries."""
     endpoints_file = resolve_endpoints_file(endpoints_path)
     if endpoints_file is None or not endpoints_file.exists():
         return {}
     if endpoints_file.suffix != ".toml":
         raise ValueError(f"Unsupported endpoints file extension '{endpoints_file.suffix}' at {endpoints_file}")
+
+    stat = endpoints_file.stat()
+    filtered_endpoint_ids = frozenset(endpoint_ids) if endpoint_ids is not None else None
+    cache_key = (
+        str(endpoints_file.expanduser().resolve()),
+        tuple(sorted(filtered_endpoint_ids)) if filtered_endpoint_ids is not None else None,
+        getattr(stat, "st_mtime_ns", None),
+        stat.st_size,
+    )
+    if cache_key in _ENDPOINT_REGISTRY_CACHE:
+        return {
+            endpoint_id: [dict(endpoint) for endpoint in endpoint_group]
+            for endpoint_id, endpoint_group in _ENDPOINT_REGISTRY_CACHE[cache_key].items()
+        }
 
     with endpoints_file.open("rb") as handle:
         raw_toml = load_toml(handle)
@@ -141,6 +162,8 @@ def _load_endpoint_registry(endpoints_path: str) -> dict[str, list[Endpoint]]:
         endpoint_id = raw_entry.get("endpoint_id")
         if not isinstance(endpoint_id, str) or not endpoint_id:
             raise ValueError(f"Each [[endpoint]] entry must include non-empty string 'endpoint_id' in {entry_source}")
+        if filtered_endpoint_ids is not None and endpoint_id not in filtered_endpoint_ids:
+            continue
 
         model = raw_entry.get("model")
         if not isinstance(model, str) or not model:
@@ -197,6 +220,10 @@ def _load_endpoint_registry(endpoints_path: str) -> dict[str, list[Endpoint]]:
 
         endpoints.setdefault(endpoint_id, []).append(endpoint)
 
+    _ENDPOINT_REGISTRY_CACHE[cache_key] = {
+        endpoint_id: [dict(endpoint) for endpoint in endpoint_group]
+        for endpoint_id, endpoint_group in endpoints.items()
+    }
     return endpoints
 
 
@@ -219,11 +246,13 @@ def build_eval_config(raw: Mapping[str, Any], *, overrides: EvalConfigOverrides 
     )
 
     endpoints_path = str(merged_raw.get("endpoints_path", DEFAULT_ENDPOINTS_PATH))
-    endpoints = _load_endpoint_registry(endpoints_path)
+    endpoint_filter_ids = _endpoint_registry_filter_ids(merged_raw)
+    endpoints = _load_endpoint_registry(endpoints_path, endpoint_ids=endpoint_filter_ids)
     model, resolved_endpoint_id, client_config = _build_client_config(merged_raw, endpoints, endpoints_path)
     max_concurrent = _resolve_max_concurrent(merged_raw, endpoints_path, resolved_endpoint_id)
 
-    endpoint_sampling_profiles = load_endpoint_sampling_profiles(endpoints_path)
+    sampling_filter_ids = {resolved_endpoint_id} if resolved_endpoint_id is not None else endpoint_filter_ids
+    endpoint_sampling_profiles = load_endpoint_sampling_profiles(endpoints_path, endpoint_ids=sampling_filter_ids)
     endpoint_sampling_args = _resolve_endpoint_sampling_args(endpoint_sampling_profiles, resolved_endpoint_id)
     cli_sampling_args = overrides.sampling_args if overrides is not None else None
     sampling_args = _build_sampling_args(
@@ -272,7 +301,7 @@ def build_eval_identity_payload(
 
     merged_raw = _apply_overrides(dict(raw), overrides)
     endpoints_path = str(merged_raw.get("endpoints_path", DEFAULT_ENDPOINTS_PATH))
-    endpoints = _load_endpoint_registry(endpoints_path)
+    endpoints = _load_endpoint_registry(endpoints_path, endpoint_ids=_endpoint_registry_filter_ids(merged_raw))
     model, resolved_endpoint_id, _client_config = _build_client_config(merged_raw, endpoints, endpoints_path)
     max_concurrent = _resolve_max_concurrent(merged_raw, endpoints_path, resolved_endpoint_id)
 
@@ -292,6 +321,18 @@ def build_eval_identity_payload(
     if "name" in raw:
         payload["name"] = raw["name"]
     return payload
+
+
+def _endpoint_registry_filter_ids(raw: Mapping[str, Any]) -> set[str] | None:
+    raw_endpoint_id = raw.get("endpoint_id")
+    if isinstance(raw_endpoint_id, str):
+        return {raw_endpoint_id}
+
+    raw_model = raw.get("model", DEFAULT_MODEL)
+    if isinstance(raw_model, str):
+        return {raw_model}
+
+    return None
 
 
 def _resolve_max_concurrent(

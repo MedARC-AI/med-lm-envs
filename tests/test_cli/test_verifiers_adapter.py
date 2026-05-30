@@ -269,6 +269,62 @@ reasoning_field = "reasoning"
     assert getattr(config.client_config, "reasoning_field") == "reasoning"
 
 
+def test_build_eval_config_ignores_unrelated_invalid_endpoint_entry(tmp_path: Path) -> None:
+    endpoints_path = tmp_path / "endpoints.toml"
+    endpoints_path.write_text(
+        """
+[[endpoint]]
+endpoint_id = "target"
+model = "org/target"
+url = "http://localhost:8000/v1"
+key = "TARGET_KEY"
+reasoning_field = "reasoning"
+
+[[endpoint]]
+endpoint_id = "unrelated"
+model = "org/unrelated"
+url = "http://localhost:8001/v1"
+key = "UNRELATED_KEY"
+reasoning_field = "not-a-supported-field"
+""".strip()
+    )
+
+    config = build_eval_config({"env_id": "medqa", "endpoint_id": "target", "endpoints_path": str(endpoints_path)})
+    identity = build_eval_identity_payload(
+        {"env_id": "medqa", "endpoint_id": "target", "endpoints_path": str(endpoints_path)}
+    )
+
+    assert config.model == "org/target"
+    assert getattr(config.client_config, "reasoning_field") == "reasoning"
+    assert identity["model"] == "org/target"
+
+
+def test_build_eval_config_ignores_unrelated_invalid_sampling_profile(tmp_path: Path) -> None:
+    endpoints_path = tmp_path / "endpoints.toml"
+    endpoints_path.write_text(
+        """
+[[endpoint]]
+endpoint_id = "target"
+model = "org/target"
+url = "http://localhost:8000/v1"
+key = "TARGET_KEY"
+sampling_args = { temperature = 0.2 }
+
+[[endpoint]]
+endpoint_id = "unrelated"
+model = "org/unrelated"
+url = "http://localhost:8001/v1"
+key = "UNRELATED_KEY"
+sampling_args = "bad"
+""".strip()
+    )
+
+    config = build_eval_config({"env_id": "medqa", "endpoint_id": "target", "endpoints_path": str(endpoints_path)})
+
+    assert config.model == "org/target"
+    assert config.sampling_args["temperature"] == 0.2
+
+
 def test_build_eval_config_rejects_conflicting_replica_reasoning_fields(tmp_path: Path) -> None:
     endpoints_path = tmp_path / "endpoints.toml"
     endpoints_path.write_text(

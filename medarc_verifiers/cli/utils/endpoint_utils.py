@@ -44,7 +44,14 @@ def load_endpoint_registry(
     return store[normalized]
 
 
-def load_endpoint_sampling_profiles(path: str | Path) -> dict[str, list[dict[str, Any]]]:
+_GLOBAL_ENDPOINT_SAMPLING_PROFILE_CACHE: dict[
+    tuple[str, tuple[str, ...] | None, int | None, int | None], dict[str, list[dict[str, Any]]]
+] = {}
+
+
+def load_endpoint_sampling_profiles(
+    path: str | Path, *, endpoint_ids: set[str] | frozenset[str] | None = None
+) -> dict[str, list[dict[str, Any]]]:
     """Load MedARC endpoint-level sampling defaults from a TOML registry."""
     try:
         resolved = resolve_endpoints_file(str(path))
@@ -54,6 +61,20 @@ def load_endpoint_sampling_profiles(path: str | Path) -> dict[str, list[dict[str
         raise
     if resolved is None or not resolved.exists() or resolved.suffix != ".toml":
         return {}
+
+    stat = resolved.stat()
+    filtered_endpoint_ids = frozenset(endpoint_ids) if endpoint_ids is not None else None
+    cache_key = (
+        _normalize_path(resolved),
+        tuple(sorted(filtered_endpoint_ids)) if filtered_endpoint_ids is not None else None,
+        getattr(stat, "st_mtime_ns", None),
+        stat.st_size,
+    )
+    if cache_key in _GLOBAL_ENDPOINT_SAMPLING_PROFILE_CACHE:
+        return {
+            endpoint_id: [dict(profile) for profile in profiles]
+            for endpoint_id, profiles in _GLOBAL_ENDPOINT_SAMPLING_PROFILE_CACHE[cache_key].items()
+        }
 
     with resolved.open("rb") as handle:
         raw_toml = load_toml(handle)
@@ -77,6 +98,8 @@ def load_endpoint_sampling_profiles(path: str | Path) -> dict[str, list[dict[str
                     f"Endpoint profile with sampling_args must include non-empty string endpoint_id in {entry_source}"
                 )
             continue
+        if filtered_endpoint_ids is not None and endpoint_id not in filtered_endpoint_ids:
+            continue
 
         raw_sampling_args = raw_entry.get("sampling_args", {})
         if isinstance(raw_sampling_args, list):
@@ -89,6 +112,10 @@ def load_endpoint_sampling_profiles(path: str | Path) -> dict[str, list[dict[str
 
         profiles.setdefault(endpoint_id, []).append(dict(cast(dict[str, Any], raw_sampling_args)))
 
+    _GLOBAL_ENDPOINT_SAMPLING_PROFILE_CACHE[cache_key] = {
+        endpoint_id: [dict(profile) for profile in endpoint_profiles]
+        for endpoint_id, endpoint_profiles in profiles.items()
+    }
     return profiles
 
 
