@@ -24,6 +24,7 @@ DEFAULT_CONTAINER_CONFIG: Mapping[str, Any] = {
 DEFAULT_SLURM_CONFIG: Mapping[str, Any] = {
     "qos": "bottom",
     "slurm_resume": True,
+    "signal": "B:TERM@120",
 }
 DEFAULT_PYXIS_CONFIG: Mapping[str, Any] = {
     "srun_extra_args": ["--overlap"],
@@ -687,6 +688,7 @@ def _validate_endpoint_orchestration_registry(payload: Mapping[str, Any], *, sou
                     "mail_type",
                     "mail_user",
                     "slurm_resume",
+                    "signal",
                 },
                 label=f"{source} {endpoint_id}.orchestrate.slurm",
             )

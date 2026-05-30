@@ -1,13 +1,17 @@
+import asyncio
 import sys
+import threading
 import types
 from pathlib import Path
 
 from medarc_verifiers.orchestrate.podman_vllm import PodmanRuntimeAdapter
-from medarc_verifiers.orchestrate.runtime import RuntimeLaunchError
+from medarc_verifiers.orchestrate.runtime import RuntimeHandle, RuntimeLaunchError
 from medarc_verifiers.orchestrate.state import TaskManifest
 from medarc_verifiers.orchestrate.topology import ResolvedTopology
 from medarc_verifiers.orchestrate.worker import (
     LaunchInputs,
+    TaskWorker,
+    WorkerOptions,
     _effective_serve_args,
     _parse_vllm_image_version,
     main as launch_main,
@@ -132,6 +136,205 @@ def test_launch_cli_infers_allocated_gpus_from_visible_devices(tmp_path: Path, m
 
     assert rc == 0
     assert captured["allocated_gpus"] == 4
+
+
+def test_task_worker_shutdown_before_launch_skips_runtime(tmp_path: Path, monkeypatch) -> None:
+    calls: list[str] = []
+
+    class Streamer:
+        def start(self) -> None:
+            calls.append("stream-start")
+
+        def stop(self, *, timeout: float = 2.0) -> None:
+            calls.append("stream-stop")
+
+        def is_alive(self) -> bool:
+            return False
+
+    class Runtime:
+        def launch(self, **_kwargs):
+            calls.append("launch")
+            return RuntimeHandle(base_url="http://127.0.0.1:9999/v1", identifier="serve-1")
+
+        def stream_logs(self, handle, sink):
+            calls.append(f"stream:{handle.identifier}")
+            return Streamer()
+
+        def teardown(self, handle) -> None:
+            calls.append(f"teardown:{handle.identifier}")
+
+    async def fail_readiness(*_args, **_kwargs):
+        raise AssertionError("readiness should not run after shutdown was requested")
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.wait_for_readiness_async", fail_readiness)
+    task_root = tmp_path / "task"
+    launch = LaunchInputs(
+        task_id="foo-medqa",
+        model_id="Foo/Bar",
+        endpoint_id="foo",
+        image="fake",
+        gpus=1,
+        runtime_dir=task_root / "runtime",
+        serve_dir=task_root / "serve",
+        ready_file=task_root / "runtime" / "ready.json",
+        bench_argv=("medarc-eval", "bench"),
+    )
+    worker = TaskWorker(launch, options=WorkerOptions(runtime="pyxis", readiness_timeout_s=60), runtime_adapter=Runtime())
+
+    async def run_worker() -> None:
+        await worker.request_shutdown()
+        await worker.run()
+
+    asyncio.run(run_worker())
+
+    assert calls == []
+    assert '"state": "cancelled"' in (task_root / "runtime" / "state.json").read_text(encoding="utf-8")
+    assert '"failure_reason": "shutdown_requested"' in (task_root / "runtime" / "result.json").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_task_worker_shutdown_during_runtime_launch_records_cancelled(tmp_path: Path, monkeypatch) -> None:
+    launch_started = threading.Event()
+    release_launch = threading.Event()
+
+    class Runtime:
+        def launch(self, **_kwargs):
+            launch_started.set()
+            release_launch.wait(timeout=1)
+            return RuntimeHandle(base_url="http://127.0.0.1:9999/v1", identifier="serve-1")
+
+        def stream_logs(self, handle, sink):
+            raise AssertionError("logs should not start when launch shutdown grace expires")
+
+        def teardown(self, handle) -> None:
+            raise AssertionError("no handle is available before launch returns")
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.LAUNCH_SHUTDOWN_GRACE_S", 0.01)
+    task_root = tmp_path / "task"
+    launch = LaunchInputs(
+        task_id="foo-medqa",
+        model_id="Foo/Bar",
+        endpoint_id="foo",
+        image="fake",
+        gpus=1,
+        runtime_dir=task_root / "runtime",
+        serve_dir=task_root / "serve",
+        ready_file=task_root / "runtime" / "ready.json",
+        bench_argv=("medarc-eval", "bench"),
+    )
+    worker = TaskWorker(launch, options=WorkerOptions(runtime="pyxis", readiness_timeout_s=60), runtime_adapter=Runtime())
+
+    async def run_worker() -> None:
+        run_task = asyncio.create_task(worker.run())
+        await asyncio.to_thread(launch_started.wait, 1)
+        await worker.request_shutdown()
+        await run_task
+
+    try:
+        asyncio.run(run_worker())
+    finally:
+        release_launch.set()
+
+    assert '"state": "cancelled"' in (task_root / "runtime" / "state.json").read_text(encoding="utf-8")
+    assert '"failure_reason": "shutdown_requested"' in (task_root / "runtime" / "result.json").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_task_worker_shutdown_during_stuck_runtime_launch_returns_before_thread_finishes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    launch_started = threading.Event()
+    release_launch = threading.Event()
+
+    class Runtime:
+        def launch(self, **_kwargs):
+            launch_started.set()
+            release_launch.wait()
+            return RuntimeHandle(base_url="http://127.0.0.1:9999/v1", identifier="serve-1")
+
+        def stream_logs(self, handle, sink):
+            raise AssertionError("logs should not start when launch shutdown grace expires")
+
+        def teardown(self, handle) -> None:
+            pass
+
+    monkeypatch.setattr("medarc_verifiers.orchestrate.worker.LAUNCH_SHUTDOWN_GRACE_S", 0.01)
+    task_root = tmp_path / "task"
+    launch = LaunchInputs(
+        task_id="foo-medqa",
+        model_id="Foo/Bar",
+        endpoint_id="foo",
+        image="fake",
+        gpus=1,
+        runtime_dir=task_root / "runtime",
+        serve_dir=task_root / "serve",
+        ready_file=task_root / "runtime" / "ready.json",
+        bench_argv=("medarc-eval", "bench"),
+    )
+    worker = TaskWorker(launch, options=WorkerOptions(runtime="pyxis", readiness_timeout_s=60), runtime_adapter=Runtime())
+
+    async def run_worker() -> None:
+        run_task = asyncio.create_task(worker.run())
+        await asyncio.to_thread(launch_started.wait, 1)
+        await worker.request_shutdown()
+        await asyncio.wait_for(run_task, timeout=1)
+
+    try:
+        asyncio.run(run_worker())
+    finally:
+        release_launch.set()
+
+    assert '"state": "cancelled"' in (task_root / "runtime" / "state.json").read_text(encoding="utf-8")
+    assert '"failure_reason": "shutdown_requested"' in (task_root / "runtime" / "result.json").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_task_worker_shutdown_during_runtime_launch_error_records_cancelled(tmp_path: Path) -> None:
+    launch_started = threading.Event()
+    release_launch = threading.Event()
+
+    class Runtime:
+        def launch(self, **_kwargs):
+            launch_started.set()
+            release_launch.wait(timeout=1)
+            raise RuntimeLaunchError("allocation went away")
+
+        def stream_logs(self, handle, sink):
+            raise AssertionError("logs should not start when launch fails during shutdown")
+
+        def teardown(self, handle) -> None:
+            raise AssertionError("no handle is available when launch raises")
+
+    task_root = tmp_path / "task"
+    launch = LaunchInputs(
+        task_id="foo-medqa",
+        model_id="Foo/Bar",
+        endpoint_id="foo",
+        image="fake",
+        gpus=1,
+        runtime_dir=task_root / "runtime",
+        serve_dir=task_root / "serve",
+        ready_file=task_root / "runtime" / "ready.json",
+        bench_argv=("medarc-eval", "bench"),
+    )
+    worker = TaskWorker(launch, options=WorkerOptions(runtime="pyxis", readiness_timeout_s=60), runtime_adapter=Runtime())
+
+    async def run_worker() -> None:
+        run_task = asyncio.create_task(worker.run())
+        await asyncio.to_thread(launch_started.wait, 1)
+        await worker.request_shutdown()
+        release_launch.set()
+        await run_task
+
+    asyncio.run(run_worker())
+
+    assert '"state": "cancelled"' in (task_root / "runtime" / "state.json").read_text(encoding="utf-8")
+    assert '"failure_reason": "shutdown_requested"' in (task_root / "runtime" / "result.json").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_effective_serve_args_keeps_async_scheduling_for_latest_vllm_image() -> None:

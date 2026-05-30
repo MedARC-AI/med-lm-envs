@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Protocol
-from typing import Any
 import re
+from dataclasses import dataclass
+from typing import Any, Protocol
 
 from medarc_verifiers.orchestrate.config import TaskSpec
 from medarc_verifiers.orchestrate.topology import ResolvedTopology, resolve_topology, task_sort_key
 
 _TASK_ALLOWED = re.compile(r"[^a-zA-Z0-9_.-]+")
+_SLURM_TERM_SIGNAL_ALLOWED = re.compile(r"^B:TERM@[1-9][0-9]*$")
 _ALLOWED_SLURM_KEYS = {
     "job_name",
     "cpus_per_gpu",
@@ -22,6 +22,7 @@ _ALLOWED_SLURM_KEYS = {
     "mail_type",
     "mail_user",
     "slurm_resume",
+    "signal",
 }
 
 
@@ -40,6 +41,7 @@ class SlurmSubmissionOverrides(Protocol):
     mail_type: str | None
     mail_user: str | None
     slurm_resume: bool | None
+    signal: str | None
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,7 @@ class SlurmTaskOptions:
     mail_type: str | None = None
     mail_user: str | None = None
     slurm_resume: bool = False
+    signal: str | None = None
 
 
 @dataclass(frozen=True)
@@ -137,6 +140,10 @@ def merge_slurm_options(task: TaskSpec, *, submission_options: SlurmSubmissionOv
         slurm_resume=submission_options.slurm_resume
         if submission_options.slurm_resume is not None
         else bool(job_cfg.get("slurm_resume", False)),
+        signal=_validate_slurm_signal(
+            submission_options.signal if submission_options.signal is not None else _optional_str(job_cfg.get("signal")),
+            task_id=task.task_id,
+        ),
     )
 
 
@@ -176,6 +183,14 @@ def _optional_int(value: object) -> int | None:
     if value is None:
         return None
     return int(value)
+
+
+def _validate_slurm_signal(value: str | None, *, task_id: str) -> str | None:
+    if value is None:
+        return None
+    if not _SLURM_TERM_SIGNAL_ALLOWED.fullmatch(value):
+        raise ValueError(f"Task {task_id} slurm.signal must use B:TERM@<seconds>.")
+    return value
 
 
 __all__ = [

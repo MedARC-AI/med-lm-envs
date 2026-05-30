@@ -369,6 +369,7 @@ def write_script(
         _sbatch_line("--nice", planned_task.options.nice),
         _sbatch_line("--mail-type", planned_task.options.mail_type),
         _sbatch_line("--mail-user", planned_task.options.mail_user),
+        _sbatch_line("--signal", planned_task.options.signal),
     ]
     lines.extend(line for line in option_lines if line is not None)
     if planned_task.options.slurm_resume:
@@ -401,10 +402,39 @@ def write_script(
         f"export MEDARC_ALLOCATED_GPU_COUNT={planned_task.allocated_gpus}",
         "",
         *_render_auxiliary_images(task_bundle.runtime.auxiliary_images, task_bundle=task_bundle),
-        " ".join(shlex.quote(arg) for arg in command),
+        *_render_signal_forwarded_command(command),
         "",
     ]
     script_path.write_text("\n".join(lines + body_lines), encoding="utf-8")
+
+
+def _render_signal_forwarded_command(command: list[str]) -> list[str]:
+    rendered_command = " ".join(shlex.quote(arg) for arg in command)
+    return [
+        "launch_pid=",
+        "launch_status=0",
+        "termination_requested=0",
+        "forward_launch_signal() {",
+        '    echo "Received termination signal; forwarding to medarc-orchestrate launch" >&2',
+        "    termination_requested=1",
+        "    launch_status=143",
+        '    if [ -n "${launch_pid:-}" ]; then',
+        '        kill -TERM "$launch_pid" 2>/dev/null || true',
+        '        wait "$launch_pid" || launch_status=$?',
+        '        exit "$launch_status"',
+        "    fi",
+        "    return 0",
+        "}",
+        "trap forward_launch_signal TERM INT USR1",
+        f"{rendered_command} &",
+        "launch_pid=$!",
+        'if [ "$termination_requested" -eq 1 ]; then',
+        "    forward_launch_signal",
+        "fi",
+        'wait "$launch_pid" || launch_status=$?',
+        "trap - TERM INT USR1",
+        'exit "$launch_status"',
+    ]
 
 
 def _launch_command(

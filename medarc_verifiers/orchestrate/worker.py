@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import suppress
 import json
 import os
 import re
+import signal
 import shlex
 import shutil
+import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +20,7 @@ from typing import Callable, Mapping
 from medarc_verifiers.orchestrate.bench import (
     BenchProcess,
     start_benchmark,
+    terminate_benchmark,
     wait_benchmark,
 )
 from medarc_verifiers.orchestrate.bundle import (
@@ -63,6 +67,11 @@ BenchRegistration = Callable[[str, BenchProcess], None]
 BenchRemoval = Callable[[str], None]
 StreamerRegistration = Callable[[str, LogStreamer], None]
 StreamerRemoval = Callable[[str], None]
+LAUNCH_SHUTDOWN_GRACE_S = 30.0
+
+
+class _RuntimeLaunchCancelled(Exception):
+    """Raised when a runtime handle was created after shutdown was requested."""
 
 
 @dataclass(frozen=True)
@@ -131,6 +140,15 @@ class TaskWorker:
         self._active_handle: RuntimeHandle | None = None
         self._bench_process: BenchProcess | None = None
         self._log_streamer: LogStreamer | None = None
+        self._shutdown_requested = False
+        self._shutdown_event: asyncio.Event | None = None
+
+    async def request_shutdown(self, *, term_timeout_s: float = 30.0) -> None:
+        self._shutdown_requested = True
+        if self._shutdown_event is not None:
+            self._shutdown_event.set()
+        if self._bench_process is not None:
+            await terminate_benchmark(self._bench_process, term_timeout_s=term_timeout_s)
 
     async def run(
         self,
@@ -162,9 +180,20 @@ class TaskWorker:
         log = log or (
             self._callbacks.log if self._callbacks is not None and self._callbacks.log is not None else (lambda _: None)
         )
+        self._shutdown_event = asyncio.Event()
+        if self._shutdown_requested:
+            self._shutdown_event.set()
 
         await self._run_once(manifest=manifest, paths=paths, state_handler=state_handler, log=log)
         return manifest
+
+    def _launch_runtime_with_shutdown_cleanup(self, **kwargs: object) -> RuntimeHandle:
+        handle = self._runtime_adapter.launch(**kwargs)
+        if self._shutdown_requested:
+            with suppress(Exception):
+                self._runtime_adapter.teardown(handle)
+            raise _RuntimeLaunchCancelled
+        return handle
 
     async def _run_once(
         self,
@@ -245,9 +274,12 @@ class TaskWorker:
         _write_runtime_manifest(paths, self._launch, manifest=manifest, request=request_payload)
 
         state_handler(manifest, paths, JobState.launching)
+        if self._shutdown_requested:
+            _record_shutdown_cancelled(manifest, paths, state_handler)
+            return
         try:
-            self._active_handle = await asyncio.to_thread(
-                self._runtime_adapter.launch,
+            launch_task = _run_in_daemon_thread(
+                self._launch_runtime_with_shutdown_cleanup,
                 task_id=self._launch.task_id,
                 model_id=self._launch.model_id,
                 container_args=container_args,
@@ -263,9 +295,26 @@ class TaskWorker:
                 ipc_mode=self._launch.container_ipc_mode,
                 srun_extra_args=list(self._launch.pyxis_srun_extra_args),
             )
+            await _wait_for_task_or_shutdown(launch_task, self._shutdown_event)
+            if self._shutdown_requested and not launch_task.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(launch_task), timeout=LAUNCH_SHUTDOWN_GRACE_S)
+                except asyncio.TimeoutError:
+                    _record_shutdown_cancelled(manifest, paths, state_handler)
+                    return
+            self._active_handle = await launch_task
+        except _RuntimeLaunchCancelled:
+            _record_shutdown_cancelled(manifest, paths, state_handler)
+            return
         except RuntimeLaunchError:
+            if self._shutdown_requested:
+                _record_shutdown_cancelled(manifest, paths, state_handler)
+                return
             raise
         except Exception as exc:  # noqa: BLE001
+            if self._shutdown_requested:
+                _record_shutdown_cancelled(manifest, paths, state_handler)
+                return
             raise RuntimeLaunchError(str(exc)) from exc
         manifest.container_id = self._active_handle.identifier
         if self._callbacks is not None and self._callbacks.register_handle is not None:
@@ -277,12 +326,28 @@ class TaskWorker:
             self._callbacks.register_log_streamer(self._launch.task_id, self._log_streamer)
         completed_successfully = False
         try:
+            if self._shutdown_requested:
+                _record_shutdown_cancelled(manifest, paths, state_handler)
+                return
             state_handler(manifest, paths, JobState.loading)
-            readiness = await wait_for_readiness_async(
-                self._active_handle.base_url,
-                model_id=self._launch.model_id,
-                timeout_s=self._options.readiness_timeout_s,
+            readiness_task = asyncio.create_task(
+                wait_for_readiness_async(
+                    self._active_handle.base_url,
+                    model_id=self._launch.model_id,
+                    timeout_s=self._options.readiness_timeout_s,
+                )
             )
+            await _wait_for_task_or_shutdown(readiness_task, self._shutdown_event)
+            if self._shutdown_requested and not readiness_task.done():
+                readiness_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await readiness_task
+                _record_shutdown_cancelled(manifest, paths, state_handler)
+                return
+            readiness = await readiness_task
+            if self._shutdown_requested:
+                _record_shutdown_cancelled(manifest, paths, state_handler)
+                return
             manifest.readiness = readiness.__dict__
             write_text(paths.readiness_path, json.dumps(readiness.__dict__, indent=2))
             write_text(self._launch.ready_file, json.dumps(readiness.__dict__, indent=2))
@@ -306,6 +371,9 @@ class TaskWorker:
             log(f"JOB bench-start task={self._launch.task_id} cmd={_shorten(manifest.bench_command)}")
             state_handler(manifest, paths, JobState.running)
             bench_env = {**os.environ, "TQDM_DISABLE": "1"}
+            if self._shutdown_requested:
+                _record_shutdown_cancelled(manifest, paths, state_handler)
+                return
             self._bench_process = await start_benchmark(
                 command,
                 cwd=Path(__file__).resolve().parents[2],
@@ -313,6 +381,8 @@ class TaskWorker:
                 stdout_path=paths.stdout_path,
                 stderr_path=paths.stderr_path,
             )
+            if self._shutdown_requested:
+                await terminate_benchmark(self._bench_process, term_timeout_s=30.0)
             if self._callbacks is not None and self._callbacks.register_bench is not None:
                 self._callbacks.register_bench(self._launch.task_id, self._bench_process)
             bench_result = await wait_benchmark(self._bench_process)
@@ -342,6 +412,11 @@ class TaskWorker:
                 state_handler(manifest, paths, JobState.completed)
                 completed_successfully = True
         finally:
+            if self._bench_process is not None:
+                await terminate_benchmark(self._bench_process, term_timeout_s=30.0)
+                if self._callbacks is not None and self._callbacks.unregister_bench is not None:
+                    self._callbacks.unregister_bench(self._launch.task_id)
+                self._bench_process = None
             if self._active_handle is not None:
                 await _teardown_runtime(self._runtime_adapter, self._active_handle)
                 if self._callbacks is not None and self._callbacks.unregister_handle is not None:
@@ -441,7 +516,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     state_handler = _default_state_handler(paths=paths)
     try:
-        asyncio.run(worker.run(manifest=manifest))
+        exit_code = asyncio.run(
+            _run_worker_with_signal_shutdown(
+                worker,
+                manifest=manifest,
+                paths=paths,
+                state_handler=state_handler,
+            )
+        )
+        if exit_code:
+            return exit_code
     except Exception as exc:  # noqa: BLE001
         manifest.error = str(exc)
         manifest.failure_reason = (
@@ -454,6 +538,110 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
     return 0
+
+
+async def _run_worker_with_signal_shutdown(
+    worker: TaskWorker,
+    *,
+    manifest: TaskManifest,
+    paths: TaskPaths,
+    state_handler: StateHandler,
+) -> int:
+    loop = asyncio.get_running_loop()
+    shutdown_event = asyncio.Event()
+    received_signals: list[signal.Signals] = []
+
+    def request_signal_shutdown(sig: signal.Signals) -> None:
+        received_signals.append(sig)
+        shutdown_event.set()
+
+    registered_signals: list[signal.Signals] = []
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGUSR1):
+        try:
+            loop.add_signal_handler(sig, request_signal_shutdown, sig)
+        except (NotImplementedError, RuntimeError, ValueError):
+            continue
+        registered_signals.append(sig)
+
+    worker_task = asyncio.create_task(worker.run(manifest=manifest))
+    shutdown_task = asyncio.create_task(shutdown_event.wait())
+    try:
+        done, _pending = await asyncio.wait({worker_task, shutdown_task}, return_when=asyncio.FIRST_COMPLETED)
+        if worker_task in done:
+            await worker_task
+            return 0
+
+        sig = received_signals[-1] if received_signals else signal.SIGTERM
+        await worker.request_shutdown()
+        await worker_task
+        if manifest.completed_at is None:
+            manifest.failure_reason = f"received_{sig.name.lower()}"
+            write_task_result(
+                paths,
+                {"state": JobState.cancelled, "failure_reason": manifest.failure_reason, "signal": sig.name},
+            )
+            state_handler(manifest, paths, JobState.cancelled)
+        return 128 + int(sig)
+    finally:
+        shutdown_task.cancel()
+        for sig in registered_signals:
+            try:
+                loop.remove_signal_handler(sig)
+            except (RuntimeError, ValueError):
+                continue
+
+
+def _run_in_daemon_thread(func: Callable[..., RuntimeHandle], **kwargs: object) -> asyncio.Future[RuntimeHandle]:
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[RuntimeHandle] = loop.create_future()
+
+    def target() -> None:
+        try:
+            result = func(**kwargs)
+        except BaseException as exc:  # noqa: BLE001
+            try:
+                loop.call_soon_threadsafe(_set_future_exception_if_pending, future, exc)
+            except RuntimeError:
+                pass
+            return
+        try:
+            loop.call_soon_threadsafe(_set_future_result_if_pending, future, result)
+        except RuntimeError:
+            pass
+
+    thread = threading.Thread(target=target, daemon=True)
+    thread.start()
+    return future
+
+
+def _set_future_result_if_pending(future: asyncio.Future[RuntimeHandle], result: RuntimeHandle) -> None:
+    if not future.done():
+        future.set_result(result)
+
+
+def _set_future_exception_if_pending(future: asyncio.Future[RuntimeHandle], exc: BaseException) -> None:
+    if not future.done():
+        future.set_exception(exc)
+
+
+async def _wait_for_task_or_shutdown(
+    task: asyncio.Future | asyncio.Task,
+    shutdown_event: asyncio.Event | None,
+) -> None:
+    if shutdown_event is None:
+        await task
+        return
+    shutdown_task = asyncio.create_task(shutdown_event.wait())
+    try:
+        await asyncio.wait({task, shutdown_task}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        shutdown_task.cancel()
+
+
+def _record_shutdown_cancelled(manifest: TaskManifest, paths: TaskPaths, state_handler: StateHandler) -> None:
+    manifest.failure_reason = "shutdown_requested"
+    write_task_result(paths, {"state": JobState.cancelled, "failure_reason": manifest.failure_reason})
+    state_handler(manifest, paths, JobState.cancelled)
 
 
 def _run_label_from_task_root(root: Path) -> str:

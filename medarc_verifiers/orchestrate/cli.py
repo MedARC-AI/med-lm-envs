@@ -86,6 +86,7 @@ def _add_slurm_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--mail-user", default=None)
     parser.add_argument("--test-only", action="store_true")
     parser.add_argument("--slurm-resume", action="store_true", default=None)
+    parser.add_argument("--slurm-signal", dest="signal", default=None)
     parser.add_argument("--source-dir", type=Path, default=None)
     parser.add_argument("--activate-script", type=Path, default=None)
 
@@ -128,6 +129,7 @@ def _run_launch(args: argparse.Namespace) -> int:
         mail_type=args.mail_type,
         mail_user=args.mail_user,
         slurm_resume=args.slurm_resume,
+        signal=args.signal,
     )
     return submit_slurm_launch_plan(launch, options)
 

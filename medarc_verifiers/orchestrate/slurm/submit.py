@@ -34,6 +34,7 @@ class SlurmSubmissionOptions:
     mail_type: str | None = None
     mail_user: str | None = None
     slurm_resume: bool | None = None
+    signal: str | None = None
 
 
 def submit_slurm_launch_plan(launch: LaunchPlan, options: SlurmSubmissionOptions) -> int:

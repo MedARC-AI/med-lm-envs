@@ -465,7 +465,10 @@ def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
     assert "#SBATCH --partition=gpu" in script
     assert "#SBATCH --qos=low" in script
     assert "#SBATCH --nice=500" in script
+    assert "#SBATCH --signal=B:TERM@120" in script
     assert "#SBATCH --requeue" in script
+    assert "trap forward_launch_signal TERM INT USR1" in script
+    assert 'kill -TERM "$launch_pid"' in script
     assert "--runtime pyxis" in script
     assert "medarc-orchestrate launch" in script
     assert "--task-id" in script
@@ -503,6 +506,19 @@ def test_render_bundle_writes_script_and_bundled_config(tmp_path: Path) -> None:
 
     run_manifest = load_run_bundle_manifest(tmp_path / "outputs" / "run_manifest.json")
     assert run_manifest.tasks[0].bundled_eval_config_path == entry.generated_eval_config_path
+
+
+def test_build_submission_plan_rejects_unsupported_slurm_signal(tmp_path: Path) -> None:
+    suite_cfg = tmp_path / "job.yaml"
+    _write_suite_config(suite_cfg, slurm={"signal": "B:USR2@120"})
+    tasks = expand_tasks(load_plan(_write_plan(tmp_path, [suite_cfg])))
+
+    with pytest.raises(ValueError, match=r"slurm.signal must use B:TERM@<seconds>"):
+        build_submission_plan(
+            tasks,
+            base_dependency=None,
+            submission_options=SlurmSubmissionOptions(),
+        )
 
 
 def test_lifecycle_render_writes_cpu_scripts_manifest_and_symbolic_dependencies(tmp_path: Path) -> None:
