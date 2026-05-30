@@ -35,6 +35,14 @@ from medarc_verifiers.cli._constants import (
     PROCESS_COMMAND,
     WINRATE_COMMAND,
 )
+from medarc_verifiers.cli.bench_health import (
+    DEFAULT_VLLM_HEALTH_CHECK_FAILURES,
+    DEFAULT_VLLM_HEALTH_CHECK_INTERVAL_SECONDS,
+    DEFAULT_VLLM_HEALTH_CHECK_TIMEOUT_SECONDS,
+    VllmHealthCheckConfig,
+    resolve_vllm_health_check_config,
+    run_with_vllm_health_check,
+)
 from medarc_verifiers.cli._schemas import EnvironmentConfigSchema, EnvironmentExportConfig
 from medarc_verifiers.cli._single_run import run_single_mode
 from medarc_verifiers.cli.eval_identity import (
@@ -168,6 +176,37 @@ def build_batch_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.0,
         help="Sleep this many seconds after each job (overridden by per-job sleep).",
+    )
+    parser.add_argument(
+        "--vllm-health-check",
+        choices=("auto", "on", "off"),
+        default="auto",
+        help="Monitor local vLLM endpoints during bench evals (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--vllm-health-check-interval",
+        type=float,
+        default=DEFAULT_VLLM_HEALTH_CHECK_INTERVAL_SECONDS,
+        help="Seconds between local vLLM health probes (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--vllm-health-check-timeout",
+        type=float,
+        default=DEFAULT_VLLM_HEALTH_CHECK_TIMEOUT_SECONDS,
+        help="Timeout in seconds for each local vLLM health probe (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--vllm-health-check-failures",
+        type=int,
+        default=DEFAULT_VLLM_HEALTH_CHECK_FAILURES,
+        help="Consecutive failed local vLLM health probes before failing the eval (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--no-vllm-health-check",
+        dest="vllm_health_check",
+        action="store_const",
+        const="off",
+        help="Disable local vLLM health monitoring.",
     )
     return parser
 
@@ -480,6 +519,12 @@ def _run_batch_mode(argv: Sequence[str]) -> int:
         )
         if args.rollout_max_retries is not None and args.rollout_max_retries < 0:
             raise ValueError("--max-retries must be >= 0.")
+        if args.vllm_health_check_interval <= 0:
+            raise ValueError("--vllm-health-check-interval must be > 0.")
+        if args.vllm_health_check_timeout <= 0:
+            raise ValueError("--vllm-health-check-timeout must be > 0.")
+        if args.vllm_health_check_failures < 1:
+            raise ValueError("--vllm-health-check-failures must be >= 1.")
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -1452,7 +1497,15 @@ def _execute_selected_toml_plan(
                 _prepare_toml_results_dir(path_plan.results_path, force=bool(args.force))
                 run_config = config.model_copy(update={"resume_path": path_plan.results_path, "save_results": True})
                 logger.info("Running TOML eval %d/%d: %s on %s", index, len(raw_configs), config.env_id, config.model)
-                asyncio.run(_run_one_toml_eval(run_config))
+                health_config = resolve_vllm_health_check_config(
+                    run_config,
+                    provider=_raw_provider(raw, overrides),
+                    mode=args.vllm_health_check,
+                    interval_seconds=float(args.vllm_health_check_interval),
+                    timeout_seconds=float(args.vllm_health_check_timeout),
+                    failure_threshold=int(args.vllm_health_check_failures),
+                )
+                asyncio.run(_run_one_toml_eval(run_config, health_config=health_config))
         except Exception as exc:  # noqa: BLE001
             failures += 1
             logger.exception("TOML eval %d failed: %s", index, exc)
@@ -1537,6 +1590,12 @@ def _bench_child_payload(
         "expected_model": str(plan_input["model"]),
         "cleanup_env_package": cleanup_env_package,
         "env_preinstalled": env_preinstalled,
+        "vllm_health_check": {
+            "mode": args.vllm_health_check,
+            "interval_seconds": float(args.vllm_health_check_interval),
+            "timeout_seconds": float(args.vllm_health_check_timeout),
+            "failure_threshold": int(args.vllm_health_check_failures),
+        },
     }
 
 
@@ -1552,6 +1611,11 @@ def _overrides_payload(overrides: EvalConfigOverrides) -> dict[str, Any]:
         "env_args": dict(overrides.env_args or {}),
         "sampling_args": dict(overrides.sampling_args or {}),
     }
+
+
+def _raw_provider(raw: Mapping[str, Any], overrides: EvalConfigOverrides) -> str | None:
+    value = overrides.provider if overrides.provider is not None else raw.get("provider")
+    return str(value) if value is not None else None
 
 
 def _jsonable_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -1597,8 +1661,8 @@ def _completed_process_tail(completed: subprocess.CompletedProcess[str] | None, 
     return "\n".join(parts)
 
 
-async def _run_one_toml_eval(config: Any) -> Any:
-    return await run_evaluation(config)
+async def _run_one_toml_eval(config: Any, *, health_config: VllmHealthCheckConfig | None = None) -> Any:
+    return await run_with_vllm_health_check(lambda: run_evaluation(config), health_config)
 
 
 def _prepare_toml_results_dir(

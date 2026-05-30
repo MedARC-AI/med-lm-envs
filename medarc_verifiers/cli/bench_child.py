@@ -12,6 +12,13 @@ from typing import Any
 
 from verifiers.utils.eval_utils import run_evaluation
 
+from medarc_verifiers.cli.bench_health import (
+    DEFAULT_VLLM_HEALTH_CHECK_FAILURES,
+    DEFAULT_VLLM_HEALTH_CHECK_INTERVAL_SECONDS,
+    DEFAULT_VLLM_HEALTH_CHECK_TIMEOUT_SECONDS,
+    resolve_vllm_health_check_config,
+    run_with_vllm_health_check,
+)
 from medarc_verifiers.cli.env_lifecycle import (
     EnvInstallState,
     ensure_installed,
@@ -64,7 +71,12 @@ def _run_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if config.model != payload["expected_model"]:
             raise ValueError(f"Child resolved model {config.model!r}, expected {payload['expected_model']!r}.")
         config = config.model_copy(update={"resume_path": planned_resume_path, "save_results": True})
-        asyncio.run(run_evaluation(config))
+        health_config = resolve_vllm_health_check_config(
+            config,
+            provider=_raw_provider(payload),
+            **_health_check_options(payload),
+        )
+        asyncio.run(run_with_vllm_health_check(lambda: run_evaluation(config), health_config))
         status["eval_ok"] = True
         status["exit_code"] = 0
         status["exit_reason"] = "success"
@@ -101,6 +113,28 @@ def _overrides_from_payload(payload: dict[str, Any]) -> EvalConfigOverrides:
         env_args=payload.get("env_args"),
         sampling_args=payload.get("sampling_args"),
     )
+
+
+def _health_check_options(payload: dict[str, Any]) -> dict[str, Any]:
+    options = payload.get("vllm_health_check")
+    if not isinstance(options, dict):
+        options = {}
+    return {
+        "mode": options.get("mode", "auto"),
+        "interval_seconds": float(options.get("interval_seconds", DEFAULT_VLLM_HEALTH_CHECK_INTERVAL_SECONDS)),
+        "timeout_seconds": float(options.get("timeout_seconds", DEFAULT_VLLM_HEALTH_CHECK_TIMEOUT_SECONDS)),
+        "failure_threshold": int(options.get("failure_threshold", DEFAULT_VLLM_HEALTH_CHECK_FAILURES)),
+    }
+
+
+def _raw_provider(payload: dict[str, Any]) -> str | None:
+    overrides = payload.get("overrides")
+    if isinstance(overrides, dict) and overrides.get("provider") is not None:
+        return str(overrides["provider"])
+    raw_config = payload.get("raw_config")
+    if isinstance(raw_config, dict) and raw_config.get("provider") is not None:
+        return str(raw_config["provider"])
+    return None
 
 
 def _format_exception(exc: BaseException) -> str:

@@ -254,8 +254,6 @@ def run_teardown(
         cache = ConstructCache.from_dict(prepare_payload.get("cache") if isinstance(prepare_payload, Mapping) else {})
         effective_hub_cache = str(hub_cache or cache.hub_cache or "")
         if remove_model_weights:
-            if not _looks_isolated_cache(str(effective_hub_cache)):
-                raise RuntimeError("teardown remove_model_weights is only supported for isolated per-run cache roots.")
             if not effective_hub_cache:
                 raise RuntimeError("teardown remove_model_weights requires --hub-cache or prepare cache metadata.")
             repo_dir = Path(effective_hub_cache) / ("models--" + model.replace("/", "--"))

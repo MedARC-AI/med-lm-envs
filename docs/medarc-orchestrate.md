@@ -162,7 +162,7 @@ When `[container].volumes` includes `/path/to/hf-cache:/root/.cache/huggingface`
 
 Image materialization uses direct `enroot import` before the GPU job starts. For regular tags or digest-pinned images, prepare writes a deterministic `.sqsh` path under `[prepare.cache].image_dir`. For mutable tags such as `:latest`, prepare first queries the registry, resolves the tag to a digest, imports the digest-specific image if needed, and atomically updates `latest.sqsh` and `latest` symlinks to that image. Existing absolute `.sqsh` image paths are treated as already materialized and are left unchanged.
 
-Teardown deletion is intentionally conservative. Model-weight deletion is only for isolated per-run cache roots; shared production caches should leave teardown disabled and rely on a separate retention policy. For preemptible idle-capacity jobs, use Slurm requeue for the eval job. The teardown `afterany` dependency is expected to release only after the same requeued eval job id reaches final completion.
+Teardown deletion is intentionally scoped. Model-weight deletion removes only the matching Hugging Face repo directory under the configured hub cache, while shared production image caches should keep `remove_images = false` and rely on a separate image retention policy. For preemptible idle-capacity jobs, use Slurm requeue for the eval job. The teardown `afterany` dependency is expected to release only after the same requeued eval job id reaches final completion.
 
 ### Task Bundles
 

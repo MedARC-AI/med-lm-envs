@@ -330,18 +330,26 @@ def test_teardown_deletes_only_isolated_repo_cache(tmp_path: Path) -> None:
     assert str(repo_dir) in result["removed"]
 
 
-def test_teardown_rejects_shared_cache_model_deletion(tmp_path: Path) -> None:
+def test_teardown_deletes_shared_cache_model_repo_only(tmp_path: Path) -> None:
+    hub_cache = tmp_path / "shared" / "hf" / "hub"
+    repo_dir = hub_cache / "models--Foo--Bar"
+    other_repo = hub_cache / "models--Other--Model"
+    repo_dir.mkdir(parents=True)
+    other_repo.mkdir(parents=True)
+    (repo_dir / "refs").mkdir()
+    (other_repo / "refs").mkdir()
     result_path = tmp_path / "runtime" / "teardown_result.json"
 
     rc = run_teardown(
         result_path=result_path,
         model="Foo/Bar",
         env_file=None,
-        hub_cache=tmp_path / "shared" / "hf" / "hub",
+        hub_cache=hub_cache,
         remove_model_weights=True,
     )
 
     result = json.loads(result_path.read_text(encoding="utf-8"))
-    assert rc == 1
-    assert result["state"] == "failed"
-    assert "isolated" in result["error"]
+    assert rc == 0
+    assert not repo_dir.exists()
+    assert other_repo.exists()
+    assert str(repo_dir) in result["removed"]

@@ -224,6 +224,21 @@ provider arguments pass through to upstream.
 | `--timeout SEC` | Override request timeout for every eval |
 | `--max-retries N` | Override upstream rollout retries for every eval |
 | `--sleep SEC` | Sleep after each eval |
+| `--vllm-health-check auto\|on\|off` | Monitor local vLLM endpoints during evals, default `auto` |
+| `--vllm-health-check-interval SEC` | Seconds between local vLLM probes, default `600` |
+| `--vllm-health-check-timeout SEC` | Timeout for each local vLLM probe, default `120` |
+| `--vllm-health-check-failures N` | Consecutive failed probes before failing the eval, default `2` |
+| `--no-vllm-health-check` | Disable local vLLM health monitoring |
+
+## Local vLLM Health Checks
+
+Bench automatically monitors local OpenAI-compatible vLLM endpoints when the
+resolved provider is `local`/`vllm` or the API base URL points at loopback. The
+check calls `/health` every 600 seconds and only falls back to a minimal chat
+completion request when `/health` is unavailable or returns a non-200 response.
+It fails the current eval after two consecutive bad probes. Hosted API endpoints
+are skipped in `auto` mode; use `--vllm-health-check on` only for endpoints you
+know are local vLLM deployments.
 
 ## Endpoint Sampling Profiles
 
