@@ -775,7 +775,7 @@ def test_toml_bench_auto_resumes_existing_output(monkeypatch: pytest.MonkeyPatch
     assert calls == 2
 
 
-def test_toml_bench_passes_malformed_existing_output_to_upstream(
+def test_toml_bench_archives_malformed_existing_output_before_resume(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -799,12 +799,128 @@ def test_toml_bench_passes_malformed_existing_output_to_upstream(
     async def fake_run(config, **_kwargs):
         nonlocal calls
         calls += 1
+        assert Path(config.resume_path) == results_path
+        assert not (results_path / "metadata.json").is_dir()
+        (results_path / "metadata.json").write_text(json.dumps({"env_id": "medqa", "model": "gpt-5-mini"}))
+        (results_path / "results.jsonl").write_text(json.dumps({"example_id": "1"}) + "\n")
         return {"outputs": [], "metadata": {}}
 
     monkeypatch.setattr(main, "run_evaluation", fake_run)
 
     assert main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir)]) == 0
     assert calls == 1
+    archived = list((output_dir / "gpt-5-mini" / "medqa").glob("base__malformed_*"))
+    assert len(archived) == 1
+    assert (archived[0] / "metadata.json").is_dir()
+    assert (results_path / "metadata.json").is_file()
+
+
+def test_toml_bench_archives_invalid_json_metadata_before_resume(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_toml_bench_envs_installed(monkeypatch)
+    config_path = tmp_path / "bench.toml"
+    output_dir = tmp_path / "evals"
+    _write_config(
+        config_path,
+        """
+        model = "gpt-5-mini"
+
+        [[eval]]
+        env_id = "medqa"
+        """,
+    )
+    results_path = output_dir / "gpt-5-mini" / "medqa" / "base"
+    results_path.mkdir(parents=True)
+    (results_path / "metadata.json").write_text("")
+    (results_path / "results.jsonl").write_text(json.dumps({"example_id": "0"}) + "\n")
+
+    async def fake_run(config, **_kwargs):
+        assert Path(config.resume_path) == results_path
+        (results_path / "metadata.json").write_text(json.dumps({"env_id": "medqa", "model": "gpt-5-mini"}))
+        (results_path / "results.jsonl").write_text(json.dumps({"example_id": "1"}) + "\n")
+        return {"outputs": [], "metadata": {}}
+
+    monkeypatch.setattr(main, "run_evaluation", fake_run)
+
+    assert main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir)]) == 0
+    archived = list((output_dir / "gpt-5-mini" / "medqa").glob("base__malformed_*"))
+    assert len(archived) == 1
+    assert (archived[0] / "metadata.json").read_text() == ""
+    assert json.loads((results_path / "metadata.json").read_text())["env_id"] == "medqa"
+
+
+@pytest.mark.parametrize("metadata_text", ["null", "[]", '"not an object"'])
+def test_toml_bench_archives_non_object_metadata_before_resume(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    metadata_text: str,
+) -> None:
+    _patch_toml_bench_envs_installed(monkeypatch)
+    config_path = tmp_path / "bench.toml"
+    output_dir = tmp_path / "evals"
+    _write_config(
+        config_path,
+        """
+        model = "gpt-5-mini"
+
+        [[eval]]
+        env_id = "medqa"
+        """,
+    )
+    results_path = output_dir / "gpt-5-mini" / "medqa" / "base"
+    results_path.mkdir(parents=True)
+    (results_path / "metadata.json").write_text(metadata_text)
+    (results_path / "results.jsonl").write_text(json.dumps({"example_id": "0"}) + "\n")
+
+    async def fake_run(config, **_kwargs):
+        assert Path(config.resume_path) == results_path
+        (results_path / "metadata.json").write_text(json.dumps({"env_id": "medqa", "model": "gpt-5-mini"}))
+        (results_path / "results.jsonl").write_text(json.dumps({"example_id": "1"}) + "\n")
+        return {"outputs": [], "metadata": {}}
+
+    monkeypatch.setattr(main, "run_evaluation", fake_run)
+
+    assert main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir)]) == 0
+    archived = list((output_dir / "gpt-5-mini" / "medqa").glob("base__malformed_*"))
+    assert len(archived) == 1
+    assert (archived[0] / "metadata.json").read_text() == metadata_text
+
+
+def test_toml_bench_archives_non_utf8_metadata_before_resume(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_toml_bench_envs_installed(monkeypatch)
+    config_path = tmp_path / "bench.toml"
+    output_dir = tmp_path / "evals"
+    _write_config(
+        config_path,
+        """
+        model = "gpt-5-mini"
+
+        [[eval]]
+        env_id = "medqa"
+        """,
+    )
+    results_path = output_dir / "gpt-5-mini" / "medqa" / "base"
+    results_path.mkdir(parents=True)
+    (results_path / "metadata.json").write_bytes(b"\xff")
+    (results_path / "results.jsonl").write_text(json.dumps({"example_id": "0"}) + "\n")
+
+    async def fake_run(config, **_kwargs):
+        assert Path(config.resume_path) == results_path
+        (results_path / "metadata.json").write_text(json.dumps({"env_id": "medqa", "model": "gpt-5-mini"}))
+        (results_path / "results.jsonl").write_text(json.dumps({"example_id": "1"}) + "\n")
+        return {"outputs": [], "metadata": {}}
+
+    monkeypatch.setattr(main, "run_evaluation", fake_run)
+
+    assert main.main(["bench", "--config", str(config_path), "--output-dir", str(output_dir)]) == 0
+    archived = list((output_dir / "gpt-5-mini" / "medqa").glob("base__malformed_*"))
+    assert len(archived) == 1
+    assert (archived[0] / "metadata.json").read_bytes() == b"\xff"
 
 
 def test_toml_bench_reuses_empty_existing_output_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

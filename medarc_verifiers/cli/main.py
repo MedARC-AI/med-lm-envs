@@ -1674,9 +1674,44 @@ def _prepare_toml_results_dir(
         _archive_existing_path(results_path)
 
     if results_path.exists():
+        if _is_malformed_toml_results_dir(results_path):
+            _archive_malformed_results_path(results_path)
+            results_path.mkdir(parents=True, exist_ok=True)
         return
 
     results_path.mkdir(parents=True, exist_ok=True)
+
+
+def _is_malformed_toml_results_dir(path: Path) -> bool:
+    if not path.is_dir():
+        return True
+    try:
+        if not any(path.iterdir()):
+            return False
+    except OSError:
+        return True
+
+    metadata_path = path / "metadata.json"
+    results_path = path / "results.jsonl"
+    if not metadata_path.is_file() or not results_path.is_file():
+        return True
+    try:
+        with metadata_path.open("r", encoding="utf-8") as handle:
+            metadata = json.load(handle)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return True
+    return not isinstance(metadata, Mapping)
+
+
+def _archive_malformed_results_path(path: Path) -> Path:
+    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    candidate = path.with_name(f"{path.name}__malformed_{timestamp}")
+    suffix = 1
+    while candidate.exists():
+        candidate = path.with_name(f"{path.name}__malformed_{timestamp}_{suffix}")
+        suffix += 1
+    shutil.move(str(path), str(candidate))
+    return candidate
 
 
 def _archive_existing_path(path: Path) -> Path:
