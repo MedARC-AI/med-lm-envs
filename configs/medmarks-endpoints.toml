@@ -252,11 +252,12 @@ enable_thinking = false
 gpus = 1
 
 [endpoint.orchestrate.vllm.serve]
-max_num_batched_tokens = 32768
+gpu_memory_utilization = 0.92
+performance_mode = "throughput"
+max_num_batched_tokens = 57344
 max_num_seqs = 1024
 reasoning_parser = "gemma4"
 tool_call_parser = "gemma4"
-chat_template = "examples/tool_chat_template_gemma4.jinja"
 
 
 
@@ -277,11 +278,12 @@ enable_thinking = true
 gpus = 1
 
 [endpoint.orchestrate.vllm.serve]
-max_num_batched_tokens = 32768
+gpu_memory_utilization = 0.92
+performance_mode = "throughput"
+max_num_batched_tokens = 57344
 max_num_seqs = 1024
 reasoning_parser = "gemma4"
 tool_call_parser = "gemma4"
-chat_template = "examples/tool_chat_template_gemma4.jinja"
 
 
 
@@ -302,11 +304,12 @@ enable_thinking = false
 gpus = 1
 
 [endpoint.orchestrate.vllm.serve]
+gpu_memory_utilization = 0.95
+performance_mode = "throughput"
 max_num_batched_tokens = 32768
-max_num_seqs = 1024
+max_num_seqs = 1536
 reasoning_parser = "gemma4"
 tool_call_parser = "gemma4"
-chat_template = "examples/tool_chat_template_gemma4.jinja"
 
 
 
@@ -327,11 +330,12 @@ enable_thinking = true
 gpus = 1
 
 [endpoint.orchestrate.vllm.serve]
+gpu_memory_utilization = 0.95
+performance_mode = "throughput"
 max_num_batched_tokens = 32768
-max_num_seqs = 1024
+max_num_seqs = 1536
 reasoning_parser = "gemma4"
 tool_call_parser = "gemma4"
-chat_template = "examples/tool_chat_template_gemma4.jinja"
 
 
 
@@ -352,11 +356,12 @@ enable_thinking = false
 gpus = 1
 
 [endpoint.orchestrate.vllm.serve]
+gpu_memory_utilization = 0.95
 max_num_batched_tokens = 16384
 max_num_seqs = 256
 reasoning_parser = "gemma4"
 tool_call_parser = "gemma4"
-chat_template = "examples/tool_chat_template_gemma4.jinja"
+chat_template = "/root/.cache/huggingface/hub/models--google--gemma-4-26B-A4B-it/snapshots/6e6f6edea8c52db2094dca3086e4b963a0034dfc/chat_template.jinja"
 
 
 
@@ -381,7 +386,7 @@ max_num_batched_tokens = 16384
 max_num_seqs = 256
 reasoning_parser = "gemma4"
 tool_call_parser = "gemma4"
-chat_template = "examples/tool_chat_template_gemma4.jinja"
+chat_template = "/root/.cache/huggingface/hub/models--google--gemma-4-26B-A4B-it/snapshots/6e6f6edea8c52db2094dca3086e4b963a0034dfc/chat_template.jinja"
 
 
 
@@ -402,11 +407,13 @@ enable_thinking = false
 gpus = 2
 
 [endpoint.orchestrate.vllm.serve]
+gpu_memory_utilization = 0.92
+performance_mode = "throughput"
 max_num_batched_tokens = 16384
 max_num_seqs = 256
 reasoning_parser = "gemma4"
 tool_call_parser = "gemma4"
-chat_template = "examples/tool_chat_template_gemma4.jinja"
+chat_template = "/root/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/fb9ae262347c3945692f09a612f8bb189def854f/chat_template.jinja"
 
 
 
@@ -431,7 +438,7 @@ max_num_batched_tokens = 16384
 max_num_seqs = 256
 reasoning_parser = "gemma4"
 tool_call_parser = "gemma4"
-chat_template = "examples/tool_chat_template_gemma4.jinja"
+chat_template = "/root/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/fb9ae262347c3945692f09a612f8bb189def854f/chat_template.jinja"
 
 
 
@@ -855,6 +862,67 @@ image = "vllm/vllm-openai:v0.12.0"
 
 
 [[endpoint]]
+endpoint_id = "lfm2.5-1.2b-instruct"
+model = "LiquidAI/LFM2.5-1.2B-Instruct"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.1
+top_k = 50
+repetition_penalty = 1.05
+
+[endpoint.orchestrate.vllm]
+gpus = 1
+
+[endpoint.orchestrate.vllm.serve]
+gpu_memory_utilization = 0.90
+max_num_batched_tokens = 32768
+max_num_seqs = 256
+tool_call_parser = "lfm2"
+
+
+[[endpoint]]
+endpoint_id = "lfm2.5-1.2b-thinking"
+model = "LiquidAI/LFM2.5-1.2B-Thinking"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.1
+top_k = 50
+repetition_penalty = 1.05
+
+[endpoint.orchestrate.vllm]
+gpus = 1
+
+[endpoint.orchestrate.vllm.serve]
+gpu_memory_utilization = 0.90
+max_num_batched_tokens = 32768
+max_num_seqs = 256
+tool_call_parser = "lfm2"
+
+
+[[endpoint]]
+endpoint_id = "lfm2.5-8b-a1b"
+model = "LiquidAI/LFM2.5-8B-A1B"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 0.2
+top_k = 80
+repetition_penalty = 1.05
+
+[endpoint.orchestrate.vllm]
+gpus = 1
+
+[endpoint.orchestrate.vllm.serve]
+gpu_memory_utilization = 0.92
+max_num_batched_tokens = 16384
+max_num_seqs = 256
+tool_call_parser = "lfm2"
+
+
+
+[[endpoint]]
 endpoint_id = "llama-3.3-70b-instruct"
 model = "meta-llama/Llama-3.3-70B-Instruct"
 api_client_type = "openai_chat_completions"
@@ -1007,7 +1075,8 @@ top_k = 40
 gpus = 4
 
 [endpoint.orchestrate.vllm.serve]
-max_num_seqs = 512
+max_num_batched_tokens = 24576
+max_num_seqs = 256
 reasoning_parser = "minimax_m2_append_think"
 tool_call_parser = "minimax_m2"
 trust_remote_code = true
@@ -1028,7 +1097,52 @@ top_k = 40
 gpus = 4
 
 [endpoint.orchestrate.vllm.serve]
-max_num_seqs = 512
+max_num_batched_tokens = 24576
+max_num_seqs = 256
+reasoning_parser = "minimax_m2_append_think"
+tool_call_parser = "minimax_m2"
+trust_remote_code = true
+
+
+
+[[endpoint]]
+endpoint_id = "minimax-m2.5"
+model = "MiniMaxAI/MiniMax-M2.5"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+top_k = 40
+
+[endpoint.orchestrate.vllm]
+gpus = 4
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 24576
+max_num_seqs = 256
+reasoning_parser = "minimax_m2_append_think"
+tool_call_parser = "minimax_m2"
+trust_remote_code = true
+
+
+
+[[endpoint]]
+endpoint_id = "minimax-m2.7"
+model = "MiniMaxAI/MiniMax-M2.7"
+api_client_type = "openai_chat_completions"
+
+[endpoint.sampling_args]
+temperature = 1.0
+top_p = 0.95
+top_k = 40
+
+[endpoint.orchestrate.vllm]
+gpus = 4
+
+[endpoint.orchestrate.vllm.serve]
+max_num_batched_tokens = 24576
+max_num_seqs = 256
 reasoning_parser = "minimax_m2_append_think"
 tool_call_parser = "minimax_m2"
 trust_remote_code = true
@@ -1268,7 +1382,7 @@ gpus = 4
 [endpoint.orchestrate.vllm.serve]
 gpu_memory_utilization = 0.92
 max_num_batched_tokens = 16384
-max_num_seqs = 256
+max_num_seqs = 128
 mamba_ssm_cache_dtype = "float32"
 reasoning_parser = "nemotron_v3"
 tool_call_parser = "qwen3_coder"
@@ -2094,7 +2208,7 @@ gpus = 4
 
 [endpoint.orchestrate.vllm.serve]
 gpu_memory_utilization = 0.92
-max_num_batched_tokens = 16384
+max_num_batched_tokens = 32768
 max_num_seqs = 256
 reasoning_parser = "qwen3"
 tool_call_parser = "qwen3_coder"
@@ -2123,7 +2237,8 @@ enable_thinking = true
 gpus = 4
 
 [endpoint.orchestrate.vllm.serve]
-max_num_batched_tokens = 16384
+gpu_memory_utilization = 0.92
+max_num_batched_tokens = 32768
 max_num_seqs = 256
 reasoning_parser = "qwen3"
 tool_call_parser = "qwen3_coder"
@@ -2154,7 +2269,7 @@ gpus = 8
 [endpoint.orchestrate.vllm.serve]
 gpu_memory_utilization = 0.92
 max_num_batched_tokens = 16384
-max_num_seqs = 128
+max_num_seqs = 64
 reasoning_parser = "qwen3"
 tool_call_parser = "qwen3_coder"
 language_model_only = true
@@ -2182,7 +2297,7 @@ enable_thinking = true
 gpus = 8
 
 [endpoint.orchestrate.vllm.serve]
-gpu_memory_utilization = 0.92
+gpu_memory_utilization = 0.90
 max_num_batched_tokens = 16384
 max_num_seqs = 128
 reasoning_parser = "qwen3"
@@ -2456,8 +2571,8 @@ gpus = 1
 
 [endpoint.orchestrate.vllm.serve]
 gpu_memory_utilization = 0.92
-max_num_batched_tokens = 16384
-max_num_seqs = 256
+max_num_batched_tokens = 32768
+max_num_seqs = 512
 reasoning_parser = "qwen3"
 tool_call_parser = "qwen3_coder"
 language_model_only = true
@@ -2484,8 +2599,8 @@ gpus = 1
 
 [endpoint.orchestrate.vllm.serve]
 gpu_memory_utilization = 0.92
-max_num_batched_tokens = 16384
-max_num_seqs = 256
+max_num_batched_tokens = 32768
+max_num_seqs = 512
 reasoning_parser = "qwen3"
 tool_call_parser = "qwen3_coder"
 language_model_only = true
@@ -2534,6 +2649,7 @@ temperature = 0.45
 gpus = 8
 
 [endpoint.orchestrate.vllm.serve]
+gpu_memory_utilization = 0.92
 max_num_batched_tokens = 16384
 max_num_seqs = 256
 trust_remote_code = true
