@@ -1,8 +1,20 @@
 from dataclasses import dataclass, field
 import os
 from typing import Dict, Iterable, Optional, Tuple, Union
+from urllib.parse import urlparse
 from .sampling_args import sanitize_sampling_args_for_openai
 from .prime_inference import PRIME_INFERENCE_URL, _resolve_include_usage
+
+# Google's OpenAI-compatibility endpoint strictly validates request payloads and
+# rejects fields it does not support (e.g. top_k) with 400 INVALID_ARGUMENT.
+_GOOGLE_OPENAI_COMPAT_HOST = "generativelanguage.googleapis.com"
+_GOOGLE_UNSUPPORTED_SAMPLING_KEYS = ("top_k", "min_p")
+
+
+def _is_google_openai_compat(base_url: str | None) -> bool:
+    if not base_url:
+        return False
+    return urlparse(base_url).hostname == _GOOGLE_OPENAI_COMPAT_HOST
 
 
 def _normalize_judge_name(name: str) -> str:
@@ -80,7 +92,7 @@ _JUDGE_DEFAULTS: Iterable[JudgeSamplingDefaults] = (
         top_k=64,
     ),
     JudgeSamplingDefaults(
-        name="gemini-3",
+        name=("gemini-3", "gemini-3.1"),
         temperature=1.0,
         top_p=0.95,
         top_k=64,
@@ -149,7 +161,8 @@ def judge_sampling_args_and_headers(
 
     Args:
         judge_name: The name of the judge model.
-        base_url: The base URL for the API. Used for Prime Inference detection.
+        base_url: The base URL for the API. Used for Prime Inference detection and
+            to drop sampling params rejected by Google's OpenAI-compatibility endpoint.
         timeout: Request timeout in seconds.
         include_usage: Whether to include usage reporting in extra_body.
             If None (default), checks MEDARC_INCLUDE_USAGE env var, then
@@ -174,6 +187,9 @@ def judge_sampling_args_and_headers(
             effective_include_usage = _resolve_include_usage(include_usage, is_prime_inference)
 
             payload = judge_defaults.as_dict(include_usage=effective_include_usage)
+            if _is_google_openai_compat(base_url):
+                for key in _GOOGLE_UNSUPPORTED_SAMPLING_KEYS:
+                    payload.pop(key, None)
             if reasoning_effort is not None and "reasoning_effort" in payload:
                 if isinstance(reasoning_effort, str) and reasoning_effort.lower().strip() == "none":
                     payload.pop("reasoning_effort", None)

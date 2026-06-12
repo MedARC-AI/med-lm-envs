@@ -124,6 +124,25 @@ def test_judge_sampling_defaults_supports_multiple_names_per_defaults(
     assert result_47 == result_46
 
 
+def test_judge_sampling_drops_params_unsupported_by_google_openai_compat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Google's OpenAI-compat endpoint rejects unknown fields like top_k with 400."""
+    monkeypatch.delenv("PRIME_TEAM_ID", raising=False)
+    monkeypatch.delenv("MEDARC_INCLUDE_USAGE", raising=False)
+
+    google_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    result, _ = judge_sampling_args_and_headers("gemini-3.1-flash-lite", base_url=google_url)
+    assert "top_k" not in result.get("extra_body", {})
+    assert "min_p" not in result.get("extra_body", {})
+    assert result["temperature"] == 1.0
+    assert result["top_p"] == 0.95
+
+    # Other base URLs keep the provider-recommended top_k.
+    result, _ = judge_sampling_args_and_headers("gemini-3.1-flash-lite", base_url="https://api.example.com/v1")
+    assert result["extra_body"]["top_k"] == 64
+
+
 def test_judge_sampling_override_temperature_non_reasoning(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("PRIME_TEAM_ID", raising=False)
     monkeypatch.delenv("MEDARC_INCLUDE_USAGE", raising=False)
