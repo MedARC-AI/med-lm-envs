@@ -81,6 +81,11 @@ PROVIDER_CONFIGS: dict[str, dict[str, str]] = {
         "url": "http://localhost:8000/v1",
         "key": "VLLM_API_KEY",
     },
+    "bedrock": {
+        "url": "region:us-east-1",
+        "key": "AWS_PROFILE",
+        "client_type": "bedrock_converse",
+    },
 }
 
 
