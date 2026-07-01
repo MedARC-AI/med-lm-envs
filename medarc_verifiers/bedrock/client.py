@@ -35,9 +35,22 @@ class BedrockConverseClient(Client[Any, dict, dict, dict]):
     """Verifiers client that calls AWS Bedrock Converse API directly."""
 
     def setup_client(self, config: ClientConfig) -> Any:
-        # boto3 natively respects AWS_PROFILE, AWS_REGION, AWS_ACCESS_KEY_ID,
-        # ~/.aws/config, instance roles, etc. No config repurposing needed.
-        session = boto3.Session()
+        # Extract region from api_base_url (format: "region:<region-name>")
+        # and profile from api_key_var (the env var name whose value is the profile).
+        import os
+
+        region_name = None
+        if config.api_base_url and config.api_base_url.startswith("region:"):
+            region_name = config.api_base_url.split(":", 1)[1]
+
+        profile_name = None
+        if config.api_key_var:
+            profile_name = os.environ.get(config.api_key_var)
+
+        session = boto3.Session(
+            profile_name=profile_name,
+            region_name=region_name,
+        )
         return session.client("bedrock-runtime")
 
     async def close(self) -> None:
@@ -54,19 +67,52 @@ class BedrockConverseClient(Client[Any, dict, dict, dict]):
             elif isinstance(msg, UserMessage):
                 conversation.append({"role": "user", "content": _to_content(msg.content)})
             elif isinstance(msg, AssistantMessage):
-                content = msg.content if isinstance(msg.content, str) else _flatten(msg.content)
-                conversation.append({"role": "assistant", "content": [{"text": content}]})
+                content_blocks: list[dict] = []
+                # Add text content if present
+                text = msg.content if isinstance(msg.content, str) else _flatten(msg.content) if msg.content else ""
+                if text:
+                    content_blocks.append({"text": text})
+                # Add toolUse blocks if the assistant made tool calls
+                if msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        # tc may be a ToolCall object or a JSON string (from serialized completions)
+                        if isinstance(tc, str):
+                            import json as _json
+                            tc_data = _json.loads(tc)
+                            content_blocks.append({"toolUse": {
+                                "toolUseId": tc_data["id"],
+                                "name": tc_data["name"],
+                                "input": _json.loads(tc_data["arguments"]) if isinstance(tc_data["arguments"], str) else tc_data["arguments"],
+                            }})
+                        else:
+                            import json as _json
+                            content_blocks.append({"toolUse": {
+                                "toolUseId": tc.id,
+                                "name": tc.name,
+                                "input": _json.loads(tc.arguments) if isinstance(tc.arguments, str) else tc.arguments,
+                            }})
+                if not content_blocks:
+                    content_blocks.append({"text": ""})
+                conversation.append({"role": "assistant", "content": content_blocks})
             elif isinstance(msg, TextMessage):
                 conversation.append({"role": "user", "content": [{"text": msg.content}]})
             elif isinstance(msg, ToolMessage):
-                # Bedrock tool results go as user messages
-                conversation.append({
-                    "role": "user",
-                    "content": [{"toolResult": {
-                        "toolUseId": msg.tool_call_id,
-                        "content": [{"text": msg.content if isinstance(msg.content, str) else str(msg.content)}],
-                    }}],
-                })
+                # Bedrock tool results go as user messages.
+                # Multiple tool results for the same turn must be in one user message.
+                tool_result_block = {"toolResult": {
+                    "toolUseId": msg.tool_call_id,
+                    "content": [{"text": msg.content if isinstance(msg.content, str) else str(msg.content)}],
+                }}
+                # Merge with previous user message if it already contains toolResult blocks
+                if conversation and conversation[-1]["role"] == "user" and any(
+                    "toolResult" in block for block in conversation[-1]["content"]
+                ):
+                    conversation[-1]["content"].append(tool_result_block)
+                else:
+                    conversation.append({
+                        "role": "user",
+                        "content": [tool_result_block],
+                    })
 
         return {"messages": conversation, "system": system}, {}
 
