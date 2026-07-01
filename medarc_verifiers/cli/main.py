@@ -440,6 +440,9 @@ def build_winrate_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Unified CLI entry point."""
+    from medarc_verifiers.bedrock import register as _register_bedrock
+    _register_bedrock()
+
     args_list = list(argv) if argv is not None else sys.argv[1:]
 
     if not args_list:

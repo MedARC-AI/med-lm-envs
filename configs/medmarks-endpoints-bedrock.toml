@@ -1,0 +1,68 @@
+# Bedrock model endpoint aliases for medmarks.
+#
+# Usage:
+#   uv run medarc-eval medqa \
+#     -m nova-pro \
+#     --endpoints-path configs/medmarks-endpoints-bedrock.toml \
+#     --provider bedrock \
+#     -n 25
+#
+# To use a specific AWS profile:
+#   uv run medarc-eval medqa \
+#     -m nova-pro \
+#     --endpoints-path configs/medmarks-endpoints-bedrock.toml \
+#     --provider bedrock \
+#     --api-key-var AWS_PROFILE \
+#     -n 25
+#
+# To use a different region:
+#   --api-base-url region:us-west-2
+
+# --- Amazon Nova ---
+
+[[endpoint]]
+endpoint_id = "nova-pro"
+model = "us.amazon.nova-pro-v1:0"
+api_client_type = "bedrock_converse"
+[endpoint.sampling_args]
+temperature = 0.7
+top_p = 0.9
+
+[[endpoint]]
+endpoint_id = "nova-lite"
+model = "us.amazon.nova-lite-v1:0"
+api_client_type = "bedrock_converse"
+[endpoint.sampling_args]
+temperature = 0.7
+top_p = 0.9
+
+[[endpoint]]
+endpoint_id = "nova-micro"
+model = "us.amazon.nova-micro-v1:0"
+api_client_type = "bedrock_converse"
+[endpoint.sampling_args]
+temperature = 0.7
+top_p = 0.9
+
+# --- Anthropic Claude (Bedrock) ---
+
+[[endpoint]]
+endpoint_id = "claude-sonnet-4"
+model = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+api_client_type = "bedrock_converse"
+[endpoint.sampling_args]
+temperature = 0.7
+
+[[endpoint]]
+endpoint_id = "claude-haiku-3-5"
+model = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
+api_client_type = "bedrock_converse"
+[endpoint.sampling_args]
+temperature = 0.7
+
+[[endpoint]]
+endpoint_id = "claude-sonnet-3-5-v2"
+model = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+api_client_type = "bedrock_converse"
+[endpoint.sampling_args]
+temperature = 0.7

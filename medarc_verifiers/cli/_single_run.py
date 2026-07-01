@@ -166,6 +166,8 @@ def run_single_mode(argv: Sequence[str] | None = None) -> int:
         "hf_hub_dataset_name": args.hf_hub_dataset_name or "",
         "verbose": args.verbose,
     }
+    if args.provider is not None:
+        raw_config["provider"] = args.provider
     if api_base_url_explicit:
         raw_config["api_base_url"] = args.api_base_url
     else:
@@ -291,6 +293,12 @@ def _build_base_parser_layout(
     )
     _add_and_track(
         core_group, "--api-base-url", "-b", default=DEFAULT_API_BASE_URL, help="Base URL for the inference API."
+    )
+    _add_and_track(
+        core_group,
+        "--provider",
+        default=None,
+        help="Provider shorthand (e.g., bedrock, openai, anthropic, local). Sets default URL, key, and client type.",
     )
     _add_and_track(
         core_group,

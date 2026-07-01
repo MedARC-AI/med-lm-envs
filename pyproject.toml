@@ -36,6 +36,9 @@ orchestrator = [
     "nvidia-ml-py>=12.560.30",
     "python-dotenv>=1.0.1",
 ]
+bedrock = [
+    "boto3>=1.35.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
