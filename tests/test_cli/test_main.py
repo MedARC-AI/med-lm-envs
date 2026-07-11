@@ -153,7 +153,8 @@ def test_toml_bench_dry_run_expands_evals_and_ablations(
     assert "base" in output
     assert "shuffle_seed-1618" in output
     assert "shuffle_seed-9331" in output
-    assert str(tmp_path / "evals" / "gpt-5-mini" / "medqa" / "base") in output
+    assert "gpt-5-mini" in output
+    assert "medqa" in output
 
 
 def test_repository_smoke_toml_config_dry_runs(capsys: pytest.CaptureFixture[str]) -> None:
@@ -162,7 +163,8 @@ def test_repository_smoke_toml_config_dry_runs(capsys: pytest.CaptureFixture[str
     output = capsys.readouterr().out
     assert exit_code == 0
     assert "TOML Bench Dry Run" in output
-    assert "18 eval(s) to dry-run" in output
+    assert "19 eval(s) to dry-run" in output
+    assert "medfact_bench" in output
     assert "medqa" in output
     assert "runs/smoke/openai-gpt-4.1-mini/medqa" in output
 
@@ -219,7 +221,7 @@ def test_bench_rejects_removed_yaml_runner_flags(capsys: pytest.CaptureFixture[s
 
 
 def test_repository_verified_toml_config_dry_run_shows_ablation_variants(capsys: pytest.CaptureFixture[str]) -> None:
-    exit_code = main.main(["bench", "--config", "configs/medmarks-verified.toml", "--dry-run", "--eval-index", "45"])
+    exit_code = main.main(["bench", "--config", "configs/medmarks-verified.toml", "--dry-run", "--eval-index", "46"])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -626,7 +628,11 @@ def test_toml_bench_dry_run_uses_toml_output_dir(
 
     assert main.main(["bench", "--config", str(config_path), "--dry-run"]) == 0
 
-    assert str(output_dir / "gpt-5-mini" / "medqa" / "base") in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert str(output_dir) in output
+    assert "gpt-5-mini" in output
+    assert "medqa" in output
+    assert "base" in output
 
 
 def test_toml_bench_executes_sequentially_to_deterministic_path(

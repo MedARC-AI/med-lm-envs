@@ -50,6 +50,11 @@ rollouts_per_example = 1
 env_args = { version = "1.2" }
 
 [[eval]]
+env_id = "medfact_bench"
+num_examples = 10
+rollouts_per_example = 1
+
+[[eval]]
 env_id = "medconceptsqa"
 num_examples = 10
 rollouts_per_example = 1

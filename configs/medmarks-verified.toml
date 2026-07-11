@@ -129,6 +129,11 @@ num_examples = -1
 rollouts_per_example = 1
 env_args = { version = "verified", add_python_tool = true, add_calculator_tool = true }
 
+[[eval]]
+env_id = "medfact_bench"
+num_examples = -1
+rollouts_per_example = 1
+
 [[ablation]]
 env_id = "medconceptsqa"
 name = "{env_args.difficulty}"
