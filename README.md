@@ -9,7 +9,7 @@ Open-source LLM benchmark suite for medical tasks.
 
 [medmarks.ai](https://medmarks.ai) | [arXiv:2605.01417](https://arxiv.org/abs/2605.01417)
 
-Medmarks is a comprehensive benchmark suite for evaluating medical capabilities in large language models. It includes 30 open-source benchmarks spanning question answering, information extraction, consumer health questions, clinical reasoning, EHR interactions, medical calculations, and open-ended medical tasks.
+Medmarks is a comprehensive benchmark suite for evaluating medical capabilities in large language models. It includes 31 open-source benchmarks spanning question answering, information extraction, consumer health questions, clinical reasoning, EHR interactions, medical calculations, fact verification, and open-ended medical tasks.
 
 This repository contains the runnable benchmark environments, evaluation configs, result processing tools, and win-rate analysis pipeline used for Medmarks. It also contains the [`medarc_verifiers` Python library](docs/README.md), which provides the shared CLI, parsers, rewards, judging utilities, and orchestration helpers used by the benchmark environments.
 
@@ -122,6 +122,7 @@ Evaluation outputs are written under `runs/evals/`, processed parquet files unde
 | M-ARC | Long-tail medical questions designed to test model resistance to inflexible clinical reasoning patterns. | Apache-2.0 | 100 | -- |
 | Med-HALT | Clinical Reasoning Hallucination detection via false confidence tests and "none of the above" recognition. | Apache-2.0 | 22,152 | -- |
 | MedCalc-Bench | Clinical calculator questions evaluating medical computation and formula application skills. | CC-BY-SA-4.0 | 1,100 | 10,538 |
+| MedFact-Bench | Medical fact verification benchmark combining SciFact, HealthVer, MedAESQA, PubMedQA-Fact, and BioASQ-Fact under the Med-V1 zero-shot protocol. | Not specified | 14,274 | -- |
 | MedConceptsQA | Multiple-choice questions on medical coding systems, e.g., ICD-9, ICD-10, etc., only ICD-10CM subsamples evaluated. | Not specified | 6,000 | -- |
 | Medbullets | USMLE Step 2 and Step 3 style clinical reasoning questions sourced from social media. | Not specified | 308 | -- |
 | MedHallu | Medical hallucination detection benchmark with four domain-specific error categories derived from the PubMedQA dataset. | MIT | 2,000 | -- |
